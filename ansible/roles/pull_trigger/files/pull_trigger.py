@@ -72,6 +72,30 @@ QUARANTINE_REF: Final = "refs/pull-trigger/head"
 BUNDLE_HEADERS: Final = (b"# v2 git bundle\n", b"# v3 git bundle\n")
 BUNDLE_SUMMARY_PREFIX: Final = "push-receiver"
 PULL_SUMMARY_PREFIX: Final = "pull-trigger"
+# The release tag (docs/pull-signer-trust.md, T8). A release is an annotated tag whose own text
+# names a commit of this history and a name of this fixed shape, signed by a release key. The tags
+# are fetched into this private namespace, which is emptied first on the pull route, so a tag
+# withdrawn at the source is gone on the next fetch. The refspec is never built from caller text.
+RELEASE_REF_PREFIX: Final = "refs/pull-trigger/release/"
+RELEASE_FETCH_SPEC: Final = f"+refs/tags/release/*:{RELEASE_REF_PREFIX}*"
+RELEASE_NAME: Final = re.compile(r"release/[0-9]{8}\.[0-9]{1,4}")
+# More candidates than this is a refusal of its own, not a silent cut: junk tags must not be able
+# to crowd a real tag out unseen. Each candidate costs one signature check.
+MAX_RELEASE_CANDIDATES: Final = 64
+TAG_SIGNATURE_START: Final = re.compile(
+    rb"^-----BEGIN (?P<kind>SSH|PGP) SIGNATURE-----$", re.MULTILINE
+)
+TAG_SIGNATURE_END: Final = {
+    b"SSH": b"-----END SSH SIGNATURE-----",
+    b"PGP": b"-----END PGP SIGNATURE-----",
+}
+# What ssh-keygen prints for a good signature checked without an allowed-signers file.
+SSH_GOOD_SIGNATURE: Final = re.compile(
+    r'Good "git" signature with (?P<algorithm>[A-Z0-9-]+) '
+    r"key (?P<fingerprint>SHA256:[A-Za-z0-9+/]+)",
+)
+# gpg status words that end a verification as not good, whatever else was printed.
+GPG_BAD_STATUS: Final = frozenset({"BADSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "ERRSIG"})
 
 HTTPS_URL: Final = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)+")
 FILE_URL: Final = re.compile(r"file:///[A-Za-z0-9._~/-]+")
@@ -104,7 +128,11 @@ CONFIG_KEYS: Final = frozenset(
 # Optional. An absent ``steps`` means no step may be requested, which is the safe direction. An
 # absent ``source`` means ``remote``: the role writes ``source`` only for a host that takes
 # bundles, so every other host keeps a configuration a program from before this key still parses.
-OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps", "source"})
+# ``release_signers`` and ``require_release_tag`` are written only for a host that is moved to the
+# release-tag route, so every other host keeps a configuration a program from before them parses.
+OPTIONAL_CONFIG_KEYS: Final = frozenset(
+    {"steps", "source", "release_signers", "require_release_tag"}
+)
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
 # role that its playbook keeps behind the ``never`` tag. This is the only home of the list: the
@@ -253,6 +281,10 @@ class Why(enum.Enum):
     BUNDLE_UNPACK = "the bundle's objects could not be unpacked, or failed the object check"
     BUNDLE_FSCK = "the bundle's objects failed the object check"
     BUNDLE_HEAD = "the bundle's HEAD is not the requested commit"
+    CONFIG_RELEASE_FLAG = "require_release_tag must be true or false"
+    CONFIG_RELEASE_SIGNERS = "release_signers must be a list, and not empty when a tag is required"
+    RELEASE_TAG_ABSENT = "no release tag signed by a release key names this commit"
+    RELEASE_TAG_FLOOD = "more release tags name this commit than the limit"
 
 
 class TriggerError(Exception):
@@ -339,6 +371,18 @@ class BadBundleError(RefusedError):
     """Standard input is not a complete, well-formed bundle whose HEAD is the requested commit."""
 
     reason = "bad-bundle"
+
+
+class ReleaseTagMissingError(RefusedError):
+    """A release tag is required and none that names the commit is signed by a release key."""
+
+    reason = "release-tag-missing"
+
+
+class ReleaseTagFloodError(RefusedError):
+    """More release tags name the commit than the limit, so none is believed unseen."""
+
+    reason = "too-many-release-tags"
 
 
 class UnsignedError(RefusedError):
@@ -445,6 +489,8 @@ class Config:
     keep_runs: int
     steps: tuple[Step, ...] = ()
     source: Literal["remote", "bundle"] = "remote"
+    release_signers: tuple[Signer, ...] = ()
+    require_release_tag: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -772,6 +818,25 @@ def _absolute(data: Mapping[str, object], key: str, longest: int = 4096) -> Path
     return Path(text)
 
 
+def _release_signers_from(data: Mapping[str, object]) -> tuple[Signer, ...]:
+    """Return the release keys, and refuse a requirement that no key could ever satisfy.
+
+    The release keys are a list of their own. A key of ``signers`` is never read for a tag, and a
+    key of this list is never read for a commit.
+
+    Raises:
+        ConfigError: the flag is not a boolean, the keys are not a list, or a tag is required
+            and there is no key.
+    """
+    flag = data.get("require_release_tag", False)
+    if not isinstance(flag, bool):
+        raise ConfigError(Why.CONFIG_RELEASE_FLAG)
+    value = data.get("release_signers", [])
+    if not isinstance(value, list) or (flag and not value):
+        raise ConfigError(Why.CONFIG_RELEASE_SIGNERS)
+    return tuple(_signer_from(entry) for entry in value)
+
+
 def parse_config(text: str) -> Config:
     """Turn the configuration text into a validated ``Config``.
 
@@ -811,6 +876,7 @@ def parse_config(text: str) -> Config:
     source = data.get("source", SOURCE_REMOTE)
     if source not in SOURCES:
         raise ConfigError(Why.CONFIG_SOURCE)
+    release_signers = _release_signers_from(data)
     return Config(
         remote_url=url,
         signers=tuple(_signer_from(entry) for entry in signers_value),
@@ -823,6 +889,8 @@ def parse_config(text: str) -> Config:
         keep_runs=_whole(data, "keep_runs", 1, 1_000),
         steps=_steps_from(data),
         source=SOURCE_BUNDLE if source == SOURCE_BUNDLE else SOURCE_REMOTE,
+        release_signers=release_signers,
+        require_release_tag=data.get("require_release_tag") is True,
     )
 
 
@@ -1030,6 +1098,31 @@ class Git:
         environment = {**self.environment, **(extra_environment or {})}
         return run_command([*argv, *args], environment)
 
+    def object_bytes(self, kind: Literal["tag"], name: str) -> bytes:
+        """Return an object's exact bytes, which a signature is checked over.
+
+        The text runner would translate line ends and replace bytes that are not UTF-8, so a
+        signature over them would not verify.
+
+        Raises:
+            GitError: git cannot run or exits with a non-zero status.
+        """
+        argv = [str(self._tools.git), f"--git-dir={self._git_dir}", "cat-file", kind, name]
+        try:
+            done = subprocess.run(  # noqa: S603 - constants and an id this program read from git
+                argv,
+                capture_output=True,
+                env=dict(self.environment),
+                stdin=subprocess.DEVNULL,
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise GitError(Why.COMMAND_INCOMPLETE, "git") from None
+        if done.returncode != 0:
+            raise GitError(Why.COMMAND_STATUS, f"git cat-file exited {done.returncode}")
+        return done.stdout
+
     def output(
         self,
         *args: str,
@@ -1101,6 +1194,34 @@ class Repository:
         listing = self._git.output("ls-tree", "-z", commit, "--", path)
         return listing.startswith(("100644 blob ", "100755 blob "))
 
+    def release_tags_naming(self, commit: str) -> list[str]:
+        """Return the ids of the annotated release tags that name exactly this commit.
+
+        Only what is under ``RELEASE_REF_PREFIX`` is read. A ref is dropped unless it is a tag
+        object (so a lightweight tag is dropped), whose own text names this commit directly (so a
+        tag of a tag is dropped) and has a name of the fixed shape in its own text, whatever the
+        ref is called. Nothing here reads a signature.
+
+        Raises:
+            GitError: git cannot list the refs.
+        """
+        fields = "%(objectname)%00%(objecttype)%00%(tag)%00%(*objecttype)%00%(*objectname)"
+        listing = self._git.output("for-each-ref", f"--format={fields}", RELEASE_REF_PREFIX)
+        found: set[str] = set()
+        for line in listing.split("\n"):
+            parts = line.split("\x00")
+            if len(parts) != len(fields.split("%00")):
+                continue
+            tag_id, kind, name, target_kind, target = parts
+            if (
+                kind == "tag"
+                and target_kind == "commit"
+                and target == commit
+                and RELEASE_NAME.fullmatch(name) is not None
+            ):
+                found.add(tag_id)
+        return sorted(found)
+
 
 class Cache(Repository):
     """A root-owned bare repository holding only what was fetched from main."""
@@ -1110,13 +1231,18 @@ class Cache(Repository):
         super().__init__(git)
         self._remote_url = remote_url
 
-    def fetch_main(self) -> None:
+    def fetch_main(self, release_tags: bool = False) -> None:
         """Fetch ``main`` and nothing else, so a commit not on main is not even present.
+
+        A host that requires a release tag also fetches the ``release/`` tags, into a namespace
+        that is emptied first so a tag withdrawn at the remote is gone.
 
         Raises:
             GitError: the fetch fails.
         """
         self._git.initialise()
+        if release_tags:
+            self._empty_release_namespace()
         self._git.output(
             "fetch",
             "--no-tags",
@@ -1126,7 +1252,19 @@ class Cache(Repository):
             "--",
             self._remote_url,
             f"+refs/heads/main:{MAIN_REF}",
+            *([RELEASE_FETCH_SPEC] if release_tags else []),
         )
+
+    def _empty_release_namespace(self) -> None:
+        """Delete every ref under ``RELEASE_REF_PREFIX``.
+
+        Raises:
+            GitError: git cannot list or delete the refs.
+        """
+        listing = self._git.output("for-each-ref", "--format=%(refname)", RELEASE_REF_PREFIX)
+        for ref in listing.split("\n"):
+            if ref.startswith(RELEASE_REF_PREFIX):
+                self._git.output("update-ref", "-d", ref)
 
     def require_ancestor_of_main(self, commit: str) -> None:
         """Refuse a commit that is not an ancestor of the fetched tip of main.
@@ -1159,12 +1297,14 @@ class Quarantine(Repository):
             start = handle.read(max(len(header) for header in BUNDLE_HEADERS))
         return start.startswith(BUNDLE_HEADERS)
 
-    def admit(self, bundle: Path, commit: str) -> None:
+    def admit(self, bundle: Path, commit: str, release_tags: bool = False) -> None:
         """Unpack the bundle here and require its HEAD to be the requested commit.
 
         The bundle needs a bundle header and must verify (a complete history). Its objects must
         unpack and pass git's object check, made by the fetch and by ``git fsck``, so the guard
         does not depend on the git version (older gits ignore ``transfer.fsckObjects`` here).
+        A host that requires a release tag also takes the bundle's ``release/`` tags, into the
+        namespace the signature check reads; the quarantine is new for each request.
 
         Raises:
             BadBundleError: Any of those fails; each has its own sentence.
@@ -1184,6 +1324,7 @@ class Quarantine(Repository):
             "--",
             str(bundle),
             f"+HEAD:{QUARANTINE_REF}",
+            *([RELEASE_FETCH_SPEC] if release_tags else []),
         )
         if fetched.returncode != 0:
             raise BadBundleError(Why.BUNDLE_UNPACK)
@@ -1344,6 +1485,125 @@ class Verifier:
         if not found:
             raise GitError(Why.PGP_NO_FINGERPRINT)
         return found
+
+
+def split_signed_tag(raw: bytes) -> tuple[bytes, bytes, Literal["ssh", "openpgp"]] | None:
+    """Split a tag object into the bytes that were signed and its detached signature.
+
+    The signature is the armoured block that runs to the end of the object, from the last line
+    that opens one. Anything else (no block, a block that does not close on the last line) is
+    not a signed tag and is None. A message that holds a decoy block moves the split and so
+    makes the signature fail, which is the safe direction.
+    """
+    starts = list(TAG_SIGNATURE_START.finditer(raw))
+    if not starts:
+        return None
+    start = starts[-1]
+    block = raw[start.start() :]
+    kind = start.group("kind")
+    if not block.rstrip(b"\n").endswith(TAG_SIGNATURE_END[kind]):
+        return None
+    return raw[: start.start()], block, "ssh" if kind == b"SSH" else "openpgp"
+
+
+class ReleaseVerifier(Verifier):
+    """Checks that a tag is signed by one of the release keys, and by nothing else.
+
+    It is built from the release keys alone. A key of the commit signer list is never put in its
+    keyring or its fingerprints, so a commit signer cannot sign a release. The signature is read
+    from the tag object's own bytes, never from the commit it names.
+    """
+
+    def signed_by_release_key(self, tag: str, scratch_root: Path) -> bool:
+        """Say whether the tag object carries a good signature by a listed release key.
+
+        Raises:
+            GitError: the keyring cannot be built or git cannot run.
+        """
+        split = split_signed_tag(self._git.object_bytes("tag", tag))
+        if split is None:
+            return False
+        payload, signature, key_format = split
+        with tempfile.TemporaryDirectory(dir=scratch_root, prefix="v-") as scratch:
+            home = Path(scratch)
+            try:
+                allowed, _settings = self._prepare(home)
+                (home / "tag.sig").write_bytes(signature)
+                if key_format == "ssh":
+                    return self._ssh_good(home, payload, allowed)
+                (home / "tag.payload").write_bytes(payload)
+                return self._pgp_good(home, allowed)
+            finally:
+                self._stop_agent(home / "gnupg")
+
+    def _ssh_good(self, home: Path, payload: bytes, allowed: frozenset[str]) -> bool:
+        """Say whether ssh-keygen finds a good ``git``-namespace signature by an allowed key.
+
+        Raises:
+            GitError: ssh-keygen cannot run to completion.
+        """
+        try:
+            done = subprocess.run(  # noqa: S603 - constants and paths this program made
+                [
+                    str(self._tools.ssh_keygen),
+                    "-Y",
+                    "check-novalidate",
+                    "-n",
+                    "git",
+                    "-s",
+                    str(home / "tag.sig"),
+                ],
+                capture_output=True,
+                input=payload,
+                env=dict(self._git.environment),
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise GitError(Why.COMMAND_INCOMPLETE, "ssh-keygen") from None
+        if done.returncode != 0:
+            return False
+        for line in done.stdout.decode("utf-8", errors="replace").splitlines():
+            good = SSH_GOOD_SIGNATURE.fullmatch(line.strip())
+            if good is not None and good.group("fingerprint") in allowed:
+                return True
+        return False
+
+    def _pgp_good(self, home: Path, allowed: frozenset[str]) -> bool:
+        """Say whether gpg finds a good signature by an allowed key, from its status lines."""
+        gnupg = home / "gnupg"
+        environment = {**self._git.environment, "GNUPGHOME": str(gnupg)}
+        done = run_command(
+            [
+                str(self._tools.gpg),
+                "--batch",
+                "--no-tty",
+                "--homedir",
+                str(gnupg),
+                "--status-fd",
+                "1",
+                "--verify",
+                str(home / "tag.sig"),
+                str(home / "tag.payload"),
+            ],
+            environment,
+        )
+        words: set[str] = set()
+        fingerprints: set[str] = set()
+        for line in done.stdout.split("\n"):
+            fields = line.split()
+            if len(fields) < 2 or fields[0] != "[GNUPG:]":
+                continue
+            words.add(fields[1])
+            if fields[1] == "VALIDSIG" and len(fields) >= 3:
+                fingerprints.add(fields[2])
+                fingerprints.add(fields[-1])
+        return (
+            done.returncode == 0
+            and {"GOODSIG", "VALIDSIG"} <= words
+            and not words & GPG_BAD_STATUS
+            and any(item in allowed for item in fingerprints)
+        )
 
 
 class Workspace:
@@ -1904,10 +2164,8 @@ class Trigger:
         try:
             git = Git(self._tools, directory, self._workspace.home, protocols="file")
             quarantine = Quarantine(git)
-            quarantine.admit(spool, commit)
-            Verifier(git, quarantine, self._tools, self._config.signers).verify(
-                commit, self._workspace.scratch
-            )
+            quarantine.admit(spool, commit, release_tags=self._config.require_release_tag)
+            self._require_authority(git, quarantine, commit)
             floor = self._workspace.last_applied()
             if floor is None:
                 raise NoFloorError(Why.FLOOR_ABSENT)
@@ -1967,15 +2225,40 @@ class Trigger:
         self._require_tools()
         git = Git(self._tools, self._workspace.repo, self._workspace.home)
         cache = Cache(git, self._config.remote_url)
-        cache.fetch_main()
+        cache.fetch_main(release_tags=self._config.require_release_tag)
         cache.require_ancestor_of_main(commit)
         floor = self._workspace.last_applied()
         if floor is not None and floor != commit and not cache.is_ancestor(floor, commit):
             raise RollbackError(Why.COMMIT_OLDER)
-        Verifier(git, cache, self._tools, self._config.signers).verify(
-            commit, self._workspace.scratch
-        )
+        self._require_authority(git, cache, commit)
         return self._checked_out_and_run(cache, mode, commit, step)
+
+    def _require_authority(self, git: Git, repository: Repository, commit: str) -> None:
+        """Require what makes this host run the commit: a commit signer, or a release tag.
+
+        Both sources and every mode (apply, check, step) call this one method, before any playbook
+        is chosen, so a mode added later is covered and never silently exempt. A host not told to
+        require a release tag checks the commit's signature as before. A host that is told to
+        requires an annotated tag that names the commit and is signed by a release key; it does not
+        read the commit's own signature, so its trust does not rest on the hosting platform's key.
+
+        Raises:
+            ReleaseTagFloodError: more tags name the commit than ``MAX_RELEASE_CANDIDATES``.
+            ReleaseTagMissingError: no tag that names the commit is signed by a release key.
+        """
+        if not self._config.require_release_tag:
+            Verifier(git, repository, self._tools, self._config.signers).verify(
+                commit, self._workspace.scratch
+            )
+            return
+        candidates = repository.release_tags_naming(commit)
+        if len(candidates) > MAX_RELEASE_CANDIDATES:
+            raise ReleaseTagFloodError(Why.RELEASE_TAG_FLOOD)
+        verifier = ReleaseVerifier(git, repository, self._tools, self._config.release_signers)
+        if not any(
+            verifier.signed_by_release_key(tag, self._workspace.scratch) for tag in candidates
+        ):
+            raise ReleaseTagMissingError(Why.RELEASE_TAG_ABSENT)
 
     def _checked_out_and_run(
         self, repository: Repository, mode: Mode, commit: str, step: Step | None

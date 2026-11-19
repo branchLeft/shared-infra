@@ -956,8 +956,13 @@ class ConfigSourceTests(unittest.TestCase):
         # The check the earlier program made, written out: no key outside its sets.
         self.assertTrue(trigger.CONFIG_KEYS <= set(data) <= old_keys)
 
-    def test_the_new_key_is_the_only_one_added_to_the_optional_set(self) -> None:
-        self.assertEqual({"steps", "source"}, set(trigger.OPTIONAL_CONFIG_KEYS))
+    def test_the_optional_set_is_exactly_the_keys_a_host_may_leave_out(self) -> None:
+        # ``release_signers`` and ``require_release_tag`` are the release-tag route's two keys
+        # (test_pull_trigger_release_tag); a host that does not use it carries neither.
+        self.assertEqual(
+            {"steps", "source", "release_signers", "require_release_tag"},
+            set(trigger.OPTIONAL_CONFIG_KEYS),
+        )
 
 
 class PullRouteUnchangedTests(unittest.TestCase):
