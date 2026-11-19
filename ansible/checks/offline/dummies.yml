@@ -91,3 +91,10 @@ overrides:
     value:
       from_address: 192.0.2.1
       public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+  # The tunnel role's two keys, which the role reads from its inputs. Throwaway public keys.
+  tenant_scrape_tunnel_scraper_public_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+  tenant_scrape_tunnel_target_host_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
