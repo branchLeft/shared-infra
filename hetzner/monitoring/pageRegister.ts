@@ -4,7 +4,7 @@
  * and why alerts group on the cause, is in `pageRegister.md`.
  */
 
-export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks';
+export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks' | 'github-workflow';
 
 export interface PageRegisterEntry {
   /** Stable slug -- the identity a future change argues about, never renamed. */
@@ -22,9 +22,10 @@ export interface PageRegisterEntry {
   /**
    * How this entry's page actually reaches a phone. Six entries route
    * through this stack's own Alertmanager; the drain worker's dead-man's
-   * switch pages through its own Healthchecks.io check directly, so this
-   * entry renders no Alertmanager route at all -- it is listed here only so
-   * the register still names every path that can reach the phone.
+   * switch pages through its own Healthchecks.io check directly, and the
+   * secret-scanning page is posted to ntfy by a scheduled workflow. Neither
+   * of those two renders an Alertmanager route -- they are listed here only
+   * so the register still names every path that can reach the phone.
    */
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
@@ -139,6 +140,19 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     alertName: 'StoppedDemoReaper',
     deliveryPath: 'alertmanager',
     dormant: true,
+    tenantScoped: false,
+  },
+  {
+    id: 'secret-scanning-alert',
+    name: 'A secret-scanning alert',
+    reason:
+      'A credential pushed to a public repository is exposed the moment it lands, so it ' +
+      "cannot wait for a digest. A scheduled workflow polls the organisation's open " +
+      'secret-scanning alerts on public repositories and sends one ntfy page per new alert; ' +
+      'the page never carries the secret.',
+    alertName: null,
+    deliveryPath: 'github-workflow',
+    dormant: false,
     tenantScoped: false,
   },
 ] as const;

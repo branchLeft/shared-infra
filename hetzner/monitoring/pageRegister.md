@@ -17,6 +17,17 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+## Entries delivered by a workflow
+
+The `github-workflow` delivery path is for a page that a scheduled workflow
+posts straight to ntfy, rather than one raised by Alertmanager or sent by a
+Healthchecks.io check. Such an entry has no `alertName`, so it renders no
+Alertmanager route, is not in `pageAlertNames`, and is not checked by
+`findLiveEntriesWithoutPageRule`, which looks at Alertmanager entries only.
+Its producer is `.github/workflows/secret-alert-pager.yml`. The entry is
+registered so that the page is a reviewed entry in this list, not a silent
+route that exists only in the workflow.
+
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of
