@@ -66,11 +66,14 @@ against the real register and the real rendered rules, and against the reaper
 entry flipped to live with no rule, which must report it.
 
 Two `severity: page` rules come from the edge's ban classifier on edge1, and their
-entries carry no exemption. `EdgeBanIssued` pages for a ban on an owned address only
-(`edge_ban_owned{owned="true"}`); `EdgeBanOwnerStale` pages when the classifier has not
-run for over 15 minutes. While the classifier is stale, `EdgeBanIssued` also pages every
-ban. A ban on any other address is `EdgeBanUnowned`, a warning that goes to email and is
-not registered. Each of the other three live Alertmanager entries carries a
+entries carry no exemption. `EdgeBanIssued` pages for each ban on an owned address
+(`edge_ban_owned{owned="true"}`, one sample per decision id); `EdgeBanOwnerStale` pages
+when the classifier has not run for over 15 minutes, once that has lasted 5 minutes.
+`EdgeBanIssued` also pages every ban while the classifier is stale (at once) or has
+reported and then been absent for 10 minutes; a classifier that has never reported
+pages at once. While the role is disabled (`EDGE_BAN_OWNER_ENABLED` is `false`),
+`EdgeBanOwnerStale` is routed to the `discard` receiver, not to a page. A ban on any other address is
+`EdgeBanUnowned`, a warning that goes to email and is not registered. Each of the other three live Alertmanager entries carries a
 `ruleExemption`: the tier-two safety
 match and the failed-unsafe tenant are raised by the platform itself, and the
 reader-facing probe's page is per tenant, which this stack's instance-labelled
