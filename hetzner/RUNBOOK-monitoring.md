@@ -631,6 +631,14 @@ through `db1`'s tunnel on `10.20.1.20:9105`
 reads `down`, until that tunnel is installed and the label flipped. It exists
 only for the length of the migration.
 
+`release_watcher` is the odd one out: it reads a file from GitHub's
+raw-content host (`ghost_release_watcher_last_success_timestamp_seconds`, kept
+on the `state/release-watcher` branch of `branchLeft/ghost-platform`), carries
+no `expected_up` label on purpose, and so is not in the list above;
+`render.md#the-release-watcher-scrape-path` says why. A `down` there is read at 24
+hours by `TargetDownUnmarked`, and `ReleaseWatcherStale` is the alert that
+matters.
+
 `stalwart` is the one target here whose credential is not in this repo and
 not in the container image. It is `basic_auth` with a `password_file`, written
 onto the host by `render_alertmanager_config.py` from
