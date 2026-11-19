@@ -554,6 +554,20 @@ describe('findLiveEntriesWithoutPageRule', () => {
     expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([]);
   });
 
+  it('leaves a GitHub-workflow entry alone even with an alertname, and still reports an Alertmanager one', () => {
+    const register = [
+      live({
+        id: 'workflow',
+        alertName: 'SyntheticWorkflowAlert',
+        deliveryPath: 'github-workflow',
+      }),
+      live({ id: 'control', alertName: 'SyntheticAlertmanagerAlert' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([
+      'SyntheticAlertmanagerAlert',
+    ]);
+  });
+
   it('reports every offender, in register order', () => {
     const register = [
       live({ id: 'a', alertName: 'First' }),
