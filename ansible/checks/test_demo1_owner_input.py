@@ -22,7 +22,11 @@ PULL_ROLES = frozenset(("ansible_runtime", "pull_trigger"))
 
 
 def _mapping(value: object) -> dict[str, object]:
-    """Return a YAML mapping as a dict, or fail the test when it is not one."""
+    """Return a YAML mapping as a dict, or fail the test when it is not one.
+
+    Raises:
+        TypeError: the value is not a mapping.
+    """
     if not isinstance(value, dict):
         message = f"expected a mapping, got {type(value).__name__}"
         raise TypeError(message)
@@ -30,7 +34,11 @@ def _mapping(value: object) -> dict[str, object]:
 
 
 def _names(value: object) -> dict[str, list[str]]:
-    """Return a host-to-names mapping of the loader, with each name list as strings."""
+    """Return a host-to-names mapping of the loader, with each name list as strings.
+
+    Raises:
+        TypeError: a host's value is not a list.
+    """
     found: dict[str, list[str]] = {}
     for host, names in _mapping(value).items():
         if not isinstance(names, list):
@@ -45,7 +53,11 @@ def _doc(path: Path) -> dict[str, object]:
 
 
 def _play_roles(path: Path) -> list[object]:
-    """Return the roles of a host playbook's one play."""
+    """Return the roles of a host playbook's one play.
+
+    Raises:
+        TypeError: the playbook holds no play.
+    """
     plays = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(plays, list) or not plays:
         message = f"{path.name} holds no play"
@@ -67,9 +79,8 @@ class Demo1OwnerInput(unittest.TestCase):
         self.assertIn(INPUT, optional["demo1"])
 
     def test_demo1_applies_the_loader_after_the_pull_roles_and_before_any_reader(self) -> None:
-        roles = [
-            Path(str(_mapping(entry).get("role", entry))).name for entry in _play_roles(self.playbook)
-        ]
+        entries = _play_roles(self.playbook)
+        roles = [Path(str(_mapping(entry).get("role", entry))).name for entry in entries]
         self.assertIn(LOADER, roles)
         self.assertEqual(roles[: roles.index(LOADER)], ["ansible_runtime", "pull_trigger"])
         self.assertLess(roles.index(LOADER), roles.index("broker_deploy"))
