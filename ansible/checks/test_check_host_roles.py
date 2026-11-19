@@ -66,32 +66,28 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 
 # The last pull role in every enrolled playbook. Whatever follows it is the host's own roles.
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-# The roles a real playbook applies after the pull roles: host_baseline (this change) and the
-# roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), egress_nat (the
-# NAT gateway, after host_baseline for its Docker and iptables), ci_jump (directly after ci_login;
-# it only reports until the owner enables it), deploy_tooling and
-# edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
-# the deploy tooling installs), then edge1's node exporter and tenant_scrape_tunnel (after the edge
-# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's three
-# monitoring roles after the edge stack (exporters_and_collectors, ntfy_pager, then
-# monitoring_stack), then sweego_receiver (last of all: it refuses to run until its secret files
-# exist), app1's host_inputs,
-# host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
-# host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
-# order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
-# db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
-# first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
-# (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
-# the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
-# backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
-# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's broker_deploy (first: demo1_build
-# reads what it leaves behind), two build roles and spool_path_account. ops1 and db1 also apply
-# deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
-# One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
+# The roles a real playbook applies after the last pull role, in run order. edge1: host_inputs
+# (the loader goes first, R11), host_baseline, egress_nat (after host_baseline for its Docker and
+# iptables), ci_login, ci_jump (directly after ci_login; it only reports until the owner enables
+# it), deploy_verifier, deploy_tooling, edge_stack (it needs Docker from host_baseline and the
+# compose unit and wrapper deploy_tooling installs), node_exporter, tenant_scrape_tunnel (after
+# the edge stack and node_exporter; its edge1 half only reports until its data is filled),
+# exporters_and_collectors, ntfy_pager, monitoring_stack, then sweego_receiver last (it refuses to
+# run until its secret files exist). app1: host_inputs, host_baseline, breakglass_grant_host,
+# deploy_verifier, website_app1 and publicpress_website_app1 (both after Docker), deploy_tooling
+# and deploy_slot_keys (the slot keys need the wrapper), tenant_onboarding, export_bundler, then
+# node_exporter last (so a disk refusal holds nothing else back). db1: host_inputs, host_baseline,
+# deploy_verifier, deploy_tooling, db1_stack, db1_backup_timers, node_exporter, db1_grants (after
+# the timers that deliver the dump programs it checks). ops1: host_inputs, ci_step_login (after
+# host_baseline), breakglass_mint_host, safety_service, safety_channel_key, deploy_verifier,
+# deploy_tooling, control_plane, status_page (it binds the private address, so it follows the
+# drop's role), nextcloud_stack, backup_worker, backup_restore (it reads the worker's variables),
+# control_plane_db (it asserts the directory control_plane makes), node_exporter,
+# mail_collector_inputs, mail_collector, spool_paths (it reads mail_collector's descriptors), then
+# ring_controller_host last so its failure holds nothing back. demo1: broker_deploy first
+# (demo1_build reads what it leaves behind), then demo1_build, demo1_egress_spool and
+# spool_path_account. One test holds the real playbooks to these lists; fixtures start from the
+# pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
         "host_inputs",
