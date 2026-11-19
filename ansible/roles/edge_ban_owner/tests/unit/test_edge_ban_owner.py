@@ -305,18 +305,26 @@ class ClassificationTests(RuntimeTestCase):
         self.invoke(runtime)
         self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 3})
 
-    def test_a_simulated_flag_that_is_any_truthy_value_skips_the_decision(self) -> None:
-        simulated: list[object] = [True, "true", "True", " TRUE ", "yes", 1, "1", [1], {"a": 1}]
-        real: list[object] = [False, None, 0, "", "false", "False", "0", "no", "off", [], {}]
-        for flag in simulated:
-            with self.subTest(simulated=flag):
-                self.invoke(
-                    FakeRuntime(
-                        files=self.owner_log(OWNER_ADDRESS),
-                        cscli=cscli_text(alert(decision(SCANNER_ADDRESS, simulated=flag))),
-                    )
-                )
-                self.assertEqual(self.textfile_totals(), {})
+    def test_only_json_true_marks_a_decision_simulated(self) -> None:
+        self.invoke(
+            FakeRuntime(
+                files=self.owner_log(OWNER_ADDRESS),
+                cscli=cscli_text(alert(decision(SCANNER_ADDRESS, simulated=True))),
+            )
+        )
+        self.assertEqual(self.textfile_totals(), {})
+        real: list[object] = [
+            False,
+            None,
+            0,
+            1,
+            "true",
+            "yes",
+            "0.0",
+            [],
+            {},
+            [1],
+        ]
         for flag in real:
             with self.subTest(simulated=flag):
                 self.invoke(

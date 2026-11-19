@@ -2180,17 +2180,11 @@ tests:
         alertname: HostCPUSaturated
         exp_alerts: []
 
-  # EdgeBanIssued, EdgeBanUnowned, EdgeBanOwnerStale: the edge_ban_owner timer's
-  # textfile beside CrowdSec's own decision gauge. Owned bans are one sample per
-  # ban (labels reason, owned, decision_id: CrowdSec's integer id, never an
-  # address); a decision with no usable id is one aggregated sample per scenario,
-  # and unowned bans are always aggregated. The last-run series `0+30x..` at a
-  # 30s interval equals the evaluation time, so the classifier ran just now;
-  # `0x..` is a run that never happened again.
-  #
-  # An owned ban with no decision_id is the aggregated form: one alert per
-  # scenario carrying the count. The same scenario's unowned bans are another
-  # series and do not add to it.
+  # EdgeBanIssued, EdgeBanUnowned, EdgeBanOwnerStale: the edge_ban_owner textfile
+  # beside CrowdSec's decision gauge. An owned ban with a decision_id is one sample
+  # (integer id, never an address); without one, owned bans aggregate per scenario,
+  # and unowned bans always do, as their own series. The last run `0+30x..` equals
+  # the evaluation time (ran just now); `0x..` never repeated.
   - interval: 30s
     input_series:
       - series: 'edge_ban_owned{reason="crowdsecurity/http-admin-interface-probing", owned="true", host="edge1", job="node"}'

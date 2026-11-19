@@ -87,7 +87,6 @@ SAFE_REASON = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_./-]{0,127}\Z")
 DOTTED_QUAD = re.compile(r"\d+\.\d+\.\d+\.\d+")
 # CrowdSec's decision id is a database row number; written only as digits, it holds no address.
 DECISION_ID = re.compile(r"\A[0-9]{1,18}\Z")
-FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 # A sample of the textfile: scenario, owned flag, and the decision id when the sample is one ban.
@@ -805,12 +804,10 @@ def usable_decision_id(candidate: object) -> str | None:
 def is_simulated(flag: object) -> bool:
     """Whether a decision's `simulated` field marks it as simulated.
 
-    CrowdSec writes a JSON boolean. Anything else that is truthy counts as simulated too, apart
-    from a string that spells false, so an odd encoding of true never pages as a real ban.
+    CrowdSec writes a JSON boolean; only true counts. Any other value is a ban, so an odd
+    encoding pages instead of being dropped.
     """
-    if isinstance(flag, str) and flag.strip().casefold() in FALSE_SPELLINGS:
-        return False
-    return bool(flag)
+    return flag is True
 
 
 def ban_from_decision(decision: object, alert_scenario: object) -> Ban | None:
