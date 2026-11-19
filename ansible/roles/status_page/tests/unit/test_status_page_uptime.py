@@ -9,7 +9,6 @@ prove a seeded gap of known length gives the percentage worked out by hand.
 import contextlib
 import io
 import json
-import sqlite3
 import threading
 import unittest
 from datetime import UTC, datetime
@@ -50,17 +49,16 @@ def _minutes(start: int, count: int, *, failing: range = range(0)) -> list[tuple
     return [(start + index * MINUTE, index not in failing) for index in range(count)]
 
 
-def _store_with(
-    case: unittest.TestCase, results: dict[str, list[tuple[int, bool]]]
-) -> sqlite3.Connection:
-    """Return a store holding these samples, closed when the test ends."""
-    connection = uptime.open_store(Path(":memory:"))
-    case.addCleanup(connection.close)
+def _store_with(case: unittest.TestCase, results: dict[str, list[tuple[int, bool]]]) -> Path:
+    """Return a sample directory holding these samples, removed when the test ends."""
+    tmp = TemporaryDirectory()
+    case.addCleanup(tmp.cleanup)
+    directory = uptime.open_store(Path(tmp.name) / "samples")
     uptime.record(
-        connection,
+        directory,
         [uptime.Sample(key, when, ok) for key, series in results.items() for when, ok in series],
     )
-    return connection
+    return directory
 
 
 class ParseTest(unittest.TestCase):
@@ -113,20 +111,39 @@ class RecordTest(unittest.TestCase):
     """A probe sample is held once."""
 
     def test_the_same_result_read_twice_is_recorded_once(self) -> None:
-        connection = uptime.open_store(Path(":memory:"))
-        self.addCleanup(connection.close)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = uptime.open_store(Path(tmp.name) / "samples")
         samples = uptime.parse_statuses(_body({"k": _minutes(NOW - 600, 10)}))
-        self.assertEqual(uptime.record(connection, samples), 10)
-        self.assertEqual(uptime.record(connection, samples), 0)
-        self.assertEqual(uptime.record(connection, samples[5:] + samples[:2]), 0)
+        self.assertEqual(uptime.record(store, samples), 10)
+        self.assertEqual(uptime.record(store, samples), 0)
+        self.assertEqual(uptime.record(store, samples[5:] + samples[:2]), 0)
 
     def test_the_first_reading_of_a_sample_stands(self) -> None:
-        connection = uptime.open_store(Path(":memory:"))
-        self.addCleanup(connection.close)
-        uptime.record(connection, [uptime.Sample("k", NOW, True)])
-        uptime.record(connection, [uptime.Sample("k", NOW, False)])
-        (only,) = uptime.uptimes(connection, NOW)
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = uptime.open_store(Path(tmp.name) / "samples")
+        uptime.record(store, [uptime.Sample("k", NOW, True)])
+        uptime.record(store, [uptime.Sample("k", NOW, False)])
+        (only,) = uptime.uptimes(store, NOW)
         self.assertEqual((only.samples, only.successes), (1, 1))
+
+
+class StoreTest(unittest.TestCase):
+    """A damaged sample file stops the run, so a wrong figure is never printed."""
+
+    def test_a_line_that_is_not_a_sample_is_refused(self) -> None:
+        store = _store_with(self, {"k": [(NOW, True)]})
+        with (store / "k.tsv").open("a", encoding="ascii") as handle:
+            handle.write("not a sample\n")
+        with self.assertRaises(uptime.StoreError):
+            uptime.uptimes(store, NOW)
+        with self.assertRaises(uptime.StoreError):
+            uptime.record(store, [uptime.Sample("k", NOW + 60, True)])
+
+    def test_an_unsafe_endpoint_key_is_refused(self) -> None:
+        with self.assertRaises(uptime.StatusPayloadError):
+            uptime.parse_statuses([{"key": "../x", "results": []}])
 
 
 class UptimeTest(unittest.TestCase):
@@ -138,7 +155,7 @@ class UptimeTest(unittest.TestCase):
         start = NOW - 100 * DAY
         series_a = [(start + i * MINUTE, (i * 7919) % 211 != 0) for i in range(100 * 24 * 60 + 1)]
         series_b = [(when, ok) for when, ok in series_a if when >= NOW - 60 * DAY]
-        connection = _store_with(self, {"a": series_a, "b": series_b})
+        store = _store_with(self, {"a": series_a, "b": series_b})
 
         for key, series in (("a", series_a), ("b", series_b)):
             # The independent count: its own loop over the raw list, the window written out.
@@ -149,7 +166,7 @@ class UptimeTest(unittest.TestCase):
                     total += 1
                     if ok:
                         passed += 1
-            found = {item.endpoint_key: item for item in uptime.uptimes(connection, NOW)}[key]
+            found = {item.endpoint_key: item for item in uptime.uptimes(store, NOW)}[key]
             self.assertEqual((found.samples, found.successes), (total, passed), key)
             self.assertAlmostEqual(found.uptime_percent, 100 * passed / total, places=4)
 
@@ -157,10 +174,10 @@ class UptimeTest(unittest.TestCase):
         # 90 days of passing probes with one outage of exactly 90 failed probes (90 minutes):
         # (129 600 - 90) / 129 600 = 99.930 555...%.
         start = NOW - WINDOW_SAMPLES * MINUTE + MINUTE
-        connection = _store_with(
+        store = _store_with(
             self, {"gap": _minutes(start, WINDOW_SAMPLES, failing=range(40_000, 40_090))}
         )
-        (found,) = uptime.uptimes(connection, NOW)
+        (found,) = uptime.uptimes(store, NOW)
         self.assertEqual(found.samples, WINDOW_SAMPLES)
         self.assertEqual(found.successes, WINDOW_SAMPLES - 90)
         self.assertEqual(found.uptime_percent, 99.9306)
@@ -169,15 +186,15 @@ class UptimeTest(unittest.TestCase):
     def test_the_window_is_ninety_days_not_thirty(self) -> None:
         self.assertEqual(uptime.WINDOW_DAYS, 90)
         # A failure 60 days old is outside Gatus's 30 days and inside ours.
-        connection = _store_with(
+        store = _store_with(
             self, {"k": [(NOW - 60 * DAY, False), (NOW - 91 * DAY, False), (NOW - 5 * DAY, True)]}
         )
-        (found,) = uptime.uptimes(connection, NOW)
+        (found,) = uptime.uptimes(store, NOW)
         self.assertEqual((found.samples, found.successes), (2, 1))
         self.assertEqual(found.uptime_percent, 50.0)
 
     def test_the_window_edges_are_after_the_start_and_up_to_now(self) -> None:
-        connection = _store_with(
+        store = _store_with(
             self,
             {
                 "k": [
@@ -188,12 +205,12 @@ class UptimeTest(unittest.TestCase):
                 ]
             },
         )
-        (found,) = uptime.uptimes(connection, NOW)
+        (found,) = uptime.uptimes(store, NOW)
         self.assertEqual((found.samples, found.successes), (2, 2))
 
     def test_failed_probes_count_against_the_figure(self) -> None:
-        connection = _store_with(self, {"k": _minutes(NOW - 3 * MINUTE, 4, failing=range(2))})
-        (found,) = uptime.uptimes(connection, NOW)
+        store = _store_with(self, {"k": _minutes(NOW - 3 * MINUTE, 4, failing=range(2))})
+        (found,) = uptime.uptimes(store, NOW)
         self.assertEqual((found.samples, found.successes, found.uptime_percent), (4, 2, 50.0))
 
     def test_a_stretch_with_no_samples_lowers_coverage_and_leaves_the_figure(self) -> None:
@@ -203,8 +220,8 @@ class UptimeTest(unittest.TestCase):
             for when, ok in _minutes(NOW - WINDOW_SAMPLES * MINUTE + MINUTE, WINDOW_SAMPLES)
             if not NOW - 10 * DAY < when <= NOW - 9 * DAY
         ]
-        connection = _store_with(self, {"k": series})
-        (found,) = uptime.uptimes(connection, NOW)
+        store = _store_with(self, {"k": series})
+        (found,) = uptime.uptimes(store, NOW)
         self.assertEqual(found.uptime_percent, 100.0)
         self.assertEqual(found.samples, WINDOW_SAMPLES - 1440)
         self.assertEqual(
@@ -212,8 +229,8 @@ class UptimeTest(unittest.TestCase):
         )
 
     def test_an_endpoint_with_no_sample_in_the_window_is_absent_not_a_hundred(self) -> None:
-        connection = _store_with(self, {"old": [(NOW - 200 * DAY, True)]})
-        self.assertEqual(uptime.uptimes(connection, NOW), [])
+        store = _store_with(self, {"old": [(NOW - 200 * DAY, True)]})
+        self.assertEqual(uptime.uptimes(store, NOW), [])
 
 
 class _Page(BaseHTTPRequestHandler):
@@ -247,18 +264,18 @@ class CommandTest(unittest.TestCase):
         try:
             url = f"http://127.0.0.1:{server.server_port}/api/v1/endpoints/statuses"
             with TemporaryDirectory() as tmp:
-                db = Path(tmp) / "nested" / "samples.db"
+                db = Path(tmp) / "nested" / "samples"
                 first = io.StringIO()
                 with contextlib.redirect_stdout(first):
-                    self.assertEqual(uptime.main(["collect", "--url", url, "--db", str(db)]), 0)
+                    self.assertEqual(uptime.main(["collect", "--url", url, "--dir", str(db)]), 0)
                 self.assertEqual(first.getvalue().strip(), "read 5 samples, recorded 5 new")
                 second = io.StringIO()
                 with contextlib.redirect_stdout(second):
-                    uptime.main(["collect", "--url", url, "--db", str(db)])
+                    uptime.main(["collect", "--url", url, "--dir", str(db)])
                 self.assertEqual(second.getvalue().strip(), "read 5 samples, recorded 0 new")
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    uptime.main(["report", "--db", str(db), "--now", str(NOW)])
+                    uptime.main(["report", "--dir", str(db), "--now", str(NOW)])
         finally:
             server.shutdown()
             server.server_close()
@@ -283,8 +300,8 @@ class CommandTest(unittest.TestCase):
                         "collect",
                         "--url",
                         f"http://127.0.0.1:{server.server_port}/x",
-                        "--db",
-                        str(Path(tmp) / "s.db"),
+                        "--dir",
+                        str(Path(tmp) / "s"),
                     ]
                 )
         finally:

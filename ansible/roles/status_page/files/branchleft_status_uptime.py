@@ -5,10 +5,12 @@ deletes anything older than 32 days (storage/store/sql), and its uptime API and 
 `30d`, `7d`, `24h` and `1h` only. So the 90-day figure is made here, from samples this program
 records itself, and is never typed by hand.
 
-Two commands, both reading and writing one SQLite file:
+The samples live in one directory, one append-only file per endpoint, a line `<unix time>
+<TAB><1 or 0>` for each probe. Two commands read and write it:
 
-- `collect` asks the page for the latest results of every endpoint and records each probe
-  sample once, keyed by endpoint and instant, so reading the same result twice records it once.
+- `collect` asks the page for the latest results of every endpoint and appends each probe
+  sample once. A sample at or before the last one held for its endpoint is not appended, so
+  reading the same result twice records it once, and the first reading of an instant stands.
 - `report` prints, for every endpoint, the samples in the last 90 days, how many passed, the
   uptime that gives, and how much of the window the samples cover.
 
@@ -22,7 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
+import re
 import sys
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -37,17 +39,11 @@ PROBE_INTERVAL_SECONDS = 60
 RESULTS_PER_REQUEST = 100
 
 DEFAULT_URL = "http://127.0.0.1:8303/api/v1/endpoints/statuses"
-DEFAULT_DB = Path("/var/lib/branchleft/status-uptime/samples.db")
+DEFAULT_DIR = Path("/var/lib/branchleft/status-uptime/samples")
 REQUEST_TIMEOUT_SECONDS = 20
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS samples (
-    endpoint_key TEXT NOT NULL,
-    unix_time    INTEGER NOT NULL,
-    success      INTEGER NOT NULL CHECK (success IN (0, 1)),
-    PRIMARY KEY (endpoint_key, unix_time)
-) WITHOUT ROWID
-"""
+# An endpoint key becomes a file name, so only the characters Gatus writes in a key are allowed.
+_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
 class StatusPayloadError(ValueError):
@@ -56,11 +52,20 @@ class StatusPayloadError(ValueError):
     NOT_A_LIST = "the statuses body is not a list"
     NOT_AN_OBJECT = "an endpoint status is not an object"
     NO_KEY_OR_RESULTS = "an endpoint status has no key or no results list"
+    BAD_KEY = "an endpoint key is not a safe file name"
     BAD_RESULT = "a result has no timestamp or no success flag"
 
     def __init__(self, problem: str, key: str = "") -> None:
         """Say which problem, and for which endpoint when one is known."""
         super().__init__(f"{key}: {problem}" if key else problem)
+
+
+class StoreError(ValueError):
+    """A sample file holds a line that is not `<unix time><TAB><1 or 0>`."""
+
+    def __init__(self, file: str, line: int) -> None:
+        """Name the file and the line, counted from 1."""
+        super().__init__(f"{file}:{line}: not `<unix time><TAB><1 or 0>`")
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,8 @@ def parse_statuses(payload: object) -> list[Sample]:
         results = endpoint.get("results")
         if not isinstance(key, str) or not isinstance(results, list):
             raise StatusPayloadError(StatusPayloadError.NO_KEY_OR_RESULTS)
+        if _KEY.fullmatch(key) is None:
+            raise StatusPayloadError(StatusPayloadError.BAD_KEY, key)
         for result in results:
             if (
                 not isinstance(result, dict)
@@ -117,55 +124,76 @@ def parse_statuses(payload: object) -> list[Sample]:
     return samples
 
 
-def open_store(path: Path) -> sqlite3.Connection:
-    """Open the sample store, creating it and its directory when absent."""
-    if str(path) != ":memory:":
-        path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
-    connection.execute(_SCHEMA)
-    connection.commit()
-    return connection
+def open_store(directory: Path) -> Path:
+    """Create the sample directory when absent, and return it."""
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
-def record(connection: sqlite3.Connection, samples: list[Sample]) -> int:
-    """Store the samples not held yet, and return how many were new.
+def _read(path: Path) -> list[tuple[int, bool]]:
+    """Return the `(unix time, success)` pairs of one endpoint's file, in file order.
 
-    A sample already held is left as it was: its first reading is the one that stands.
+    Raises:
+        StoreError: a line is not `<unix time><TAB><1 or 0>`.
     """
-    before = connection.total_changes
-    connection.executemany(
-        "INSERT OR IGNORE INTO samples (endpoint_key, unix_time, success) VALUES (?, ?, ?)",
-        [(s.endpoint_key, s.unix_time, int(s.success)) for s in samples],
-    )
-    connection.commit()
-    return connection.total_changes - before
+    pairs: list[tuple[int, bool]] = []
+    for number, line in enumerate(path.read_text(encoding="ascii").splitlines(), start=1):
+        when, _, flag = line.partition("\t")
+        if not when.isdigit() or flag not in {"0", "1"}:
+            raise StoreError(path.name, number)
+        pairs.append((int(when), flag == "1"))
+    return pairs
 
 
-def uptimes(
-    connection: sqlite3.Connection, now: int, window_days: int = WINDOW_DAYS
-) -> list[Uptime]:
+def record(directory: Path, samples: list[Sample]) -> int:
+    """Append the samples not held yet, and return how many were new.
+
+    A sample at or before the last one held for its endpoint is left out, so the first reading
+    of an instant stands and an overlapping read adds nothing.
+    """
+    by_key: dict[str, list[Sample]] = {}
+    for sample in samples:
+        by_key.setdefault(sample.endpoint_key, []).append(sample)
+    added = 0
+    for key, found in by_key.items():
+        path = directory / f"{key}.tsv"
+        held = _read(path) if path.exists() else []
+        last = held[-1][0] if held else -1
+        fresh: dict[int, bool] = {}
+        for sample in sorted(found, key=lambda item: item.unix_time):
+            if sample.unix_time > last and sample.unix_time not in fresh:
+                fresh[sample.unix_time] = sample.success
+        if fresh:
+            with path.open("a", encoding="ascii") as handle:
+                handle.write("".join(f"{when}\t{int(ok)}\n" for when, ok in fresh.items()))
+            added += len(fresh)
+    return added
+
+
+def uptimes(directory: Path, now: int, window_days: int = WINDOW_DAYS) -> list[Uptime]:
     """Return each endpoint's uptime over the `window_days` ending at `now`, sorted by key.
 
-    The window holds the samples after `now - window` up to and including `now`.
+    The window holds the samples after `now - window` up to and including `now`. An endpoint
+    with no sample in the window is left out: it has no figure, which is not a figure of 100.
     """
     window = window_days * SECONDS_PER_DAY
     expected = window // PROBE_INTERVAL_SECONDS
-    rows = connection.execute(
-        "SELECT endpoint_key, COUNT(*), SUM(success), MIN(unix_time) FROM samples "
-        "WHERE unix_time > ? AND unix_time <= ? GROUP BY endpoint_key ORDER BY endpoint_key",
-        (now - window, now),
-    ).fetchall()
     found: list[Uptime] = []
-    for key, total, passed, first in rows:
+    for path in sorted(directory.glob("*.tsv")):
+        inside = [(when, ok) for when, ok in _read(path) if now - window < when <= now]
+        if not inside:
+            continue
+        passed = sum(1 for _, ok in inside if ok)
+        first = min(when for when, _ in inside)
         found.append(
             Uptime(
-                endpoint_key=str(key),
-                samples=int(total),
-                successes=int(passed),
-                uptime_percent=round(100 * int(passed) / int(total), 4),
+                endpoint_key=path.stem,
+                samples=len(inside),
+                successes=passed,
+                uptime_percent=round(100 * passed / len(inside), 4),
                 expected_samples=expected,
-                coverage_percent=round(100 * min(int(total), expected) / expected, 2),
-                first_sample=datetime.fromtimestamp(int(first), UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                coverage_percent=round(100 * min(len(inside), expected) / expected, 2),
+                first_sample=datetime.fromtimestamp(first, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
         )
     return found
@@ -181,27 +209,18 @@ def fetch_statuses(url: str) -> object:
     return body
 
 
-def _collect(url: str, db: Path) -> int:
+def _collect(url: str, directory: Path) -> int:
     samples = parse_statuses(fetch_statuses(url))
-    connection = open_store(db)
-    try:
-        new = record(connection, samples)
-    finally:
-        connection.close()
+    new = record(open_store(directory), samples)
     print(f"read {len(samples)} samples, recorded {new} new")
     return 0
 
 
-def _report(db: Path, now: int) -> int:
-    connection = open_store(db)
-    try:
-        found = uptimes(connection, now)
-    finally:
-        connection.close()
+def _report(directory: Path, now: int) -> int:
     document = {
         "window_days": WINDOW_DAYS,
         "generated_at": datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "endpoints": [asdict(item) for item in found],
+        "endpoints": [asdict(item) for item in uptimes(open_store(directory), now)],
     }
     print(json.dumps(document, indent=2))
     return 0
@@ -213,14 +232,14 @@ def main(argv: list[str]) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     collect = commands.add_parser("collect", help="record the page's latest probe samples")
     collect.add_argument("--url", default=DEFAULT_URL)
-    collect.add_argument("--db", type=Path, default=DEFAULT_DB)
+    collect.add_argument("--dir", type=Path, default=DEFAULT_DIR)
     report = commands.add_parser("report", help="print the 90-day uptime of every endpoint")
-    report.add_argument("--db", type=Path, default=DEFAULT_DB)
+    report.add_argument("--dir", type=Path, default=DEFAULT_DIR)
     report.add_argument("--now", type=int, default=None, help="unix time; default is the clock")
     args = parser.parse_args(argv)
     if args.command == "collect":
-        return _collect(args.url, args.db)
-    return _report(args.db, int(datetime.now(UTC).timestamp()) if args.now is None else args.now)
+        return _collect(args.url, args.dir)
+    return _report(args.dir, int(datetime.now(UTC).timestamp()) if args.now is None else args.now)
 
 
 if __name__ == "__main__":
