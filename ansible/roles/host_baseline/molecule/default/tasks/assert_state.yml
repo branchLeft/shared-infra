@@ -101,3 +101,20 @@
   loop: '{{ host_baseline_assert_state_units.results }}'
   loop_control:
     label: '{{ item.item }}'
+
+# The timer is what keeps old images from filling the disk, so it must be enabled and waiting.
+# The service is a oneshot that is never enabled: the timer starts it.
+- name: Ask systemd for the Docker image prune timer and service
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+  loop: [branchleft-docker-image-prune.timer, branchleft-docker-image-prune.service]
+  register: host_baseline_assert_state_prune_units
+
+- name: Assert the prune timer is enabled and waiting, and the service is not enabled
+  ansible.builtin.assert:
+    that:
+      - host_baseline_assert_state_prune_units.results[0].status.UnitFileState == 'enabled'
+      - host_baseline_assert_state_prune_units.results[0].status.ActiveState == 'active'
+      - host_baseline_assert_state_prune_units.results[1].status.UnitFileState != 'enabled'
+    quiet: true
+    fail_msg: The Docker image prune timer is not enabled and active, or its service is enabled on its own.
