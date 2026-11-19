@@ -108,7 +108,7 @@ def wrong_identity_check(wrapper: ModuleType, image: str, run: Run) -> Result:
             [
                 wrapper.VERIFIER,
                 f"{registered}@{digest}",
-                wrapper.ATTESTED_REPO,
+                wrapper.attested_repo(others[0]),
                 others[0],
                 "--bundle-from-oci",
             ],

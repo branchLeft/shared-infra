@@ -615,6 +615,8 @@ TENANT_DIGEST = "b" * 64
 TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
 TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 PERCONA_SIGNER = "branchLeft/ghost-platform/.github/workflows/percona-image.yml"
+WEBSITE = f"ghcr.io/branchleft/website@sha256:{'c' * 64}"
+WEBSITE_SIGNER = "branchLeft/website/.github/workflows/ci.yml"
 # The digest the Percona image workflow pushed, scanned (blocking=0) and attested on
 # ghost-platform main, run 43331723453 at commit 1289eb507b95. The db_t1 role pins the same one.
 PERCONA_DIGEST = "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
@@ -702,8 +704,55 @@ class AttestationTests(unittest.TestCase):
                     "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
                 ),
                 "ghcr.io/branchleft/percona-server": PERCONA_SIGNER,
+                "ghcr.io/branchleft/website": WEBSITE_SIGNER,
             },
         )
+
+    def test_the_website_image_is_verified_against_its_own_repository_and_workflow(self):
+        # The register's signer names the repository, so the verifier is asked about
+        # branchLeft/website and not about ghost-platform.
+        run = FakeRun([0, 0])
+        self.deploy_to("website", WEBSITE, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, WEBSITE, "branchLeft/website", WEBSITE_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("website", self.config_dir)), WEBSITE
+        )
+
+    def test_an_unsigned_website_digest_is_refused_before_any_host_change(self):
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy_to("website", WEBSITE, run)
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+        self.assertFalse(os.path.exists(bd.image_env_path("website", self.config_dir)))
+
+    def test_the_website_image_is_no_longer_exempt_on_any_stack(self):
+        for stack, names in bd.UNATTESTED_STACK_IMAGES.items():
+            with self.subTest(stack=stack):
+                self.assertNotIn("ghcr.io/branchleft/website", names)
+
+    def test_a_register_signer_names_the_repository_that_owns_its_workflow(self):
+        for name, signer in bd.ATTESTED_IMAGES.items():
+            with self.subTest(name=name):
+                repo = bd.attested_repo(signer)
+                self.assertTrue(signer.startswith(f"{repo}/.github/workflows/"), signer)
+        self.assertEqual(bd.attested_repo(TENANT_SIGNER), bd.ATTESTED_REPO)
+        self.assertEqual(bd.attested_repo(WEBSITE_SIGNER), "branchLeft/website")
+
+    def test_a_signer_that_is_not_a_workflow_path_is_refused_rather_than_guessed(self):
+        for signer in (
+            "",
+            "branchLeft/website",
+            "branchLeft/website/ci.yml",
+            "branchLeft/website/.github/workflows/",
+            "branchLeft/website/.github/workflows/a/b.yml",
+            "branchLeft/website/.github/workflows/ci.yml\n",
+            "a b/website/.github/workflows/ci.yml",
+        ):
+            with self.subTest(signer=signer), self.assertRaises(bd.DeployError):
+                bd.attested_repo(signer)
 
     def test_the_scanned_percona_digest_is_verified_against_its_own_workflow_and_pinned(self):
         run = FakeRun([0, 0])
@@ -839,12 +888,13 @@ class AttestationTests(unittest.TestCase):
         edge_caddy = f"ghcr.io/branchleft/edge-caddy@sha256:{'d' * 64}"
         self.assert_refused_with_nothing_run("blog", edge_caddy)
         self.assert_refused_with_nothing_run(
-            "edge", f"ghcr.io/branchleft/website@sha256:{'d' * 64}"
+            "edge", f"ghcr.io/branchleft/publicpress-website@sha256:{'d' * 64}"
         )
 
     def test_every_stack_pinned_through_the_wrapper_today_still_deploys_its_image(self):
+        # The website is not here: its image is registered, so it is verified
+        # (test_the_website_image_is_verified_against_its_own_repository_and_workflow).
         today = {
-            "website": "ghcr.io/branchleft/website",
             "publicpress-website": "ghcr.io/branchleft/publicpress-website",
             "edge": "ghcr.io/branchleft/edge-caddy",
             "db": "mysql:8.4",
@@ -903,7 +953,6 @@ class AttestationTests(unittest.TestCase):
         self.assertEqual(
             bd.UNATTESTED_STACK_IMAGES,
             {
-                "website": frozenset({"ghcr.io/branchleft/website"}),
                 "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
                 "edge": frozenset(
                     {"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}
