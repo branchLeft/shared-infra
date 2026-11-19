@@ -371,10 +371,13 @@ class ClaimTests(EntryTestCase):
     def test_a_missing_volume_program_frees_the_slug_and_a_retry_succeeds(self) -> None:
         original = self.host.volume
 
-        def missing(args: list[str]) -> entry.Outcome:
-            raise entry.FailedError("program-missing")
+        # The listing at the start of the claim works; the program is gone when the claim runs.
+        def missing_on_claim(args: list[str]) -> entry.Outcome:
+            if args[0] == "--uid":
+                raise entry.FailedError("program-missing")
+            return original(args)
 
-        self.host.volume = missing  # type: ignore[method-assign]
+        self.host.volume = missing_on_claim  # type: ignore[method-assign]
         code, _out, err = self.host.request(f"claim {SLUG}")
         self.assertEqual(code, entry.EXIT_FAILED)
         self.assertIn("failed: program-missing\n", err)
@@ -384,12 +387,21 @@ class ClaimTests(EntryTestCase):
         self.assertEqual(self.host.claims, {SLUG: 30000})
 
     def test_a_timeout_with_an_unreadable_listing_still_frees_the_slug(self) -> None:
-        def timeout_everywhere(args: list[str]) -> entry.Outcome:
+        original = self.host.volume
+        listings: list[str] = []
+
+        def timeout_then_no_listing(args: list[str]) -> entry.Outcome:
+            if args == ["--list-claims"]:
+                listings.append("listed")
+                if len(listings) > 1:
+                    raise entry.FailedError("timeout")
+                return original(args)
             raise entry.FailedError("timeout")
 
-        self.host.volume = timeout_everywhere  # type: ignore[method-assign]
+        self.host.volume = timeout_then_no_listing  # type: ignore[method-assign]
         code, _out, err = self.host.request(f"claim {SLUG}")
         self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertIn("failed: timeout\n", err)
         self.assertEqual(list(self.host.entry.iterdir()), [self.host.entry / ".lock"])
 
     def test_an_unreadable_claim_list_stops_the_request(self) -> None:
