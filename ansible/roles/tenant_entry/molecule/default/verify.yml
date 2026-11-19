@@ -205,18 +205,25 @@
       failed_when: false
       check_mode: false
       loop:
-        - { request: claim example-tenant, expect: 'refused: slug-in-use' }
-        - { request: enable example-tenant, expect: 'refused: secrets-first' }
-        - { request: key example-tenant, expect: 'refused: secrets-first' }
-        - { request: owner example-tenant, expect: 'refused: secrets-first' }
-        - { request: secrets example-tenant, stdin: '{nope', expect: 'refused: payload-not-json' }
-        - {
-            request: secrets example-tenant,
-            stdin: '{"template": "", "values": {"A": "b"}, "etc_dir": "/tmp"}',
-            expect: 'refused: payload-keys',
-          }
-        - { request: secrets example-other, stdin: '{}', expect: 'refused: not-claimed-here' }
-        - { request: enable example-other, expect: 'refused: not-claimed-here' }
+        - request: claim example-tenant
+          expect: 'refused: slug-in-use'
+        - request: enable example-tenant
+          expect: 'refused: secrets-first'
+        - request: key example-tenant
+          expect: 'refused: secrets-first'
+        - request: owner example-tenant
+          expect: 'refused: secrets-first'
+        - request: secrets example-tenant
+          stdin: '{nope'
+          expect: 'refused: payload-not-json'
+        - request: secrets example-tenant
+          stdin: '{"template": "", "values": {"A": "b"}, "etc_dir": "/elsewhere"}'
+          expect: 'refused: payload-keys'
+        - request: secrets example-other
+          stdin: '{}'
+          expect: 'refused: not-claimed-here'
+        - request: enable example-other
+          expect: 'refused: not-claimed-here'
       loop_control:
         label: '{{ item.request }}'
 
