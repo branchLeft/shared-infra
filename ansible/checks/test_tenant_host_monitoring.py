@@ -117,7 +117,8 @@ class TheExporterIsNeverPublic(unittest.TestCase):
         ]
         listens = re.findall(r"--web\.listen-address=(\S+)", "\n".join(commands))
         self.assertEqual(listens, ["${NODE_EXPORTER_LISTEN_ADDRESS}:9100"])
-        self.assertNotIn("0.0.0.0", "\n".join(commands))
+        # The literal is the wildcard the test must never find; it is not a bind address.
+        self.assertNotIn("0.0.0.0", "\n".join(commands))  # noqa: S104
         self.assertNotIn("[::]", "\n".join(commands))
 
     def test_the_role_refuses_to_install_without_an_address_in_the_estate_subnet(self) -> None:
