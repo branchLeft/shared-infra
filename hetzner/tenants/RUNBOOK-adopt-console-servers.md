@@ -7,9 +7,17 @@ as `rob@branchleft.co.uk`. This runbook brings them under the tenants stack
 Everything here is the platform owner's: it reads and changes production, and
 nothing in it is run by an agent.
 
-The tenants stack is **not** applied by CI. Merging the change that carries this
-runbook changes no server. The applies below are the owner's hand applies, which
-`CLAUDE.md` allows for first-time provisioning and gated migrations.
+CI plans and applies the tenants stack on a merge to `main` that changes its inputs
+(`hetzner-tenants-plan` and `hetzner-tenants-apply` in `.github/workflows/ci.yml`):
+the apply waits in the `production` environment for the owner's approval, and a plan
+with no change skips it. Merging the change that carries this runbook changes no
+server. The adoption applies below are still the owner's hand applies, which
+`CLAUDE.md` allows for first-time provisioning and gated migrations, because each
+stage is checked between applies. Once an adoption change is merged, the plan CI
+shows for it is the same plan; approve its apply there instead of running
+`pulumi up` again, or reject it if the hand apply already ran. The Hetzner token,
+passphrase and salt CI reads are the repository secrets `HCLOUD_TOKEN_TENANTS`,
+`PULUMI_PASSPHRASE_HETZNER_TENANTS` and `PULUMI_SALT_HETZNER_TENANTS`.
 
 ## What the servers look like when this starts
 

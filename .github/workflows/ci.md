@@ -18,8 +18,9 @@ job keeps its name, so the required checks are matched as before.
 The GCP edge program that used to live at the repository root (`edge.ts` and its
 deploy-plan/deploy-apply jobs) is gone: the GCP estate was destroyed 2026-09-13
 and the program was removed once it described infrastructure that no longer
-existed. What is left is Hetzner-native: the mail stack and both `hetzner/`
-stacks. The guardrails below are unchanged for them.
+existed. What is left is Hetzner-native: the mail stack, the `hetzner/` network
+and estate stacks, the DNS stack and the tenants stack. The guardrails below are
+unchanged for them.
 
 1. Anything credentialed runs only on `push` to `main`, a reviewed, merged
    commit. Pull requests get type-check only, and no credentials of any kind.
@@ -54,6 +55,34 @@ stacks. The guardrails below are unchanged for them.
    is never routed: it stays in `production-mail`, and the DNS apply is never
    routed either: it stays in `production-dns` (`scripts/choose-apply-environment.py`,
    `scripts/test_ci_apply_environments.py`).
+
+## The tenants stack
+
+`hetzner-tenants-plan` and `hetzner-tenants-apply` deliver
+`branchleft-hetzner-tenants` (`hetzner/tenants/`: the tenants project's network,
+edge-t, db-t1 and app-t1), with the guardrails above. What differs from the
+estate pair, and why:
+
+- It waits behind the estate apply, and so behind the network's: the program
+  reads `edge1PublicIpv4` from the estate stack, and edge-t's one SSH source is
+  set from it. The plan lists all four of those jobs in `needs`, because a failed
+  network plan leaves both estate jobs skipped. The `changes` filter names the
+  estate's own inputs for the same reason: an estate change that moves edge1's
+  address must re-plan the tenants stack. The tenants runbooks are not inputs.
+- Its apply is never routed. It runs in the literal `production`, so the owner
+  approves every tenants plan, and the apply's gate reads `production` alone
+  (a required-reviewer rule, or the reviewer App's custom rule). The spend gate
+  is not run for it.
+- Its credential scope is written down in the plan and apply jobs' `env:`: the
+  tenants project's own Hetzner token (`HCLOUD_TOKEN_TENANTS`, Read and Write on
+  that project alone), this stack's passphrase and salt
+  (`PULUMI_PASSPHRASE_HETZNER_TENANTS`, `PULUMI_SALT_HETZNER_TENANTS`), and the
+  state bucket's Object Storage key, which it shares with the estate (one
+  backend, pinned in `hetzner/tenants/Pulumi.yaml`). Only these two jobs name the
+  tenants secrets (pinned by `scripts/test_ci_apply_environments.py`,
+  `tenants_violations`), and they read repository secrets, as the estate pair
+  does.
+- It has no pull-request plan, for the reason in the next section.
 
 ## Why there is no preview job on pull requests
 
