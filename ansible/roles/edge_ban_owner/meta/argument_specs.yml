@@ -3,13 +3,21 @@ argument_specs:
   main:
     short_description: Install the edge ban classifier, its unit and its timer on edge1
     description: >-
-      Installs the edge ban classifier program, its systemd service and its timer, creates the
-      state directory (root, 0700) and the textfile directory (root, 0755), and enables and
-      starts the timer. The classifier reads the edge's access log and CrowdSec through the
+      Does nothing unless edge_ban_owner_enabled is true. When enabled, installs the edge ban
+      classifier program, its systemd service and its timer, creates the state directory
+      (root, 0700) and the textfile directory (root, 0755), and enables and starts the
+      timer. The classifier reads the edge's access log and CrowdSec through the
       edge's containers, and writes one textfile with no address in it. The role takes no
       secret.
     author: branchLeft
     options:
+      edge_ban_owner_enabled:
+        type: bool
+        description: >-
+          Whether the role installs the classifier. False installs nothing and changes nothing on
+          the host. Set it true only together with the constant of the same name in
+          hetzner/monitoring/render.ts.
+        default: false
       edge_ban_owner_docker_binary:
         type: str
         description: Absolute path of the Docker command the classifier runs. The unit runs as root.

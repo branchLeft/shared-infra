@@ -6,6 +6,7 @@
 - name: Refuse an option of the wrong type
   ansible.builtin.assert:
     that:
+      - edge_ban_owner_enabled is boolean
       - edge_ban_owner_docker_binary is string
       - edge_ban_owner_compose_project is string
       - edge_ban_owner_caddy_service is string
@@ -75,6 +76,13 @@
       - edge_ban_owner_timer_calendar | length > 0
     fail_msg: 'edge_ban_owner refused its input (rule: calendar): the timer calendar must not be empty.'
     quiet: true
+
+# The role ships disabled. The inputs above are still checked, so a bad value is refused whether or
+# not the role is on; nothing below runs, and no handler is queued, until the toggle is true. The
+# type assertion above guarantees the toggle is a real boolean, so a string never reads as true.
+- name: Stop here while the role is disabled
+  ansible.builtin.meta: end_role
+  when: not edge_ban_owner_enabled
 
 # The state directory holds the addresses, so it is root-only. The textfile directory is shared
 # with the other textfile writers on the host and is root-owned, read by node_exporter. Both are

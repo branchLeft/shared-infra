@@ -2,9 +2,9 @@
 # Converged with docker swapped for a stand-in that answers from files (molecule.yml,
 # prepare.yml). Each case writes an access log and a cscli answer, starts the real unit and
 # reads what it left. Log timestamps count back from this play's start.
-# Case keys: name; log (ip, age_days, optional trusted; null for no file); cscli;
-# cscli_status (default 0); expect (edge_ban_owned samples, and no others); expect_state;
-# expect_unit_ok (false if the unit must fail); keep_previous_output.
+# Case keys: name; log (ip, age_days, optional trusted; null for no file); cscli (each decision
+# may carry an id); cscli_status (default 0); expect (edge_ban_owned samples, and no others);
+# expect_state; expect_unit_ok (false if the unit must fail); keep_previous_output.
 # Addresses are RFC 5737 or RFC 3849 only.
 - name: Verify
   hosts: all
@@ -27,19 +27,29 @@
     verify_cases:
       - name: owned
         log:
-          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
-          - {ip: '2001:db8::10', age_days: 2, trusted: 1}
-          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
+          - { ip: '2001:db8::10', age_days: 2, trusted: 1 }
+          - { ip: '198.51.100.7', age_days: 1, trusted: '0' }
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 101
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
           - scenario: crowdsecurity/ssh-bf
             decisions:
-              - {type: ban, scope: Ip, value: '2001:db8::10', scenario: crowdsecurity/ssh-bf, simulated: false}
+              - id: 102
+                type: ban
+                scope: Ip
+                value: '2001:db8::10'
+                scenario: crowdsecurity/ssh-bf
+                simulated: false
         expect:
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
-          - 'edge_ban_owned{reason="crowdsecurity/ssh-bf",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="101"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/ssh-bf",owned="true",decision_id="102"} 1'
         expect_state: ['192.0.2.10', '2001:db8::10']
 
       # The state file from the case above is still there, and it trusts 192.0.2.10. With no log
@@ -50,56 +60,102 @@
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 103
+                type: ban
+                scope: Ip
+                value: '198.51.100.7'
+                scenario: crowdsecurity/http-probing
+                simulated: false
         expect:
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="103"} 1'
 
       - name: unowned
         log:
-          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
-          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
-          - {ip: '198.51.100.7', age_days: 1}
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
+          - { ip: '198.51.100.7', age_days: 1, trusted: '0' }
+          - { ip: '198.51.100.7', age_days: 1 }
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 104
+                type: ban
+                scope: Ip
+                value: '198.51.100.7'
+                scenario: crowdsecurity/http-probing
+                simulated: false
         expect:
           - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="false"} 1'
         expect_state: ['192.0.2.10']
 
       - name: range that contains an owned address, and one that does not
         log:
-          - {ip: '203.0.113.20', age_days: 3, trusted: '1'}
-          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+          - { ip: '203.0.113.20', age_days: 3, trusted: '1' }
+          - { ip: '198.51.100.7', age_days: 1, trusted: '0' }
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Range, value: '203.0.113.0/24', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 105
+                type: ban
+                scope: Range
+                value: '203.0.113.0/24'
+                scenario: crowdsecurity/http-probing
+                simulated: false
           - scenario: crowdsecurity/ssh-bf
             decisions:
-              - {type: ban, scope: Range, value: '198.51.100.0/24', scenario: crowdsecurity/ssh-bf, simulated: false}
+              - id: 106
+                type: ban
+                scope: Range
+                value: '198.51.100.0/24'
+                scenario: crowdsecurity/ssh-bf
+                simulated: false
         expect:
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="105"} 1'
           - 'edge_ban_owned{reason="crowdsecurity/ssh-bf",owned="false"} 1'
 
-      # Two owned bans and one unowned ban of one scenario give one sample per pair. A simulated
-      # decision and a decision that is not a ban are not counted.
+      # Each owned ban is a sample of its own, labelled with its decision id. The unowned ban is
+      # counted per scenario. A simulated decision and a decision that is not a ban are not counted.
       - name: bans of one scenario, owned and not, with decisions that do not count
         log:
-          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
-          - {ip: '192.0.2.11', age_days: 1, trusted: '1'}
-          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
+          - { ip: '192.0.2.11', age_days: 1, trusted: '1' }
+          - { ip: '198.51.100.7', age_days: 1, trusted: '0' }
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
-              - {type: ban, scope: Ip, value: '192.0.2.11', scenario: crowdsecurity/http-probing, simulated: false}
-              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
-              - {type: ban, scope: Ip, value: '198.51.100.8', scenario: crowdsecurity/http-probing, simulated: true}
-              - {type: captcha, scope: Ip, value: '198.51.100.9', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 107
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 108
+                type: ban
+                scope: Ip
+                value: '192.0.2.11'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 109
+                type: ban
+                scope: Ip
+                value: '198.51.100.7'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 110
+                type: ban
+                scope: Ip
+                value: '198.51.100.8'
+                scenario: crowdsecurity/http-probing
+                simulated: true
+              - id: 111
+                type: captcha
+                scope: Ip
+                value: '198.51.100.9'
+                scenario: crowdsecurity/http-probing
+                simulated: false
         expect:
           - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="false"} 1'
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 2'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="107"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="108"} 1'
 
       # The case before left a textfile and a state file. A failed cscli must leave both exactly as
       # they are, and the answer it would have printed must not show up in them.
@@ -108,11 +164,16 @@
         expect_unit_ok: false
         cscli_status: 1
         log:
-          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
         cscli:
           - scenario: crowdsecurity/ssh-bf
             decisions:
-              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/ssh-bf, simulated: false}
+              - id: 112
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/ssh-bf
+                simulated: false
         expect: []
 
       - name: missing signal, no log file
@@ -120,23 +181,115 @@
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 113
+                type: ban
+                scope: Ip
+                value: '198.51.100.7'
+                scenario: crowdsecurity/http-probing
+                simulated: false
         expect:
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="113"} 1'
 
       # The only trusted line is 60 days old, past the 30-day window, and the log has a recent line
       # that is not trusted: the log is readable but holds no usable signal.
       - name: stale signal, trusted lines older than the window
         log:
-          - {ip: '192.0.2.10', age_days: 60, trusted: '1'}
-          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+          - { ip: '192.0.2.10', age_days: 60, trusted: '1' }
+          - { ip: '198.51.100.7', age_days: 1, trusted: '0' }
         cscli:
           - scenario: crowdsecurity/http-probing
             decisions:
-              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
-              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
+              - id: 114
+                type: ban
+                scope: Ip
+                value: '198.51.100.7'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 115
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
         expect:
-          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 2'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="114"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="115"} 1'
+
+      # Two separate alerts of one scenario, both for owned addresses, stay two samples with two
+      # different decision ids, so the alert rules can tell the second ban from the first.
+      - name: a second owned ban of the same scenario
+        log:
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
+          - { ip: '192.0.2.11', age_days: 1, trusted: '1' }
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - id: 116
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - id: 203
+                type: ban
+                scope: Ip
+                value: '192.0.2.11'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="116"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="203"} 1'
+
+      # An id counts only as digits, as a JSON integer or a digit string. An owned ban without a
+      # usable id is counted per scenario, and two decisions with one id are one sample with a count,
+      # never two series with the same labels.
+      - name: owned bans without a usable decision id, and two decisions with one id
+        log:
+          - { ip: '192.0.2.10', age_days: 1, trusted: '1' }
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 'abc'
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: '1234567890123456789'
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: '120'
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 121
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+              - id: 121
+                type: ban
+                scope: Ip
+                value: '192.0.2.10'
+                scenario: crowdsecurity/http-probing
+                simulated: false
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 3'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="120"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true",decision_id="121"} 2'
 
   tasks:
     # The clock of the instance, the one the program reads, as whole seconds.

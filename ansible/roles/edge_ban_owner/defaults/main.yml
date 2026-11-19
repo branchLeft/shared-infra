@@ -1,4 +1,10 @@
 ---
+# The role ships disabled. While this is false it installs nothing on the host: no directory, no
+# program, no unit, no timer. The monitoring stack's rules and routes assume the classifier exists
+# only when this is true, so the constant of the same name in hetzner/monitoring/render.ts flips in
+# the same commit.
+edge_ban_owner_enabled: false
+
 # The classifier reads the edge's own access log and CrowdSec through the edge's containers.
 # The container labels are the edge stack's Compose project and service names, the same
 # names the edge runbook uses to find the containers.

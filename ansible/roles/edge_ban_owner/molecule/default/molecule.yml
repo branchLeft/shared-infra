@@ -35,6 +35,9 @@ provisioner:
     # The values the role runs with, read by the prepare, converge and verify plays as well.
     group_vars:
       all:
+        # The role ships disabled and installs nothing until this is true. The scenario tests the
+        # installed role, so it turns it on.
+        edge_ban_owner_enabled: true
         # The role calls this program in place of the docker command line. It is a copy of the
         # unit tests' stand-in (tests/unit/fake_docker.py), which prepare puts on the instance
         # with the directory of files it answers from.

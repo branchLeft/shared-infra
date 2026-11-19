@@ -5,6 +5,9 @@ and a systemd timer. The classifier decides, for each CrowdSec ban on the edge,
 whether the banned address is one of the owner's own, and writes the answer as a
 textfile that the monitoring stack's alert rules read.
 
+The role ships disabled. While `edge_ban_owner_enabled` is false, which is its
+default, it installs nothing on the host. See "The toggle" below.
+
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14).
 
@@ -17,15 +20,51 @@ missing, unreadable or empty, or no address is trusted), every ban is written as
 owned, so that it pages. If the classifier cannot read CrowdSec, it writes nothing,
 and the staleness alert fires.
 
+"Owned" is wider than the owner's own addresses. A verified staff request is any
+Ghost staff session the edge confirmed, so the staff addresses of every tenant's
+Ghost count as owned, not only the owner's. Those addresses are held only in the
+root-only state file, `/var/lib/branchleft/edge-ban-owner/trusted.json` (mode
+0600), for at most 30 days, the edge's log retention. The textfile and the alerts
+carry no address. Each owned ban is one sample labelled with CrowdSec's decision
+id, which is an integer and holds no address, so a second owned ban of the same
+scenario is a new alert. Unowned bans are counted per scenario.
+
 The alert rules and the routes that act on this are in `hetzner/monitoring`; this
 role only puts the classifier on the host.
 
+## The toggle
+
+`edge_ban_owner_enabled` is a boolean and defaults to false, in
+`defaults/main.yml` and in `meta/argument_specs.yml`. The role still checks its
+inputs when the toggle is false, and a value that is not a real boolean (a string
+such as `"false"`, for example) is refused. After the checks it stops: it creates no
+directory, installs no program, writes no unit, enables no timer and queues no
+handler.
+
+The role ships disabled until the owner has answered which addresses count as
+theirs, because "owned" includes every tenant's staff addresses (see above). Until
+the toggle is true on the host, every ban pages as before: the owned-only alerts
+exist in the rules, but no classifier writes the textfile, the staleness alert goes
+to the `discard` receiver, and the fallback of the ban alert pages every ban at once,
+because the textfile series has never existed. The 10-minute hold applies only after a
+classifier has reported and then gone quiet.
+
+Turning it on is one later data commit. Set `edge_ban_owner_enabled: true` for the
+edge host, and set the constant `EDGE_BAN_OWNER_ENABLED` in
+`hetzner/monitoring/render.ts` to true in the same commit, then run
+`pnpm run render` in `hetzner/`. The two values must agree: a test in `hetzner/monitoring`
+fails when the constant and this role's default differ. After the gated apply the
+timer writes the textfile within five minutes, and from then on only owned bans
+page, the staleness alert is routed, and unowned bans go to email.
+
 ## What the role does
 
-It runs in this order, and each step changes only what it names.
+When the toggle is true, it runs in this order, and each step changes only what it
+names.
 
 1. Checks its inputs and refuses, before any change, a value of the wrong type or
-   shape. No refusal message names a value.
+   shape. No refusal message names a value. With the toggle false, the role ends
+   here.
 2. Creates `/var/lib/branchleft/edge-ban-owner` (root, 0700): the directory of the
    state file, which holds the addresses. Nothing outside the classifier reads it.
 3. Creates `/var/lib/branchleft/snds-exporter` (root, 0755) if it is absent. Other
@@ -53,8 +92,8 @@ address. Only the state file holds addresses.
 ## Interface
 
 The variables the role reads, their types and defaults are in
-`meta/argument_specs.yml`. `defaults/main.yml` holds the same defaults. The
-defaults name the edge's Compose project and its container services, the access
+`meta/argument_specs.yml`. `defaults/main.yml` holds the same defaults. The toggle
+is described above. The other defaults name the edge's Compose project and its container services, the access
 log's directory and stem, the 30-day window, the state and textfile paths, the
 program directory, the unit name, and the timer schedule.
 
@@ -72,6 +111,8 @@ file.
 
 ## What it changes on a host
 
+With the toggle false: nothing. With the toggle true:
+
 - `/var/lib/branchleft/edge-ban-owner` (root, 0700), created if absent.
 - `/var/lib/branchleft/snds-exporter` (root, 0755), created if absent.
 - `/usr/local/lib/branchleft-edge-ban-owner` (root, 0755), created if absent, and
@@ -81,7 +122,7 @@ file.
 
 The classifier writes two files at run time, not through this role: the state file
 `trusted.json` (root, 0600) and the textfile `edge_ban_owner.prom` (0644). Both are
-written atomically.
+written atomically. The state file is the only place an address is kept.
 
 ## How to test it
 
@@ -93,15 +134,16 @@ pinned tools:
 ```
 
 The harness runs lint, yamllint, the argument-spec check and the container test.
-The container test needs a local Docker daemon. The program's own unit tests run
+The container test needs a local Docker daemon. Its scenario sets the toggle to true,
+so it tests the installed role. The program's own unit tests run
 from the role directory, as `ansible/checks/run_role_unit_tests.py` runs them.
 
 ## How it is delivered
 
 A role reaches a host only through the gated workflow (ANS-17), never by running
-`ansible-playbook` by hand. Nothing applies this role to a host from this change.
-Merging the change does not alter edge1; the gated apply does, and the owner
-decides when.
+`ansible-playbook` by hand. The role is in the edge play but ships disabled, so an
+apply of the play changes nothing on edge1 on this role's account until the toggle
+is flipped (see "The toggle"). The owner decides when.
 
 ## How to change it safely
 

@@ -126,6 +126,7 @@
     - name: Assert the textfile has the expected samples, a fresh run time, and nothing else
       ansible.builtin.assert:
         that:
+          - verify_lines | select('match', '# HELP edge_ban_owned .*decision id') | list | length == 1
           - verify_lines | select('match', '# TYPE edge_ban_owned gauge$') | list | length == 1
           - verify_lines | select('match', '# TYPE edge_ban_owner_last_run_timestamp_seconds gauge$') | list | length == 1
           - verify_samples | sort == verify_case.expect | sort
