@@ -42,6 +42,9 @@ CLAIM_LINE_PATTERN: Final = re.compile(r"\A([a-z][a-z0-9-]*)=([0-9]{1,6})\Z")
 PUBLIC_KEY_PATTERN: Final = re.compile(r"\Assh-ed25519 [A-Za-z0-9+/]{68}( [ -~]{0,100})?\Z")
 CONTAINER_ID_PATTERN: Final = re.compile(r"\A[0-9a-f]{64}\Z")
 PRINTABLE_PATTERN: Final = re.compile(r"\A[ -~]+\Z")
+# Owner name and title go to the platform's script as argv: a value that starts with a dash would
+# be read there as an option, so it is refused here.
+OWNER_TEXT_PATTERN: Final = re.compile(r"\A(?!-)[ -~]+\Z")
 SITE_URL_PATTERN: Final = re.compile(r"\Ahttps://[a-z0-9]([a-z0-9.-]{0,250}[a-z0-9])?\Z")
 
 CHILD_ENVIRONMENT: Final = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"}
@@ -386,13 +389,33 @@ def step_claim(host: Host, slug: str) -> list[str]:
     uid = first_free_uid(set(claims.values()) | {m["uid"] for m in markers.values()})
     port = first_free_port({m["port"] for m in markers.values()})
     write_marker(host, slug, uid, port)
-    outcome = host.runner([host.paths.volume_program, "--uid", str(uid), slug], None)
+    # Every way out of the volume step, a timeout or a missing program included, releases the
+    # marker when no claim sits behind it, so a retry needs no hand step.
+    try:
+        outcome = host.runner([host.paths.volume_program, "--uid", str(uid), slug], None)
+    except BaseException:
+        release_unclaimed_marker(host, slug)
+        raise
     if outcome.returncode != 0:
-        # A marker with no claim behind it would hold the slug for nothing; one with a claim stays.
-        if slug not in list_claims(host):
-            os.unlink(marker_path(host, slug))
+        release_unclaimed_marker(host, slug)
         fail("volumes", detail_of(outcome))
     return [f"claimed uid={uid} port_a={port} port_b={port + 1} port_health={port + 2}"]
+
+
+def release_unclaimed_marker(host: Host, slug: str) -> None:
+    """Remove the slug's marker unless the volume program lists a claim for it.
+
+    A marker with no claim holds the slug for nothing. A claim that is listed keeps its marker.
+    When the listing itself fails, no claim is confirmed, so the marker goes: later verbs then
+    refuse it by name (not-claimed-here), and the listing still refuses a repeat claim if the
+    volume program had in fact made one.
+    """
+    try:
+        claimed = slug in list_claims(host)
+    except FailedError:
+        claimed = False
+    if not claimed:
+        os.unlink(marker_path(host, slug))
 
 
 def step_secrets(host: Host, slug: str) -> list[str]:
@@ -472,8 +495,8 @@ def step_owner(host: Host, slug: str) -> list[str]:
     colour = payload["colour"]
     if colour not in ("a", "b"):
         refuse("field-colour")
-    name = text_field(payload, "name", PRINTABLE_PATTERN)
-    title = text_field(payload, "site_title", PRINTABLE_PATTERN)
+    name = text_field(payload, "name", OWNER_TEXT_PATTERN)
+    title = text_field(payload, "site_title", OWNER_TEXT_PATTERN)
     site_url = text_field(payload, "site_url", SITE_URL_PATTERN)
     if len(name) > 64 or len(title) > 120:
         refuse("field-length")

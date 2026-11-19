@@ -351,6 +351,47 @@ class ClaimTests(EntryTestCase):
         self.assertEqual(self.host.request(f"claim {SLUG}")[0], entry.EXIT_FAILED)
         self.assertTrue((self.host.entry / f"{SLUG}.json").exists())
 
+    def test_a_timed_out_volume_step_frees_the_slug_and_a_retry_succeeds(self) -> None:
+        original = self.host.volume
+
+        def timeout_on_claim(args: list[str]) -> entry.Outcome:
+            if args[0] == "--uid":
+                raise entry.FailedError("timeout")
+            return original(args)
+
+        self.host.volume = timeout_on_claim  # type: ignore[method-assign]
+        code, _out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertIn("failed: timeout\n", err)
+        self.assertFalse((self.host.entry / f"{SLUG}.json").exists())
+        self.host.volume = original  # type: ignore[method-assign]
+        self.host.claim()
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+
+    def test_a_missing_volume_program_frees_the_slug_and_a_retry_succeeds(self) -> None:
+        original = self.host.volume
+
+        def missing(args: list[str]) -> entry.Outcome:
+            raise entry.FailedError("program-missing")
+
+        self.host.volume = missing  # type: ignore[method-assign]
+        code, _out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertIn("failed: program-missing\n", err)
+        self.assertFalse((self.host.entry / f"{SLUG}.json").exists())
+        self.host.volume = original  # type: ignore[method-assign]
+        self.host.claim()
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+
+    def test_a_timeout_with_an_unreadable_listing_still_frees_the_slug(self) -> None:
+        def timeout_everywhere(args: list[str]) -> entry.Outcome:
+            raise entry.FailedError("timeout")
+
+        self.host.volume = timeout_everywhere  # type: ignore[method-assign]
+        code, _out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertEqual(list(self.host.entry.iterdir()), [self.host.entry / ".lock"])
+
     def test_an_unreadable_claim_list_stops_the_request(self) -> None:
         original = self.host.volume
 
@@ -711,6 +752,10 @@ class OwnerTests(EntryTestCase):
             "name too long": {"name": "n" * 65},
             "title too long": {"site_title": "t" * 121},
             "title not text": {"site_title": 1},
+            "name starting with a dash": {"name": "-x"},
+            "name that is an option": {"name": "--help"},
+            "title starting with a dash": {"site_title": "-o"},
+            "title that is a long option": {"site_title": "--container=x"},
         }
         for name, change in cases.items():
             with self.subTest(name=name):
