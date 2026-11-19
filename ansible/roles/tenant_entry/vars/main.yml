@@ -12,13 +12,6 @@ tenant_entry_serve_flag: --from-ssh
 # The register of tenants this entry point has claimed: root-owned, mode 0700.
 tenant_entry_register_dir: /etc/branchleft/tenant-entry
 
-# A shell whose last path word is one of these cannot run a forced command.
-tenant_entry_refused_shell_names:
-  - nologin
-  - 'false'
-# The password field of a locked account starts with one of these characters.
-tenant_entry_locked_pattern: '^[*!]'
-
 # Exactly two lines: the one that keeps the request text through sudo, and one grant of one
 # argument list. sudo matches a command with arguments exactly, so no other argument passes.
 tenant_entry_sudoers_lines:

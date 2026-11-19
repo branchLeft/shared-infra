@@ -354,41 +354,23 @@
         refused_from:
           - '192.0.2.10",command="/bin/EXAMPLE_COMMAND'
 
-    # An account the role did not make is never changed, only judged. The role stops at the
-    # check that names the fault, and the account is put back before the next case.
-    - name: Give the account a password that is not locked
+    # The role owns this account: a password set on it and a shell that cannot run a forced
+    # command are put right by the next apply, not judged and left.
+    - name: Give the account a password that is not locked and a shell that cannot run a forced command
       ansible.builtin.user:
         name: '{{ scenario_user }}'
         password: '$6$EXAMPLESALT$EXAMPLEHASH'
-      no_log: true
-
-    - name: Refuse an account that has a usable password
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an account that has a usable password
-
-    - name: Lock the password of the account again
-      ansible.builtin.user:
-        name: '{{ scenario_user }}'
-        password: '!'
-      no_log: true
-
-    - name: Give the account a shell that cannot run a forced command
-      ansible.builtin.user:
-        name: '{{ scenario_user }}'
         shell: /usr/sbin/nologin
+      no_log: true
 
-    - name: Refuse an account whose shell cannot run a forced command
-      ansible.builtin.include_tasks: tasks/refused.yml
+    - name: Apply the role over the damaged account
+      ansible.builtin.include_role:
+        name: branchleft.tenant_entry
       vars:
-        refused_task: Refuse an account whose shell cannot run a forced command
+        tenant_entry_key: '{{ scenario_entry_public }}'
+        tenant_entry_from: '{{ scenario_from }}'
 
-    - name: Give the account its shell back
-      ansible.builtin.user:
-        name: '{{ scenario_user }}'
-        shell: /bin/bash
-
-    - name: Assert the refusals left the host as it was
+    - name: Assert the refusals left the host as it was and the account is as the role makes it
       ansible.builtin.include_tasks: tasks/assert_state.yml
 
     # exclusive: a key the host holds that the role was not given is removed.

@@ -51,4 +51,4 @@
     manage_dir: true
   no_log: true
   diff: false
-  when: tenant_entry_account_present | bool
+  when: tenant_entry_home.stat.exists

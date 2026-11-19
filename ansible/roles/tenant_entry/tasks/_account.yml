@@ -1,64 +1,21 @@
 ---
-# An account that exists is never modified: the role only creates a missing one and
-# then checks the result.
-- name: Look up the entry account before anything is changed
-  ansible.builtin.getent:
-    database: passwd
-    key: '{{ tenant_entry_user }}'
-    fail_key: false
-  register: tenant_entry_account_before
-
-# No password argument: useradd leaves the new account's password field locked.
-- name: Create the entry account when it is absent
+# The role owns this account, so a password or a shell that a person changed is put back. No
+# password argument: useradd leaves a new account's password field locked, and password_lock
+# keeps it so. The shell must be a real one, because sshd runs a forced command through it.
+- name: Make sure the entry account exists, locked, with a real shell
   ansible.builtin.user:
     name: '{{ tenant_entry_user }}'
     system: true
     create_home: true
     shell: '{{ tenant_entry_shell }}'
+    password_lock: true
     state: present
-  when: tenant_entry_account_before.ansible_facts.getent_passwd[tenant_entry_user] is none
 
-- name: Read the entry account again
-  ansible.builtin.getent:
-    database: passwd
-    key: '{{ tenant_entry_user }}'
-    fail_key: false
-  register: tenant_entry_account_after
-
-# The password field is the hash itself, so the task and the fact that reads it keep it out of the log.
-- name: Read the password field of the entry account
-  ansible.builtin.getent:
-    database: shadow
-    key: '{{ tenant_entry_user }}'
-    fail_key: false
-  register: tenant_entry_shadow_after
-  no_log: true
-
-- name: Work out whether the account is there, what its shell is and whether it is locked
-  ansible.builtin.set_fact:
-    tenant_entry_account_present: '{{ tenant_entry_account_after.ansible_facts.getent_passwd[tenant_entry_user] is not none }}'
-    tenant_entry_account_shell: >-
-      {{ (tenant_entry_account_after.ansible_facts.getent_passwd[tenant_entry_user] | default([], true))[5] | default('') }}
-    tenant_entry_account_locked: >-
-      {{ ((tenant_entry_shadow_after.ansible_facts.getent_shadow[tenant_entry_user] | default([], true))[0] | default(''))
-      is match(tenant_entry_locked_pattern) }}
-  no_log: true
-
-# These two run only when the account is there. In check mode on a host that has no
-# account yet it is not there, because the create step above only reports; that is the
-# one case they skip. A real run always has the account by now.
-- name: Refuse an account whose shell cannot run a forced command
-  ansible.builtin.assert:
-    that:
-      - tenant_entry_account_shell | basename not in tenant_entry_refused_shell_names
-    quiet: true
-    fail_msg: The entry account has a shell that cannot run a forced command (nologin or false). The role does not change an existing account.
-  when: tenant_entry_account_present | bool
-
-- name: Refuse an account that has a usable password
-  ansible.builtin.assert:
-    that:
-      - tenant_entry_account_locked | bool
-    quiet: true
-    fail_msg: The entry account has a password that is not locked. The role does not change an existing account; lock it by hand.
-  when: tenant_entry_account_present | bool
+# The key module needs the account. The role's own user task has only reported by now in check
+# mode on a host that has none yet, so the key task runs only when the account's home is there:
+# that is the one case a check-mode plan skips it, and a real run always has the account by now.
+- name: Look for the account's home
+  ansible.builtin.stat:
+    path: '/home/{{ tenant_entry_user }}'
+    get_checksum: false
+  register: tenant_entry_home

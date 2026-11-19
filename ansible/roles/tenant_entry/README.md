@@ -102,7 +102,7 @@ in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them
 - `/root/platform-provision/render_tenant_secrets.py`: the secrets program, the pinned bytes
   (`root:root`, `0755`).
 - The account `tenant-entry`: a system account with a home, a real shell and a locked password. An
-  existing account is judged, never changed.
+  password or shell that a person changed on it is put back by the next apply.
 - `/etc/sudoers.d/tenant-entry` (`root:root`, `0440`), checked by `visudo -csf` before it replaces
   anything. Two lines: one keeps the request text through sudo, one grants this account the program
   with the one argument `--from-ssh`, as root, with no password. sudo matches a command with
