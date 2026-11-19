@@ -611,8 +611,7 @@ def _walk_routes(template: str, labels: dict[str, str]) -> list[_Delivery]:
 
     reached: list[_Delivery] = []
     for block in _child_routes(template):
-        matchers = re.findall(r"^        - (.+)$", block, re.MULTILINE)
-        if not all(_matcher_holds(matcher, labels) for matcher in matchers):
+        if not _block_matches(block, labels):
             continue
         receiver = _route_setting(block, "receiver", "      ")
         assert receiver is not None
@@ -628,26 +627,23 @@ def _receivers(template: str, labels: dict[str, str]) -> set[str]:
 
 OWNED_BAN_SECONDS_BOUND = 300
 EDGE_BAN_SCENARIOS = ("crowdsecurity/http-probing", "branchleft/ghost-admin-login-bruteforce")
-EDGE_BAN_OWNER_DEFAULTS = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "ansible"
-    / "roles"
-    / "edge_ban_owner"
-    / "defaults"
-    / "main.yml"
-)
+def _block_matches(block: str, labels: dict[str, str]) -> bool:
+    matchers = re.findall(r"^        - (.+)$", block, re.MULTILINE)
+    return all(_matcher_holds(matcher, labels) for matcher in matchers)
 
 
-def _edge_ban_owner_enabled() -> bool:
-    """The role's own default: the monitoring renderer's constant must equal it (a vitest
-    holds them together), so it is the mode the committed template is rendered in."""
-    found = re.search(
-        r"^edge_ban_owner_enabled:[ \t]*(true|false)\b",
-        EDGE_BAN_OWNER_DEFAULTS.read_text(encoding="utf-8"),
-        re.MULTILINE,
-    )
-    assert found is not None, f"{EDGE_BAN_OWNER_DEFAULTS} sets no edge_ban_owner_enabled"
-    return found.group(1) == "true"
+def _classifier_off(template: str) -> bool:
+    """Whether the template is in the classifier-off mode, read from the template itself.
+    The discard route and the discard receiver are written as a pair, so a template with
+    only one of them is in neither mode and fails here."""
+    route_present = any("      receiver: discard\n" in block for block in _child_routes(template))
+    receiver_present = "\n  - name: discard\n" in template
+    if route_present != receiver_present:
+        raise AssertionError(
+            "template is in neither classifier mode: discard route present "
+            f"{route_present}, discard receiver present {receiver_present}"
+        )
+    return route_present
 
 
 class OwnedEdgeBanRouteTests(unittest.TestCase):
@@ -686,17 +682,36 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
         labels = {"alertname": "EdgeBanIssued", "severity": "page", "reason": EDGE_BAN_SCENARIOS[0]}
         self.assertEqual(_receivers(self.template, labels), {"ntfy-page"})
 
-    def test_stale_classifier_follows_the_role_toggle(self) -> None:
-        """Installed: the staleness alert pages. Not installed: it would fire for ever, so it
-        goes to the discard receiver, and never falls through to email either."""
+    def test_template_is_in_one_consistent_classifier_mode(self) -> None:
+        _classifier_off(self.template)
+        receiver_renamed = self.template.replace("\n  - name: discard\n", "\n  - name: other\n")
+        with self.assertRaisesRegex(AssertionError, "neither classifier mode"):
+            _classifier_off(receiver_renamed)
+        route_retargeted = self.template.replace("      receiver: discard\n", "      receiver: email\n")
+        with self.assertRaisesRegex(AssertionError, "neither classifier mode"):
+            _classifier_off(route_retargeted)
+
+    def test_stale_classifier_follows_the_mode_the_template_is_in(self) -> None:
+        """Installed: the staleness alert pages through the generic route. Not installed: it
+        would fire for ever, so it goes to the discard receiver, and the generic route must
+        not also take it."""
         labels = {"alertname": "EdgeBanOwnerStale", "severity": "page"}
-        expected = {"ntfy-page"} if _edge_ban_owner_enabled() else {"discard"}
-        self.assertEqual(_receivers(self.template, labels), expected)
+        generic = next(
+            block
+            for block in self.routes
+            if "alertname =~ " in block and "TierTwoSafetyMatch" in block
+        )
+        if _classifier_off(self.template):
+            self.assertEqual(_receivers(self.template, labels), {"discard"})
+            self.assertFalse(_block_matches(generic, labels))
+            return
+        self.assertEqual(_receivers(self.template, labels), {"ntfy-page"})
+        self.assertTrue(_block_matches(generic, labels))
 
     def test_discard_receiver_exists_only_while_the_classifier_is_off_and_has_no_integration(
         self,
     ) -> None:
-        if _edge_ban_owner_enabled():
+        if not _classifier_off(self.template):
             self.assertNotIn("discard", self.template)
             return
         self.assertEqual(_receiver_block(self.template, "discard").strip(), "discard")
@@ -709,7 +724,7 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
             if "alertname =~ " in block and "TierTwoSafetyMatch" in block
         ]
         self.assertEqual(len(generic), 1)
-        if _edge_ban_owner_enabled():
+        if not _classifier_off(self.template):
             self.assertEqual(discard, [])
             return
         self.assertEqual(len(discard), 1)
