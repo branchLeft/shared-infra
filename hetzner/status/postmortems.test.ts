@@ -91,6 +91,12 @@ describe('renderAnnouncements', () => {
   });
 });
 
+// A test run from a git hook inherits GIT_INDEX_FILE and its siblings, which
+// would point every git command here, the code under test's included, at the
+// committing repository's own index and overwrite it. The scratch repos get
+// the environment without them, and the suite restores it afterwards.
+const inheritedGitEnv = Object.entries(process.env).filter(([key]) => key.startsWith('GIT_'));
+
 describe('loadPostmortems', () => {
   let repo: string;
   const run = (...args: string[]): void => {
@@ -116,10 +122,14 @@ describe('loadPostmortems', () => {
   };
 
   beforeEach(() => {
+    for (const [key] of inheritedGitEnv) delete process.env[key];
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  afterEach(() => {
+    for (const [key, value] of inheritedGitEnv) process.env[key] = value;
+    rmSync(repo, { recursive: true, force: true });
+  });
 
   it('shows a merged post-mortem of a resolved incident', () => {
     put('edge-outage.md', doc('Edge outage', '2026-12-01T10:42:00Z'));

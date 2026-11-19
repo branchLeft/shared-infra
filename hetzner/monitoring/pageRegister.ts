@@ -175,22 +175,59 @@ export function pageAlertNames(register: readonly PageRegisterEntry[]): string[]
     .filter((name): name is string => name !== null);
 }
 
+/** How long a page for an entry with no tenant of its own waits to join a
+ * group that has already notified. The root route's `group_interval` is 1h,
+ * which the tenant-scoped pages keep: a new alert joining a group that has
+ * already notified waits for the next group interval, and an estate-wide
+ * page shares one group (its `tenant` label is empty), so a second ban would
+ * otherwise wait up to an hour behind the first, or never page if it ended
+ * sooner. A minute keeps a burst of bans to one page a minute. */
+export const UNSCOPED_PAGE_GROUP_INTERVAL = '1m';
+
+/** The alertnames of the live Alertmanager entries whose alerts carry no
+ * `tenant` label, in register order: the ones that need a short group
+ * interval, because they all land in one group. A subset of
+ * `pageAlertNames`. */
+export function unscopedPageAlertNames(register: readonly PageRegisterEntry[]): string[] {
+  return register
+    .filter(
+      (entry) => entry.deliveryPath === 'alertmanager' && !entry.dormant && !entry.tenantScoped
+    )
+    .map((entry) => entry.alertName)
+    .filter((name): name is string => name !== null);
+}
+
 /**
  * The page route's `route.routes` entry, rendered from `register` and
  * nothing else. Empty alertname list renders no route at all -- Alertmanager
  * has no way to express "match nothing", and a regex that matched nothing
  * would still be a route entry sitting in the tree for no reason.
+ *
+ * Entries with no tenant label get a child route that shortens only
+ * `group_interval` (receiver and `group_by` are inherited), so a further ban
+ * pages within a minute of the first rather than at the root's hourly tick,
+ * while the tenant-scoped pages keep the root's interval.
  */
 export function renderPageRoute(register: readonly PageRegisterEntry[]): string {
   const names = pageAlertNames(register);
   if (names.length === 0) return '';
-  return [
+  const unscoped = unscopedPageAlertNames(register);
+  const lines = [
     '    - matchers:',
     '        - severity = "page"',
     `        - alertname =~ "^(${names.join('|')})$"`,
     `      receiver: ${PAGE_RECEIVER_NAME}`,
     "      group_by: ['tenant']",
-  ].join('\n');
+  ];
+  if (unscoped.length > 0) {
+    lines.push(
+      '      routes:',
+      '        - matchers:',
+      `            - alertname =~ "^(${unscoped.join('|')})$"`,
+      `          group_interval: ${UNSCOPED_PAGE_GROUP_INTERVAL}`
+    );
+  }
+  return lines.join('\n');
 }
 
 /**

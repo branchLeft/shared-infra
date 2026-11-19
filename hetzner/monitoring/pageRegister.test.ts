@@ -9,11 +9,13 @@ import {
   NTFY_PAGER_TOKEN_PLACEHOLDER,
   PAGE_REGISTER,
   PAGE_RECEIVER_NAME,
+  UNSCOPED_PAGE_GROUP_INTERVAL,
   findLiveEntriesWithoutPageRule,
   findUnregisteredPageSeverityAlerts,
   pageAlertNames,
   renderPageReceiverBlock,
   renderPageRoute,
+  unscopedPageAlertNames,
   type PageRegisterEntry,
 } from './pageRegister';
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
@@ -170,6 +172,28 @@ describe('renderPageRoute', () => {
     const route = renderPageRoute(PAGE_REGISTER);
     expect(route).toContain(`receiver: ${PAGE_RECEIVER_NAME}`);
     expect(route).toContain("group_by: ['tenant']");
+  });
+
+  it('gives only the entries with no tenant label a short group interval, as a child route that inherits the rest', () => {
+    const route = renderPageRoute(PAGE_REGISTER);
+    const [parent, child] = route.split('      routes:\n');
+    // The child names the estate-wide live entry and nothing tenant-scoped.
+    expect(child).toContain('alertname =~ "^(EdgeBanIssued)$"');
+    expect(child).toContain(`group_interval: ${UNSCOPED_PAGE_GROUP_INTERVAL}`);
+    expect(child).not.toMatch(/TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead/);
+    // It overrides the interval alone: the receiver and grouping are the parent's.
+    expect(child).not.toContain('receiver:');
+    expect(child).not.toContain('group_by');
+    // The parent keeps the root's interval, so tenant-scoped pages are no noisier.
+    expect(parent).not.toContain('group_interval');
+    expect(unscopedPageAlertNames(PAGE_REGISTER)).toEqual(['EdgeBanIssued']);
+  });
+
+  it('renders no child route when no live entry is estate-wide', () => {
+    const tenantOnly = PAGE_REGISTER.filter((entry) => entry.tenantScoped);
+    const route = renderPageRoute(tenantOnly);
+    expect(route).not.toContain('routes:');
+    expect(route).not.toContain('group_interval');
   });
 
   it('renders no route at all once every Alertmanager entry is dormant', () => {

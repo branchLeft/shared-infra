@@ -62,6 +62,10 @@ route:
         - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"
       receiver: ntfy-page
       group_by: ['tenant']
+      routes:
+        - matchers:
+            - alertname =~ "^(EdgeBanIssued)$"
+          group_interval: 1m
 
 inhibit_rules:
   - source_matchers:

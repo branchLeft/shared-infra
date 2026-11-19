@@ -876,6 +876,12 @@ known exploits on the same hostname, and requires each to ban.
 Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
 reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
 scenario), which the monitoring stack already scrapes from edge1, and its page
-register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
+register entry (`edge-ban`) routes it to ntfy. A ban pages within about two
+minutes (a 30s scrape, a 30s rule evaluation, then the page route's 30s
+`group_wait` for a first page or 1m `group_interval` for a further one), even
+when another ban paged earlier in the hour; CI runs a real Alertmanager to
+prove it (`hetzner/monitoring/check_page_cadence.md`). A further ban by a
+scenario that is already firing is not a new alert, so it raises the count in
+the next repeat and does not page again. The gauge has no address label,
 so the page names the scenario and never an address. A simulated decision is
 not in the gauge, so a watch-only scenario never pages; the replay asserts it.

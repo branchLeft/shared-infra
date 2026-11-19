@@ -17,6 +17,15 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+That one group is why an entry with no tenant label has its own child route
+with `group_interval: 1m` (`UNSCOPED_PAGE_GROUP_INTERVAL`), while the
+tenant-scoped entries keep the root's `1h`. A new alert joining a group that
+has already notified waits for the next group interval, so under the root's
+hour a second edge ban would wait up to an hour behind the first, and a ban
+that ended sooner would never page. `amtool` cannot read an interval, so
+`check_page_cadence.py` runs a real Alertmanager in CI and fails unless a
+further estate-wide page arrives promptly and a further tenant page does not.
+
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of

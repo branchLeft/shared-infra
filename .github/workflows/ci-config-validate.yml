@@ -139,7 +139,8 @@ jobs:
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
-    # Observed 0.3-0.62min over the last 20 successful runs (p95 0.5min).
+    # Observed 0.3-0.62min over 20 successful runs (p95 0.5min) before the
+    # page-cadence step, which waits about 100s for a real Alertmanager.
     timeout-minutes: 10
     # Same reasoning as edge-config-validate above and deliberately not in
     # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
@@ -318,6 +319,10 @@ jobs:
           route ntfy-page alertname=TierTwoSafetyMatch severity=page tenant=acme
           route ntfy-page alertname=TenantFailedUnsafe severity=page tenant=acme
           route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
+          # The edge-ban page has no tenant label, and every one of its
+          # alerts, whatever the scenario, reaches the same receiver and nothing else.
+          route ntfy-page alertname=EdgeBanIssued severity=page reason=crowdsecurity/http-probing
+          route ntfy-page alertname=EdgeBanIssued severity=page reason=crowdsecurity/ssh-bf
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
           # A page-severity alertname the register has never heard of
@@ -326,6 +331,19 @@ jobs:
           # is the other half: it fails the build before a rule like this one
           # is ever rendered for real.
           route email alertname=SomeUnregisteredPagingAlert severity=page
+
+      # amtool names where an alert goes and never when: it cannot read a
+      # group interval. This runs the real Alertmanager on the rendered config
+      # with the ntfy receiver pointed at a stand-in, raises a second ban and a
+      # second tenant alert after the first of each has paged, and fails
+      # unless the ban pages within the bound and the tenant alert does not
+      # (check_page_cadence.md). Takes about two minutes.
+      - name: Test how soon a further page reaches the phone
+        if: steps.skip.outputs.run != 'false'
+        run: >-
+          python3 hetzner/monitoring/check_page_cadence.py
+          hetzner/monitoring/stack/alertmanager/alertmanager.yml
+          docker.io/prom/alertmanager:v0.34.0@sha256:268d4bf0e4bc0fe6dbdef6a59ce81a2918c88458bf8edf7dd0572ad372a093e6
 
       # Starts the pinned ntfy image on the rendered config, so a config the
       # server would refuse fails here and not at the next deploy, then reads
