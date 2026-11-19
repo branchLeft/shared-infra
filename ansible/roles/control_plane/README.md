@@ -222,6 +222,19 @@ An empty string counts as not given.
   until a pin is given. With no pin and no portal container the run stops with
   `control_plane[image-missing]`; an image that is not `NAME@sha256:` and 64 hex digits
   stops it with `control_plane[image-not-pinned]`, as the deploy wrapper would.
+- **The record and the running image must agree.** With no pin, the record is what a restart of
+  the unit would run and the running portal container is what runs now. When both are digests
+  and the digests differ (a failed upgrade that left the pin in place, a hand edit), the run
+  stops with `control_plane[image-drift]`, names both images (names and digests, no secret) and
+  writes nothing; it would otherwise have moved the portal and the console to the record's
+  digest. Only the digests are compared, so the same bytes under another name pass. A pin
+  given skips the check, because the pin is the image meant, and so does a running image that is
+  not a digest. The run then reads Docker whenever no pin is given. The refusal shows in a plan,
+  because the two reads run in check mode.
+- **The record holds one `IMAGE=` line.** The role takes the first digest line and systemd,
+  reading the file as an environment file, the last. A record with more than one `IMAGE=` line
+  stops the run with `control_plane[image-record-duplicate]`, naming the file. It is read only
+  when no pin is given; the deploy wrapper rewrites the whole file when it deploys a pin.
 
 ### A host where the stack already runs
 
@@ -361,7 +374,11 @@ converge is the idempotence step. `verify.yml` checks:
 - the image cases, with a stand-in for the `docker` command that answers the two reads:
   a given pin is used as given and `docker` is not called; with no image the one the
   stand-in reports is used, and the calls carry the project, service and one-off
-  filters; with no portal container the run stops with `control_plane[image-missing]`;
+  filters; a record that differs from the running image stops the run with
+  `control_plane[image-drift]` naming both and writing nothing, while the same two with a pin
+  given go on; a record with two `IMAGE=` lines stops it with
+  `control_plane[image-record-duplicate]`, and a record that agrees with the running image is
+  used with only the two reads asked; with no portal container the run stops with `control_plane[image-missing]`;
   with a running image that is a tag it stops with `control_plane[image-not-pinned]`;
 - that no throwaway value, from any apply, appears in the run's log.
 
@@ -405,7 +422,9 @@ command of the role can remove a container or a volume.
   corrections, the stack files and the isolation files only.
 - **The host is the source of the image until a pin is given.** With no pin the role
   deploys whatever the portal container runs, so it cannot upgrade or roll back the
-  image. A pin does.
+  image. A pin does. Where the record and the running image differ it refuses instead of
+  choosing (`control_plane[image-drift]`); the owner's way out is to correct the record or give
+  a pin.
 - **The owner and mode of the secret files are corrected at each run, not
   continuously.** A file widened between two runs stays wider until the next run
   that reaches this role.
