@@ -1,35 +1,22 @@
 #!/usr/bin/python3
 """The forced command of the tenant database host: create one tenant's database, and nothing else.
 
-The controller reaches db-t1 over SSH with a key whose authorized_keys line carries
-`command="/usr/bin/sudo -n /usr/local/sbin/branchleft-tenant-db-entry"`. sshd then runs this
-program as root, whatever the client asked for, and leaves the client's request in the
-environment variable SSH_ORIGINAL_COMMAND. That request is the only input, and it is untrusted
-text. It is accepted in exactly one shape:
+sshd runs this program as root through `sudo -n` for the controller's key, whatever the client
+asked for, and leaves the client's request in SSH_ORIGINAL_COMMAND. That request is untrusted text
+and is accepted in exactly one shape, `create-tenant-db NAME`, where NAME follows the tenant-name
+rule. Anything else is refused before the database is contacted.
 
-    create-tenant-db NAME
+For a valid, free name the program makes the database `ghost_NAME`, one account that may connect
+only from the application host, and one grant on that database alone. It writes the generated
+password to standard output once, which is the delivery channel, and never to a file, the journal
+or an argument. A name whose database or account already exists is refused and nothing is changed.
 
-NAME follows the tenant-name rule (lower-case letters, digits and hyphens, starting with a letter,
-ending with a letter or digit, 26 characters at most). Anything else is refused before the
-database is contacted: a shell command, a second command, a name with a quote, a name of the
-wrong length, an empty request, a request with a line break.
+The database's root value is not read here: the running container's own client reads it from the
+container's environment.
 
-On a name that is valid and free the program makes the database `ghost_NAME` (hyphens become
-underscores), one account of the same name that may connect only from the application host, and
-one grant on that database alone, with a generated password. It writes the password to standard
-output, once. That is the delivery channel: the controller pipes it into the application host.
-The password is never written to a file, to the journal or to an argument, and is never printed
-again. A name whose database or account already exists is refused, and nothing is changed or
-printed: a second request cannot read, reset or take over an existing tenant.
-
-The database's root value is not read here. The program asks the running container to run the
-client, and the client reads the container's own environment. Nothing on the host holds the value
-for this program to read, and it is never on a command line.
-
-Standard error carries one line, `branchleft-tenant-db-entry: <outcome> reason=<code>`, built from a
-fixed code and never from the request or from the server's own text. Exit status: 0 created,
-2 refused request, 3 name already exists, 4 busy, 5 the database could not be reached or the
-statements failed.
+Standard error carries one line, `branchleft-tenant-db-entry: <outcome> reason=<code>`, built from
+a fixed code. Exit status: 0 created, 2 refused request, 3 name exists, 4 busy, 5 the database
+could not be reached or a statement failed. The role's README holds the full reasoning.
 """
 
 from __future__ import annotations
@@ -163,7 +150,7 @@ def grant_pattern(database: str) -> str:
 
 def existence_query(database: str) -> str:
     """One row of two counts: accounts of this name at any host, and databases of this name."""
-    # S608: `database` is a validated tenant name, never request text.
+    # `database` is a validated tenant name, never request text.
     return (
         f"SELECT (SELECT COUNT(*) FROM mysql.user WHERE User = '{database}'), "  # noqa: S608
         f"(SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '{database}');\n"
@@ -173,7 +160,7 @@ def existence_query(database: str) -> str:
 def create_statements(database: str, password: str) -> str:
     """The statements that make the database, its account and its one grant."""
     account = f"'{database}'@'{TENANT_USER_HOST}'"
-    # S608: `database` is a validated tenant name and `password` a generated URL-safe token.
+    # `database` is a validated tenant name and `password` a generated URL-safe token.
     return (  # noqa: S608
         f"CREATE DATABASE `{database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
         f"CREATE USER {account} IDENTIFIED BY '{password}' "
