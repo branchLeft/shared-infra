@@ -426,6 +426,54 @@ groups:
             script delivered after this rule writes its first status within
             one 15 minute timer period. If db1 itself is down,
             HostOrServiceDown pages first.
+
+      - alert: ControlPlaneBackupStale
+        expr: >-
+          time() - control_plane_backup_last_success_timestamp_seconds{host="ops1"} > 129600
+        labels:
+          severity: warning
+        annotations:
+          summary: "The control-plane backup has not completed its {{ $labels.stage }} step for over 36 hours."
+          description: >-
+            control_plane_backup_last_success_timestamp_seconds is written
+            on ops1 by the control-plane backup program after each stage
+            succeeds: verified_on_host once the copy has been restored into a
+            throwaway server and counted equal to live, and shipped_offsite
+            once the sealed copy has been put to backup copy 1. The timer fires
+            at 02:40 UTC with up to 5 minutes of random delay and the unit is
+            stopped at 2 hours, so two healthy successes are at most 26h05m
+            apart. 129600s (36h) leaves 9h55m of margin and fires on the first
+            missed night. Backup copy 1 expires an object 10 days after it is
+            put, so nothing is lost yet and about 8.5 days remain to run the
+            backup by hand before copy 1 holds no control-plane backup. On
+            ops1, read journalctl -u branchleft-control-plane-backup.service;
+            a stopped timer shows in systemctl list-timers. Warning, never
+            page. Nothing fires before the first success is written, so a
+            timer that has never run is not seen by this rule.
+
+      - alert: ControlPlaneBackupRunFailed
+        expr: >-
+          control_plane_backup_last_failure_timestamp_seconds{host="ops1"}
+          unless on(instance)
+          (control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance) control_plane_backup_last_failure_timestamp_seconds{host="ops1"})
+        labels:
+          severity: warning
+        annotations:
+          summary: "The control-plane backup on {{ $labels.instance }} failed and no later run has shipped a copy."
+          description: >-
+            branchleft-control-plane-backup.service entered a failed state: a
+            check that did not pass, a missing precondition, a kill, the
+            two-hour timeout or a crash. systemd then started
+            branchleft-control-plane-backup-failed.service, which wrote the
+            time to control_plane_backup_failed.prom in the textfile
+            directory. This rule holds while that time is newer than the last
+            shipped_offsite success, so the next run that ships a copy clears
+            it, and a failure that comes after a ship (the prune that follows
+            it) is not hidden by an earlier success. It fires the night it
+            happens, about 36 hours before ControlPlaneBackupStale could.
+            On ops1, read journalctl -u branchleft-control-plane-backup.service
+            for the reason; a run by hand with systemctl start clears it once
+            it ships. The previous proven copies are still on the host.
   - name: scanner
     rules:
       - alert: ScannerNotConfigured
