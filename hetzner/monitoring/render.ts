@@ -753,6 +753,38 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            never page. The estate state has no other off-host copy until',
     '            this runs.',
     '',
+    // The weekly restore drill's own failure, from the OnFailure= the backup_restore
+    // Ansible role gives the drill unit. systemd runs a small unit that touches
+    // restore_drill_unit_failed.prom in the textfile directory; node_exporter reports the
+    // file's mtime. The mark counts only while it is newer than the drill's own last-run
+    // time, so the next run that writes its metrics clears it, and a drill that has never
+    // written any (a crash before the first write) stays marked. Warning with no owner_action,
+    // like the rest of this group: the on-host mailbox is the route, and the exact owner_action
+    // list in render.test.ts is the owner's call to widen. See render.md#the-backup-rule-group.
+    '      - alert: RestoreDrillUnitFailed',
+    '        expr: >-',
+    '          node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"}',
+    '          unless on(instance)',
+    '          (restore_drill_last_run_timestamp_seconds >= on(instance) node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"})',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The weekly restore drill on {{ $labels.instance }} failed, and no later run has recorded its result."',
+    '          description: >-',
+    '            branchleft-restore-drill.service entered a failed state: a crash,',
+    '            a kill, the three-hour timeout, or an exit after a failed check.',
+    '            systemd then started branchleft-restore-drill-failed.service,',
+    '            which touched restore_drill_unit_failed.prom in the textfile',
+    '            directory. This rule holds while that file is newer than',
+    '            restore_drill_last_run_timestamp_seconds, or the drill has never',
+    '            written that series, so it also covers the crash that happens',
+    '            before the drill writes any metric. No for: the file is written',
+    '            once per failure and is flat otherwise. On ops1, read',
+    '            journalctl -u branchleft-restore-drill.service for the reason;',
+    '            the next run that records its result clears the alert, and a',
+    '            drill run by hand with systemctl start does the same. Until then',
+    '            nothing has shown that the latest backup restores.',
+    '',
     // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
     // about this signal depends on a route that avoids mx1.
     //

@@ -308,6 +308,30 @@ groups:
             never page. The estate state has no other off-host copy until
             this runs.
 
+      - alert: RestoreDrillUnitFailed
+        expr: >-
+          node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"}
+          unless on(instance)
+          (restore_drill_last_run_timestamp_seconds >= on(instance) node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"})
+        labels:
+          severity: warning
+        annotations:
+          summary: "The weekly restore drill on {{ $labels.instance }} failed, and no later run has recorded its result."
+          description: >-
+            branchleft-restore-drill.service entered a failed state: a crash,
+            a kill, the three-hour timeout, or an exit after a failed check.
+            systemd then started branchleft-restore-drill-failed.service,
+            which touched restore_drill_unit_failed.prom in the textfile
+            directory. This rule holds while that file is newer than
+            restore_drill_last_run_timestamp_seconds, or the drill has never
+            written that series, so it also covers the crash that happens
+            before the drill writes any metric. No for: the file is written
+            once per failure and is flat otherwise. On ops1, read
+            journalctl -u branchleft-restore-drill.service for the reason;
+            the next run that records its result clears the alert, and a
+            drill run by hand with systemctl start does the same. Until then
+            nothing has shown that the latest backup restores.
+
       - alert: BackupLockWaitHigh
         expr: backup_worker_lock_wait_seconds > 1
         labels:

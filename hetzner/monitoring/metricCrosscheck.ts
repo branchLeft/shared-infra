@@ -279,6 +279,13 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // role pins the name to this rule's expression.
   branchleft_pager_route_configured:
     'the monitoring_stack Ansible role, a textfile gauge on the monitoring host',
+  // The restore drill's failure mark: the textfile collector's own per-file mtime of a file the
+  // backup_restore Ansible role's OnFailure= unit touches. The collector is node_exporter, and the
+  // writer is a systemd unit, so nothing under this root can scan either.
+  node_textfile_mtime_seconds:
+    "node_exporter's textfile collector; the file is touched by the backup_restore Ansible role's OnFailure unit, on ops1",
+  restore_drill_last_run_timestamp_seconds:
+    'restore_drill.py, in branchLeft/ghost-platform infra/provisioning/scripts, on ops1',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.
