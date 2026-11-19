@@ -81,6 +81,7 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and
 # app1's export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
 # back),
+
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
 # (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
