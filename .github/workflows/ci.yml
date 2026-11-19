@@ -509,6 +509,12 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
+      - name: Test and type-check .github/scripts
+        run: |
+          python3 -m pip install --quiet mypy==2.4.1
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+          python3 -m mypy --strict .github/scripts/secret_alert_pager.py
+
       # demo1's roles carry ghost-platform files and hold each to a sha256 in this
       # repository, which a change to a file and its pin together passes. This fetches
       # ghost-platform (public, no credential) at each role's *_source_sha and fails,
