@@ -57,7 +57,8 @@ starts with a code, so that a test can tell one from another:
 ### Optional inputs
 
 `host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
-file may leave out. Today that is `ci_jump_user`, on edge1 and edget, and nothing else. An
+file may leave out. Today that is `ci_jump_user`, on edge1 and edget, and `ci_jump_spool_user`, on
+edget, and nothing else. An
 absent optional input is not set, which leaves its role's argument unset, and the play goes
 on. One that is in the file must still hold a usable value (an empty string, null or white
 space is `host_inputs[missing-key]`), and a key outside the row is refused as ever.
@@ -214,7 +215,8 @@ content hides its result, every check precedes the first input).
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
 nothing else. The playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
-its one input is `ci_jump_user`, for the `ci_jump` role. A run stops
+its two inputs are `ci_jump_user` and `ci_jump_spool_user`, the names of the two jump accounts of
+the `ci_jump` role, both optional. A run stops
 here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
 `/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above), which proves the file
 on the host before the roles after the loader depend on it. db1 also needs its signer in

@@ -421,6 +421,7 @@ wrong source. To add a secret option, add its row here.
 | `backup_worker`            | `backup_worker_db_password`               | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
+| `ci_jump`                  | `ci_jump_spool_user`                      | host_inputs: edget        |
 | `ci_jump`                  | `ci_jump_user`                            | host_inputs: edge1, edget |
 | `control_plane`            | `control_plane_env_content`               | none                      |
 | `control_plane`            | `control_plane_masterkey`                 | none                      |

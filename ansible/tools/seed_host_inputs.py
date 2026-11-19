@@ -85,7 +85,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_machine_password_hash",
         "ci_jump_user",
     ),
-    "edget": ("ci_jump_user",),
+    "edget": ("ci_jump_user", "ci_jump_spool_user"),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -203,6 +203,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
+    "ci_jump_spool_user": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.

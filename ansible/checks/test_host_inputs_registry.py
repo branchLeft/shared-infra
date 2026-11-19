@@ -291,7 +291,7 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_machine_password_hash",
                     "ci_jump_user",
                 ],
-                "edget": ["ci_jump_user"],
+                "edget": ["ci_jump_user", "ci_jump_spool_user"],
                 "ops1": [
                     "backup_worker_db_host",
                     "backup_worker_db_user",
@@ -334,7 +334,7 @@ class RealTree(unittest.TestCase):
         # addition is a decision that shows here. Every other input is required.
         self.assertEqual(
             optional_of(ROOT / "ansible"),
-            {"edge1": ["ci_jump_user"], "edget": ["ci_jump_user"]},
+            {"edge1": ["ci_jump_user"], "edget": ["ci_jump_user", "ci_jump_spool_user"]},
         )
 
     def test_app1_applies_the_loader_then_the_website_role_and_the_deploy_roles(self) -> None:
@@ -469,8 +469,8 @@ class Mutations(unittest.TestCase):
     def test_an_optional_host_with_no_row_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/vars/main.yml",
-            "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  demo1:\n    - ci_jump_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n  demo1:\n    - ci_jump_user\n\n# A value",
         )
         self._expect("optional demo1: the host has no row")
 
@@ -479,8 +479,8 @@ class Mutations(unittest.TestCase):
         # it would stop the play, so the plan would fail the way the missing key did.
         self._edit(
             "roles/host_inputs/vars/main.yml",
-            "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  db1:\n    - db1_stack_exporter_password\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n  db1:\n    - db1_stack_exporter_password\n\n# A value",
         )
         self._expect("db1_stack_exporter_password is optional but role db1_stack requires it")
 

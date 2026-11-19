@@ -45,8 +45,9 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, edget (edge-t), ops1 and app1. edget has one input, `ci_jump_user`, typed because it
-exists nowhere on the host. db1 already has its file and no live file to read; a test names it, so
+seeds edge1, edget (edge-t), ops1 and app1. edget has two inputs, `ci_jump_user` and
+`ci_jump_spool_user` (the names of its two jump accounts), each typed because it exists nowhere on
+the host; the second is added later with `--set ci_jump_spool_user` when the spool tunnels are wanted. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:
