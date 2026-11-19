@@ -1,4 +1,6 @@
-"""Check that the tenant hosts are monitored the way the monitoring runbook states, and no metrics port is public.
+"""Check that the tenant hosts are monitored as the monitoring runbook states.
+
+No metrics port is public.
 
 Full reasoning: `test_tenant_host_monitoring.md`.
 """
@@ -104,9 +106,9 @@ class TenantHostsRunTheExporter(unittest.TestCase):
 
 
 class TheExporterIsNeverPublic(unittest.TestCase):
-    """The exporter binds the host's own private address, so no firewall is what keeps it private."""
+    """The exporter binds the host's own private address, so no firewall keeps it private."""
 
-    def test_the_unit_listens_on_the_address_the_role_found_and_never_on_every_address(self) -> None:
+    def test_the_unit_listens_on_the_role_address_never_every_address(self) -> None:
         # Comments in the unit say "never 0.0.0.0", so only its command lines are read.
         commands = [
             line
@@ -152,9 +154,8 @@ class JournalRetentionIsStatedPerHost(unittest.TestCase):
         self.assertEqual(defaults[JOURNAL_KEY], 0)
 
     def test_the_role_refuses_a_figure_over_the_ceiling(self) -> None:
-        tasks = (ANSIBLE / "roles" / "host_baseline" / "tasks" / "_journal_retention.yml").read_text(
-            encoding="utf-8"
-        )
+        retention = ANSIBLE / "roles" / "host_baseline" / "tasks" / "_journal_retention.yml"
+        tasks = retention.read_text(encoding="utf-8")
         self.assertIn(f"{JOURNAL_KEY} | int <= {PRIVACY_CEILING_DAYS}", tasks)
 
 

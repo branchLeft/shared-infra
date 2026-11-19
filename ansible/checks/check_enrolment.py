@@ -189,7 +189,8 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
     "ops1": {"deploy_tooling_host_class": "internal"},
     "db1": {"deploy_tooling_host_class": "internal"},
     # The three tenant hosts keep their journal for 30 days, inside the 90 days the privacy
-    # notice states for server logs; test_tenant_host_monitoring.py holds the figure and the ceiling.
+    # notice states for server logs; test_tenant_host_monitoring.py holds the figure and
+    # the ceiling.
     "dbt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
     "appt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
     # mx1's jail has no ignoreip line (the opt-out of host_baseline). The pin is here, and the
