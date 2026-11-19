@@ -18,9 +18,17 @@ directory test_counts/ is owned by the same CODEOWNERS owner as this file.
 
 import collections
 import pathlib
+import sys
 import unittest
 
 PROVISION = pathlib.Path(__file__).resolve().parent
+CI_WORKFLOW = PROVISION.parent.parent / ".github" / "workflows" / "ci.yml"
+
+# The oldest interpreter this suite runs under: macOS's system python3 is 3.9, and
+# the first `python3` on a developer's PATH or a git hook is often that one. Every
+# module here must import under it, so `X | None` in an annotation needs
+# `from __future__ import annotations`. CI's floor step reads the same number.
+MIN_PYTHON = (3, 9)
 COUNTS = PROVISION / "test_counts"
 SUFFIX = ".txt"
 
@@ -93,6 +101,26 @@ class SuiteSizeTests(unittest.TestCase):
             with self.subTest(path.name):
                 self.assertTrue(path.name.endswith(SUFFIX), path.name)
                 self.assertRegex(path.read_text(), r"\A[1-9][0-9]*\n\Z")
+
+    def test_the_interpreter_meets_the_recorded_floor(self):
+        # Below the floor a module that cannot import is one placeholder test and
+        # the run reports a smaller count. This turns that into a named refusal.
+        self.assertGreaterEqual(
+            sys.version_info[:2],
+            MIN_PYTHON,
+            f"this suite needs Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or newer; "
+            f"{sys.executable} is {sys.version.split()[0]}. Put a newer python3 first "
+            "on PATH: below the floor unittest hides modules behind import errors "
+            "and reports a smaller suite instead of refusing.",
+        )
+
+    def test_ci_checks_the_same_floor(self):
+        floor = ".".join(str(part) for part in MIN_PYTHON)
+        self.assertIn(
+            f"assert-min-python-version.py {floor} --suite hetzner/provision",
+            CI_WORKFLOW.read_text(encoding="utf-8"),
+            "the CI floor step and MIN_PYTHON must name the same version",
+        )
 
 
 if __name__ == "__main__":
