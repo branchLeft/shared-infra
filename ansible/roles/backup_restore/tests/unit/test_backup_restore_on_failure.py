@@ -1,4 +1,4 @@
-"""Unit tests for the restore drill's failure alert (branchLeft/workspace#2023).
+"""Unit tests for the restore drill's failure alert.
 
 The drill unit is the release's pinned file, so the role gives it an `OnFailure=` in a drop-in. The
 unit that names marks the failure in the textfile directory, and the alert rule in
