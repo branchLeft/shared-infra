@@ -8,3 +8,7 @@ hetzner/provision/test_control_plane_hba_server.py
 ansible/roles/control_plane_backup/files/branchleft_control_plane_backup.py
 # The tests of that program, which hold the same statements as literals to prove what it sends.
 ansible/roles/control_plane_backup/tests/unit/test_control_plane_backup.py
+# Backup and restore tooling for the tenant database host's binary logs: it lists the server's logs, flushes the log and replays shipped logs into a scratch server (database administration and operational checks, not application code).
+ansible/roles/binlog_pull/files/branchleft_binlog_pull.py
+# The tests of that program, which hold the same statements as literals to prove what it sends.
+ansible/roles/binlog_pull/tests/unit/test_binlog_pull.py

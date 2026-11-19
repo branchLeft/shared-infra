@@ -229,7 +229,7 @@ a pull with no environment stops with exit 2 and names the missing file.
 
 ### Sabotage: skip one log, the gap alert fires
 
-`SkippedLogScenario` in the unit tests is the issue's sabotage. It pulls five logs with the
+`SkippedLogScenario` in the unit tests is the sabotage control. It pulls five logs with the
 fetch of the third failing. The ledger holds 1, 2, 4 and 5; `check` is red and names `[3]`;
 `binlog_pull_gap_logs` is 1; `BinlogPullGap` has its input in
 `hetzner/monitoring/alert_rules_test.yml`, where it fires. Reverting the skip ships log 3
@@ -274,7 +274,7 @@ One row per edit to the program or role, with the unit suite run over it.
   seen against `db-t1`.
 - **Nothing reaches `db-t1` today.** Its MySQL listens on loopback only on `main`, and the
   tenants project is its own network: there is no path from `ops1` to the port. Both are owner
-  or other-issue work (ISSUE branchLeft/workspace#1634 for the listener) and the role assumes
+  or other work (the listener is the private-listener change for the tenant database host) and the role assumes
   them done. The program takes a host and a port, so a tunnel's local port serves.
 - **The put key is put-only.** `pull` can report that a put succeeded; only `audit`, with a read
   key, shows the object came back byte for byte. The timer does not run `audit`, because the
@@ -287,7 +287,7 @@ One row per edit to the program or role, with the unit suite run over it.
   put it. A log that large stays unshipped and loud (the gap and unshipped gauges, then the
   alert) instead of being cut. A flush every 15 minutes keeps logs far below that.
 - **Copy 2 is not written.** Only copy 1. The second copy is the owner's spend
-  (ISSUE branchLeft/workspace#1789); the put is one function, `ReleaseStore.put`, and a second
+  (a separate piece of work); the put is one function, `ReleaseStore.put`, and a second
   store added beside it writes the same ciphertext to both.
 - **No `absent()` alert.** Like the control plane's backup, a pull nobody has switched on is not
   an alert. A pull that has run once and stopped is `BinlogPullStale`.

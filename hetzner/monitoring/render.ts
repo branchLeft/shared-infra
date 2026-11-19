@@ -964,7 +964,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            it ships. The previous proven copies are still on the host.',
     '',
     // The tenant database host's binary-log pull, from the textfile gauges the program the binlog_pull
-    // Ansible role installs writes on ops1 after every run. The gap rule is the control of issue 1791:
+    // Ansible role installs writes on ops1 after every run. The gap rule is the control of the pull:
     // a log that was skipped or failed leaves a hole or an unshipped log, and the pull publishes both
     // counts, so the alert needs no second source. No absent(): the timer is off until the owner's
     // apply turns it on. Warnings, same route as the group. See render.md#the-backup-rule-group.

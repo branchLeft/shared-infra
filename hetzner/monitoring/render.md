@@ -229,7 +229,7 @@ select on `host="ops1"` and are warnings on the same route as the rest of the gr
 | `BinlogPullGap`   | `binlog_pull_gap_logs` or `binlog_pull_unshipped_logs` is above zero | 30m    |
 | `BinlogPullStale` | the last run that shipped every closed log is over 3600s (1h) old    | none   |
 
-`BinlogPullGap` is the control of issue 1791: a log that was skipped or failed to
+`BinlogPullGap` is the control of the pull: a log that was skipped or failed to
 ship leaves a hole in the shipped sequence or an unshipped log, the pull publishes both
 counts, and the rule fires once either has held for two pull periods. A single failed
 run does not fire it, because the next pull ships the log again while the server still

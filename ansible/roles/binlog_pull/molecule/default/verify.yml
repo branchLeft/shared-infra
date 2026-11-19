@@ -120,8 +120,7 @@
 
     - name: Read the schedule systemd has for the timer
       ansible.builtin.command:
-        argv:
-          [systemctl, show, --property=OnBootUSec, OnUnitActiveUSec, branchleft-binlog-pull.timer]
+        argv: [systemctl, show, --property=TimersMonotonic, branchleft-binlog-pull.timer]
       register: binlog_pull_verify_schedule
       changed_when: false
 

@@ -2395,7 +2395,7 @@ tests:
         eval_time: 5m
         exp_samples: []
 
-  # BinlogPullGap, the control of issue 1791: one log is skipped, so the pull publishes a gap of
+  # BinlogPullGap, the control: one log is skipped, so the pull publishes a gap of
   # one, and the alert fires once it has held for 30m (two pull periods). It is silent at 29m,
   # pinning the `for:` from below, and fires at 35m with the labels the summary is routed on.
   - interval: 1m

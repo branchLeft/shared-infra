@@ -422,7 +422,7 @@ class PullTests(WorkdirCase):
 
 
 class SkippedLogScenario(WorkdirCase):
-    """The control of issue 1791: skip one log in the pull; the check and the gauge go red."""
+    """The control: skip one log in the pull; the check and the gauge go red."""
 
     def pull_with_log_three_skipped(self, store: FakeStore) -> program.PullReport:
         return self.do_pull(FakeSource(timed_logs(5), fail={3}), store)

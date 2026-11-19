@@ -197,6 +197,16 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "registered because the scan reads the path as a stack name. No Compose "
         "file exists for it anywhere."
     ),
+    "binlog-pull": (
+        "Not an instance of the template: `/opt/branchleft/binlog-pull` is the "
+        "directory the ansible/roles/binlog_pull role of branchLeft/shared-infra "
+        "installs its binary-log pull program into, and `/etc/branchleft/binlog-pull.env` "
+        "is its settings file, which a systemd oneshot service and timer of that "
+        "role run. It never starts through branchleft-compose@ or branchleft-deploy; "
+        "it dials the tenant database host's MySQL port over TLS. It is registered "
+        "because the scan reads the path as a stack name. No Compose file exists "
+        "for it anywhere."
+    ),
     "ntfy-pager": (
         "Not an instance of the template: `/etc/branchleft/ntfy-pager.env` is the "
         "secrets file of the ntfy pager, written by the ansible/roles/ntfy_pager "
