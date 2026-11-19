@@ -9,6 +9,7 @@
 - edge_stack
 - node_exporter
 - exporters_and_collectors
+- edge_ban_owner
 - ntfy_pager
 - monitoring_stack
 - sweego_receiver

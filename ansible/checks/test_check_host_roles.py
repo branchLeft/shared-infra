@@ -102,6 +102,7 @@ APPLIED_ON_MAIN = {
         "edge_stack",
         "node_exporter",
         "exporters_and_collectors",
+        "edge_ban_owner",
         "ntfy_pager",
         "monitoring_stack",
         "sweego_receiver",
@@ -413,7 +414,8 @@ class HostRoleLists(unittest.TestCase):
     # edge1 applies the loader first, then the NAT gateway (egress_nat) right after the baseline,
     # whose Docker and iptables its reconciler needs, then the edge stack after the CI login
     # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
-    # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
+    # then the three monitoring roles: the collectors, the edge ban owner (after the collectors,
+    # which create the textfile directory it writes to), the pager, and the monitoring stack last
     # (it hashes the pager's files and decides the one restart of its unit), then the Sweego
     # receiver after all of them, because it refuses to run until the owner has placed its secret
     # files and that refusal must not hold the roles before it back. The edge stack is
@@ -437,6 +439,7 @@ class HostRoleLists(unittest.TestCase):
                 "edge_stack",
                 "node_exporter",
                 "exporters_and_collectors",
+                "edge_ban_owner",
                 "ntfy_pager",
                 "monitoring_stack",
                 "sweego_receiver",
