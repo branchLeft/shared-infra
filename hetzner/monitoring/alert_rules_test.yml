@@ -2394,3 +2394,119 @@ tests:
       - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
         eval_time: 5m
         exp_samples: []
+
+  # BinlogPullGap, the control of issue 1791: one log is skipped, so the pull publishes a gap of
+  # one, and the alert fires once it has held for 30m (two pull periods). It is silent at 29m,
+  # pinning the `for:` from below, and fires at 35m with the labels the summary is routed on.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="ops1"}'
+        values: '1x120'
+      - series: 'binlog_pull_unshipped_logs{job="node", host="ops1"}'
+        values: '0x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 29m
+        exp_samples: []
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BinlogPullGap", alertstate="firing", severity="warning", job="node", host="ops1"}'
+            value: 1
+
+  # The same control, green: the next pull ships the skipped log, the gap and the unshipped count
+  # fall to zero, and the alert that was firing at 35m clears.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="ops1"}'
+        values: '1x40 0x80'
+      - series: 'binlog_pull_unshipped_logs{job="node", host="ops1"}'
+        values: '1x40 0x80'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 39m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BinlogPullGap", alertstate="firing", severity="warning", job="node", host="ops1"}'
+            value: 1
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 45m
+        exp_samples: []
+
+  # A log that failed once and was shipped by the very next pull is not a gap: the unshipped count
+  # is up for 14 minutes only, under the 30m hold, and nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="ops1"}'
+        values: '0x120'
+      - series: 'binlog_pull_unshipped_logs{job="node", host="ops1"}'
+        values: '1x14 0x106'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 60m
+        exp_samples: []
+
+  # An unshipped log with no hole (the newest closed log keeps failing) fires on its own.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="ops1"}'
+        values: '0x120'
+      - series: 'binlog_pull_unshipped_logs{job="node", host="ops1"}'
+        values: '2x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullGap", alertstate="firing"}
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BinlogPullGap", alertstate="firing", severity="warning", job="node", host="ops1"}'
+            value: 1
+
+  # Every closed log shipped: both counts are zero for two hours and nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="ops1"}'
+        values: '0x120'
+      - series: 'binlog_pull_unshipped_logs{job="node", host="ops1"}'
+        values: '0x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"BinlogPull.*", alertstate="firing"}
+        eval_time: 120m
+        exp_samples: []
+
+  # The rules read ops1 only: a series of the same name on another host is not this pull.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_gap_logs{job="node", host="db1"}'
+        values: '3x120'
+      - series: 'binlog_pull_last_success_timestamp_seconds{job="node", host="db1"}'
+        values: '0x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"BinlogPull.*", alertstate="firing"}
+        eval_time: 100m
+        exp_samples: []
+
+  # BinlogPullStale: the bound is 3600s (`>` not `>=`), pinned from both sides. The success time
+  # is 0 and the clock starts at 0, so the age is the evaluation time: exactly 60m is silent and
+  # 61m fires.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_last_success_timestamp_seconds{job="node", host="ops1"}'
+        values: '0x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullStale", alertstate="firing"}
+        eval_time: 60m
+        exp_samples: []
+      - expr: ALERTS{alertname="BinlogPullStale", alertstate="firing"}
+        eval_time: 61m
+        exp_samples:
+          - labels: 'ALERTS{alertname="BinlogPullStale", alertstate="firing", severity="warning", job="node", host="ops1"}'
+            value: 1
+
+  # A pull that succeeds every period: the success time advances with the clock, so the age never
+  # passes a minute and nothing fires over two hours.
+  - interval: 1m
+    input_series:
+      - series: 'binlog_pull_last_success_timestamp_seconds{job="node", host="ops1"}'
+        values: '0+60x120'
+    promql_expr_test:
+      - expr: ALERTS{alertname="BinlogPullStale", alertstate="firing"}
+        eval_time: 120m
+        exp_samples: []

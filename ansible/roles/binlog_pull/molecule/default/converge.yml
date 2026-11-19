@@ -1,0 +1,122 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    # The include carries no no_log: the role's own tasks must be the ones that keep the values
+    # out of the log, and a keyword here would hide a missing one.
+    - name: Apply the role with the defaults
+      ansible.builtin.include_role:
+        name: branchleft.binlog_pull
+
+    # The control case for the timer's precondition: with the timer asked for and neither the
+    # state-copy file nor the staged client on the host, the role must refuse and say why. The
+    # refusal comes before the timer task, so nothing changes and the second converge still
+    # reports zero changes. The assertion names the file so that a failure of any other kind
+    # does not pass for this one.
+    - name: Prove the timer is refused while the destination file is absent
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the timer asked for and no destination file
+          ansible.builtin.include_role:
+            name: branchleft.binlog_pull
+          vars:
+            binlog_pull_timer_enabled: true
+        - name: Fail if the timer was accepted
+          ansible.builtin.fail:
+            msg: The role enabled the timer with no state-copy environment file on the host.
+      rescue:
+        - name: Assert the failure was the missing destination file
+          ansible.builtin.assert:
+            that:
+              - "'state-copy environment file' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed on the missing destination file for a reason other than that file.
+
+    # A login value with a character the environment file cannot hold must be refused before
+    # any task changes anything.
+    - name: Prove a login value with a space is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with a login value the environment file cannot hold
+          ansible.builtin.include_role:
+            name: branchleft.binlog_pull
+          vars:
+            binlog_pull_db_password: 'two words'
+        - name: Fail if the value was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a login value with a space in it.
+      rescue:
+        - name: Assert the failure was the login value
+          ansible.builtin.assert:
+            that:
+              - "'login value is empty or holds a character' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed for a reason other than the login value.
+
+    # The enable and the disable are test setup, not role tasks, so they report no change; the
+    # idempotence step measures the role. Check mode skips this block: nothing is enabled there.
+    - name: Prove the defaults leave an enabled timer on, and the timer path runs
+      when: not ansible_check_mode
+      block:
+        - name: Enable the timer before the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-binlog-pull.timer
+            enabled: true
+            state: started
+          changed_when: false
+
+        - name: Apply the role with the defaults
+          ansible.builtin.include_role:
+            name: branchleft.binlog_pull
+
+        - name: Read the timer after the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-binlog-pull.timer
+          register: binlog_pull_converge_timer
+          changed_when: false
+
+        - name: Assert the defaults left the enabled timer enabled
+          ansible.builtin.assert:
+            that:
+              - binlog_pull_converge_timer.status.UnitFileState == 'enabled'
+            quiet: true
+            fail_msg: The default apply changed a timer that was enabled; the timer task must be gated on binlog_pull_timer_may_disable.
+
+        - name: Place empty stand-ins for the destination file and the staged client
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ item }}'
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          loop:
+            - /etc/branchleft/state-copy.env
+            - /tmp/binlog-pull-stand-in-client.py
+          changed_when: false
+
+        - name: Apply the role with the timer asked for, the client probe pointed at the stand-in
+          ansible.builtin.include_role:
+            name: branchleft.binlog_pull
+          vars:
+            binlog_pull_timer_enabled: true
+            binlog_pull_release_client: /tmp/binlog-pull-stand-in-client.py
+
+        - name: Remove the stand-ins
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /etc/branchleft/state-copy.env
+            - /tmp/binlog-pull-stand-in-client.py
+          changed_when: false
+
+        - name: Disable the timer again for the later steps
+          ansible.builtin.systemd_service:
+            name: branchleft-binlog-pull.timer
+            enabled: false
+            state: stopped
+          changed_when: false

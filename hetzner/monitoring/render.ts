@@ -121,6 +121,14 @@ export const DB_BINLOG_ABSENT_FOR = '1h';
  */
 const OPS1_SERIES = 'host="ops1"';
 export const CONTROL_PLANE_BACKUP_STALE_SECONDS = 129600;
+/**
+ * The tenant database host's binary-log pull (ansible/roles/binlog_pull) runs on ops1 every 15m and its
+ * unit is stopped at 10m, so a healthy gap between two clean runs is under 25m. 1h is three runs in a
+ * row failed or missed. A gap or an unshipped log is held for 30m, two runs: the next pull ships a log
+ * that failed once, so one failed run is not a gap yet.
+ */
+export const BINLOG_PULL_STALE_SECONDS = 3600;
+export const BINLOG_PULL_GAP_FOR = '30m';
 
 /**
  * The scanner series reach Prometheus through a host's node_exporter textfile
@@ -954,6 +962,52 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            On ops1, read journalctl -u branchleft-control-plane-backup.service',
     '            for the reason; a run by hand with systemctl start clears it once',
     '            it ships. The previous proven copies are still on the host.',
+    '',
+    // The tenant database host's binary-log pull, from the textfile gauges the program the binlog_pull
+    // Ansible role installs writes on ops1 after every run. The gap rule is the control of issue 1791:
+    // a log that was skipped or failed leaves a hole or an unshipped log, and the pull publishes both
+    // counts, so the alert needs no second source. No absent(): the timer is off until the owner's
+    // apply turns it on. Warnings, same route as the group. See render.md#the-backup-rule-group.
+    '      - alert: BinlogPullGap',
+    '        expr: >-',
+    `          binlog_pull_gap_logs{${OPS1_SERIES}} > 0 or binlog_pull_unshipped_logs{${OPS1_SERIES}} > 0`,
+    `        for: ${BINLOG_PULL_GAP_FOR}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The tenant database host\'s binary logs on backup copy 1 have a gap or a log not yet shipped."',
+    '          description: >-',
+    '            binlog_pull_gap_logs counts sequence numbers missing from the',
+    '            shipped series and binlog_pull_unshipped_logs counts closed logs',
+    '            the database host holds that the last pull did not ship. Either',
+    '            above zero for 30 minutes, two pull periods, means a log failed to',
+    '            fetch, was cut short, or could not be put, and the next pull did',
+    '            not fix it. A restore to a time inside the missing log cannot be',
+    '            replayed. On ops1, read journalctl -u branchleft-binlog-pull.service',
+    "            and run the program's check command, which names the sequence",
+    '            numbers. binlog_pull_lost_logs above zero means the server no',
+    '            longer holds a missing log, so a later pull cannot fill it: take a',
+    '            fresh dump and restore from that instead. Warning, never page: the',
+    '            database host keeps its own binary logs for 7 days.',
+    '',
+    '      - alert: BinlogPullStale',
+    '        expr: >-',
+    `          time() - binlog_pull_last_success_timestamp_seconds{${OPS1_SERIES}} > ${BINLOG_PULL_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The binary-log pull from the tenant database host has not shipped everything for over an hour."',
+    '          description: >-',
+    '            binlog_pull_last_success_timestamp_seconds is written on ops1 by',
+    '            the pull after a run that shipped every closed log. The timer',
+    '            fires every 15 minutes and the unit is stopped at 10, so two',
+    '            healthy successes are under 25 minutes apart. 3600s (1h) fires',
+    '            after three runs in a row have failed or not run, and unlike',
+    '            BinlogPullGap it also sees a pull that cannot reach the database',
+    '            host at all. On ops1, read journalctl -u branchleft-binlog-pull.service;',
+    '            a stopped timer shows in systemctl list-timers. Warning, never',
+    '            page. Nothing fires before the first success is written, so a',
+    '            timer that has never run is not seen by this rule.',
     // The scanning storage adapter's own metrics, written by each tenant's
     // Ghost process as a node_exporter textfile. Every rule is scoped to
     // expected_up="true" on the node target, so nothing fires for a host

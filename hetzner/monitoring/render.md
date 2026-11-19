@@ -217,6 +217,37 @@ directory, so `metricCrosscheck.ts` lists them under `EXTERNAL_METRICS`, and a u
 test in the role pins both names and the `shipped_offsite` stage to these
 expressions.
 
+### The tenant database host's binary-log pull
+
+Two more rules in the same group read the pull of the tenant database host's closed
+binary logs on `ops1`, from the textfile gauges the program installed by the
+`binlog_pull` Ansible role writes after every run (`ansible/roles/binlog_pull`). Both
+select on `host="ops1"` and are warnings on the same route as the rest of the group.
+
+| Alert             | Fires when                                                           | `for:` |
+| ----------------- | -------------------------------------------------------------------- | ------ |
+| `BinlogPullGap`   | `binlog_pull_gap_logs` or `binlog_pull_unshipped_logs` is above zero | 30m    |
+| `BinlogPullStale` | the last run that shipped every closed log is over 3600s (1h) old    | none   |
+
+`BinlogPullGap` is the control of issue 1791: a log that was skipped or failed to
+ship leaves a hole in the shipped sequence or an unshipped log, the pull publishes both
+counts, and the rule fires once either has held for two pull periods. A single failed
+run does not fire it, because the next pull ships the log again while the server still
+holds it. `binlog_pull_lost_logs` above zero is the part a later pull cannot fix. The
+program's `check` command names the sequence numbers, and the role's unit test
+`SkippedLogScenario` and the promtool cases for this alert pin the same numbers.
+
+`BinlogPullStale` reads `binlog_pull_last_success_timestamp_seconds`. The timer fires
+every 15 minutes and the unit is stopped at 10, so two healthy successes are under 25
+minutes apart; 1 hour is three runs in a row failed or missed, and it also sees a pull
+that cannot reach the database host at all.
+
+Named limits. Neither rule uses `absent()`: the role's timer stays off until the
+owner's apply turns it on, so a pull that has never run is not an alert. The names
+are not emitted by a collector under this directory, so `metricCrosscheck.ts` lists
+them under `EXTERNAL_METRICS`, and a unit test in the role pins them to these
+expressions.
+
 ## The `scanner` rule group
 
 Watches the upload scanner inside each tenant's Ghost process. The series are

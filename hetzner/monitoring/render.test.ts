@@ -7,6 +7,8 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  BINLOG_PULL_GAP_FOR,
+  BINLOG_PULL_STALE_SECONDS,
   CONTROL_PLANE_BACKUP_STALE_SECONDS,
   DB_BINLOG_ABSENT_FOR,
   DB_BINLOG_STALE_SECONDS,
@@ -662,6 +664,37 @@ describe('the rendered alert rules', () => {
     expect(block).toContain(
       'control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance)'
     );
+  });
+
+  it('watches the tenant database host binary-log pull from ops1 as two warnings that never page', () => {
+    for (const name of ['BinlogPullGap', 'BinlogPullStale']) {
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('{host="ops1"}');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+      expect(block).not.toContain('absent(');
+    }
+  });
+
+  it('fires the gap alert on a hole or an unshipped log held for two pull periods', () => {
+    const block = ruleBlock('BinlogPullGap');
+    expect(BINLOG_PULL_GAP_FOR).toBe('30m');
+    expect(block).toContain(
+      'binlog_pull_gap_logs{host="ops1"} > 0 or binlog_pull_unshipped_logs{host="ops1"} > 0'
+    );
+    expect(block).toContain('for: 30m');
+  });
+
+  it('calls the pull stale after three missed 15 minute runs, clear of one healthy gap', () => {
+    const block = ruleBlock('BinlogPullStale');
+    expect(BINLOG_PULL_STALE_SECONDS).toBe(3600);
+    expect(block).toContain(
+      'time() - binlog_pull_last_success_timestamp_seconds{host="ops1"} > 3600'
+    );
+    expect(block).not.toContain('for:');
+    // One healthy gap is the 15m period plus the 10m unit timeout.
+    expect(BINLOG_PULL_STALE_SECONDS).toBeGreaterThan(25 * 60);
   });
 
   it('keeps the existing worker-copy alert untouched beside them', () => {
