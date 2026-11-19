@@ -63,8 +63,7 @@ timer until each is done.
 
 - The lifecycle rule that expires the copies after 28 days is the backup
   bucket's (`db/provision/configure_backup_bucket.py` in `ghost-platform`).
-- A missed or overrunning run alert is its own work
-  ([ISSUE branchLeft/workspace#1767](https://github.com/branchLeft/workspace/issues/1767)).
+- An alert on a missed or overrunning run is not built here.
 
 ## Interface
 
