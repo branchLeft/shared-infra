@@ -13,9 +13,11 @@ import datetime
 import http.server
 import io
 import json
+import os
 import pathlib
 import re
 import socket
+import stat
 import tempfile
 import threading
 import unittest
@@ -305,6 +307,74 @@ class ReaderTests(PagerCase):
         self.assertEqual(self.paged_keys(), [f"{REPO}:1", f"{REPO}:2"])
         self.assertEqual(transport.requests[1].headers["Authorization"], f"Bearer {READ_TOKEN}")
 
+    SECOND = f"https://{GITHUB_HOST}/orgs/{OWNER}/secret-scanning/alerts?hide_secret=true&after=abc"
+
+    def read_with_link(self, header: str | None) -> FakeTransport:
+        """Read the listing when the first page carries this Link header (none when None)."""
+
+        def handler(request: pager.HttpRequest) -> pager.HttpResponse:
+            if request.url == self.SECOND or "after=" in request.url:
+                return json_response(200, [])
+            return json_response(200, [], {} if header is None else {"link": header})
+
+        transport = FakeTransport(handler)
+        pager.read_open_public_alerts(transport, pager.load_config(environment(), self.state_file))
+        return transport
+
+    def test_every_spelling_of_the_next_relation_is_followed(self) -> None:
+        second = self.SECOND
+        headers = {
+            "quoted": f'<{second}>; rel="next"',
+            "bare": f"<{second}>; rel=next",
+            "upper-case name and value": f'<{second}>; REL="NEXT"',
+            "several relation types": f'<{second}>; rel="prev next"',
+            "next is not first": f'<{second}x>; rel="prev", <{second}>; rel="next", <{second}y>; rel="last"',
+            "other parameters first": f'<{second}>; title="a, b"; rel="next"',
+            "no space after the semicolon": f'<{second}>;rel="next"',
+            "spaces around the equals sign": f'<{second}> ; rel = "next"',
+            "empty parameter": f'<{second}>; ; rel="next"',
+        }
+        for label, header in headers.items():
+            with self.subTest(label):
+                transport = self.read_with_link(header)
+                self.assertEqual(len(transport.requests), 2)
+                self.assertEqual(transport.requests[1].url, second)
+
+    def test_a_comma_inside_the_angle_brackets_does_not_split_the_link(self) -> None:
+        comma_url = self.SECOND + "&labels=a,b"
+        transport = self.read_with_link(f'<{comma_url}>; rel="next"')
+        self.assertEqual(transport.requests[1].url, comma_url)
+
+    def test_no_next_relation_means_no_second_request(self) -> None:
+        second = self.SECOND
+        headers: dict[str, str | None] = {
+            "header absent": None,
+            "only prev and last": f'<{second}>; rel="prev", <{second}>; rel="last"',
+            "next only as a word in the url": f'<{second}&next=1>; rel="last"',
+            "next only in another parameter": f'<{second}>; title="next"; rel="last"',
+            "relation that merely contains next": f'<{second}>; rel="nextish"',
+            "empty header": "",
+        }
+        for label, header in headers.items():
+            with self.subTest(label):
+                self.assertEqual(len(self.read_with_link(header).requests), 1)
+
+    def test_a_link_that_looks_like_next_but_cannot_be_parsed_fails_closed(self) -> None:
+        second = self.SECOND
+        headers = {
+            "unterminated angle bracket": f'<{second}; rel="next"',
+            "missing url": 'rel="next"',
+            "missing semicolon": f"<{second}> rel=next",
+            "unterminated quote": f'<{second}>; rel="next',
+        }
+        for label, header in headers.items():
+            with self.subTest(label):
+                with self.assertRaises(pager.AlertReadError):
+                    self.read_with_link(header)
+
+    def test_garbage_that_is_not_a_next_link_is_ignored(self) -> None:
+        self.assertEqual(len(self.read_with_link("garbage").requests), 1)
+
     def test_next_link_to_a_foreign_host_is_refused_before_any_request(self) -> None:
         for foreign in (
             "https://evil.example.test/orgs/x/secret-scanning/alerts?hide_secret=true",
@@ -577,6 +647,89 @@ class StateTests(PagerCase):
         with self.assertRaises(pager.StateFileError):
             pager.PagedStateStore(self.state_file).load()
 
+    def make_target(self, text: str = '{"version": 1, "paged": ["a/b:1"]}') -> pathlib.Path:
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        target = self.directory / "target.json"
+        target.write_text(text, encoding="utf-8")
+        return target
+
+    def test_load_refuses_a_symlink_and_does_not_read_its_target(self) -> None:
+        target = self.make_target()
+        self.state_file.symlink_to(target)
+        with self.assertRaises(pager.StateFileError) as caught:
+            pager.PagedStateStore(self.state_file).load()
+        self.assertNotIn("a/b:1", str(caught.exception))
+
+    def test_load_refuses_a_dangling_symlink_rather_than_calling_it_cold(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.symlink_to(self.directory / "nowhere.json")
+        with self.assertRaises(pager.StateFileError):
+            pager.PagedStateStore(self.state_file).load()
+
+    def test_load_refuses_a_fifo_without_blocking(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        os.mkfifo(self.state_file)
+        outcome: list[BaseException | None] = []
+
+        def attempt() -> None:
+            try:
+                pager.PagedStateStore(self.state_file).load()
+                outcome.append(None)
+            except BaseException as failure:
+                outcome.append(failure)
+
+        worker = threading.Thread(target=attempt, daemon=True)
+        worker.start()
+        worker.join(5)
+        self.assertFalse(worker.is_alive(), "load blocked on a FIFO")
+        self.assertIsInstance(outcome[0], pager.StateFileError)
+
+    def test_load_names_a_non_regular_file_when_it_is_a_directory(self) -> None:
+        self.state_file.mkdir(parents=True)
+        with self.assertRaises(pager.StateFileError) as caught:
+            pager.PagedStateStore(self.state_file).load()
+        self.assertIn("regular file", str(caught.exception))
+
+    def test_main_refuses_a_symlinked_state_file_without_paging(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.symlink_to(self.make_target())
+        transport = FakeTransport(listing_of(item(7)))
+        code, _, stderr = self.run_main(transport)
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR: StateFileError", stderr)
+        self.assertEqual(transport.pages, [])
+
+    def test_state_file_that_is_not_utf8_is_a_state_error(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_bytes(b"\xff\xfe")
+        with self.assertRaises(pager.StateFileError):
+            pager.PagedStateStore(self.state_file).load()
+        transport = FakeTransport(listing_of(item(7)))
+        code, _, stderr = self.run_main(transport)
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR: StateFileError", stderr)
+        self.assertNotIn("UnicodeDecodeError", stderr)
+        self.assertEqual(transport.pages, [])
+
+    def test_save_over_a_symlink_is_refused_and_the_target_is_untouched(self) -> None:
+        target = self.make_target()
+        self.state_file.symlink_to(target)
+        before = target.read_bytes()
+        with self.assertRaises(pager.StateFileError):
+            pager.PagedStateStore(self.state_file).save(frozenset({"c/d:2"}))
+        self.assertEqual(target.read_bytes(), before)
+        self.assertTrue(self.state_file.is_symlink())
+        self.assertEqual(sorted(path.name for path in self.state_file.parent.iterdir()), ["paged.json"])
+
+    def test_save_over_a_directory_is_refused(self) -> None:
+        self.state_file.mkdir(parents=True)
+        with self.assertRaises(pager.StateFileError):
+            pager.PagedStateStore(self.state_file).save(frozenset())
+
+    def test_saved_file_is_private_to_the_owner(self) -> None:
+        pager.PagedStateStore(self.state_file).save(frozenset({"a/b:1"}))
+        self.assertEqual(stat.S_IMODE(self.state_file.stat().st_mode), 0o600)
+
     def test_unwritable_state_path_is_a_state_error(self) -> None:
         blocker = self.directory / "blocker"
         blocker.write_text("a file where a directory is needed", encoding="utf-8")
@@ -618,6 +771,76 @@ class OutputTests(PagerCase):
     def test_state_changed_is_not_written_when_the_read_fails(self) -> None:
         transport = FakeTransport(lambda request: json_response(403, {"message": "refused"}))
         self.assertEqual(self.run_with_output(transport), "")
+
+
+class AnnounceOrderTests(PagerCase):
+    """state_changed=true must reach GITHUB_OUTPUT before any page can be sent."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.output = self.directory / "github_output"
+        self.output.write_text("", encoding="utf-8")
+
+    def announced_at_each_page(self, listing: Callable[[pager.HttpRequest], pager.HttpResponse]) -> list[str]:
+        seen: list[str] = []
+        output = self.output
+
+        class Observing(FakeTransport):
+            def send(inner, request: pager.HttpRequest) -> pager.HttpResponse:
+                if request.url == NTFY_BASE + "/":
+                    seen.append(output.read_text(encoding="utf-8"))
+                return super().send(request)
+
+        self.run_main(Observing(listing), env=environment(GITHUB_OUTPUT=str(self.output)))
+        return seen
+
+    def test_announced_before_the_first_page_on_a_warm_run(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_text('{"version": 1, "paged": []}', encoding="utf-8")
+        seen = self.announced_at_each_page(listing_of(item(1, age_minutes=9), item(2, age_minutes=5)))
+        self.assertEqual(seen, ["state_changed=true\n", "state_changed=true\n"])
+
+    def test_announced_before_the_first_page_on_a_cold_start(self) -> None:
+        seen = self.announced_at_each_page(listing_of(item(1, age_minutes=5)))
+        self.assertEqual(seen, ["state_changed=true\n"])
+
+    def test_announced_before_the_cold_start_backlog_is_saved(self) -> None:
+        output = pager.GithubOutputFile(str(self.directory / "missing" / "output"))
+        transport = FakeTransport(listing_of(item(1, age_minutes=600)))
+        config = pager.load_config(environment(), self.state_file)
+        with self.assertRaises(pager.StateFileError):
+            pager.run_pager(config, transport, lambda: NOW, pager.PagedStateStore(self.state_file), output)
+        self.assertFalse(self.state_file.exists())
+
+    def test_a_failed_announce_stops_the_run_before_any_page(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_text('{"version": 1, "paged": []}', encoding="utf-8")
+        transport = FakeTransport(listing_of(item(7)))
+        env = environment(GITHUB_OUTPUT=str(self.directory / "missing" / "output"))
+        code, _, stderr = self.run_main(transport, env=env)
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR: StateFileError", stderr)
+        self.assertEqual(transport.pages, [])
+        self.assertEqual([r for r in transport.requests if r.method == "POST"], [])
+        self.assertEqual(self.paged_keys(), [])
+
+    def test_announced_when_saving_after_a_successful_page_fails(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_text('{"version": 1, "paged": []}', encoding="utf-8")
+        transport = FakeTransport(listing_of(item(7)))
+        failing = pager.StateFileError("the state file cannot be written: injected")
+        with mock.patch.object(pager.PagedStateStore, "save", side_effect=failing):
+            code, _, stderr = self.run_main(transport, env=environment(GITHUB_OUTPUT=str(self.output)))
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR: StateFileError", stderr)
+        self.assertEqual(len(transport.pages), 1)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "state_changed=true\n")
+
+    def test_not_announced_when_every_listed_alert_is_already_paged(self) -> None:
+        self.state_file.parent.mkdir(parents=True)
+        self.state_file.write_text(f'{{"version": 1, "paged": ["{REPO}:7"]}}', encoding="utf-8")
+        self.announced_at_each_page(listing_of(item(7)))
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "")
 
 
 class OutputFileTests(PagerCase):

@@ -12,9 +12,16 @@ The file being absent is the only cold-start signal: the run then pages alerts c
 last fifteen minutes and records every older open alert without paging it. A file that is
 present but unreadable stops the run, because treating it as cold would re-page.
 
+Before the first page of a run, or before the cold-start backlog is written, the run tells the
+workflow that the file will change, so the workflow saves the cache even if the run then dies.
 For each alert the page is sent first and its key is written to the file straight after, so a
-failed send is retried next run. The one repeat left is the process dying between a successful
-send and that write.
+failed send is retried next run. An alert can be paged twice in three cases:
+  - the process dies between a successful send and the write of its key;
+  - the write raises after a successful send: the key is not recorded, the run fails loudly, and
+    the next run pages that alert again;
+  - the cache save fails after a changed run: the workflow's verification step turns the run red,
+    and the next run restores the older cache entry, which lacks that run's alerts, and pages
+    them again.
 """
 
 from __future__ import annotations
@@ -27,8 +34,9 @@ import json
 import os
 import pathlib
 import re
+import secrets
+import stat
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -53,8 +61,12 @@ STATE_VERSION = 1
 ERROR_MESSAGE_LIMIT = 200
 
 OWNER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
-LINK_ENTRY = re.compile(r"<([^>]+)>([^<]*)")
-NEXT_RELATION = re.compile(r'rel="?next"?')
+LINK_SEGMENT = re.compile(r'(?:<[^<>]*>|"(?:[^"\\]|\\.)*"|[^,])+')
+LINK_TARGET = re.compile(r"<([^<>]*)>(.*)", re.DOTALL)
+LINK_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+LINK_PARAMETER = re.compile(
+    rf'\s*;\s*(?:({LINK_TOKEN})\s*(?:=\s*("(?:[^"\\]|\\.)*"|{LINK_TOKEN}))?)?\s*'
+)
 
 
 class PagerError(Exception):
@@ -365,10 +377,44 @@ def _github_message(body: bytes) -> str:
 
 
 def _next_link(header: str) -> str | None:
-    for match in LINK_ENTRY.finditer(header):
-        if NEXT_RELATION.search(match.group(2)):
-            return match.group(1)
+    for segment in LINK_SEGMENT.findall(header):
+        link = _parse_link_value(segment.strip())
+        if link is None:
+            # Fail closed: a segment that mentions next but cannot be read must not end paging.
+            if "next" in segment.lower():
+                raise AlertReadError("the link header holds a next link that cannot be parsed")
+            continue
+        target, relation_types = link
+        if "next" in relation_types:
+            return target
     return None
+
+
+def _parse_link_value(value: str) -> tuple[str, frozenset[str]] | None:
+    """Read one RFC 8288 link-value into its target and relation types, or None if malformed."""
+    opened = LINK_TARGET.fullmatch(value)
+    if opened is None:
+        return None
+    target, remainder = opened.groups()
+    parameters: list[tuple[str, str | None]] = []
+    position = 0
+    while position < len(remainder):
+        parameter = LINK_PARAMETER.match(remainder, position)
+        if parameter is None:
+            return None
+        if parameter.group(1) is not None:
+            parameters.append((parameter.group(1), parameter.group(2)))
+        position = parameter.end()
+    return target, _relation_types(parameters)
+
+
+def _relation_types(parameters: Sequence[tuple[str, str | None]]) -> frozenset[str]:
+    """The lower-cased types of the first rel parameter; RFC 8288 ignores any later rel."""
+    for name, value in parameters:
+        if name.lower() == "rel":
+            raw = value or ""
+            return frozenset((raw[1:-1] if raw.startswith('"') else raw).lower().split())
+    return frozenset()
 
 
 def _checked_next_url(url: str) -> str:
@@ -469,14 +515,12 @@ class PagedStateStore:
         """Return the paged keys, or None when the file does not exist.
 
         Raises:
-            StateFileError: the file exists but cannot be read, parsed or recognised.
+            StateFileError: the path is a symlink, a FIFO, a directory or anything but a regular
+                file, or the file cannot be read, decoded as UTF-8, parsed or recognised.
         """
-        try:
-            text = self.path.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        text = self._read_text()
+        if text is None:
             return None
-        except OSError as failure:
-            raise StateFileError(f"the state file cannot be read: {failure.strerror}") from failure
         try:
             document: object = json.loads(text)
         except ValueError as failure:
@@ -485,6 +529,35 @@ class PagedStateStore:
         if keys is None:
             raise StateFileError("the state file is not a version 1 paged-alert set")
         return keys
+
+    def _read_text(self) -> str | None:
+        descriptor = self._open_regular_file()
+        if descriptor is None:
+            return None
+        try:
+            with os.fdopen(descriptor, "rb") as handle:
+                return handle.read().decode("utf-8")
+        except (OSError, ValueError) as failure:
+            raise StateFileError("the state file cannot be read as UTF-8 text") from failure
+
+    def _open_regular_file(self) -> int | None:
+        """Open without following a symlink or waiting on a FIFO, and check the opened file."""
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        try:
+            descriptor = os.open(self.path, flags)
+        except FileNotFoundError:
+            return None
+        except OSError as failure:
+            raise StateFileError(f"the state file cannot be opened: {failure.strerror}") from failure
+        try:
+            is_regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
+        except OSError as failure:
+            os.close(descriptor)
+            raise StateFileError(f"the state file cannot be inspected: {failure.strerror}") from failure
+        if not is_regular:
+            os.close(descriptor)
+            raise StateFileError("the state file is not a regular file")
+        return descriptor
 
     @staticmethod
     def _keys(document: object) -> frozenset[str] | None:
@@ -496,16 +569,21 @@ class PagedStateStore:
         return frozenset(paged)
 
     def save(self, keys: frozenset[str]) -> None:
-        """Write the set atomically: a temporary file in the same directory, then a rename.
+        """Write the set atomically: a new private file in the same directory, then a rename.
 
         Raises:
-            StateFileError: the directory or file cannot be written.
+            StateFileError: the destination exists and is not a regular file, or the directory
+                or file cannot be written.
         """
         document = {"version": STATE_VERSION, "paged": sorted(keys)}
-        temporary: str | None = None
+        temporary: pathlib.Path | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".paged-")
+            self._refuse_unsafe_destination()
+            candidate = self.path.parent / f".paged-{secrets.token_hex(8)}"
+            flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW
+            descriptor = os.open(candidate, flags, 0o600)
+            temporary = candidate
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
                 handle.flush()
@@ -513,8 +591,16 @@ class PagedStateStore:
             os.replace(temporary, self.path)
         except OSError as failure:
             if temporary is not None:
-                pathlib.Path(temporary).unlink(missing_ok=True)
+                temporary.unlink(missing_ok=True)
             raise StateFileError(f"the state file cannot be written: {failure.strerror}") from failure
+
+    def _refuse_unsafe_destination(self) -> None:
+        try:
+            mode = os.lstat(self.path).st_mode
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(mode):
+            raise StateFileError("the state file path exists and is not a regular file")
 
 
 class GithubOutputFile:
@@ -566,8 +652,10 @@ def run_pager(
     """Page each new alert once and record it.
 
     Raises:
-        PagerError: any subclass; the run stops at the first failure with every page already
-            sent recorded in the state file.
+        PagerError: any subclass; the run stops at the first failure. A page is recorded in the
+            state file straight after it is sent, so only a failure of that write leaves a sent
+            page unrecorded. state_changed is announced before the first page or the backlog
+            write of a run that will change the file.
     """
     previous = store.load()
     listing = read_open_public_alerts(transport, config)
@@ -582,10 +670,12 @@ def run_pager(
         candidates = [listed for listed in candidates if listed.alert.created_at >= cutoff]
         paged = frozenset(listed.alert.key for listed in backlog)
         backlog_recorded = len(paged)
-        store.save(paged)
-        output.announce_state_changed()
     else:
         paged = previous
+    if previous is None or any(listed.alert.key not in paged for listed in candidates):
+        output.announce_state_changed()
+    if previous is None:
+        store.save(paged)
     sent = 0
     already = 0
     for listed in candidates:
@@ -597,7 +687,6 @@ def run_pager(
         publish_page(transport, config, page, listed.alert)
         paged = paged | {listed.alert.key}
         store.save(paged)
-        output.announce_state_changed()
         sent += 1
     return RunSummary(len(listing.alerts), sent, already, backlog_recorded, listing.skipped_non_public)
 
