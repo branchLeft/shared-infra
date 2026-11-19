@@ -8,6 +8,7 @@
 - deploy_tooling
 - edge_stack
 - node_exporter
+- tenant_scrape_tunnel
 - exporters_and_collectors
 - ntfy_pager
 - monitoring_stack

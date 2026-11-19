@@ -21,7 +21,8 @@
 #
 # Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline account on
 # edge-t belongs to the edge-t server's own ticket, ws#2898), the edge stack (Caddy) and the
-# monitoring roles.
+# monitoring roles other than the tenant scrape tunnel, which is last here: edge-t's half of the
+# restricted tunnel that edge1's Prometheus reads this host's node exporter through.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files: the
@@ -54,3 +55,4 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
+    - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
