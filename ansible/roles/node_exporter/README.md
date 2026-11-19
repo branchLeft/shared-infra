@@ -34,7 +34,10 @@ It runs in this order, and each step changes only what it names.
 5. Creates the system user `node-exporter` with no home and no login shell, only
    when it is absent.
 6. Creates `/var/lib/branchleft/backup-worker-exporter` (root, 0755) for the
-   textfile collector.
+   textfile collector, and `/var/lib/branchleft/support-access-exporter` (root,
+   0755), the second directory the unit names. The second is the one the
+   break-glass textfile writer of `breakglass_grant_host` replaces its file in on
+   an app host (it makes the directory too); on every other host it stays empty.
 7. Writes `/etc/default/node-exporter` with the one line
    `NODE_EXPORTER_LISTEN_ADDRESS=<the host's private address>`, rewritten every
    run so a rebuilt host does not keep a stale address.

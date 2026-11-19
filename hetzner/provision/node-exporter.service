@@ -24,7 +24,11 @@ EnvironmentFile=/etc/default/node-exporter
 # The textfile directory is the one ghost-platform's backup worker writes its
 # per-tenant gauges to, on this same host. Until its first run the directory
 # is absent, and node_textfile_scrape_error reads 1 rather than failing.
-ExecStart=/usr/local/bin/node_exporter --web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100 --collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter
+# The second directory is the one the break-glass textfile writer on an app host
+# replaces its support-access file in (the breakglass_grant_host role); the flag
+# repeats, and the same unit is installed on every host, where the directory is
+# made empty by the node_exporter role.
+ExecStart=/usr/local/bin/node_exporter --web.listen-address=${NODE_EXPORTER_LISTEN_ADDRESS}:9100 --collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter --collector.textfile.directory=/var/lib/branchleft/support-access-exporter
 Restart=always
 RestartSec=5
 User=node-exporter
