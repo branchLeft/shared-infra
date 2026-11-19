@@ -439,14 +439,15 @@
              | dict2items
              | selectattr('value', 'in', tenant_scrape_tunnel_verify_log)
              | map(attribute='key') | list }}
-        # The public key's body may be in the log only on the line the role prints it on.
+        # The public key's body may be in the log only on the line the role prints it on. The body is
+        # base64, so it can hold + and /, which a pattern would read as syntax: it is escaped.
         tenant_scrape_tunnel_verify_body_elsewhere: >-
           {{ tenant_scrape_tunnel_verify_log.splitlines()
-             | select('search', tenant_scrape_tunnel_verify_scraper_body)
+             | select('search', tenant_scrape_tunnel_verify_scraper_body | regex_escape)
              | reject('search', 'scraper_public_key: ') | list | length }}
         tenant_scrape_tunnel_verify_body_on_print: >-
           {{ tenant_scrape_tunnel_verify_log.splitlines()
-             | select('search', tenant_scrape_tunnel_verify_scraper_body)
+             | select('search', tenant_scrape_tunnel_verify_scraper_body | regex_escape)
              | select('search', 'scraper_public_key: ') | list | length }}
       vars:
         tenant_scrape_tunnel_verify_private_text: '{{ tenant_scrape_tunnel_verify_private.content | b64decode }}'
