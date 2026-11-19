@@ -1,0 +1,39 @@
+---
+# Keeps the disk check from stopping a delivery because of old images. node_exporter's disk
+# rule refuses a delivery at 70% of the root disk, and a host that deploys often fills it with
+# images no container uses (app1, 18 Nov 2026: 50 images, 3 in use, 19 GB reclaimable).
+#
+# `docker image prune --all` removes only an image that no container, running or stopped,
+# refers to, and the until filter keeps anything created in the last 168 hours, so a rollback
+# to last week's image still has it. It never removes a container, a volume or a network.
+
+- name: Deliver the Docker image prune service and its timer
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '/etc/systemd/system/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - branchleft-docker-image-prune.service
+    - branchleft-docker-image-prune.timer
+  notify: Reload systemd manager
+
+# Queued handlers run here, so the enable below starts the timer with the unit file as it
+# now is on disk.
+- name: Load queued unit changes before the timer is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host there is nothing for systemd to enable.
+# The stat runs in check mode as it does in a real run.
+- name: Read back the Docker image prune timer unit file
+  ansible.builtin.stat:
+    path: /etc/systemd/system/branchleft-docker-image-prune.timer
+  register: host_baseline_image_prune_timer_unit
+
+- name: Enable and start the Docker image prune timer when its unit is on disk
+  ansible.builtin.systemd_service:
+    name: branchleft-docker-image-prune.timer
+    enabled: true
+    state: started
+  when: host_baseline_image_prune_timer_unit.stat.exists
