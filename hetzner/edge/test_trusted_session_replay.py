@@ -547,6 +547,21 @@ class VerifiedSessionsAreNeverRefused(unittest.TestCase):
     def test_the_ban_is_in_force_for_an_address_with_no_session(self) -> None:
         self.assertEqual(self.armed[0]["status"], 403, self.armed)
 
+    def test_a_banned_address_is_shown_the_blocked_page_and_nothing_about_the_ban(self) -> None:
+        # Through the real bouncer: it raises a Caddy error only with `enable_caddy_error`.
+        body = str(self.armed[0]["body"])
+        self.assertIn("BLOCKED_PAGE_HEADING", body, self.armed)
+        self.assertIn("</html>", body, self.armed)
+        for secret in (BANNED, TENANT_ONE, "crowdsec", "trusted-session replay", "ban"):
+            self.assertNotIn(secret, body, self.armed)
+
+    def test_an_in_band_appsec_refusal_is_shown_the_same_page(self) -> None:
+        self.assertEqual(self.appsec_control["status"], 403, self.appsec_control)
+        body = str(self.appsec_control["body"])
+        self.assertIn("BLOCKED_PAGE_HEADING", body, self.appsec_control)
+        for secret in (APPSEC_CONTROL, TENANT_TWO, "appsec", "crowdsec"):
+            self.assertNotIn(secret, body, self.appsec_control)
+
     def test_a_banned_address_with_a_valid_staff_session_gets_through(self) -> None:
         for request, result in zip(ADMITTED, self.admitted, strict=True):
             with self.subTest(request.name):

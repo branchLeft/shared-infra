@@ -115,11 +115,30 @@ describe('loadPostmortems', () => {
     writeFileSync(path.join(repo, POSTMORTEM_DIR, file), text);
   };
 
+  // A commit hook runs with GIT_INDEX_FILE (an absolute path in a linked worktree)
+  // and GIT_DIR in its environment. Inherited, they point every git command here at
+  // the committer's own index: the test repository would never be used, and the
+  // committer's staged files would be emptied. So none is passed on.
+  const GIT_LOCATION_VARIABLES = ['GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE'] as const;
+  const inherited: Partial<Record<(typeof GIT_LOCATION_VARIABLES)[number], string>> = {};
+
   beforeEach(() => {
+    for (const name of GIT_LOCATION_VARIABLES) {
+      const value = process.env[name];
+      if (value !== undefined) inherited[name] = value;
+      delete process.env[name];
+    }
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    for (const name of GIT_LOCATION_VARIABLES) {
+      const value = inherited[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
 
   it('shows a merged post-mortem of a resolved incident', () => {
     put('edge-outage.md', doc('Edge outage', '2026-12-01T10:42:00Z'));
