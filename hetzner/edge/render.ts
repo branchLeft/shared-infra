@@ -859,10 +859,132 @@ function webhookSiteBlock(
   };
 }
 
+/**
+ * The request methods a signed object gateway is sent: the reads, `PUT` for an
+ * object and a multipart part, `POST` for the multipart calls, `DELETE` for a
+ * lock object. Any other method is answered by the edge. Why each, and what the
+ * gateway itself still refuses: `render.md`, "`siteBlock`: signed object gateway".
+ */
+const GATEWAY_READ_METHODS = ['GET', 'HEAD'] as const;
+const GATEWAY_WRITE_METHODS = ['PUT', 'POST', 'DELETE'] as const;
+const GATEWAY_METHODS = [...GATEWAY_READ_METHODS, ...GATEWAY_WRITE_METHODS] as const;
+
+/** The two paths the gateway answers for the edge's own probes; reads only. */
+const GATEWAY_PROBE_PATHS = ['/healthz', '/readyz'] as const;
+
+/**
+ * A path-style request is `/<bucket>` or `/<bucket>/<key>`: one non-empty first
+ * segment. `/` (a bucket listing) and `//x` (an empty first segment) are not
+ * request shapes the gateway serves, so they do not match. The probe paths
+ * match too, which is why a write to one is answered before this matcher is
+ * reached.
+ */
+const GATEWAY_PATH_REGEXP = '^/[^/]+(?:/.*)?$';
+
+/**
+ * A `.` or `..` segment in the path of the request as it arrived, written
+ * literally or percent-encoded. Matched on the original URI and not with
+ * `path_regexp`, because Caddy matches `path` and `path_regexp` against the path
+ * with its dot segments already resolved while it proxies the path as it was
+ * sent: a request for `/bucket/..` is matched as `/` and forwarded as
+ * `/bucket/..`. A signature covers the path as the client canonicalised it, so
+ * a server that resolves dot segments differently from the client reads a
+ * different object than the one the client signed for. The expression carries
+ * no brace, because a placeholder reads one.
+ */
+const GATEWAY_DOT_SEGMENT_REGEXP = '^[^?]*/(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|[?]|$)';
+
+/**
+ * Upstream timeouts of a gateway route. A checkpoint is a few hundred
+ * kilobytes, so neither bound is generous: the dial is a hop on the private
+ * network, and the first response byte of a state write is bounded by the
+ * object store behind the gateway.
+ */
+const GATEWAY_DIAL_TIMEOUT = '5s';
+const GATEWAY_RESPONSE_HEADER_TIMEOUT = '30s';
+
+/**
+ * A signed object gateway (`EdgeSite.signedObjectGateway`). Deliberately not the
+ * generic block with matchers added: it carries none of the Ghost matchers, and
+ * it forwards a request unchanged or answers it itself. It sets no `header_up`,
+ * rewrites no path and strips no query parameter, because the client's
+ * signature covers the method, the path, the query and the signed headers, and
+ * the gateway recomputes it. Why each line is where it is: `render.md`.
+ */
+function gatewaySiteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
+  const upstream = site.privateUpstream;
+  if (upstream === undefined) {
+    throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  if (
+    site.inboundWebhookPath !== undefined ||
+    site.discardRoute !== undefined ||
+    site.injectionWafPreviewOnly ||
+    site.trustedSession !== undefined ||
+    (site.backend !== undefined && site.backend !== 'other')
+  ) {
+    throw new Error(
+      `site ${site.name} is a signed object gateway and cannot also be a webhook, Ghost or Nextcloud site, or declare a discardRoute, injectionWafPreviewOnly or trustedSession`
+    );
+  }
+  const address = resolvePrivateAddress(upstream.host, upstream.port);
+  return {
+    addresses: hostnames,
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      '@gateway_probe_write {',
+      `\tmethod ${GATEWAY_WRITE_METHODS.join(' ')}`,
+      `\tpath ${GATEWAY_PROBE_PATHS.join(' ')}`,
+      '}',
+      '@gateway_wrong_method {',
+      `\tnot method ${GATEWAY_METHODS.join(' ')}`,
+      '}',
+      '@gateway_dot_segments {',
+      `\texpression \`{http.request.orig_uri}.matches('${GATEWAY_DOT_SEGMENT_REGEXP}')\``,
+      '}',
+      '@gateway {',
+      `\tmethod ${GATEWAY_METHODS.join(' ')}`,
+      `\tpath_regexp ${GATEWAY_PATH_REGEXP}`,
+      '}',
+      'route {',
+      ...hstsDirective().map((line) => `\t${line}`),
+      // Deferred (`>`), so it replaces a Cache-Control the gateway sends rather
+      // than adding a second value beside it, and it reaches the edge's own
+      // 404 and 405 too.
+      '\theader >Cache-Control "no-store"',
+      ...requestBodyDirective(site).map((line) => `\t${line}`),
+      ...protectionChain(posture, `${site.name}_per_ip`, { appsec: 'all' }).map(
+        (line) => `\t${line}`
+      ),
+      `\theader @gateway_probe_write Allow "${GATEWAY_READ_METHODS.join(', ')}"`,
+      '\trespond @gateway_probe_write 405',
+      `\theader @gateway_wrong_method Allow "${GATEWAY_METHODS.join(', ')}"`,
+      '\trespond @gateway_wrong_method 405',
+      '\trespond @gateway_dot_segments 400',
+      `\treverse_proxy @gateway ${address} {`,
+      '\t\ttransport http {',
+      `\t\t\tdial_timeout ${GATEWAY_DIAL_TIMEOUT}`,
+      `\t\t\tresponse_header_timeout ${GATEWAY_RESPONSE_HEADER_TIMEOUT}`,
+      '\t\t}',
+      '\t}',
+      // Last, matcher-less: whatever the lines above did not answer or proxy is
+      // refused here, so a missed case fails closed rather than reaching upstream.
+      '\trespond 404',
+      '}',
+    ],
+  };
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
     throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  // Checked first, so a site that is both refuses to render instead of
+  // silently becoming a webhook site.
+  if (site.signedObjectGateway === true) {
+    return gatewaySiteBlock(site, hostnames, posture);
   }
   if (site.inboundWebhookPath !== undefined) {
     return webhookSiteBlock(site, site.inboundWebhookPath, hostnames, posture);
