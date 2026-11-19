@@ -5,16 +5,17 @@
   vars:
     control_plane_backup_vf: '{{ playbook_dir }}/../../files'
   tasks:
-    - name: Read the installed program and the two units
+    - name: Read the installed program and the three units
       ansible.builtin.slurp:
         src: '{{ item }}'
       loop:
         - /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py
         - /etc/systemd/system/branchleft-control-plane-backup.service
         - /etc/systemd/system/branchleft-control-plane-backup.timer
+        - /etc/systemd/system/branchleft-control-plane-backup-failed.service
       register: control_plane_backup_vi
 
-    - name: Assert the three files are the role's own, byte for byte
+    - name: Assert the four files are the role's own, byte for byte
       ansible.builtin.assert:
         that:
           - >-
@@ -26,6 +27,9 @@
           - >-
             (control_plane_backup_vi.results[2].content | b64decode)
             == lookup('ansible.builtin.file', control_plane_backup_vf + '/branchleft-control-plane-backup.timer', rstrip=False)
+          - >-
+            (control_plane_backup_vi.results[3].content | b64decode)
+            == lookup('ansible.builtin.file', control_plane_backup_vf + '/branchleft-control-plane-backup-failed.service', rstrip=False)
         quiet: true
         fail_msg: An installed file differs from the file in the role.
 
@@ -39,6 +43,7 @@
         - /var/backups/branchleft/control-plane
         - /etc/systemd/system/branchleft-control-plane-backup.service
         - /etc/systemd/system/branchleft-control-plane-backup.timer
+        - /etc/systemd/system/branchleft-control-plane-backup-failed.service
       register: control_plane_backup_verify_stats
 
     - name: Assert each path is root's with the mode asked for
@@ -46,7 +51,7 @@
         that:
           - control_plane_backup_verify_stats.results | map(attribute='stat.pw_name') | unique | list == ['root']
           - control_plane_backup_verify_stats.results | map(attribute='stat.gr_name') | unique | list == ['root']
-          - control_plane_backup_verify_stats.results | map(attribute='stat.mode') | list == ['0755', '0755', '0700', '0644', '0644']
+          - control_plane_backup_verify_stats.results | map(attribute='stat.mode') | list == ['0755', '0755', '0700', '0644', '0644', '0644']
         quiet: true
         fail_msg: A path is not root's or its mode is wrong; the backup directory must be 0700.
 
@@ -82,3 +87,82 @@
             --check,
           ]
       changed_when: false
+
+    # The failure hook, end to end. systemd must read OnFailure= from the installed service, and a
+    # run that fails must start the failure unit, which must leave the mark the alert rule reads.
+    # The service requires docker.service, which this container does not have, so a stand-in unit
+    # that starts and stays up lets the service itself run; the program then fails for want of a
+    # docker client. The cause does not matter: every failed state must be marked, and the wait
+    # below names the file so that a hook that never ran cannot pass.
+    - name: Read what systemd has for the service's OnFailure
+      ansible.builtin.command:
+        argv:
+          [systemctl, show, --property=OnFailure, --value, branchleft-control-plane-backup.service]
+      register: control_plane_backup_verify_on_failure
+      changed_when: false
+
+    - name: Assert systemd starts the failure unit when the service fails
+      ansible.builtin.assert:
+        that:
+          - control_plane_backup_verify_on_failure.stdout | trim == 'branchleft-control-plane-backup-failed.service'
+        quiet: true
+        fail_msg: The installed service does not name the failure unit in OnFailure.
+
+    - name: Place a stand-in for the docker unit the service requires
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+      changed_when: false
+
+    - name: Reload systemd so it reads the stand-in
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      changed_when: false
+
+    - name: Run the service, which fails here
+      ansible.builtin.command:
+        argv: [systemctl, start, branchleft-control-plane-backup.service]
+      register: control_plane_backup_verify_run
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the service run failed, so the mark below is the hook's and not a leftover
+      ansible.builtin.assert:
+        that:
+          - control_plane_backup_verify_run.rc != 0
+        quiet: true
+        fail_msg: The service ran to success with no database; the hook was not tried.
+
+    - name: Wait for the failure unit to write its mark
+      ansible.builtin.wait_for:
+        path: /var/lib/branchleft/backup-worker-exporter/control_plane_backup_failed.prom
+        timeout: 60
+
+    - name: Read the mark
+      ansible.builtin.slurp:
+        src: /var/lib/branchleft/backup-worker-exporter/control_plane_backup_failed.prom
+      register: control_plane_backup_verify_mark
+
+    - name: Read the mark's file
+      ansible.builtin.stat:
+        path: /var/lib/branchleft/backup-worker-exporter/control_plane_backup_failed.prom
+        get_checksum: false
+      register: control_plane_backup_verify_mark_stat
+
+    - name: Assert the mark is the gauge the alert rule reads, readable by node_exporter
+      ansible.builtin.assert:
+        that:
+          - >-
+            (control_plane_backup_verify_mark.content | b64decode).splitlines()
+            | select('match', '^control_plane_backup_last_failure_timestamp_seconds [0-9]+$')
+            | list | length == 1
+          - control_plane_backup_verify_mark_stat.stat.mode == '0644'
+        quiet: true
+        fail_msg: The failure unit did not leave the one gauge line the alert rule reads, or left it unreadable.

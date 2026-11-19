@@ -2228,3 +2228,169 @@ tests:
       - eval_time: 11m
         alertname: EdgeBanIssued
         exp_alerts: []
+
+  # ControlPlaneBackupStale: the control-plane backup's per-stage success time, read on ops1.
+  # The bound is 36h (129600s, `>` not `>=`), pinned from both sides: 35h and exactly 36h are
+  # silent, 37h fires for each stage on its own, carrying the stage label the summary names.
+  - interval: 1h
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="verified_on_host"}'
+        values: '0x40'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="shipped_offsite"}'
+        values: '0x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing"}
+        eval_time: 35h
+        exp_samples: []
+      - expr: ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing"}
+        eval_time: 36h
+        exp_samples: []
+      - expr: ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing"}
+        eval_time: 37h
+        exp_samples:
+          - labels: 'ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing", severity="warning", job="node", host="ops1", stage="verified_on_host"}'
+            value: 1
+          - labels: 'ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing", severity="warning", job="node", host="ops1", stage="shipped_offsite"}'
+            value: 1
+
+  # The fixture the finding asked for: the newest control-plane backup is 10 days old, the age at
+  # which backup copy 1 has expired its last object. The success time is 10 days before the clock's
+  # start, so the age at the first evaluation is already past ten days without ten days of
+  # evaluations. The rule fires, with the exact text the owner reads.
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="shipped_offsite"}'
+        values: '-864000x120'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: ControlPlaneBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              host: ops1
+              stage: shipped_offsite
+            exp_annotations:
+              summary: 'The control-plane backup has not completed its shipped_offsite step for over 36 hours.'
+              description: >-
+                control_plane_backup_last_success_timestamp_seconds is written on ops1 by the control-plane backup program after each stage succeeds: verified_on_host once the copy has been restored into a throwaway server and counted equal to live, and shipped_offsite once the sealed copy has been put to backup copy 1. The timer fires at 02:40 UTC with up to 5 minutes of random delay and the unit is stopped at 2 hours, so two healthy successes are at most 26h05m apart. 129600s (36h) leaves 9h55m of margin and fires on the first missed night. Backup copy 1 expires an object 10 days after it is put, so nothing is lost yet and about 8.5 days remain to run the backup by hand before copy 1 holds no control-plane backup. On ops1, read journalctl -u branchleft-control-plane-backup.service; a stopped timer shows in systemctl list-timers. Warning, never page. Nothing fires before the first success is written, so a timer that has never run is not seen by this rule.
+
+  # A backup that succeeds every night: the success time advances with the clock, so the age
+  # never passes an hour and nothing fires over two days.
+  - interval: 1h
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="verified_on_host"}'
+        values: '0+3600x48'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="shipped_offsite"}'
+        values: '0+3600x48'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"ControlPlaneBackup.*", alertstate="firing"}
+        eval_time: 48h
+        exp_samples: []
+
+  # One stage stale while the other keeps succeeding (the ship fails each night after the restore
+  # proves): only the stage that stopped fires.
+  - interval: 1h
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="verified_on_host"}'
+        values: '0+3600x60'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="ops1", stage="shipped_offsite"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing"}
+        eval_time: 50h
+        exp_samples:
+          - labels: 'ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing", severity="warning", job="node", host="ops1", stage="shipped_offsite"}'
+            value: 1
+
+  # The rule reads ops1 only: a series of the same name on another host is not the control
+  # plane's backup and neither fires nor hides it.
+  - interval: 1h
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", host="db1", stage="shipped_offsite"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupStale", alertstate="firing"}
+        eval_time: 50h
+        exp_samples: []
+
+  # ControlPlaneBackupRunFailed: the failure time is written by the unit OnFailure= starts. A
+  # failure with no success ever recorded (a crash on the first night) fires.
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_failure_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '3000x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ControlPlaneBackupRunFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: '10.20.1.50:9100'
+              host: ops1
+            exp_annotations:
+              summary: 'The control-plane backup on 10.20.1.50:9100 failed and no later run has shipped a copy.'
+              description: >-
+                branchleft-control-plane-backup.service entered a failed state: a check that did not pass, a missing precondition, a kill, the two-hour timeout or a crash. systemd then started branchleft-control-plane-backup-failed.service, which wrote the time to control_plane_backup_failed.prom in the textfile directory. This rule holds while that time is newer than the last shipped_offsite success, so the next run that ships a copy clears it, and a failure that comes after a ship (the prune that follows it) is not hidden by an earlier success. It fires the night it happens, about 36 hours before ControlPlaneBackupStale could. On ops1, read journalctl -u branchleft-control-plane-backup.service for the reason; a run by hand with systemctl start clears it once it ships. The previous proven copies are still on the host.
+
+  # A failure newer than the last ship fires with that ship's own success older, and the next
+  # run that ships (a success strictly newer than the failure) clears it.
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_failure_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '3000x10'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", stage="shipped_offsite"}'
+        values: '2990x4 3010x6'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1"}'
+            value: 1
+      - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
+        eval_time: 8m
+        exp_samples: []
+
+  # A run that ships and then fails (the prune after the ship) writes the failure in the same
+  # second as the success or later: a success at the same time does not clear it (`>`, not `>=`).
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_failure_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '3000x10'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", stage="shipped_offsite"}'
+        values: '3000x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1"}'
+            value: 1
+
+  # Only a shipped copy clears it: the restore proving a newer copy on the host is not a copy off the host.
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_failure_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '3000x10'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", stage="shipped_offsite"}'
+        values: '2990x10'
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", stage="verified_on_host"}'
+        values: '3010x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1"}'
+            value: 1
+
+  # No failure mark and a healthy success: nothing. The mark of another host is not the control plane's.
+  - interval: 1m
+    input_series:
+      - series: 'control_plane_backup_last_success_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1", stage="shipped_offsite"}'
+        values: '3000x10'
+      - series: 'control_plane_backup_last_failure_timestamp_seconds{job="node", instance="10.20.1.60:9100", host="db1"}'
+        values: '3000x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples: []
