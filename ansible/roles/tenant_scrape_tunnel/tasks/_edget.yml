@@ -3,7 +3,9 @@
 # data commit hands to the scraper host's pin. It makes nothing until the scraper host's public key
 # is filled in (tenant_scrape_tunnel_is_target_enabled). Then the sshd configuration is checked as
 # a whole before it is reloaded, and a failed check, or a failed read-back, puts the previous files
-# back and fails the run. Runs under --check: nothing changes there.
+# back and fails the run. If the key is emptied after the half was installed, it is removed again
+# the same way (_edget_teardown.yml). Runs under --check: nothing changes there, and a host that has
+# none of the directories the role writes into does not fail it.
 - name: Look for the host's own ed25519 public host key
   ansible.builtin.stat:
     path: '{{ tenant_scrape_tunnel_host_key_pub_file }}'
@@ -28,12 +30,60 @@
     msg: 'tenant_scrape_tunnel target_host_key: {{ tenant_scrape_tunnel_host_key_file.content | b64decode | trim }}'
   when: tenant_scrape_tunnel_host_key_file is defined and tenant_scrape_tunnel_host_key_file.content is defined
 
+- name: Look up the tunnel account on the target host
+  ansible.builtin.include_tasks: _account_lookup.yml
+
+- name: Look for the current sshd drop-in and authorized keys
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ tenant_scrape_tunnel_sshd_dropin }}'
+    - '{{ tenant_scrape_tunnel_authorized_keys_file }}'
+  register: tenant_scrape_tunnel_before
+  check_mode: false
+
+- name: Look for the directory of the authorized keys
+  ansible.builtin.stat:
+    path: '{{ tenant_scrape_tunnel_authorized_keys_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: tenant_scrape_tunnel_authorized_keys_dir_stat
+  check_mode: false
+
+# Kept in memory, not on disk: a rollback writes these back byte for byte.
+- name: Keep the current sshd drop-in and authorized keys for a rollback
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ tenant_scrape_tunnel_before.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: item.stat.exists
+  register: tenant_scrape_tunnel_prev
+  no_log: true
+  check_mode: false
+
+# Any of the account, the files and the directory is the sign that this half was installed.
+- name: Note whether this half is installed
+  ansible.builtin.set_fact:
+    tenant_scrape_tunnel_is_target_installed: >-
+      {{ tenant_scrape_tunnel_passwd.rc == 0
+         or tenant_scrape_tunnel_authorized_keys_dir_stat.stat.exists
+         or (tenant_scrape_tunnel_before.results | selectattr('stat.exists') | list | length > 0) }}
+
 - name: Report that the tunnel waits for the scraper host's key
   ansible.builtin.debug:
     msg: >-
       tenant_scrape_tunnel waiting: tenant_scrape_tunnel_scraper_public_key is not set, so no tunnel
       account, key or sshd drop-in is installed.
   when: not (tenant_scrape_tunnel_is_target_enabled | bool)
+
+- name: Remove the tunnel account, its authorized key and its sshd drop-in
+  ansible.builtin.include_tasks: _edget_teardown.yml
+  when: tenant_scrape_tunnel_is_target_teardown | bool
 
 - name: Install the tunnel account, its authorized key and its sshd drop-in
   when: tenant_scrape_tunnel_is_target_enabled | bool
@@ -73,29 +123,6 @@
           - tenant_scrape_tunnel_dropin_dir_stat.stat.isdir
         quiet: true
         fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
-
-    - name: Look for the current sshd drop-in and authorized keys
-      ansible.builtin.stat:
-        path: '{{ item }}'
-        get_checksum: false
-        get_mime: false
-        get_attributes: false
-      loop:
-        - '{{ tenant_scrape_tunnel_sshd_dropin }}'
-        - '{{ tenant_scrape_tunnel_authorized_keys_file }}'
-      register: tenant_scrape_tunnel_before
-      check_mode: false
-
-    # Kept in memory, not on disk: a rollback writes these back byte for byte.
-    - name: Keep the current sshd drop-in and authorized keys for a rollback
-      ansible.builtin.slurp:
-        src: '{{ item.item }}'
-      loop: '{{ tenant_scrape_tunnel_before.results }}'
-      loop_control:
-        label: '{{ item.item }}'
-      when: item.stat.exists
-      register: tenant_scrape_tunnel_prev
-      no_log: true
 
     - name: Write the sshd drop-in and the authorized key, then check and reload sshd
       block:
@@ -205,48 +232,8 @@
                   + ['command="' ~ tenant_scrape_tunnel_nologin ~ '"']) | join(',') }}
 
       rescue:
-        - name: Put back the sshd drop-in that was there before
-          ansible.builtin.copy:
-            content: '{{ tenant_scrape_tunnel_prev.results[0].content | b64decode }}'
-            dest: '{{ tenant_scrape_tunnel_sshd_dropin }}'
-            owner: root
-            group: root
-            mode: '0644'
-          when: tenant_scrape_tunnel_before.results[0].stat.exists
-          no_log: true
-          diff: false
-
-        - name: Remove the sshd drop-in when there was none before
-          ansible.builtin.file:
-            path: '{{ tenant_scrape_tunnel_sshd_dropin }}'
-            state: absent
-          when: not tenant_scrape_tunnel_before.results[0].stat.exists
-
-        - name: Put back the authorized key that was there before
-          ansible.builtin.copy:
-            content: '{{ tenant_scrape_tunnel_prev.results[1].content | b64decode }}'
-            dest: '{{ tenant_scrape_tunnel_authorized_keys_file }}'
-            owner: root
-            group: root
-            mode: '0644'
-          when: tenant_scrape_tunnel_before.results[1].stat.exists
-          no_log: true
-          diff: false
-
-        - name: Remove the authorized key when there was none before
-          ansible.builtin.file:
-            path: '{{ tenant_scrape_tunnel_authorized_keys_file }}'
-            state: absent
-          when: not tenant_scrape_tunnel_before.results[1].stat.exists
-
-        # A reload that fails here (another file makes the whole configuration bad) must not hide
-        # the cause below: the running sshd keeps its old settings.
-        - name: Reload sshd with the previous files back
-          ansible.builtin.systemd_service:
-            name: '{{ tenant_scrape_tunnel_sshd_service }}'
-            state: reloaded
-          when: not ansible_check_mode
-          failed_when: false
+        - name: Put the previous files back and reload sshd
+          ansible.builtin.include_tasks: _edget_rollback.yml
 
         - name: Fail with the cause, after the previous files are back
           ansible.builtin.fail:

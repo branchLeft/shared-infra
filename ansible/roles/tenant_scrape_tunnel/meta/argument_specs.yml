@@ -15,8 +15,12 @@ argument_specs:
       tunnel unit. With the scraper's public key set, the target host also creates the account with
       no login shell, writes an authorized key restricted to forwards to the three tenant node
       exporters and an sshd drop-in that allows the same, checks sshd as a whole, reloads it and
-      reads the effective settings back, restoring the previous files on a failure. Runs under
-      --check without changing anything.
+      reads the effective settings back, restoring the previous files on a failure. Emptying a half's
+      values after it was installed removes it again: the scraper host removes its unit, files, key and
+      account when its host key and endpoint are both empty and the unit is installed; the target host
+      removes its account, authorized key and drop-in, checking and reloading sshd, when the scraper's
+      key is empty and any of them exists. Runs under --check without changing anything, on a host
+      where none of it exists yet too.
     author: branchLeft
     options:
       tenant_scrape_tunnel_scraper_public_key:
@@ -25,7 +29,7 @@ argument_specs:
         default: ''
         description: >-
           The scraper host's public key, one ssh-ed25519 line as that host printed it. Read by the
-          target host. Empty means the target host installs nothing.
+          target host. Empty means the target host installs nothing, and removes what it installed.
       tenant_scrape_tunnel_target_host_key:
         type: str
         required: false
@@ -33,7 +37,7 @@ argument_specs:
         description: >-
           The target host's SSH host public key, one ssh-ed25519 line as that host printed it. Read by
           the scraper host, which pins it. Empty, or an empty endpoint, means the scraper host
-          installs no unit.
+          installs no unit; both empty, with the unit installed, removes it.
       tenant_scrape_tunnel_target_endpoint:
         type: str
         required: false

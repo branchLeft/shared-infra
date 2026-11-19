@@ -1,0 +1,209 @@
+---
+# The scraper host's half while the feature is on or has never been on. It always makes the
+# tunnel's key and prints the public half, and it prints nothing private: the private half is
+# written by the key module and never read, copied, slurped or kept in a fact. The unit is
+# installed and started only when the target's host key and endpoint are filled in
+# (tenant_scrape_tunnel_is_scraper_enabled); until then this half reports.
+- name: Create the tunnel account on the scraper host
+  ansible.builtin.include_tasks: _account.yml
+
+- name: Create the key directory
+  ansible.builtin.file:
+    path: '{{ tenant_scrape_tunnel_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Under --check the directory above is not made, and the key module refuses to run beside a
+# directory that is not there. So the key is made (or, under --check, only judged) when the
+# directory is there, and a fresh host's check shows the directory and no key.
+- name: Look for the key directory
+  ansible.builtin.stat:
+    path: '{{ tenant_scrape_tunnel_key_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: tenant_scrape_tunnel_key_dir_stat
+  check_mode: false
+
+# Generated once, owned by the unit's own user and readable by it alone. The module writes the
+# private half with that owner and mode, and a re-run puts a drifted owner or mode back. It
+# generates nothing under --check. The module returns the public half and a fingerprint only, and
+# no_log keeps even those out of the log.
+- name: Generate the scraper host's key, once
+  community.crypto.openssh_keypair:
+    path: '{{ tenant_scrape_tunnel_key_file }}'
+    type: ed25519
+    comment: '{{ tenant_scrape_tunnel_key_comment }}'
+    owner: '{{ tenant_scrape_tunnel_user }}'
+    group: '{{ tenant_scrape_tunnel_user }}'
+    mode: '0600'
+    regenerate: never
+  no_log: true
+  diff: false
+  when: not ansible_check_mode or (tenant_scrape_tunnel_key_dir_stat.stat.isdir | default(false))
+
+- name: Look for the public half
+  ansible.builtin.stat:
+    path: '{{ tenant_scrape_tunnel_key_pub_file }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: tenant_scrape_tunnel_pub_stat
+  check_mode: false
+
+# Only the public half is read, to be printed for the operator's data commit.
+- name: Read the public half
+  ansible.builtin.slurp:
+    src: '{{ tenant_scrape_tunnel_key_pub_file }}'
+  register: tenant_scrape_tunnel_pub
+  when: tenant_scrape_tunnel_pub_stat.stat.exists
+  no_log: true
+  check_mode: false
+
+# This is public data, so it is the one task here that shows a value. Its prefix is what the
+# operator's agent searches the apply log for (README, "Turning the tunnel on").
+- name: Show the scraper host's public key for the target host's data
+  ansible.builtin.debug:
+    msg: 'tenant_scrape_tunnel scraper_public_key: {{ tenant_scrape_tunnel_pub.content | b64decode | trim }}'
+  when: tenant_scrape_tunnel_pub is defined and tenant_scrape_tunnel_pub.content is defined
+
+- name: Report that the tunnel waits for the target's data
+  ansible.builtin.debug:
+    msg: >-
+      tenant_scrape_tunnel waiting: tenant_scrape_tunnel_target_host_key and
+      tenant_scrape_tunnel_target_endpoint are not both set, so no tunnel unit is installed or changed.
+  when: not (tenant_scrape_tunnel_is_scraper_enabled | bool)
+
+- name: Install and start the tunnel unit
+  when: tenant_scrape_tunnel_is_scraper_enabled | bool
+  block:
+    - name: Refuse a target host key that is not one ed25519 line
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_target_host_key is match(tenant_scrape_tunnel_ed25519_pattern)
+        quiet: true
+        fail_msg: >-
+          TENANT_SCRAPE_TUNNEL_BAD_HOST_KEY: the target host key must be one line, 'ssh-ed25519 <base64>',
+          as the target host printed it.
+
+    - name: Refuse a target endpoint that is not a DNS name or an IPv4 address
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_target_endpoint is match(tenant_scrape_tunnel_endpoint_pattern)
+          - tenant_scrape_tunnel_target_endpoint | length <= 253
+        quiet: true
+        fail_msg: >-
+          TENANT_SCRAPE_TUNNEL_BAD_ENDPOINT: the target endpoint must be a DNS name or an IPv4 address,
+          with no port, user or brackets.
+
+    # The caller's play may run with gather_facts off (the pulled playbooks do), so the role asks
+    # for the one fact it uses. It reports no change and runs under --check. The result lists the
+    # host's addresses, so no_log.
+    - name: Gather the scraper host's network addresses
+      ansible.builtin.setup:
+        gather_subset:
+          - '!all'
+          - '!min'
+          - network
+      no_log: true
+
+    - name: Refuse unless the bind address is one of this host's addresses
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_bind_address in (ansible_facts['all_ipv4_addresses'] | default([]))
+        quiet: true
+        fail_msg: >-
+          TENANT_SCRAPE_TUNNEL_BIND_ADDRESS_ABSENT: the forwards are bound to the scraper host's private
+          address, and this host does not hold it.
+
+    # The unit's forwards, host-key check and options held to the constants, before any file is
+    # written, so a sabotage of one shows at its own assert and not at the digest.
+    - name: Hold the unit's forwards to the destinations
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('-L ' ~ tenant_scrape_tunnel_bind_address ~ ':' ~ item.local_port ~ ':' ~ item.address ~ ':'
+            ~ tenant_scrape_tunnel_target_port ~ ' ') in tenant_scrape_tunnel_unit_text
+        quiet: true
+        fail_msg: "The tunnel unit has no forward for {{ item.name }} that matches the role's constants."
+      loop: '{{ tenant_scrape_tunnel_destinations }}'
+      loop_control:
+        label: '{{ item.name }}'
+      vars:
+        tenant_scrape_tunnel_unit_text: "{{ lookup('ansible.builtin.file', role_path ~ '/files/branchleft-tenant-scrape.service') }}"
+
+    - name: Hold the unit to exactly those forwards and to its required options
+      ansible.builtin.assert:
+        that:
+          - (tenant_scrape_tunnel_unit_text.split(' -L ') | length) - 1 == tenant_scrape_tunnel_destinations | length
+          - >-
+            tenant_scrape_tunnel_unit_text | regex_findall(' -[A-Za-z] ') | map('trim') | unique
+            | difference(tenant_scrape_tunnel_unit_allowed_flags) | length == 0
+          - tenant_scrape_tunnel_unit_required_options | reject('in', tenant_scrape_tunnel_unit_text) | list | length == 0
+        quiet: true
+        fail_msg: The tunnel unit carries a forward, a flag or an option that does not match the role's constants.
+      vars:
+        tenant_scrape_tunnel_unit_text: "{{ lookup('ansible.builtin.file', role_path ~ '/files/branchleft-tenant-scrape.service') }}"
+
+    # The unit file is pinned by sha256, checked last of the unit's asserts. It is a tripwire on an
+    # accidental edit, not a control on a deliberate one (the diff shows that).
+    - name: Hold the unit file to its pinned sha256
+      ansible.builtin.assert:
+        that:
+          - >-
+            lookup('ansible.builtin.file', role_path ~ '/files/branchleft-tenant-scrape.service', rstrip=false)
+            | hash('sha256') == tenant_scrape_tunnel_unit_sha256
+        quiet: true
+        fail_msg: The tunnel unit file in this role does not match its pinned sha256.
+
+    # The known_hosts line pins the target host key. The unit's StrictHostKeyChecking is yes, so a
+    # key that does not match fails the connection instead of being accepted.
+    - name: Pin the target host key
+      ansible.builtin.template:
+        src: known_hosts.j2
+        dest: '{{ tenant_scrape_tunnel_known_hosts_file }}'
+        owner: root
+        group: '{{ tenant_scrape_tunnel_user }}'
+        mode: '0640'
+      no_log: true
+      diff: false
+      register: tenant_scrape_tunnel_known
+
+    - name: Write the target file the unit reads
+      ansible.builtin.template:
+        src: target.env.j2
+        dest: '{{ tenant_scrape_tunnel_target_env_file }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+      register: tenant_scrape_tunnel_target
+
+    - name: Install the tunnel unit
+      ansible.builtin.copy:
+        src: branchleft-tenant-scrape.service
+        dest: '{{ tenant_scrape_tunnel_unit_path }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: tenant_scrape_tunnel_unit
+
+    - name: Reload systemd when the unit file changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not ansible_check_mode and tenant_scrape_tunnel_unit.changed
+
+    # Start the unit, or restart it when any of its files changed, so a changed target or pin takes
+    # effect. Systemd is not touched in check mode. Until the target host holds the key the unit
+    # fails to connect and systemd restarts it, so the order of the two hosts' applies does not
+    # matter.
+    - name: Enable the tunnel and start it, or restart it when its files changed
+      ansible.builtin.systemd_service:
+        name: '{{ tenant_scrape_tunnel_unit_name }}'
+        enabled: true
+        state: >-
+          {{ 'restarted' if (tenant_scrape_tunnel_unit.changed or tenant_scrape_tunnel_target.changed or tenant_scrape_tunnel_known.changed) else 'started' }}
+      when: not ansible_check_mode

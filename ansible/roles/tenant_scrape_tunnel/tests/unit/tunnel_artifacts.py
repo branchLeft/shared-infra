@@ -30,6 +30,14 @@ UNIT_FILE = ROLE / "files" / "branchleft-tenant-scrape.service"
 
 Value = str | int | bool | list["Value"] | dict[str, "Value"]
 
+# What the tasks observe on a host and set as facts before the role's variables read them: the
+# two sign-of-installation values the teardown triggers are made from. A test that does not name
+# them gets a host with nothing installed.
+OBSERVED_NOTHING_INSTALLED: dict[str, Value] = {
+    "tenant_scrape_tunnel_is_unit_installed": False,
+    "tenant_scrape_tunnel_is_target_installed": False,
+}
+
 EXPORTER_PORT = 9100
 NOLOGIN = "/usr/sbin/nologin"
 ALL_INTERFACES = str(ipaddress.IPv4Address(0))
@@ -182,13 +190,16 @@ def _resolve(value: Value, context: Mapping[str, Value]) -> Value:
     return value
 
 
-def role_variables() -> dict[str, Value]:
+def role_variables(overrides: Mapping[str, Value] | None = None) -> dict[str, Value]:
     """The role's defaults and vars with every template in them rendered, vars over defaults.
+
+    The observed facts start as a host with nothing installed, and overrides (the inputs a
+    data commit fills in, or the observed facts) replace any value before it is rendered.
 
     Raises:
         RoleFileError: when a file is missing or a value still holds a template after rendering.
     """
-    merged: dict[str, Value] = {}
+    merged: dict[str, Value] = dict(OBSERVED_NOTHING_INSTALLED)
     for name in ("defaults", "vars"):
         path = ROLE / name / "main.yml"
         if not path.is_file():
@@ -197,6 +208,7 @@ def role_variables() -> dict[str, Value]:
         if not isinstance(document, dict):
             raise RoleFileError(str(path), "is not a mapping")
         merged.update({str(key): _value(item) for key, item in document.items()})
+    merged.update(overrides or {})
     # Each pass renders against the previous one, so a variable made from another settles by
     # the depth of the longest chain.
     for _ in range(10):

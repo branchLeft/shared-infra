@@ -10,11 +10,13 @@
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install the SSH server and its client
+    # procps is the pkill the target host's removal ends the account's connections with.
+    - name: Install the SSH server, its client and the process tools
       ansible.builtin.apt:
         name:
           - openssh-server
           - openssh-client
+          - procps
         state: present
         update_cache: true
         cache_valid_time: 3600

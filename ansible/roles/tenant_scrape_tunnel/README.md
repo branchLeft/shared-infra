@@ -6,12 +6,15 @@ separate network, so `edge1` cannot reach those exporters directly. The connecti
 account that exist for this purpose only, and `edge-t`'s sshd lets that key forward to the three
 exporter ports and do nothing else.
 
+This is one-time estate wiring for the tenants project's shared hosts (`edge-t`, `app-t1` and `db-t1`):
+onboarding a tenant never touches this role.
+
 One role, two halves, chosen by the host's name in the play (`enrolled_host`):
 
-| Host    | Half               | What it does                                                                                                  |
-| ------- | ------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `edge1` | `tasks/_edge1.yml` | Makes the tunnel account and key, prints the public half, and (once data is in) installs and starts the unit. |
-| `edget` | `tasks/_edget.yml` | Prints its own SSH host public key, and (once data is in) installs the restricted key and the sshd drop-in.   |
+| Host    | Half               | What it does                                                                                                                        |
+| ------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `edge1` | `tasks/_edge1.yml` | Makes the tunnel account and key, prints the public half, and (once data is in) installs and starts the unit. Removes it all again. |
+| `edget` | `tasks/_edget.yml` | Prints its own SSH host public key, and (once data is in) installs the restricted key and the sshd drop-in. Removes them again.     |
 
 Any other host name stops the run with `TENANT_SCRAPE_TUNNEL_HOST_NOT_ENROLLED`.
 
@@ -23,7 +26,9 @@ either host (`ci_jump`, `ci_login`, `tunnel_account`).
 ## Interface
 
 `meta/argument_specs.yml` documents the three inputs, all in `defaults/main.yml`. All three are public
-data, none is a secret, and each is empty until the data commit below fills it in. **Empty means off.**
+data, none is a secret, and each is empty until the data commit below fills it in. **Empty means off:**
+before the first fill-in it means nothing is installed, and after it, emptying the value removes what was
+installed (see "Turning the tunnel off").
 
 | Variable                                  | Read by | What it is                                                           |
 | ----------------------------------------- | ------- | -------------------------------------------------------------------- |
@@ -41,7 +46,8 @@ role is wired (`check_enrolment` R2).
 - `edge1`: OpenSSH client (`/usr/bin/ssh`), systemd, and either `ssh-keygen` or the Python
   `cryptography` library for `community.crypto.openssh_keypair`. The role gathers the network facts it
   needs itself, so the play may run with `gather_facts: false`.
-- `edget`: the OpenSSH server with its `sshd_config.d` directory (the role stops if it is missing).
+- `edget`: the OpenSSH server with its `sshd_config.d` directory (the role stops if it is missing), and
+  `pkill` (the `procps` package) for the removal.
 
 ## Turning the tunnel on
 
@@ -73,10 +79,61 @@ commit puts it there. The order, with the apply being the gated pull of `main` o
    replaced, the unit retries without end and Prometheus shows the targets down: the data commit must
    be redone from a new first-apply log.
 
-Feature off and the plan: with all three defaults empty each half only reports and nothing else
-changes, so the plan of a host shows no change beyond the account, the key directory and the key.
+Feature off and the plan: with all three defaults empty and nothing installed, each half only reports and
+nothing else changes, so the plan of a host shows no change beyond the account, the key directory and the
+key. The data commit's reviewer should prefer a DNS name for the `edge-t` endpoint. No DNS name for
+`edge-t` exists in this repository today (the zones hold no per-host record for it), and creating one is
+a DNS change that is the owner's, so the commit will carry an address unless the owner makes a name first.
+
+## Turning the tunnel off
+
+Emptying the defaults again, in a reviewed commit, removes the tunnel. Each half decides for itself, from
+its own values and from what is on its own host, so the two applies may land in either order:
+
+| Half    | Removal runs when                                                                                            | What it removes                                                                                                                       |
+| ------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `edget` | `tenant_scrape_tunnel_scraper_public_key` is empty and the drop-in, the authorized keys or the account exist | The drop-in, the authorized keys file and directory, then (sshd checked, reloaded and read back) its open connections and the account |
+| `edge1` | host key and endpoint are both empty and the unit file exists                                                | The unit (stopped and disabled first), `target.env`, `known_hosts`, the key pair, the key directory if empty, and the account         |
+
+- `edget` follows the install's discipline: it removes the two files, runs `sshd -t` on the whole
+  configuration, reloads sshd and reads the effective settings back; a failure puts the previous files back
+  and fails the run (`TENANT_SCRAPE_TUNNEL_SSHD_REFUSED`). Only then does it end any connection the
+  account still holds (a reload does not end a session, and `edge1`'s unit holds one open), using
+  `pkill`, and remove the directory and the account.
+- `edge1` is the half that also runs with empty values on the first apply, which must still make the
+  key and print it. So its trigger needs the unit file, which exists only once the tunnel was installed.
+  A half-filled pair (one value empty, one filled) is not a removal: nothing changes and the run reports
+  that it waits.
+- Neither half removes an account that has a login shell: it stops before removing anything, as the install
+  refuses to adopt one, and an operator fixes the account by hand.
+- The removal does not make the key again in the same run. The next run with the values still empty is a
+  first apply: `edge1` makes a new key and prints it, and turning the tunnel on again needs a new data
+  commit made from that log, as in "Turning the tunnel on".
+- A removal run is safe to repeat: once its files and account are gone neither trigger holds.
+
+## Check mode
+
+Both halves run under `--check` (the plan of a host) on a host where none of this exists yet, and under
+`--check` they change nothing and never fail for want of a directory the run would have made.
+
+| Task, on a fresh host under `--check`                                  | `edge1`                                                                   | `edget`                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| The account                                                            | looked up; the creation shows as a change; the read-back is skipped       | the same, when the half is on                                   |
+| The key directory and the authorized keys directory                    | shown as a change, not made                                               | shown as a change, not made                                     |
+| The key (`community.crypto.openssh_keypair`)                           | **skipped** unless the key directory exists, then only judged, never made | not used                                                        |
+| The public half                                                        | looked up, and read only if the file exists                               | not used                                                        |
+| The target's host key                                                  | not used                                                                  | looked up, and read only if the file exists                     |
+| `known_hosts`, `target.env`, the unit, the drop-in, the authorized key | shown as a diff, not written                                              | the drop-in and the authorized key shown as a diff, not written |
+| `sshd -t`, reload, read-back, the unit's start                         | not run                                                                   | not run                                                         |
+| The removal                                                            | does not run: no unit file                                                | does not run: nothing exists                                    |
+
+Every read-only task that decides the next one (`stat`, `getent`, `slurp`, `find`) runs under `--check`; no
+task that writes does, and none that makes a key. Under `--check` on a configured host with the values
+emptied, the removal shows what it would remove and removes nothing.
 
 ## What it changes on a host
+
+While the tunnel is on:
 
 `edge1`: the account `scrapetunnel`; `/etc/branchleft/tenant-scrape/` (root, 0755) holding the private
 key (the account's, 0600) and its public half, and, once data is in, `known_hosts` (root, group the
@@ -86,7 +143,8 @@ account, 0640), `target.env` (root, 0600, the endpoint only) and the unit
 `edget`, once data is in: the account `scrapetunnel`, `/etc/ssh/branchleft-tenant-scrape/authorized_keys`
 (root, 0644, exactly one line) and `/etc/ssh/sshd_config.d/50-branchleft-tenant-scrape.conf`.
 
-No path is made from the account's name.
+No path is made from the account's name. After "Turning the tunnel off" none of the above is left on the
+host, apart from the parent directories above the role's own.
 
 ## Threat model
 
@@ -97,6 +155,13 @@ No path is made from the account's name.
   the same `PermitOpen`, `PermitListen none`, and agent, X11, stream-local, tty, tunnel and user-rc
   all off, `ForceCommand /usr/sbin/nologin`. Both files are made from the one `destinations` list in
   `vars/main.yml`, so they cannot differ.
+- **No `from=` on the key line, on purpose.** `edge-t`'s firewall admits port 22 only from `edge1`'s public
+  address, which this repository deliberately never holds (`hetzner/tenants.ts` reads it from state). A
+  `from=` option would need that address written into the key line, and so into this public repository.
+  It could be added only if the address came from the same reviewed data, which it cannot without
+  being written here. The private key is made on `edge1` and never leaves it, so the network layer, the
+  restricted key and the drop-in are the layers, and the validator refuses a `from=` so that nobody adds
+  one by accident.
 - **No shell, no password.** The account's shell is `/usr/sbin/nologin`; the role refuses to adopt an
   existing account that has a login shell.
 - **The private key never leaves `edge1`.** It is made there by the key module with `no_log` and
@@ -127,7 +192,13 @@ No path is made from the account's name.
 - `ansible/checks/test_tenant_scrape_tunnel_pins.py` holds the addresses, ports and bind address
   equal to the address plan and the Prometheus configuration's generator.
 - `molecule test` in this directory runs both halves in a container against a real sshd. It needs a
-  container engine, so it is proven in CI.
+  container engine, so it is proven in CI. The `default` scenario enables the tunnel, reads it back and
+  checks it. The `teardown` scenario (`molecule test -s teardown`) enables it, runs the removal in check
+  mode and shows the host unchanged, runs the removal for real while the tunnel's connection is open,
+  runs it once more in check mode, and reads back that the unit, the key, the account, the authorized
+  keys and the drop-in are gone and that sshd still passes its check.
+- The teardown triggers are variables in `vars/main.yml`, and the unit tests judge them over every
+  combination of the values and of what is installed.
 
 ## Delivery
 

@@ -83,6 +83,29 @@ tenant_scrape_tunnel_endpoint_pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z
 tenant_scrape_tunnel_is_scraper_enabled: >-
   {{ (tenant_scrape_tunnel_target_host_key | length > 0) and (tenant_scrape_tunnel_target_endpoint | length > 0) }}
 tenant_scrape_tunnel_is_target_enabled: '{{ tenant_scrape_tunnel_scraper_public_key | length > 0 }}'
+
+# A half is torn down when its data is emptied after it was installed. The first apply also runs
+# with empty data, and it must make the key and print it, so the scraper host's trigger needs the
+# unit to be installed (it is only ever installed with data in); a half-filled pair is not a
+# removal and changes nothing. The target host's account and files exist only once its key was
+# filled in, so any of them is the sign that the half was installed. The two observed values are
+# set by the tasks from what is on the host.
+tenant_scrape_tunnel_is_scraper_teardown: >-
+  {{ (tenant_scrape_tunnel_target_host_key | length == 0)
+     and (tenant_scrape_tunnel_target_endpoint | length == 0)
+     and tenant_scrape_tunnel_is_unit_installed }}
+tenant_scrape_tunnel_is_target_teardown: >-
+  {{ (tenant_scrape_tunnel_scraper_public_key | length == 0)
+     and tenant_scrape_tunnel_is_target_installed }}
+
+# What the scraper host's teardown removes, in order: the unit first, the key pair last. The key
+# directory is removed after them, only when nothing else is in it.
+tenant_scrape_tunnel_scraper_files:
+  - '{{ tenant_scrape_tunnel_unit_path }}'
+  - '{{ tenant_scrape_tunnel_target_env_file }}'
+  - '{{ tenant_scrape_tunnel_known_hosts_file }}'
+  - '{{ tenant_scrape_tunnel_key_file }}'
+  - '{{ tenant_scrape_tunnel_key_pub_file }}'
 # Each of these must be in the unit file's text. The forwards are held to the destinations apart
 # from this list, one by one, and the options that open any other forward are refused by name.
 tenant_scrape_tunnel_unit_required_options:

@@ -9,6 +9,7 @@ with the finding that names the rule. The keys are made up for the test and have
 The README gives the command, with the files directory and the library directory on PYTHONPATH.
 """
 
+import itertools
 import unittest
 
 import jinja2
@@ -459,6 +460,96 @@ class OtherRenderedFiles(unittest.TestCase):
         line = artifacts.render_template("target.env.j2", self.variables)
         self.assertEqual(f"{self.rules['target_name']}=tunnel-target.example.test\n", line)
         self.assertIn("${" + self.rules["target_name"] + "}", artifacts.unit_text())
+
+
+def trigger(name: str, **observed: artifacts.Value) -> bool:
+    """The value of one of the role's boolean variables, with the named values replacing the defaults."""
+    rendered = artifacts.role_variables(observed)[name]
+    if rendered not in ("True", "False"):
+        raise artifacts.RoleFileError(name, f"rendered as {rendered!r}, not a boolean")
+    return rendered == "True"
+
+
+def scraper_teardown(host_key: str, endpoint: str, *, unit_installed: bool) -> bool:
+    """Whether the scraper host removes its tunnel, given its two inputs and what is installed."""
+    return trigger(
+        "tenant_scrape_tunnel_is_scraper_teardown",
+        tenant_scrape_tunnel_target_host_key=host_key,
+        tenant_scrape_tunnel_target_endpoint=endpoint,
+        tenant_scrape_tunnel_is_unit_installed=unit_installed,
+    )
+
+
+def target_teardown(scraper_key: str, *, installed: bool) -> bool:
+    """Whether the target host removes its half, given its input and what is installed."""
+    return trigger(
+        "tenant_scrape_tunnel_is_target_teardown",
+        tenant_scrape_tunnel_scraper_public_key=scraper_key,
+        tenant_scrape_tunnel_is_target_installed=installed,
+    )
+
+
+class ScraperTeardownTrigger(unittest.TestCase):
+    def test_the_first_apply_with_empty_data_removes_nothing_and_so_makes_the_key(self) -> None:
+        self.assertFalse(scraper_teardown("", "", unit_installed=False))
+
+    def test_emptying_both_values_once_the_unit_is_installed_removes_the_tunnel(self) -> None:
+        self.assertTrue(scraper_teardown("", "", unit_installed=True))
+
+    def test_emptying_only_one_value_removes_nothing(self) -> None:
+        self.assertFalse(scraper_teardown(KEY, "", unit_installed=True))
+        self.assertFalse(scraper_teardown("", "tunnel-target.example.test", unit_installed=True))
+
+    def test_filled_data_removes_nothing_whether_or_not_the_unit_is_there(self) -> None:
+        for installed in (False, True):
+            self.assertFalse(
+                scraper_teardown(KEY, "tunnel-target.example.test", unit_installed=installed)
+            )
+
+    def test_the_tunnel_is_never_both_enabled_and_removed(self) -> None:
+        for host_key, endpoint, installed in itertools.product(("", KEY), ("", "host.test"), (False, True)):
+            enabled = trigger(
+                "tenant_scrape_tunnel_is_scraper_enabled",
+                tenant_scrape_tunnel_target_host_key=host_key,
+                tenant_scrape_tunnel_target_endpoint=endpoint,
+            )
+            removed = scraper_teardown(host_key, endpoint, unit_installed=installed)
+            self.assertFalse(enabled and removed, (host_key, endpoint, installed))
+
+
+class TargetTeardownTrigger(unittest.TestCase):
+    def test_a_host_with_nothing_installed_removes_nothing(self) -> None:
+        self.assertFalse(target_teardown("", installed=False))
+
+    def test_emptying_the_key_once_any_part_is_installed_removes_the_half(self) -> None:
+        self.assertTrue(target_teardown("", installed=True))
+
+    def test_a_filled_key_removes_nothing(self) -> None:
+        for installed in (False, True):
+            self.assertFalse(target_teardown(KEY, installed=installed))
+
+    def test_the_half_is_never_both_enabled_and_removed(self) -> None:
+        for scraper_key, installed in itertools.product(("", KEY), (False, True)):
+            enabled = trigger(
+                "tenant_scrape_tunnel_is_target_enabled",
+                tenant_scrape_tunnel_scraper_public_key=scraper_key,
+            )
+            self.assertFalse(enabled and target_teardown(scraper_key, installed=installed))
+
+
+class ScraperTeardownFiles(unittest.TestCase):
+    def test_the_files_removed_are_the_unit_its_files_and_the_key_pair_and_no_directory(self) -> None:
+        listed = artifacts.role_variables()["tenant_scrape_tunnel_scraper_files"]
+        self.assertEqual(
+            [
+                "/etc/systemd/system/branchleft-tenant-scrape.service",
+                "/etc/branchleft/tenant-scrape/target.env",
+                "/etc/branchleft/tenant-scrape/known_hosts",
+                "/etc/branchleft/tenant-scrape/id_ed25519",
+                "/etc/branchleft/tenant-scrape/id_ed25519.pub",
+            ],
+            listed,
+        )
 
 
 if __name__ == "__main__":
