@@ -46,6 +46,44 @@
   ansible.builtin.set_fact:
     deploy_tooling_scenario_burst: '{{ deploy_tooling_scenario_probe.StartLimitBurst | int }}'
 
+# A start that hangs runs to its timeout and the retry follows one pause later, so the
+# burst-th start is (burst - 1) x (timeout + pause) after the first. If that is not under
+# the window the limit never trips and the unit retries for ever (branchLeft/workspace#3456).
+# The scenarios below fail at once and cannot show it with the unit's real 600 s timeout, so
+# the installed unit's own three values, as systemd reports them, are held to the relation.
+# systemd-analyze turns each span systemd prints into microseconds.
+- name: Read the installed unit's three spans as microseconds
+  ansible.builtin.command:
+    argv:
+      - systemd-analyze
+      - timespan
+      - '{{ deploy_tooling_scenario_probe.StartLimitIntervalUSec }}'
+      - '{{ deploy_tooling_scenario_probe.TimeoutStartUSec }}'
+      - '{{ deploy_tooling_scenario_probe.RestartUSec }}'
+  register: deploy_tooling_scenario_spans
+  changed_when: false
+
+- name: Keep the three spans
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_span_values: >-
+      {{ deploy_tooling_scenario_spans.stdout | regex_findall('(?m)^\s*\S+:\s+([0-9]+)\s*$') | map('int') | list }}
+
+- name: Assert the start limit can trip for a start that hangs to its timeout
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_span_values | length == 3
+      - deploy_tooling_scenario_span_values[0] > 0
+      - deploy_tooling_scenario_span_values[1] > 0
+      - >-
+        (deploy_tooling_scenario_burst | int - 1)
+        * (deploy_tooling_scenario_span_values[1] + deploy_tooling_scenario_span_values[2])
+        < deploy_tooling_scenario_span_values[0]
+    fail_msg: >-
+      The installed compose unit's start limit cannot trip for a hung start: window, timeout and
+      pause in microseconds {{ deploy_tooling_scenario_span_values }}, burst {{ deploy_tooling_scenario_burst }},
+      as systemd shows them {{ deploy_tooling_scenario_probe }}
+    quiet: true
+
 - name: Scenarios of the retry case
   block:
     # Recovery: the first two `compose up` calls fail, the third succeeds.

@@ -282,7 +282,7 @@ keeps the running image unless `control_plane_app_image` is given. On ops1 that 
   starts no container itself.
 - The stack's unit is enabled and active; the deploy wrapper writes its image pin. On
   every run the role restarts the unit through the wrapper, which costs one registry pull
-  and one start against the unit's start limit (five starts in fifteen minutes).
+  and one start against the unit's start limit (five starts in an hour).
 - `/usr/local/sbin/branchleft-docker-user-policy` (`0755`) and
   `/etc/systemd/system/branchleft-docker-user-policy.service` (`0644`). The
   policy is applied when either changed, and at every boot after.
