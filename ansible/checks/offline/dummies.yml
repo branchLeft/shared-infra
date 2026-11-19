@@ -16,6 +16,11 @@ overrides:
     type: list
     value:
       - 192.0.2.20
+  # The second account's name is a host input on edget only; edge1 applies the role too (the flag is
+  # off there) and the template renders with the condition dropped, so edge1 needs a value to render.
+  ci_jump_spool_user:
+    type: str
+    value: offline-render-dummy
   tunnel_account_in:
     type: dict
     value:

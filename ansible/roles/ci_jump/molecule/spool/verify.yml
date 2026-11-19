@@ -425,10 +425,10 @@
         refuse_destinations: '{{ item.destinations }}'
       loop:
         - { own: '{{ scenario_own }}', destinations: ['{{ scenario_unlisted }}'] }
-        - {
-            own: '{{ scenario_own }}',
-            destinations: ['{{ scenario_unlisted }}', '{{ scenario_own }}'],
-          }
+        - own: '{{ scenario_own }}'
+          destinations:
+            - '{{ scenario_unlisted }}'
+            - '{{ scenario_own }}'
         - { own: '{{ scenario_own }}', destinations: ['db-t1'] }
         - { own: '{{ scenario_own }}', destinations: ['203.0.113.7'] }
         # A test host's own address is loopback, so loopback is let through above; a jump host's
