@@ -157,8 +157,8 @@
     verify_textfile_timer: branchleft-break-glass-textfile.timer
     verify_textfile_service: branchleft-break-glass-textfile.service
     verify_textfile_dir: /var/lib/branchleft/support-access-exporter
-    # The series the writer's file declares, written here from the contract (the
-    # series contract of branchLeft/workspace#3247) and not read from the role. No
+    # The series the writer's file declares, written here from the series contract
+    # the portal's reader relies on, and not read from the role. No
     # tenant runs on this test host, so each family has its header and no sample.
     verify_textfile_families:
       - branchleft_support_access_state
