@@ -4,16 +4,12 @@
 # After them, the roles on edge1's list in checks/host_roles/edge1.yml that this playbook wires:
 # the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
 # the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
-# the host baseline, then the host firewall and the masquerade (edge_firewall: its own nftables
-# tables, monitor mode until the owner-merged flip of edge_firewall_enforce, with the estate subnet
-# it masquerades; both values are pinned to edge1 alone in checks/check_enrolment.py), then the NAT
-# gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
-# is the estate's public gateway, and the switch is pinned to the two gateways in checks/check_enrolment.py),
+# the host baseline, then the host firewall (edge_firewall, monitor mode; its two values are pinned
+# to edge1 in checks/check_enrolment.py), then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on; pinned there too),
 # the pipeline account the trigger is reached through, then the jump account's key options (ci_jump;
 # it only reports until the owner turns it on), then the deploy
 # tooling (as class gateway, which installs the common targets only), then the edge stack. The
-# gateway follows the baseline because its reconciler needs Docker and iptables from it, and
-# follows the firewall role so that the reconciler finds the role's masquerade table. The
+# gateway follows the baseline because its reconciler needs Docker and iptables from it. The
 # edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
 # tooling. After it come the three monitoring roles, so a failure in them cannot hold the edge
 # delivery back: the node exporter (node_exporter) and the SNDS collector (exporters_and_collectors), the pager

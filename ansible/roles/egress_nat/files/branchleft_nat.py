@@ -11,14 +11,9 @@ host still the gateway".
 This is only the host half. The network half is the default route declared
 in the network stack; without it nothing is ever sent here to forward.
 
-Two homes for the masquerade and the forwarding sysctl, one per host. On a host where
-the edge_firewall role has loaded its nftables table (`ip branchleft_edge_nat`), that
-table is the masquerade and the role is the writer of the forwarding sysctl, so this
-program inserts no masquerade and writes no drop-in; it only refuses unless the kernel
-is forwarding. On every other host (the edget gateway), and on edge1 whenever that table
-is not loaded, it does both itself, as it always has. A table that cannot be read counts
-as not loaded: a masquerade in both places is harmless, and a gateway with neither has no
-egress.
+Where the edge_firewall role's table (`ip branchleft_edge_nat`) holds a masquerade, the role owns
+the masquerade and the forwarding sysctl and this program inserts and writes neither; anywhere else
+it does both, as before. The README's "The masquerade's two homes" has the reasoning.
 
 The checks run in the order the shell program they replace ran them, with the
 same messages, and the rules are inserted in the same order. Every external

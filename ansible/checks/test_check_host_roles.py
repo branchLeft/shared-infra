@@ -68,11 +68,9 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall (the
-# host firewall and the masquerade, after host_baseline for its Docker), egress_nat (the NAT
-# gateway, after the firewall role whose masquerade table it reads, and after host_baseline for
-# Docker and iptables), ci_jump (directly after ci_login;
-# it only reports until the owner enables it), deploy_tooling and
+# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall (after
+# host_baseline for Docker), egress_nat (after the firewall role: it reads its table), ci_jump (directly
+# after ci_login; it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
