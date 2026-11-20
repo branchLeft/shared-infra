@@ -283,7 +283,7 @@
     - name: Refuse to read the sshd settings when the reload of sshd fails
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
-        refused_task: Reload sshd now that its configuration has been checked
+        refused_task: Reload sshd
 
     - name: Read the sshd call log after the failed reload
       ansible.builtin.slurp:
