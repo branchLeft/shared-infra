@@ -825,6 +825,7 @@
       vars:
         request_name: a malformed object, installed program
         request_text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
         request_input: '{{ pull_trigger_pr_bundles }}/malformed.bundle'
 
     - name: The installed program names the unpack step for a malformed object
