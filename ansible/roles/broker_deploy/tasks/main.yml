@@ -40,6 +40,21 @@
     quiet: true
     fail_msg: The wrapper path and the image directory must be absolute paths of letters, digits, dot, underscore, hyphen and slash.
 
+# The owner's address, which the broker refuses to start without (OWNER_DUE_DILIGENCE_EMAIL). It
+# is checked here, before anything is written and before the environment file is templated, so a
+# release is never started by a host whose broker cannot add the owner as a reader. Its value is
+# never printed: no_log, and the message names no value.
+- name: Refuse an owner address that is unset or not a plain address
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_owner_due_diligence_email is string
+      - broker_deploy_owner_due_diligence_email is match('^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+\Z')
+    quiet: true
+    fail_msg: >-
+      The owner's due-diligence address (broker_deploy_owner_due_diligence_email) is unset or is not a plain
+      address. The broker refuses to start without it; the owner places it as a host input. The value is not shown.
+  no_log: true
+
 - name: Read the Node binary the host already has
   ansible.builtin.stat:
     path: '{{ broker_deploy_node_dir }}/bin/node'
@@ -184,6 +199,9 @@
     owner: root
     group: root
     mode: '0600'
+  # The file holds the owner's address (ANS-16): no diff and no output of the templated content.
+  no_log: true
+  diff: false
   register: broker_deploy_env_result
 
 # Installed, then loaded by the reload before the role starts it.
@@ -208,6 +226,9 @@
       {{ [broker_deploy_release_copy, broker_deploy_link_result,
       broker_deploy_key_result, broker_deploy_env_result, broker_deploy_unit_result]
       | map(attribute='changed') | select | list | length > 0 }}
+  # Names the environment file's result, which is hidden for the owner's address (ANS-16).
+  no_log: true
+  diff: false
 
 - name: Start the broker, restart it when what it runs changed, and wait for its answer
   ansible.builtin.include_tasks: _run.yml
