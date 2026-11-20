@@ -53,12 +53,32 @@ IPTABLES_MASQUERADE_ADD = re.compile(
 SKIPPED_PARTS = frozenset(("molecule", "tests", "patterns", "node_modules", ".venv", "__pycache__"))
 SKIPPED_SUFFIXES = (".md",)
 
-# The two programs that may insert the iptables masquerade: the reconciler the role delivers, and
-# the bash program the hand installer (`nat-gateway.sh`) still installs until that is removed. On a
-# host where this role has loaded its table the reconciler inserts none (see the AST test below).
+# The program that may insert the iptables masquerade: the reconciler the egress_nat role delivers.
+# On a host where this role has loaded its table it inserts none (see the AST test below).
 RECONCILER = "ansible/roles/egress_nat/files/branchleft_nat.py"
-HAND_INSTALLED_RECONCILER = "hetzner/provision/branchleft_nat.sh"
-IPTABLES_MASQUERADE_HOMES = [HAND_INSTALLED_RECONCILER, RECONCILER]
+HAND_INSTALLERS = ANSIBLE / "checks" / "hand_installers.yml"
+
+
+def pending_role_scripts() -> frozenset[str]:
+    """The hand-installed scripts due for removal, as the register lists them.
+
+    They are read from the register and not named here, so a script added to it later is
+    covered with no edit, and this file names none of them.
+    """
+    register = _mapping(yaml.safe_load(HAND_INSTALLERS.read_text(encoding="utf-8")))
+    return frozenset(
+        path for path, row in register.items() if _mapping(row).get("reason") == "pending-role"
+    )
+
+
+def code_in_the_tree() -> list[Path]:
+    """Every file a host runs under ansible/ and hetzner/, but for the hand installers."""
+    pending = pending_role_scripts()
+    return [
+        path
+        for path in _files(ANSIBLE) + _files(HETZNER)
+        if str(path.relative_to(ROOT)) not in pending
+    ]
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -208,22 +228,16 @@ class MasqueradeHasOneHomePerHost(unittest.TestCase):
             IPTABLES_MASQUERADE_ADD.search("iptables -t nat -D POSTROUTING -j MASQUERADE")
         )
 
-    def test_only_the_roles_template_and_the_two_reconcilers_add_a_masquerade(self) -> None:
-        paths = _files(ANSIBLE) + _files(HETZNER)
-        self.assertEqual(
-            sorted(
-                [
-                    "ansible/roles/edge_firewall/templates/rules.nft.j2",
-                    *IPTABLES_MASQUERADE_HOMES,
-                ]
-            ),
-            sorted(masquerade_adders(paths)),
-        )
+    def test_the_register_of_hand_installers_is_read_and_not_empty(self) -> None:
+        # A control: an empty read would make the scans below cover every file, hand
+        # installers included, and the next test would then fail for the wrong reason.
+        self.assertGreater(len(pending_role_scripts()), 5)
 
-    def test_the_host_egress_programs_and_the_hand_installer_add_none(self) -> None:
-        for name in ("nat-gateway.sh", "branchleft_host_egress.sh"):
-            with self.subTest(name=name):
-                self.assertEqual([], masquerade_adders([HETZNER / "provision" / name]))
+    def test_only_the_roles_template_and_the_reconciler_add_a_masquerade(self) -> None:
+        self.assertEqual(
+            sorted(["ansible/roles/edge_firewall/templates/rules.nft.j2", RECONCILER]),
+            sorted(masquerade_adders(code_in_the_tree())),
+        )
 
     def test_the_reconciler_masquerades_only_where_the_roles_table_is_not_the_home(self) -> None:
         reconciler = ROOT / RECONCILER
@@ -263,25 +277,19 @@ class ForwardingSysctlHasOneWriterPerHost(unittest.TestCase):
     """The role writes the drop-in and sets the running value; the reconciler writes it only
     where the role's table is not loaded."""
 
-    HOMES = sorted(
-        [
-            "ansible/roles/edge_firewall/vars/main.yml",
-            HAND_INSTALLED_RECONCILER,
-            RECONCILER,
-        ]
-    )
+    HOMES = sorted(["ansible/roles/edge_firewall/vars/main.yml", RECONCILER])
 
-    def test_the_drop_in_is_named_in_the_role_and_the_two_reconcilers_and_no_other_code(
+    def test_the_drop_in_is_named_in_the_role_and_the_reconciler_and_no_other_code(
         self,
     ) -> None:
         named = [
             str(path.relative_to(ROOT))
-            for path in _files(ANSIBLE) + _files(HETZNER)
+            for path in code_in_the_tree()
             if any(DROP_IN in line for line in code_lines(path))
         ]
         self.assertEqual(self.HOMES, sorted(named))
 
-    def test_no_code_but_the_role_and_the_two_reconcilers_sets_forwarding(self) -> None:
+    def test_no_code_but_the_role_and_the_reconciler_sets_forwarding(self) -> None:
         setters = re.compile(
             r"sysctl\s+(?:-q\s+)?-w\s+net\.ipv4\.ip_forward"
             r"|name:\s*net\.ipv4\.ip_forward"
@@ -289,17 +297,11 @@ class ForwardingSysctlHasOneWriterPerHost(unittest.TestCase):
         )
         found = [
             str(path.relative_to(ROOT))
-            for path in _files(ANSIBLE) + _files(HETZNER)
+            for path in code_in_the_tree()
             if any(setters.search(line) for line in code_lines(path))
         ]
         self.assertEqual(
-            sorted(
-                [
-                    "ansible/roles/edge_firewall/tasks/main.yml",
-                    HAND_INSTALLED_RECONCILER,
-                    RECONCILER,
-                ]
-            ),
+            sorted(["ansible/roles/edge_firewall/tasks/main.yml", RECONCILER]),
             sorted(found),
         )
 

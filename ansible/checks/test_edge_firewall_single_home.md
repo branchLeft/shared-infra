@@ -7,12 +7,12 @@ reconciler (`ansible/roles/egress_nat/files/branchleft_nat.py`) inserts the `ipt
 writes the drop-in, as it always did. The reconciler decides at every run by reading the table. This
 test holds that split:
 
-- only the role's template adds an nftables masquerade, and only the two NAT reconcilers (the role's
-  Python program, and the bash program the hand installer still installs) add an `iptables` one;
+- only the role's template adds an nftables masquerade, and only the NAT reconciler adds an `iptables` one. The hand installers due for removal are read from
+  `hand_installers.yml`, not named, and left out of the scan;
 - in the Python reconciler the masquerade, the drop-in write and the sysctl write each sit in the
   `else` of `if role_owns_nat:`, so they cannot run beside the role's table (read from the syntax
   tree, with a sabotaged copy that shows the scan notices a call outside it);
-- the forwarding drop-in is named only by the role and the two reconcilers;
+- the forwarding drop-in is named only by the role and the reconciler;
 - the role is on edge1's list and in edge1's playbook alone, after `host_baseline` and before
   `egress_nat`, and its two variables are pinned to edge1 by `HOST_PLAY_VARS`
   (`check_enrolment.py`), with enforce off until the owner merges the one-line flip.
