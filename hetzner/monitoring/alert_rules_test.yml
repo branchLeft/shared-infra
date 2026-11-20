@@ -2140,6 +2140,21 @@ tests:
       - eval_time: 20m
         alertname: HostCPUSaturated
         exp_alerts: []
+      # The `for: 30m` boundary: still pending at 29m, firing at 31m.
+      - eval_time: 29m
+        alertname: HostCPUSaturated
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: HostCPUSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.60:9100
+              host: app1
+            exp_annotations:
+              summary: 'app1 (10.20.1.60:9100) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
       - eval_time: 45m
         alertname: HostCPUSaturated
         exp_alerts:
@@ -2147,8 +2162,9 @@ tests:
               severity: warning
               owner_action: 'true'
               instance: 10.20.1.60:9100
+              host: app1
             exp_annotations:
-              summary: '10.20.1.60:9100 has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              summary: 'app1 (10.20.1.60:9100) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
               description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
 
   - interval: 30s
@@ -2165,8 +2181,9 @@ tests:
               severity: warning
               owner_action: 'true'
               instance: 10.20.1.61:9100
+              host: app2
             exp_annotations:
-              summary: '10.20.1.61:9100 has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              summary: 'app2 (10.20.1.61:9100) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
               description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
 
   - interval: 30s
@@ -2179,6 +2196,49 @@ tests:
       - eval_time: 45m
         alertname: HostCPUSaturated
         exp_alerts: []
+
+  # A host with two cores: the ratio is over all of them, not over one. cpu0
+  # is fully busy and cpu1 fully idle, so the host is 50% busy and must not
+  # fire. Read from cpu0 alone it would be 100% busy and would fire.
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="10.20.1.63:9100", job="node", host="app4", cpu="0", mode="idle"}'
+        values: '0x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.63:9100", job="node", host="app4", cpu="1", mode="idle"}'
+        values: '0+30x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.63:9100", job="node", host="app4", cpu="0", mode="steal"}'
+        values: '0x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.63:9100", job="node", host="app4", cpu="1", mode="steal"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: HostCPUSaturated
+        exp_alerts: []
+
+  # Both cores 90% busy: the mean across the two is 90%, so it fires, with the
+  # host label named in the summary.
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="10.20.1.64:9100", job="node", host="app5", cpu="0", mode="idle"}'
+        values: '0+3x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.64:9100", job="node", host="app5", cpu="1", mode="idle"}'
+        values: '0+3x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.64:9100", job="node", host="app5", cpu="0", mode="steal"}'
+        values: '0x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.64:9100", job="node", host="app5", cpu="1", mode="steal"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: HostCPUSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.64:9100
+              host: app5
+            exp_annotations:
+              summary: 'app5 (10.20.1.64:9100) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
 
   # EdgeBanIssued: CrowdSec's decision gauge as edge1's crowdsec job scrapes
   # it (labels action, origin, reason; no address). No ban, no page.

@@ -233,8 +233,8 @@ What each part of the scenario does:
   rendered one.
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
-What breaks which step. Each row was measured by hand on 2026-10-17: one edit, one
-harness run, one restore. Two images are named.
+What breaks which step. Each row was measured by hand: one edit, one harness run,
+one restore. Two images are named.
 **Trixie** is `geerlingguy/docker-debian13-ansible` at the digest pinned in
 `molecule.yml`. **Historical** is an earlier Debian 12 image that this repository does
 not name or pin. The rows measured on trixie are: the `notify` row for the three unit
@@ -282,9 +282,9 @@ repository.
 - The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
   owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
   the full harness passed with `cgroupns_mode: host` in place. The runner evidence is a
-  diagnostic run of 2026-10-17, https://github.com/branchLeft/shared-infra/actions/runs/39073641288,
-  whose step with the host namespace reports all 14 steps `PASS` and exit status 0. That
-  job ends failed by design, on its temporary diagnostic step.
+  push run on `main` https://github.com/branchLeft/shared-infra/actions/runs/40191479010,
+  whose job `Harness: ansible/patterns/files_and_units` passes with the host namespace in
+  place.
 - The Ansible workflow's harness jobs run on `ubuntu-24.04`, not `ubuntu-latest`. The
   comment above their `runs-on` lines in `.github/workflows/ansible.yml` reads "Pinned
   until the harness is verified on the next Ubuntu LTS image".

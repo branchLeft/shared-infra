@@ -588,13 +588,13 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // decides the vCPU count, and the rule covers every node_exporter host.
     // Busy and steal are one alert: either one sustained is the same ceiling.
     '      - alert: HostCPUSaturated',
-    '        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
+    '        expr: (1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance, host) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
     '        for: 30m',
     '        labels:',
     '          severity: warning',
     '          owner_action: "true"',
     '        annotations:',
-    '          summary: "{{ $labels.instance }} has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
+    '          summary: "{{ $labels.host }} ({{ $labels.instance }}) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
     '          description: "Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores."',
     '',
     '      - alert: HostDiskSpaceLow',
