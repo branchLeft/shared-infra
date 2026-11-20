@@ -75,18 +75,17 @@ updates:
     labels:
       - 'dependencies'
 
-  # Watches only the tenant edge's two media-cache images. Its CrowdSec pin is held equal to
-  # the estate's by hetzner/edge-t/render.test.ts, so it has no entry here. Merging restarts
-  # the media cache, which is empty and refilled from the buckets, so each PR is reviewed on
-  # its own like the estate edge's.
+  # Watches only the tenant edge's media-cache image. Its CrowdSec pin is held equal to the
+  # estate's by hetzner/edge-t/render.test.ts, so it has no entry here. Merging restarts the
+  # media cache, which is refilled from the buckets, so each PR is reviewed on its own like
+  # the estate edge's.
   - package-ecosystem: 'docker-compose'
     directory: '/hetzner/edge-t/stack'
     schedule:
       interval: 'monthly'
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     allow:
       - dependency-name: 'nginxinc/nginx-unprivileged'
-      - dependency-name: 'nginx/nginx-prometheus-exporter'
     labels:
       - 'dependencies'
 

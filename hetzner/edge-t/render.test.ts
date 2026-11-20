@@ -166,10 +166,13 @@ describe('the tenant Caddyfile', () => {
       ':8080',
       ':9091',
       '(tenant_media)',
+      'http://:18081',
       'http://:18080',
     ]);
-    expect(caddyfile.match(/reverse_proxy/g)).toEqual(['reverse_proxy']);
-    expect(caddyfile).toContain('reverse_proxy media-cache:8080');
+    expect(caddyfile.match(/reverse_proxy (\S+)/g)).toEqual([
+      'reverse_proxy 127.0.0.1:18081',
+      'reverse_proxy media-cache:8080',
+    ]);
     expect(caddyfile).not.toMatch(/^\s*tls\b/m);
   });
 

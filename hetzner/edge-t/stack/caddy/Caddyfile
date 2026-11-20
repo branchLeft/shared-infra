@@ -16,6 +16,9 @@
 		appsec_timeout 1s
 		appsec_fail_open
 	}
+	servers :18081 {
+		name media_cache
+	}
 	servers :18080 {
 		name media_shard
 		metrics {
@@ -194,20 +197,29 @@ http://edge-probe.invalid:8080 {
 			handle @media_known {
 				header >X-Content-Type-Options "nosniff"
 				header >Content-Security-Policy "default-src 'none'; sandbox"
-				reverse_proxy media-cache:8080 {
+				reverse_proxy 127.0.0.1:18081 {
 					header_up Host {media_shard}.media-shard.invalid
 					header_up -Cookie
 					header_up -Authorization
 					header_down -Server
 					transport http {
-						dial_timeout 3s
-						response_header_timeout 20s
+						dial_timeout 1s
+						response_header_timeout 25s
 					}
 				}
 			}
 			respond 404
 		}
 		respond 404
+	}
+}
+
+http://:18081 {
+	reverse_proxy media-cache:8080 {
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 20s
+		}
 	}
 }
 

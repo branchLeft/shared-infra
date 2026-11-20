@@ -29,8 +29,13 @@ export const MEDIA_SITES_GLOB = `${MEDIA_DATA_DIR}/*.caddy`;
 export const MEDIA_FOLDERS_GLOB = `${MEDIA_DATA_DIR}/folders/*.map`;
 export const MEDIA_SNIPPET = 'tenant_media';
 
-/** The cache service's name and port on the Compose network, and the one Caddy server it reads from. */
+/**
+ * The cache service on the Compose network, the Caddy listener every request to it passes
+ * (so Caddy's own counter is the cache's request count), and the listener it reads from.
+ */
 export const MEDIA_CACHE_ADDRESS = 'media-cache:8080';
+export const MEDIA_CACHE_PORT = 18081;
+export const MEDIA_CACHE_SERVER = 'media_cache';
 export const MEDIA_SHARD_PORT = 18080;
 export const MEDIA_SHARD_SERVER = 'media_shard';
 const SHARD_HOST_SUFFIX = 'media-shard.invalid';
@@ -149,14 +154,14 @@ export function renderMediaSnippet(shards: readonly MediaShard[], posture: EdgeP
     `\t\t@media_known expression \`${known}\``,
     '\t\thandle @media_known {',
     ...tab(INERT_HEADERS, 3),
-    `\t\t\treverse_proxy ${MEDIA_CACHE_ADDRESS} {`,
+    `\t\t\treverse_proxy 127.0.0.1:${MEDIA_CACHE_PORT} {`,
     `\t\t\t\theader_up Host {media_shard}.${SHARD_HOST_SUFFIX}`,
     '\t\t\t\theader_up -Cookie',
     '\t\t\t\theader_up -Authorization',
     '\t\t\t\theader_down -Server',
     '\t\t\t\ttransport http {',
-    '\t\t\t\t\tdial_timeout 3s',
-    '\t\t\t\t\tresponse_header_timeout 20s',
+    '\t\t\t\t\tdial_timeout 1s',
+    '\t\t\t\t\tresponse_header_timeout 25s',
     '\t\t\t\t}',
     '\t\t\t}',
     '\t\t}',
@@ -168,9 +173,12 @@ export function renderMediaSnippet(shards: readonly MediaShard[], posture: EdgeP
   return [`(${MEDIA_SNIPPET}) {`, ...tab(body), '}'];
 }
 
-/** The listener each shard's server answers on, and the name its metrics carry. */
+/** The two internal listeners, named so their request counters say what they count. */
 export function mediaGlobalOptions(): string[] {
   return [
+    `\tservers :${MEDIA_CACHE_PORT} {`,
+    `\t\tname ${MEDIA_CACHE_SERVER}`,
+    '\t}',
     `\tservers :${MEDIA_SHARD_PORT} {`,
     `\t\tname ${MEDIA_SHARD_SERVER}`,
     '\t\tmetrics {',
@@ -209,35 +217,51 @@ function shardResponses(): string[] {
 }
 
 /**
- * One block per shard on the internal listener, and a catch-all that refuses a host no
- * shard owns: without it Caddy answers an unmatched host with an empty 200 the cache
- * would keep. Each block is the only thing that talks to its bucket, so its request
- * counter is that bucket's upstream request rate.
+ * The internal listeners. The cache's: every request to the cache passes it, so its
+ * counter is the cache's request count. The shards': one block per shard, and a
+ * catch-all that refuses a host no shard owns (without it Caddy answers an unmatched
+ * host with an empty 200 the cache would keep). Each shard block is the only thing that
+ * talks to its bucket, so its request counter is that bucket's upstream request rate.
  */
-export function renderMediaShardBlocks(shards: readonly MediaShard[]): Block[] {
+export function renderMediaInternalBlocks(shards: readonly MediaShard[]): Block[] {
   assertShards(shards);
-  const blocks: Block[] = shards.map((shard) => ({
-    addresses: [`http://${shard.name}.${SHARD_HOST_SUFFIX}:${MEDIA_SHARD_PORT}`],
-    body: [
-      'route {',
-      `\trewrite * /${shard.bucket}{http.request.uri.path}?`,
-      `\treverse_proxy https://${shard.host} {`,
-      '\t\theader_up Host {upstream_hostport}',
-      '\t\theader_up -Cookie',
-      '\t\theader_up -Authorization',
-      ...tab(
-        BUCKET_HEADERS_STRIPPED.map((name) => `header_down -${name}`),
-        2
-      ),
-      '\t\ttransport http {',
-      '\t\t\tdial_timeout 3s',
-      '\t\t\tresponse_header_timeout 15s',
-      '\t\t}',
-      ...tab(shardResponses(), 2),
-      '\t}',
-      '}',
-    ],
-  }));
+  const blocks: Block[] = [
+    {
+      addresses: [`http://:${MEDIA_CACHE_PORT}`],
+      body: [
+        `reverse_proxy ${MEDIA_CACHE_ADDRESS} {`,
+        '\ttransport http {',
+        '\t\tdial_timeout 3s',
+        '\t\tresponse_header_timeout 20s',
+        '\t}',
+        '}',
+      ],
+    },
+  ];
+  blocks.push(
+    ...shards.map((shard) => ({
+      addresses: [`http://${shard.name}.${SHARD_HOST_SUFFIX}:${MEDIA_SHARD_PORT}`],
+      body: [
+        'route {',
+        `\trewrite * /${shard.bucket}{http.request.uri.path}?`,
+        `\treverse_proxy https://${shard.host} {`,
+        '\t\theader_up Host {upstream_hostport}',
+        '\t\theader_up -Cookie',
+        '\t\theader_up -Authorization',
+        ...tab(
+          BUCKET_HEADERS_STRIPPED.map((name) => `header_down -${name}`),
+          2
+        ),
+        '\t\ttransport http {',
+        '\t\t\tdial_timeout 3s',
+        '\t\t\tresponse_header_timeout 15s',
+        '\t\t}',
+        ...tab(shardResponses(), 2),
+        '\t}',
+        '}',
+      ],
+    }))
+  );
   blocks.push({
     addresses: [`http://:${MEDIA_SHARD_PORT}`],
     body: ['header Cache-Control "no-store"', 'respond 404'],
@@ -251,7 +275,7 @@ export function renderMediaCaddyfileSections(
   posture: EdgePosture
 ): string[] {
   const lines: string[] = [...renderMediaSnippet(shards, posture)];
-  for (const block of renderMediaShardBlocks(shards)) {
+  for (const block of renderMediaInternalBlocks(shards)) {
     lines.push('', ...renderBlock(block));
   }
   lines.push('', `import ${MEDIA_SITES_GLOB}`);

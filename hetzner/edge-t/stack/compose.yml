@@ -115,25 +115,6 @@ services:
     mem_limit: 256m
     cpu_shares: 512
 
-  # The cache's request counter as Prometheus metrics, on edge-t's private address only.
-  media-cache-exporter:
-    image: docker.io/nginx/nginx-prometheus-exporter:1.5.0@sha256:bf76e58df548a13e52bd543ac70f6d3d667e14884e8b51c149bd81994ca75ccd
-    restart: unless-stopped
-    command:
-      - --nginx.scrape-uri=http://media-cache:8081/stub_status
-    ports:
-      - '10.20.1.210:9113:9113'
-    depends_on:
-      media-cache:
-        condition: service_started
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 64m
-    cpu_shares: 128
-
 configs:
   media_cache_conf:
     content: |

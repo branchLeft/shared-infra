@@ -1,16 +1,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { TENANTS_HOST_IPS } from '@branchleft/hetzner-host';
 import { describe, expect, it } from 'vitest';
 
 import {
   MEDIA_CACHE_ADDRESS,
+  MEDIA_CACHE_PORT,
   MEDIA_SHARDS,
   MEDIA_SHARD_PORT,
   MEDIA_SITES_GLOB,
   assertShards,
-  renderMediaShardBlocks,
+  renderMediaInternalBlocks,
   renderMediaSnippet,
   type MediaShard,
 } from './media';
@@ -29,7 +29,7 @@ const STACK = path.join(__dirname, 'stack');
 const compose = readFileSync(path.join(STACK, 'compose.yml'), 'utf8');
 
 const snippet = renderMediaSnippet(SHARDS, TENANT_POSTURE).join('\n');
-const shardBlocks = renderMediaShardBlocks(SHARDS);
+const shardBlocks = renderMediaInternalBlocks(SHARDS);
 const shardBlock = (name: string): string => {
   const block = shardBlocks.find((candidate) => candidate.addresses[0]?.includes(`//${name}.`));
   expect(block, `shard ${name} has a block`).toBeDefined();
@@ -162,6 +162,13 @@ describe('the shard blocks read each bucket and nothing else', () => {
     }
   });
 
+  it('count every request to the cache on a listener of its own, which is the only way to it', () => {
+    const cache = shardBlocks.find((block) => block.addresses[0] === `http://:${MEDIA_CACHE_PORT}`);
+    expect(cache?.body.join('\n')).toContain(`reverse_proxy ${MEDIA_CACHE_ADDRESS} {`);
+    expect(snippet).toContain(`reverse_proxy 127.0.0.1:${MEDIA_CACHE_PORT} {`);
+    expect(snippet).not.toContain(`reverse_proxy ${MEDIA_CACHE_ADDRESS}`);
+  });
+
   it('end in a catch-all that refuses a host no shard owns, so the cache keeps no empty answer', () => {
     const last = shardBlocks[shardBlocks.length - 1];
     expect(last?.addresses).toEqual([`http://:${MEDIA_SHARD_PORT}`]);
@@ -215,7 +222,8 @@ describe('the tenant Caddyfile carries the media address', () => {
     expect(at(empty, '(tenant_media) {')).toBeLessThan(at(empty, `import ${MEDIA_SITES_GLOB}`));
   });
 
-  it('names the shard listener so its request counter is the bucket’s upstream rate, per shard', () => {
+  it('names both listeners, so one counter is the cache’s requests and the other each bucket’s', () => {
+    expect(caddyfile).toContain(`servers :${MEDIA_CACHE_PORT} {\n\t\tname media_cache`);
     expect(caddyfile).toContain(`servers :${MEDIA_SHARD_PORT} {\n\t\tname media_shard`);
     expect(caddyfile).toContain('metrics {\n\t\t\tper_host');
   });
@@ -259,28 +267,21 @@ describe('the media cache in the tenant Compose file', () => {
     expect(nginx).toContain('proxy_set_header Authorization "";');
   });
 
-  it('listens where the snippet sends, and offers its counter beside, not on, that port', () => {
+  it('listens where the counted listener sends, and keeps its health page on another port', () => {
     expect(nginx).toContain(`listen ${MEDIA_CACHE_ADDRESS.split(':')[1]} default_server;`);
     expect(nginx).toContain('listen 8081;');
-    expect(compose).toContain('http://media-cache:8081/stub_status');
+    expect(compose).toContain('http://127.0.0.1:8081/stub_status');
   });
 
   it('escapes every nginx variable from Compose, which would otherwise blank it', () => {
     expect(compose).not.toMatch(/(?<!\$)\$(?!\$)[a-z_]+/);
   });
 
-  it('pins both images by digest and publishes the counter on this host’s private address only', () => {
+  it('pins the image by digest and publishes no port: only Caddy reaches it', () => {
     expect(compose).toMatch(
       /image: docker\.io\/nginxinc\/nginx-unprivileged:[\d.]+-alpine@sha256:[0-9a-f]{64}/
     );
-    expect(compose).toMatch(
-      /image: docker\.io\/nginx\/nginx-prometheus-exporter:[\d.]+@sha256:[0-9a-f]{64}/
-    );
-    expect(compose).toContain(`'${TENANTS_HOST_IPS.edgeT}:9113:9113'`);
-    const cacheService = compose.slice(
-      at(compose, '  media-cache:\n'),
-      at(compose, '  media-cache-exporter:')
-    );
+    const cacheService = compose.slice(at(compose, '  media-cache:\n'), at(compose, '\nconfigs:'));
     expect(cacheService).not.toContain('ports:');
   });
 

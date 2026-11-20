@@ -45,8 +45,8 @@ posture change on one edge does not move the other.
 - The bytes the estate renderer makes without a hostname (the acquisition files, the
   ban ladder, the watch-only list) are reused, under this profile's banner. The banner
   swap refuses a file that does not begin with the estate's banner.
-- The CrowdSec pin is the only image held equal to the estate's. The two media-cache images
-  are the tenant stack's own and have their own Dependabot entry.
+- The CrowdSec pin is the only image held equal to the estate's. The media-cache image is
+  the tenant stack's own and has its own Dependabot entry.
 
 ## The media address
 
@@ -62,8 +62,8 @@ no file here holds it. `media.ts` renders everything else. A request takes this 
    that is not `/<folder>/<object>` is 404. The folder is the tenant's opaque prefix.
    `map` then looks the folder up in the register's map; **a folder the map does not hold,
    or one that names a shard this file does not know, is 404**, and the cache is reachable
-   only inside that known-shard handle. The cache is told the shard by the `Host` it is
-   sent (`<shard>.media-shard.invalid`). Cookies and credentials are dropped, and every
+   only inside that known-shard handle. The cache is reached through the counted listener
+   (port 18081) and told the shard by the `Host` it is sent (`<shard>.media-shard.invalid`). Cookies and credentials are dropped, and every
    answer carries `nosniff` and `Content-Security-Policy: default-src 'none'; sandbox`.
 2. **`media-cache` (nginx).** One cache for all shards, keyed by host and raw request path
    (so two spellings of one path cannot share an entry, and one shard's object is never
@@ -102,11 +102,14 @@ is what the register records for a folder; it identifies no tenant.
 The provider allows 750 requests a second per source address and, separately, per bucket;
 neither can be raised, and this edge is one source address.
 
-- Requests to the cache: `nginx_http_requests_total` (port 9113 on edge-t's private
-  address; it also counts the exporter's own scrape, one request per scrape interval).
+- Requests to the cache: `caddy_http_requests_total{server="media_cache"}`, the one
+  listener every request to the cache passes. (The cache itself exports nothing: nginx's
+  own counter is not Prometheus text, and its exporter image has no shell to give the
+  compose contract a health probe.)
 - Upstream requests per shard, which is the rate the bucket sees:
-  `caddy_http_requests_total{server="media_shard",host="<shard>.media-shard.invalid"}`
-  (port 9091). The catch-all's host is `_other`.
+  `caddy_http_requests_total{server="media_shard",host="<shard>.media-shard.invalid"}`.
+  The catch-all's host is `_other`.
+- Both are on Caddy's metrics listener, port 9091 on edge-t's private address.
 - Hit ratio: `1 - sum(rate(shard requests)) / rate(cache requests)`.
 - The source-address budget is the sum over shards, not any one of them.
 
