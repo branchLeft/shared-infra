@@ -362,6 +362,46 @@ fire while mx1's volume is too low for Microsoft to report on, and each
 repeat that leaves mx1 for an external mailbox is unengaged machine mail
 spending the very reputation these rules watch.
 
+## The release watcher scrape path
+
+The Ghost release watcher is a scheduled GitHub Actions workflow in
+`branchLeft/ghost-platform` (`release-watcher-run.yml`, every six hours); no
+host of ours runs it. After each poll it commits `release-watcher.prom` to the
+`state/release-watcher` branch, carrying
+`ghost_release_watcher_last_success_timestamp_seconds` (the time of the last
+successful poll) and `ghost_release_watcher_pr_writes_enabled`.
+
+The `release_watcher` scrape job reads that file from the raw-content host
+over HTTPS. The repository is public, so the job needs no credential and
+nothing is pushed anywhere: the path is a pull, and a watcher that stops
+leaves the file, and so the gauge, where it was. Two details are deliberate:
+
+- **`scrape_interval: 2m`.** The raw host caches the file for five minutes, so
+  faster reads return the same bytes, and a sample must land inside
+  Prometheus's five-minute lookback or the series would vanish between
+  scrapes and `ReleaseWatcherStale`'s `absent()` branch would fire for a
+  healthy watcher.
+- **No `expected_up` label.** The job is named in the exemption list in
+  `render.test.ts`. `true` would send `HostOrServiceDown`, a critical page,
+  for five minutes of GitHub's own outage; `false` would raise
+  `ExpectedDownTargetAnswering` the moment it answered. Left unmarked,
+  `TargetDownUnmarked` reads a sustained outage at 24 hours as a warning.
+
+## The `release-watcher` rule group
+
+`ReleaseWatcherStale` fires when the gauge is more than 24 hours old (four
+missed six-hour ticks) or absent, after `for: 30m` so one failed scrape of the
+raw host does not fire it. Severity `warning` with no `notify` label: it
+reaches the on-host mailbox through the existing warning route, and never
+pages. It cannot tell a watcher that errors on every run from one that is
+switched off, and does not need to: both leave the timestamp where it was. The
+promtool cases are at the end of `alert_rules_test.yml`.
+
+It exists because the watcher failed every run from 11 November 2026 and
+nothing alerted. The alert rule is an owner merge; the gauge appears in
+Prometheus once the
+rendered `prometheus.yml` and `alerts.yml` are applied to edge1.
+
 ## renderAlertmanagerTemplate
 
 Alertmanager's config template. `__SMTP_USERNAME__`, `__SMTP_PASSWORD__`,
