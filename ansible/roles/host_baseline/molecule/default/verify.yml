@@ -276,7 +276,7 @@
 
     - name: Make the next reload of sshd fail
       ansible.builtin.file:
-        path: /var/lib/host_baseline_test/fail-ssh-reload
+        path: /var/lib/host_baseline_test/fail-ssh
         state: touch
         mode: '0644'
 
@@ -299,7 +299,7 @@
 
     - name: Let the next reload of sshd succeed again
       ansible.builtin.file:
-        path: /var/lib/host_baseline_test/fail-ssh-reload
+        path: /var/lib/host_baseline_test/fail-ssh
         state: absent
 
     - name: Apply the role to put the drop-in right again
