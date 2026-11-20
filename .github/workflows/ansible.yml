@@ -207,6 +207,7 @@ jobs:
             .yamllint
             .github/workflows/ansible.yml
             .github/workflows/ansible-delivery.yml
+            hetzner-host/addressPlan.ts
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
             mail/
