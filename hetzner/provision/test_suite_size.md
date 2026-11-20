@@ -11,9 +11,12 @@ can still exit 0 if everything it did collect passes -- a shrunken run looks
 identical to a smaller, still-complete one unless something states what the
 count should be.
 
-The floor is `MIN_PYTHON` (3.9, macOS's system `python3`). A test fails, naming the
-interpreter, when the suite runs below it; another fails when CI's floor step
-(`scripts/assert-min-python-version.py`) names a different version. A module
+The floor is `MIN_PYTHON` (3.9, macOS's system `python3`). The refusal is the pure
+function `interpreter_below_floor`, so its tests drive it with a 3.8 value (refused,
+naming the interpreter) and a 3.9 value (accepted) without needing a 3.8 interpreter.
+The CI check reads the `run:` value of the step named "Python version floor" in
+`ci.yml` and must equal the floor command. Four committed fixtures must each fail it:
+a commented-out step, a disabled `run:`, a renamed step, and another version. A module
 that uses `X | None` in an annotation carries `from __future__ import
 annotations`, so it imports on 3.9.
 
