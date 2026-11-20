@@ -75,7 +75,7 @@ pages at once. While the role is disabled (`EDGE_BAN_OWNER_ENABLED` is `false`),
 `EdgeBanOwnerStale` is routed to the `discard` receiver, not to a page. A ban on any other address is
 `EdgeBanUnowned`, a warning that goes to email and is not registered. Each of the other three live Alertmanager entries carries a
 `ruleExemption`: the tier-two safety
-match and the failed-unsafe tenant are raised by the platform itself, and the
+match and the failed-unsafe tenant have no producer yet: the platform is planned to raise them, and nothing does today. The
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.

@@ -62,9 +62,10 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tier-two safety match is recorded, not by a ' +
-      "Prometheus rule: nothing this stack scrapes measures one, so this stack's " +
-      'rendered rules carry no rule for it and cannot.',
+      'No producer exists yet: nothing raises TierTwoSafetyMatch today. The platform is ' +
+      'planned to raise it when a tier-two safety match is recorded, not through a ' +
+      'Prometheus rule, since nothing this stack scrapes measures one; the rendered ' +
+      'rules carry no rule for it.',
   },
   {
     id: 'tenant-failed-unsafe',
@@ -75,7 +76,8 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tenant enters failed-unsafe, not by a Prometheus ' +
+      'No producer exists yet: nothing raises TenantFailedUnsafe today. The platform is ' +
+      'planned to raise it when a tenant enters failed-unsafe, not through a Prometheus ' +
       "rule: that state is the platform's own, and this stack scrapes no metric for it, " +
       'so the rendered rules carry no rule for it.',
   },
@@ -99,10 +101,11 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised per tenant by the external reader-facing probe, not by a Prometheus rule: ' +
-      "this stack's blackbox probes carry an instance label and no tenant label, so no " +
-      'rule here can raise a tenant-labelled page. A failing probe reaches the phone ' +
-      'meanwhile through BlackboxProbeFailed at critical severity.',
+      'No producer exists yet: nothing raises ReadersCannotRead today. The external ' +
+      'reader-facing probe is planned to raise it per tenant, not through a Prometheus ' +
+      "rule: this stack's blackbox probes carry an instance label and no tenant label, so no " +
+      'rule here can raise a tenant-labelled page. Until that producer exists, a failing ' +
+      'probe reaches the phone through BlackboxProbeFailed at critical severity.',
   },
   {
     id: 'edge-ban',

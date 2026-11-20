@@ -247,6 +247,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   node_filesystem_size_bytes: 'node_exporter',
   node_cpu_seconds_total:
     'node_exporter (cpu collector, on by default; the role sets no collector flags)',
+  // The systemd collector, limited to the compose template's instances and with the restart counter on,
+  // by hetzner/provision/node-exporter.service (held by ansible/roles/node_exporter/tests/unit).
+  node_systemd_unit_state: 'node_exporter systemd collector, on app1, db1 and ops1 (not edge1)',
+  node_systemd_service_restart_total:
+    'node_exporter systemd collector with --collector.systemd.enable-restarts-metrics, on app1, db1 and ops1 (not edge1)',
   mysql_global_status_threads_connected: 'mysqld_exporter, on db1',
   mysql_global_variables_max_connections: 'mysqld_exporter, on db1',
   mysql_up: 'mysqld_exporter, on db1',
@@ -310,6 +315,12 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // Ghost process on its app host. Names and label values are the contract in
   // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the
   // source is JavaScript in another repository, so nothing here can scan it.
+  // The release watcher's poll-age gauge, written by services/release-watcher in
+  // branchLeft/ghost-platform (core.render_age_metric) and committed by a
+  // scheduled GitHub Actions run to release-watcher.prom on the state/release-watcher
+  // branch, which the release_watcher scrape job reads. Python, but in another repository.
+  ghost_release_watcher_last_success_timestamp_seconds:
+    'the release watcher, services/release-watcher in branchLeft/ghost-platform, scraped by the release_watcher job from the state/release-watcher branch (no source under this root to check against)',
   scanning_storage_unconfigured_instances:
     "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
   scanning_storage_metrics_written_timestamp_seconds:

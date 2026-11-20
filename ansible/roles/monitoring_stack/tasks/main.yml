@@ -226,7 +226,7 @@
   register: monitoring_stack_unit_status
   check_mode: false
 
-# sha256 of each file the unit runs from: the eight stack files, the monitoring
+# sha256 of each file the unit runs from: the fourteen stack files, the monitoring
 # drop-in, the renderer and the pager's secrets file (read here, written by
 # ntfy_pager). A file that is missing hashes as absent.
 - name: Hash the files the unit runs from

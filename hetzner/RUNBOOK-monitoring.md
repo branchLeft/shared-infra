@@ -593,7 +593,9 @@ Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `blackbox_mail` (five targets on `mx1.branchleft.co.uk`: 25 and 587 read the
 SMTP banner; 465, 993 and 8443, the mailgun shim's Caddy endpoint, complete a
 TLS handshake), `stalwart` (Stalwart's own
-Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
+Prometheus exporter on `mx1`, over HTTPS on 443), `release_watcher` (the
+release watcher's `.prom` file on `raw.githubusercontent.com`, every two
+minutes), the `node` target for
 `edge1`, `db1` and `ops1`, and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
 minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
@@ -630,6 +632,14 @@ through `db1`'s tunnel on `10.20.1.20:9105`
 (`provision/45-install-db-tunnel.md`). It carries `expected_up: 'false'`, and
 reads `down`, until that tunnel is installed and the label flipped. It exists
 only for the length of the migration.
+
+`release_watcher` is the odd one out: it reads a file from GitHub's
+raw-content host (`ghost_release_watcher_last_success_timestamp_seconds`, kept
+on the `state/release-watcher` branch of `branchLeft/ghost-platform`), carries
+no `expected_up` label on purpose, and so is not in the list above;
+`render.md#the-release-watcher-scrape-path` says why. A `down` there is read at 24
+hours by `TargetDownUnmarked`, and `ReleaseWatcherStale` is the alert that
+matters.
 
 `stalwart` is the one target here whose credential is not in this repo and
 not in the container image. It is `basic_auth` with a `password_file`, written
