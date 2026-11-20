@@ -476,7 +476,7 @@
         monitoring_stack_verify_fp_definition: >-
           {{ monitoring_stack_verify_vars_text.split("monitoring_stack_fingerprint_files: >-")[1].split("monitoring_stack_stamp_dir:")[0] }}
 
-    - name: Assert the fingerprint hashes the eight stack files, the monitoring drop-in, the renderer and the pager's secrets file
+    - name: Assert the fingerprint hashes the fourteen stack files, the monitoring drop-in, the renderer and the pager's secrets file
       ansible.builtin.assert:
         that:
           - "'monitoring_stack_files' in monitoring_stack_verify_fp_definition"
