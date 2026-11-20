@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  NTFY_PAGE_ACTIONS,
+  NTFY_PAGE_CLICK_URL,
   NTFY_PAGE_TOPIC,
   NTFY_PAGE_URL,
   NTFY_PAGER_TOKEN_PLACEHOLDER,
+  PAGE_GROUP_INTERVAL,
   PAGE_REGISTER,
   PAGE_RECEIVER_NAME,
   findLiveEntriesWithoutPageRule,
@@ -14,6 +17,7 @@ import {
   pageAlertNames,
   renderPageReceiverBlock,
   renderPageRoute,
+  renderPageTimingLines,
   type PageRegisterEntry,
 } from './pageRegister';
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
@@ -278,7 +282,8 @@ describe('the ntfy server config', () => {
 describe('every critical alert pages the phone', () => {
   const rendered = renderAlertmanagerTemplate();
   const criticalRoute =
-    '        - severity = "critical"\n      receiver: ntfy-page\n      continue: true';
+    '        - severity = "critical"\n      receiver: ntfy-page\n' +
+    `${renderPageTimingLines(6).join('\n')}\n      continue: true`;
 
   it('routes severity=critical to ntfy-page and continues to the later routes', () => {
     expect(rendered).toContain(criticalRoute);
@@ -302,6 +307,146 @@ describe('every critical alert pages the phone', () => {
 
   it('does not page for warnings', () => {
     expect(rendered).not.toContain('severity = "warning"\n      receiver: ntfy-page');
+  });
+});
+
+/** One route node as written in the rendered template, with the three timings
+ * it sends on: its own where it sets them, the root route's where it does not
+ * (Alertmanager's inheritance). */
+interface RouteTiming {
+  readonly receiver: string;
+  readonly matchers: readonly string[];
+  readonly groupWaitSeconds: number;
+  readonly groupIntervalSeconds: number;
+  readonly repeatIntervalSeconds: number;
+}
+
+function seconds(duration: string): number {
+  const match = /^(\d+)(s|m|h)$/.exec(duration);
+  if (match === null) throw new Error(`not a duration: ${duration}`);
+  return Number(match[1]) * { s: 1, m: 60, h: 3600 }[match[2] as 's' | 'm' | 'h'];
+}
+
+/** Reads the route tree's timings from the rendered template, resolving what a
+ * child inherits from the root. A small reader over the shape the renderer
+ * produces, as `pageSeverityAlertNames` is; `amtool` cannot do this, since it
+ * prints receivers and matchers only. */
+function routeTimings(template: string): RouteTiming[] {
+  const routeSection = template.slice(
+    template.indexOf('\nroute:\n'),
+    template.indexOf('\ninhibit_rules:')
+  );
+  const [rootText, ...nodeTexts] = routeSection.split('\n    - matchers:\n');
+  const root = (key: string): string => {
+    const found = new RegExp(`^  ${key}: (\\S+)$`, 'm').exec(rootText);
+    if (found === null) throw new Error(`root route sets no ${key}`);
+    return found[1];
+  };
+  return nodeTexts.map((text) => {
+    const own = (key: string, fallback: string): number => {
+      const found = new RegExp(`^      ${key}: (\\S+)$`, 'm').exec(text);
+      return seconds(found === null ? fallback : found[1]);
+    };
+    return {
+      receiver: /^      receiver: (\S+)$/m.exec(text)?.[1] ?? '',
+      matchers: [...text.matchAll(/^ {8}- (.+)$/gm)].map((m) => m[1]),
+      groupWaitSeconds: own('group_wait', root('group_wait')),
+      groupIntervalSeconds: own('group_interval', root('group_interval')),
+      repeatIntervalSeconds: own('repeat_interval', root('repeat_interval')),
+    };
+  });
+}
+
+describe('the page routes deliver fast and re-page inside the hour', () => {
+  const rendered = renderAlertmanagerTemplate();
+  const pageNodes = routeTimings(rendered).filter((node) => node.receiver === PAGE_RECEIVER_NAME);
+
+  it('has exactly two route nodes that send to the phone: the critical one and the page one', () => {
+    expect(pageNodes.map((node) => node.matchers[0])).toEqual([
+      'severity = "critical"',
+      'severity = "page"',
+    ]);
+  });
+
+  it("notifies about a new or resolved alert within about a minute, not the root route's hour", () => {
+    // A further ban inside the hour, and a recovery notice, both wait for the
+    // group interval.
+    for (const node of pageNodes) {
+      expect(node.groupIntervalSeconds, node.matchers.join(' ')).toBeLessThanOrEqual(120);
+      expect(node.groupWaitSeconds, node.matchers.join(' ')).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it('re-pages a page that is still firing inside the hour, not the next day', () => {
+    // The root route repeats every 24 hours, for email.
+    for (const node of pageNodes) {
+      expect(node.repeatIntervalSeconds, node.matchers.join(' ')).toBeLessThanOrEqual(3600);
+      expect(node.repeatIntervalSeconds, node.matchers.join(' ')).toBeGreaterThanOrEqual(
+        node.groupIntervalSeconds
+      );
+    }
+  });
+
+  it("leaves the email routes on the root route's slow intervals", () => {
+    // Making the page route fast must not make the email noisier: email
+    // repeats spent the mail host's sending reputation.
+    const emailNodes = routeTimings(rendered).filter((node) => node.receiver.startsWith('email'));
+    expect(emailNodes.length).toBeGreaterThan(0);
+    for (const node of emailNodes) {
+      expect(node.groupIntervalSeconds, node.matchers.join(' ')).toBe(3600);
+      expect(node.repeatIntervalSeconds, node.matchers.join(' ')).toBe(86400);
+    }
+  });
+
+  it('sends the resolved notice from the page receiver in the whole template', () => {
+    const receiver = rendered.slice(
+      rendered.indexOf('  - name: ntfy-page\n'),
+      rendered.indexOf('  - name: email\n')
+    );
+    expect(receiver).toContain('send_resolved: true');
+    expect(receiver).not.toContain('send_resolved: false');
+  });
+
+  it('the reader itself sees a fast and a slow node as different, so a pass is not a blind one', () => {
+    const slow = routeTimings(
+      rendered.replaceAll(`group_interval: ${PAGE_GROUP_INTERVAL}`, 'group_interval: 1h')
+    ).filter((node) => node.receiver === PAGE_RECEIVER_NAME);
+    expect(slow.some((node) => node.groupIntervalSeconds === 3600)).toBe(true);
+  });
+});
+
+describe('the page link and button', () => {
+  it('open the public status page, which needs no credential', () => {
+    expect(NTFY_PAGE_URL).toContain(`click=${NTFY_PAGE_CLICK_URL}`);
+    expect(NTFY_PAGE_URL).toContain('actions=view,Status%20page,');
+    expect(NTFY_PAGE_CLICK_URL).toBe('https://status.branchleft.co.uk');
+    expect(NTFY_PAGE_URL).not.toMatch(/tk_|token|password/i);
+  });
+
+  it('are a view button only: no action calls Alertmanager, which no phone can reach', () => {
+    expect(NTFY_PAGE_ACTIONS.startsWith('view,')).toBe(true);
+    expect(NTFY_PAGE_ACTIONS).not.toMatch(/\bhttp,|\bbroadcast,|9093/);
+  });
+});
+
+describe('the amtool routing cases (OBS-3)', () => {
+  const workflow = readFileSync(
+    join(__dirname, '..', '..', '.github', 'workflows', 'ci-config-validate.yml'),
+    'utf8'
+  );
+
+  it('has a case for every live page entry, which must reach the phone receiver', () => {
+    for (const name of pageAlertNames(PAGE_REGISTER)) {
+      expect(workflow, `no amtool case for ${name}`).toMatch(
+        new RegExp(`route ${PAGE_RECEIVER_NAME} alertname=${name} severity=page`)
+      );
+    }
+  });
+
+  it('has a case for a ban with no tenant label, the shape EdgeBanIssued takes', () => {
+    expect(workflow).toContain(
+      `route ${PAGE_RECEIVER_NAME} alertname=EdgeBanIssued severity=page reason=`
+    );
   });
 });
 

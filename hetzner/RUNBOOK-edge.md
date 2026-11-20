@@ -891,7 +891,9 @@ must.
 
 **Every ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
 reaches the phone through ntfy within about two minutes of a ban, naming the
-scenario. It names no address: read it with the `cscli decisions list` command
+scenario, and again every 30 minutes while that scenario's ban is still active.
+A further ban by a scenario that is already paging adds no new page until
+that repeat. It names no address: read it with the `cscli decisions list` command
 above, and clear a false alarm with the `cscli decisions delete --ip` command.
 
 ## 11. Adding a site to the edge

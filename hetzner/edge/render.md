@@ -879,3 +879,10 @@ scenario), which the monitoring stack already scrapes from edge1, and its page
 register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
 so the page names the scenario and never an address. A simulated decision is
 not in the gauge, so a watch-only scenario never pages; the replay asserts it.
+
+The page route notifies on a one-minute group interval and repeats a page that
+is still firing every 30 minutes (`monitoring/pageRegister.md`, "How fast a
+page goes"). A ban by a scenario that has not paged yet, or one made after an
+earlier ban has ended, pages within about two minutes. A further ban by a
+scenario whose first ban is still active changes only the count in the alert,
+so it pages at the next repeat, not at once.

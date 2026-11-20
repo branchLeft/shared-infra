@@ -17,6 +17,44 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+## How fast a page goes, and how often it repeats
+
+Every route node that sends to the phone (the `severity = "critical"` node
+and the page route) carries its own `group_wait: 10s`, `group_interval: 1m`
+and `repeat_interval: 30m`, from `renderPageTimingLines` in `pageRegister.ts`.
+The root route's `group_interval: 1h` and `repeat_interval: 24h` are for
+email, where repeats spend the mail host's sending reputation, and the email
+routes are separate sibling nodes that keep them. Left to inherit, a page
+behaved as email does:
+
+- a recovery notice (`send_resolved: true`) waited up to an hour, so a cleared
+  probe read as an open outage;
+- a ban that started after the first ban of the hour waited up to an hour, and
+  a ban that ended sooner never paged;
+- a page nobody saw was sent again a day later.
+
+Now a new or resolved alert in a group that has already notified is sent within
+about a minute, and a page that is still firing is sent again every half hour
+until it clears or is silenced.
+
+`amtool config routes test` proves where an alert goes and not how fast, so
+`pageRegister.test.ts` reads the intervals from the rendered tree, resolving
+what a node inherits from the root, and fails any page node slower than those
+bounds or an email node that has been made faster.
+
+One thing the route cannot do. `EdgeBanIssued` is one alert per scenario
+(`sum by (reason)`), and its count is only an annotation. A second ban by a
+scenario whose first ban is still active changes the count and starts no new
+alert, so it pages at the next repeat (half an hour), not at once. A ban by
+another scenario, or one after the first ban has ended and cleared, is a new
+or resolved alert and pages within about a minute.
+
+Each page also carries a tap target and one button, both the public status
+page (`NTFY_PAGE_CLICK_URL`), and no secret. There is no acknowledge or silence
+button: Alertmanager has no address a phone can reach, and the call would need
+a credential. CI publishes a firing and a resolved test notice to the pinned
+ntfy with the rendered URL, so a value ntfy refuses fails there.
+
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of

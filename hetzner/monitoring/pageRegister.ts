@@ -155,12 +155,60 @@ export const PAGE_RECEIVER_NAME = 'ntfy-page';
  * publisher token and the owner's login can write or read it. */
 export const NTFY_PAGE_TOPIC = 'branchleft-pages';
 
+/** The public status page. Tapping a page opens it, and the one action
+ * button below opens it too. It is a public address and carries no secret,
+ * so it costs no new credential; Alertmanager and Prometheus have no address
+ * a phone can reach, so there is nothing more specific to link. */
+export const NTFY_PAGE_CLICK_URL = 'https://status.branchleft.co.uk';
+
+/** ntfy's `actions` value: one `view` button that opens the status page. No
+ * action calls Alertmanager (an acknowledge or silence button): that API has
+ * no address a phone can reach and a call to it would need a credential. */
+export const NTFY_PAGE_ACTIONS = `view,Status page,${NTFY_PAGE_CLICK_URL}`;
+
 /** Where Alertmanager reaches ntfy: the Compose service name on the stack's
  * own network, never the public hostname, so a page does not depend on the
  * edge or on DNS. `priority=5` is ntfy's maximum, the level that bypasses
  * do-not-disturb on the phone. `template=alertmanager` is ntfy's built-in
- * reader of Alertmanager's webhook payload. */
-export const NTFY_PAGE_URL = `http://ntfy:80/${NTFY_PAGE_TOPIC}?template=alertmanager&priority=5&tags=rotating_light`;
+ * reader of Alertmanager's webhook payload. `click` and `actions` are ntfy's
+ * own publish parameters; the CI ntfy step publishes to the pinned server
+ * with exactly this URL, so a value the server refuses fails there and not
+ * as a page that never arrives. */
+export const NTFY_PAGE_URL =
+  `http://ntfy:80/${NTFY_PAGE_TOPIC}?template=alertmanager&priority=5&tags=rotating_light` +
+  `&click=${NTFY_PAGE_CLICK_URL}&actions=${NTFY_PAGE_ACTIONS.replace(/ /g, '%20')}`;
+
+/**
+ * How fast and how often a page is delivered, on every route that sends to
+ * the page receiver (the critical route and the page route). The root route's
+ * `group_interval: 1h` and `repeat_interval: 24h` are for email, whose
+ * repeats spend the mail host's sending reputation; they must not reach a
+ * page, which is the reverse case. Why each value:
+ *
+ * - `group_wait` is how long the first alert of a group waits for company.
+ *   Ten seconds is enough to put alerts that start together in one message.
+ * - `group_interval` bounds the wait before a group that already notified is
+ *   notified again about a new alert in it, or about a resolved one. At one
+ *   hour a second ban in the hour and a recovery notice both sat for up to an
+ *   hour; at one minute they arrive within about that.
+ * - `repeat_interval` re-pages an alert that is still firing, so a page that
+ *   went unseen is sent again inside the hour rather than the next day.
+ */
+export const PAGE_GROUP_WAIT = '10s';
+export const PAGE_GROUP_INTERVAL = '1m';
+export const PAGE_REPEAT_INTERVAL = '30m';
+
+/** The three timing keys as route lines at `indent` spaces, for a route node
+ * that sends to the page receiver. One home, so the critical route and the
+ * page route cannot drift apart. */
+export function renderPageTimingLines(indent: number): string[] {
+  const pad = ' '.repeat(indent);
+  return [
+    `${pad}group_wait: ${PAGE_GROUP_WAIT}`,
+    `${pad}group_interval: ${PAGE_GROUP_INTERVAL}`,
+    `${pad}repeat_interval: ${PAGE_REPEAT_INTERVAL}`,
+  ];
+}
 
 /** The placeholder `render_alertmanager_config.py` fills with the
  * publisher's access token on the host. */
@@ -193,6 +241,7 @@ export function renderPageRoute(register: readonly PageRegisterEntry[]): string 
     `        - alertname =~ "^(${names.join('|')})$"`,
     `      receiver: ${PAGE_RECEIVER_NAME}`,
     "      group_by: ['tenant']",
+    ...renderPageTimingLines(6),
   ].join('\n');
 }
 
