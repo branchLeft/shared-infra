@@ -21,6 +21,10 @@
 - name: Install Docker CE
   ansible.builtin.import_tasks: _docker.yml
 
+# A fourth part with no script behind it, after Docker is in place: the timer that prunes old images.
+- name: Prune old Docker images on a timer
+  ansible.builtin.import_tasks: _docker_image_prune.yml
+
 # fail2ban's reload is queued by its configuration file and runs here, after
 # every half, so the role returns with the service reading what is on disk.
 - name: Run the handlers still queued

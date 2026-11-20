@@ -50,8 +50,9 @@ ExecStartPre=/usr/bin/docker compose pull --quiet
 # without one it waits for *running*, which a crash-looping container is. That
 # is the whole rollback signal.
 #
-# That contract is checked for the four stacks whose Compose files this
-# repository commits -- `edge`, `monitoring`, `nextcloud1` and
+# That contract is checked for the stacks whose Compose files this
+# repository commits -- `edge`, `edge-t` (the tenant profile of the `edge`
+# instance, on its own host), `monitoring`, `nextcloud1` and
 # `control-plane` -- by test_compose_unit_contract.py, which leaves no service
 # in any of them without a health signal. It is checked for no other instance of this
 # template, because their Compose files live in other repositories and nothing

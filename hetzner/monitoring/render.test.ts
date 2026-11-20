@@ -7,6 +7,7 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  CONTROL_PLANE_BACKUP_STALE_SECONDS,
   DB_BINLOG_ABSENT_FOR,
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
@@ -628,6 +629,39 @@ describe('the rendered alert rules', () => {
     expect(block).not.toContain('for:');
     // One healthy gap is the 15m period plus the 10m unit timeout.
     expect(DB_BINLOG_STALE_SECONDS).toBeGreaterThan(25 * 60);
+  });
+
+  it("watches the control plane's own backup from ops1 as two warnings that never page", () => {
+    for (const name of ['ControlPlaneBackupStale', 'ControlPlaneBackupRunFailed']) {
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('{host="ops1"');
+      expect(block).not.toContain('for:');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+      expect(block).not.toContain('absent(');
+    }
+  });
+
+  it('alerts when the control-plane backup is over 36 hours old, well inside the 10 days copy 1 keeps it', () => {
+    const block = ruleBlock('ControlPlaneBackupStale');
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBe(129600);
+    expect(block).toContain(
+      'time() - control_plane_backup_last_success_timestamp_seconds{host="ops1"} > 129600'
+    );
+    // The longest healthy gap is 26h05m (02:40 timer, 5m random delay, 2h unit timeout); the bound
+    // must clear it, and must fire long before backup copy 1 expires its last object at 10 days.
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBeGreaterThan(26 * 3600 + 5 * 60);
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBeLessThan(5 * 24 * 3600);
+  });
+
+  it('clears the failure only when a copy was shipped after it, never on a restore alone', () => {
+    const block = ruleBlock('ControlPlaneBackupRunFailed');
+    expect(block).toContain('control_plane_backup_last_failure_timestamp_seconds{host="ops1"}');
+    expect(block).toContain('unless on(instance)');
+    expect(block).toContain(
+      'control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance)'
+    );
   });
 
   it('keeps the existing worker-copy alert untouched beside them', () => {

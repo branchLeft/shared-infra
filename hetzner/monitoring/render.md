@@ -176,6 +176,47 @@ db1. The series are named for db1,
 not for the control host's worker, so the worker's series can never hide db1's
 absence.
 
+### The control plane's own backup
+
+Two more rules in the same group read the backup of the control plane's portal and
+sign-in databases on `ops1`, from two textfile gauges the program installed by the
+`control_plane_backup` Ansible role writes (`ansible/roles/control_plane_backup`).
+Both select on `host="ops1"`, are warnings on the same route as the rest of the
+group, and carry no `for:`, because the files are written once per run and are
+otherwise flat.
+
+| Alert                         | Fires when                                                                 | `for:` |
+| ----------------------------- | -------------------------------------------------------------------------- | ------ |
+| `ControlPlaneBackupStale`     | a stage's last success is over 129600s (36h) old, per `stage` label        | none   |
+| `ControlPlaneBackupRunFailed` | the unit last failed more recently than the last `shipped_offsite` success | none   |
+
+`ControlPlaneBackupStale` reads `control_plane_backup_last_success_timestamp_seconds`,
+which the program advances per stage: `verified_on_host` after the copy has been
+restored into a throwaway server and counted equal to live, `shipped_offsite` after
+the sealed copy is put to backup copy 1. The timer fires at 02:40 UTC with up to 5
+minutes of random delay and the unit is stopped at 2 hours, so two healthy
+successes are at most 26h05m apart and 36h leaves 9h55m of margin. Backup copy 1
+expires an object 10 days after it is put, so the alert leaves about 8.5 days to
+run the backup by hand before copy 1 holds no control-plane backup.
+
+`ControlPlaneBackupRunFailed` is the same night's signal. The service's
+`OnFailure=` starts `branchleft-control-plane-backup-failed.service`, which runs the
+program's `mark-failed` command to write `control_plane_backup_last_failure_timestamp_seconds`
+to its own file (`control_plane_backup_failed.prom`). A hook outside the program is
+what lets a kill, the two-hour timeout or a crash before the program printed a line
+be seen at all. The mark holds while it is strictly newer than the last
+`shipped_offsite` success, so only a copy that reached backup copy 1 clears it: a
+restore that proved a newer copy on the host does not, and a failure that comes
+after a ship (the prune that follows it) is not hidden by that ship.
+
+Named limits. Neither rule uses `absent()`: the role's timer stays off until the
+owner's apply turns it on, and a rule that fired for a backup nobody has switched
+on would be noise from the day it is deployed. So a timer that has never run, and
+never failed, is not seen. The names are not emitted by a collector under this
+directory, so `metricCrosscheck.ts` lists them under `EXTERNAL_METRICS`, and a unit
+test in the role pins both names and the `shipped_offsite` stage to these
+expressions.
+
 ## The `scanner` rule group
 
 Watches the upload scanner inside each tenant's Ghost process. The series are

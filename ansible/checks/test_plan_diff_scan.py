@@ -819,7 +819,7 @@ class RealTreeCase(unittest.TestCase):
 
 
 class TenantStackCase(unittest.TestCase):
-    """The tenant profile's files are copied to a host by the same tasks, so none may read as secret.
+    """The tenant profile's files go to a host by the same tasks, so none may read as secret.
 
     The walk above resolves the role's copy tasks against the estate profile's stack directory. The
     tenant profile reads `hetzner/edge-t/stack` instead, which that walk does not reach, so each of

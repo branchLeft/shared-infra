@@ -76,7 +76,7 @@ function tenantBanner(text: string): string {
  * behind the throttle and the CrowdSec bouncer so a scanner walking names is
  * counted and banned, and not behind AppSec, which has nothing to inspect on a
  * request that is refused. Tenant site blocks are data the edge reconciles
- * (ISSUE branchLeft/workspace#1802) and are not rendered here.
+ * from the tenant hostname descriptors and are not rendered here.
  */
 export function renderTenantCaddyfile(
   posture: EdgePosture = TENANT_POSTURE,
