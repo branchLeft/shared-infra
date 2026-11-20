@@ -163,6 +163,17 @@ class VerifyParts(unittest.TestCase):
                 missing = sorted(set(SNAPS_READ.findall(text)) - set(SNAPS_TAKEN.findall(text)))
                 self.assertEqual(missing, [], f"{name} reads snapshots it never takes")
 
+    def test_no_file_names_a_shared_variable_without_its_role_prefix(self) -> None:
+        # The shared names carry the role prefix (ansible-lint's var-naming rule). A play, a task
+        # file or a message that still says verify_<name> reads an undefined variable at run time.
+        shared = yaml.safe_load((DEFAULT / "vars" / "restart_decision.yml").read_text("utf-8"))
+        prefix = "monitoring_stack_verify_"
+        stale = [rf"\bverify_{re.escape(name[len(prefix) :])}\b" for name in shared]
+        for path in sorted(DEFAULT.rglob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(file=str(path.relative_to(MOLECULE))):
+                self.assertEqual([p for p in stale if re.search(p, text)], [])
+
     def test_the_other_scenarios_share_the_default_scenarios_play_files(self) -> None:
         for scenario in set(FILES) - {"default"}:
             with self.subTest(scenario=scenario):
