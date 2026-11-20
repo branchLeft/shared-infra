@@ -276,9 +276,9 @@
         edge_firewall_verify_masquerade: >-
           {{ edge_firewall_verify_tables.results[1].stdout.splitlines() | map('trim')
           | select('search', 'masquerade$') | list }}
-        # The listing prints the packet counter the role's rule carries, so the rule is pinned with it.
+        # The rule carries a counter. nft prints it bare on a fresh load and with packets once traffic has moved.
         edge_firewall_verify_expected: >-
-          ip saddr 10\.20\.1\.0/24 oifname "{{ edge_firewall_scenario_uplink_dev }}" counter packets [0-9]+ bytes [0-9]+ masquerade$
+          ip saddr 10\.20\.1\.0/24 oifname "{{ edge_firewall_scenario_uplink_dev }}" counter( packets [0-9]+ bytes [0-9]+)? masquerade$
 
     # ---------------------------------------------------------------------------------------
     # Docker's stand-in rules, and the legacy rule.
