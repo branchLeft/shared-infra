@@ -5,8 +5,8 @@ Karma has no login of its own, so what keeps it from the network is how the Comp
 publishes it. These tests read `stack/compose.yml` as text, because the job that runs them
 has no YAML parser, and check the four things that would otherwise fail quietly: the image
 is pinned by digest, the only published port is edge1's loopback, it reads the stack's own
-Alertmanager, and it cannot create or expire a silence. They also check that no edge route
-or hostname reaches it.
+Alertmanager, and it cannot create or expire a silence. That no edge route can reach
+it is pinned by the edge render test, which refuses 8084 as an edge1 backend.
 """
 
 from __future__ import annotations
@@ -16,13 +16,7 @@ import re
 import unittest
 
 MONITORING = pathlib.Path(__file__).resolve().parent
-HETZNER = MONITORING.parent
-REPOSITORY = HETZNER.parent
 COMPOSE = MONITORING / "stack" / "compose.yml"
-NO_ROUTE_FILES = (
-    REPOSITORY / "sites.ts",
-    HETZNER / "edge" / "stack" / "caddy" / "Caddyfile",
-)
 
 SERVICE_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):\s*$")
 TOP_LEVEL_HEADER = re.compile(r"^\S")
@@ -132,13 +126,6 @@ class KarmaComposeTests(unittest.TestCase):
     def test_it_declares_a_healthcheck_and_waits_for_a_healthy_alertmanager(self) -> None:
         self.assertIn("\n    healthcheck:\n", self.body)
         self.assertIn("condition: service_healthy", self.body)
-
-    def test_no_edge_route_or_hostname_reaches_it(self) -> None:
-        for path in NO_ROUTE_FILES:
-            with self.subTest(path=path.name):
-                text = path.read_text(encoding="utf-8").lower()
-                self.assertNotIn("karma", text)
-                self.assertNotIn(":8084", text)
 
 
 class ServiceBlockParserTests(unittest.TestCase):
