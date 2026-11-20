@@ -74,6 +74,7 @@ class FakeGateway:
         self.nft_loaded = False
         self.masq_in_nft = False
         self.nft_counter = True
+        self.nft_packets = True  # nft prints the packet count; False is the bare `counter masquerade` seen in CI
         # What the world does.
         self.launder_outside = False  # the outside source gets answered
         self.garbage_probe = False  # the in-namespace probe prints nonsense
@@ -233,7 +234,12 @@ class FakeGateway:
                 "\t\ttype nat hook postrouting priority srcnat; policy accept;",
             ]
             if self.masq_in_nft and self.masq is not None:
-                count = f"counter packets {self.masq} bytes {self.masq * 60} " if self.nft_counter else ""
+                if not self.nft_counter:
+                    count = ""
+                elif self.nft_packets:
+                    count = f"counter packets {self.masq} bytes {self.masq * 60} "
+                else:
+                    count = "counter "
                 lines.append(f'\t\tip saddr {SUBNET} oifname "{UPLINK}" {count}masquerade')
             lines += ["\t}", "}"]
             return 0, "\n".join(lines) + "\n", ""
@@ -791,15 +797,20 @@ class MasqueradeHomeTests(unittest.TestCase):
         self.assertEqual(code, 2, out)
         self.assertIn("both", out)
 
-    def test_an_nft_masquerade_without_a_counter_is_a_refusal_not_a_pass(self):
-        host = FakeGateway(probe)
-        host.nft_loaded = True
-        host.masq_in_nft = True
-        host.nft_counter = False
-        code, out = host.run_main(probe, ["gateway"])
-        self.assertEqual(code, 2, out)
-        self.assertNotIn("GREEN", out)
-        self.assertIn("has no counter", out)
+    def test_an_nft_masquerade_with_no_packet_count_is_a_refusal_not_a_pass(self):
+        # Covers both a rule with no counter and the bare `counter masquerade` listing seen in CI:
+        # neither gives a packet count, so neither can prove the masquerade carries traffic.
+        for counter, packets in ((False, True), (True, False)):
+            with self.subTest(counter=counter, packets=packets):
+                host = FakeGateway(probe)
+                host.nft_loaded = True
+                host.masq_in_nft = True
+                host.nft_counter = counter
+                host.nft_packets = packets
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 2, out)
+                self.assertNotIn("GREEN", out)
+                self.assertIn("has no packet count", out)
 
     def test_sabotage_is_refused_when_the_masquerade_is_in_nft(self):
         host = FakeGateway(probe)

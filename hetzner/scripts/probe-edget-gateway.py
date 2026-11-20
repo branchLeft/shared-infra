@@ -259,8 +259,12 @@ class Context:
 
 NFT_TABLE = "branchleft_edge_nat"
 NFT_ABSENT = "No such file or directory"
-# `nft list table` prints a counter before the verdict: `... oifname "eth0" counter packets 3 bytes 180 masquerade`.
-NFT_MASQUERADE = re.compile(r'^\s*ip saddr (\S+) oifname "([^"]+)"(?: counter packets (\d+) bytes \d+)? masquerade\s*$')
+# `nft list table` prints the counter before the verdict. Some listings give the packet count, as
+# `counter packets 3 bytes 180 masquerade`; others print the bare `counter masquerade` (seen in CI).
+# The packet count is group 3 and is None whenever the listing does not give one.
+NFT_MASQUERADE = re.compile(
+    r'^\s*ip saddr (\S+) oifname "([^"]+)"(?: counter(?: packets (\d+) bytes \d+)?)? masquerade\s*$'
+)
 
 
 @dataclass(frozen=True)
@@ -329,8 +333,8 @@ def nft_masquerade(ctx: Context, listing: str) -> int | None:
         raise Refused(f"the MASQUERADE for {ctx.subnet} out of {ctx.uplink} is in nft table ip {NFT_TABLE} "
                       f"{len(found)} times; refusing to guess which one counts")
     if found[0].group(3) is None:
-        raise Refused(f"the nft MASQUERADE for {ctx.subnet} out of {ctx.uplink} has no counter, so the probe cannot "
-                      "show it carries traffic; add `counter` to the rule in the edge_firewall template")
+        raise Refused(f"the nft MASQUERADE for {ctx.subnet} out of {ctx.uplink} has no packet count in the listing, "
+                      "so the probe cannot show it carries traffic; the rule needs a `counter` that nft prints with its packets")
     return int(found[0].group(3))
 
 
