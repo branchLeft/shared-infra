@@ -515,7 +515,6 @@ groups:
             a stopped timer shows in systemctl list-timers. Warning, never
             page. Nothing fires before the first success is written, so a
             timer that has never run is not seen by this rule.
-
   - name: compose-units
     rules:
       - alert: ComposeUnitRestartLoop

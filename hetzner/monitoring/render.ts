@@ -1008,7 +1008,6 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            a stopped timer shows in systemctl list-timers. Warning, never',
     '            page. Nothing fires before the first success is written, so a',
     '            timer that has never run is not seen by this rule.',
-    '',
     // The compose template's own units (hetzner/provision/branchleft-compose@.service), read from the
     // node exporter's systemd collector, which node-exporter.service limits to those instances and
     // switches the restart counter on for. Both are warnings, so email and never a page, and both are
