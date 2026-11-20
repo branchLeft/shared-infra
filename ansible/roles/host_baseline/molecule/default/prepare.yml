@@ -94,6 +94,14 @@
         mode: '0644'
       loop: [ssh, fail2ban]
 
+    - name: Start the sshd call log at empty
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/lib/host_baseline_test/sshd-dumps
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Install a placeholder unit for each service the role manages
       ansible.builtin.copy:
         content: |
@@ -103,7 +111,9 @@
           Type=oneshot
           RemainAfterExit=yes
           ExecStart=/bin/true
-          ExecReload=/bin/sh -c "echo reloaded >> /var/lib/host_baseline_test/{{ item }}-reloads"
+          # A reload fails while its fail flag exists, and then counts nothing. The flag is a
+          # test switch for the case that a failed reload must stop the role.
+          ExecReload=/bin/sh -c "test ! -e /var/lib/host_baseline_test/fail-{{ item }}-reload && echo reloaded >> /var/lib/host_baseline_test/{{ item }}-reloads"
           [Install]
           WantedBy=multi-user.target
         dest: '/usr/lib/systemd/system/{{ item }}.service'
