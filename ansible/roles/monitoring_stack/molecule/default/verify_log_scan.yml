@@ -47,6 +47,8 @@
           - "'MONITORING_STACK_LOG_CANARY' in monitoring_stack_verify_log"
           - "'Write the keys into the monitoring secrets file' in monitoring_stack_verify_log"
           # The real ntfy_pager role runs only in the pager scenario's cases.
+          # Molecule exports the scenario's name; an empty one fails here instead of skipping the check.
+          - lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') | length > 0
           - >-
             lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') != 'pager'
             or 'Write the four NTFY_ lines into the pager secrets file' in monitoring_stack_verify_log

@@ -13,6 +13,7 @@ verify_pager.yml from molecule/pager/verify.yml, or a name from the guard's scen
 the log-scan import from a verify file, and these tests fail; put it back and they pass.
 """
 
+import re
 import unittest
 from pathlib import Path
 
@@ -49,6 +50,8 @@ PLAYS = {
     ],
     LOG_SCAN: ["Scan the log for the values"],
 }
+SNAPS_READ = re.compile(r"monitoring_stack_verify_snaps\.(\w+)")
+SNAPS_TAKEN = re.compile(r"monitoring_stack_verify_snap_name: (\w+)")
 SHARED_VARS = "{{ playbook_dir }}/../default/vars/restart_decision.yml"
 
 
@@ -150,6 +153,15 @@ class VerifyParts(unittest.TestCase):
                     self.assertEqual(skipped, [], "the default scenario runs every step")
                 else:
                     self.assertEqual(sorted(skipped), sorted(DEFAULT_ONLY_STEPS))
+
+    def test_every_snapshot_a_verify_file_reads_is_taken_in_the_same_file(self) -> None:
+        # A snapshot is taken in the run that holds the play, and each scenario is a run of its
+        # own container, so a name read in one file and taken in another is undefined at run time.
+        for name in PLAYS:
+            with self.subTest(file=name):
+                text = (DEFAULT / name).read_text(encoding="utf-8")
+                missing = sorted(set(SNAPS_READ.findall(text)) - set(SNAPS_TAKEN.findall(text)))
+                self.assertEqual(missing, [], f"{name} reads snapshots it never takes")
 
     def test_the_other_scenarios_share_the_default_scenarios_play_files(self) -> None:
         for scenario in set(FILES) - {"default"}:

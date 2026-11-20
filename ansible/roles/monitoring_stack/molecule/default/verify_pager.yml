@@ -15,6 +15,14 @@
     # with the real renderer, which is a change of its own and restarts once; they
     # are applied and settled first, so the rotation after them changes one line
     # and nothing else, and a restart for it can only come from the NTFY_ lines.
+
+    # The converged host this scenario starts from, which the first assertion below measures
+    # against. The default scenario's cases leave a different host, so the baseline is taken here.
+    - name: Snapshot the converged host before ntfy_pager writes its values
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: baseline
+
     - name: Apply ntfy_pager with its four values, which writes the four NTFY_ lines and the real renderer
       ansible.builtin.include_role:
         name: '{{ monitoring_stack_verify_ntfy_role }}'
@@ -39,8 +47,8 @@
     - name: Assert ntfy_pager's first values restarted the unit once
       ansible.builtin.assert:
         that:
-          - monitoring_stack_verify_snaps.ntfy_first.calls == monitoring_stack_verify_snaps.snds_after.calls + 1
-          - monitoring_stack_verify_snaps.ntfy_first.stamp != monitoring_stack_verify_snaps.snds_after.stamp
+          - monitoring_stack_verify_snaps.ntfy_first.calls == monitoring_stack_verify_snaps.baseline.calls + 1
+          - monitoring_stack_verify_snaps.ntfy_first.stamp != monitoring_stack_verify_snaps.baseline.stamp
         quiet: true
         fail_msg: The values and renderer that ntfy_pager wrote did not restart the unit exactly once on the next run of this role.
 
