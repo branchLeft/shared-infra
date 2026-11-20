@@ -390,6 +390,11 @@ The order of the checks on this source, each before the next and none after a ch
    loop, so a sender that stops sending cannot hold the program: it ends the request as
    `bad-bundle`. The single-flight lock is taken only after the read, so a stalled
    upload never makes another request answer `busy`.
+   The spool as a whole is bounded too: at most 4 files and 400 MiB in all, counting the
+   upload being read. A request that would pass either bound is refused as `spool-full`
+   before anything more is written, its own file is removed and the other uploads are left
+   alone. Files older than the deadline plus 60 seconds (a killed run left them) are swept
+   before the bound is checked, so they cannot fill the spool for good.
 4. The spool is admitted in a quarantine repository: the header must be a git bundle
    header, `git bundle verify` must pass (a bundle that needs history it does not carry
    is refused), the objects are fetched from the file into the quarantine, an explicit
@@ -469,7 +474,8 @@ step requests `step-mode-only` (a step with `--mode apply` or `--mode check`),
 `step-not-allowed` (the id is not on the host's allow-list, which may be empty) and
 `confirm-mismatch` (the word is not that step's word). On the bundle source (see "Push
 receiver") there are three more: `mode-mismatch` (the request's mode word is not the key's),
-`no-floor` (the host has no rollback floor) and `bad-bundle` (standard input is not a
+`no-floor` (the host has no rollback floor), `spool-full` (the spool already holds
+as many uploads, or as many bytes, as it may) and `bad-bundle` (standard input is not a
 bundle that stands alone, passes the object check and has the requested commit as its
 `HEAD`, or it was too large or too slow); a refusal of the bundle source also prints
 `changed=0`.
@@ -598,7 +604,8 @@ unit test makes each of them.
   refuses them as `rollback`.
 - **The push scenario cuts the container off the network, not off loopback.** It shows the
   receiver needs no network; it does not show what a host's firewall allows. The size limit
-  (200 MiB) and the deadline (300 s) are constants of the program, not settings.
+  (200 MiB), the deadline (300 s) and the spool bounds (4 files, 400 MiB) are constants of the
+  program, not settings.
 - **A read of standard input holds the connection.** A sender that dribbles bytes is cut at
   the deadline, but until then the SSH session is open and the spool holds what was sent.
   The spool and the quarantine are swept at the start of the next request.
