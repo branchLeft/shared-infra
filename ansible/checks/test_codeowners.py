@@ -429,8 +429,9 @@ HOST_APPLIER_PATHS = [
     "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
 ]
 
-# The control-plane database role provisions the portal logins and reads the admin credentials, so its
-# tasks and its variables are the owner's; its CODEOWNERS line is pinned here, as the key roles are.
+# The control-plane database role provisions the portal logins and reads the admin credentials,
+# so its tasks and its variables are the owner's; its CODEOWNERS line is pinned here, as the key
+# roles are.
 CONTROL_PLANE_DB_PATHS = [
     "ansible/roles/control_plane_db/tasks/main.yml",
     "ansible/roles/control_plane_db/vars/main.yml",
