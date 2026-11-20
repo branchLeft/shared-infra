@@ -431,7 +431,7 @@ def read_stamps(
         try:
             found[item.name] = Path(path).read_text(encoding="utf-8", errors="replace").strip()
         except OSError as error:
-            if True:
+            if unreadable == "absent":
                 found[item.name] = absent
                 continue
             raise StampUnreadableError(item.name, path, error.strerror or "I/O error") from error
@@ -454,7 +454,7 @@ def decide(classes: Sequence[StampClass], absent: str) -> dict[str, Decision]:
         stamp = _needs(item, "stamp", "decide")
         fingerprint = _needs(item, "fingerprint", "decide")
         adopt = item.adoptable and item.gate and stamp == absent and not item.drift
-        due = not adopt and (item.drift or stamp != fingerprint)
+        due = item.gate and not adopt and (item.drift or stamp != fingerprint)
         decisions[item.name] = Decision(adopt=adopt, due=due, mark=due or item.drift)
     return decisions
 
@@ -482,7 +482,7 @@ def stamps_to_write(
         FileNotAbsoluteError: when a stamp path is not absolute.
         FingerprintNotAllowedError: when a fingerprint to write is not a sha256.
     """
-    chosen = [item for item in classes if (item.adopt if state == "adopt" else True)]
+    chosen = [item for item in classes if (item.adopt if state == "adopt" else item.read_back)]
     for item in chosen:
         _stamp_path(item, state)
         _fingerprint_to_write(item, state)
