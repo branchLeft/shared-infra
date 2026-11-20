@@ -248,6 +248,36 @@ are not emitted by a collector under this directory, so `metricCrosscheck.ts` li
 them under `EXTERNAL_METRICS`, and a unit test in the role pins them to these
 expressions.
 
+## The compose-unit rule group
+
+Two warnings on the compose template's own units
+(`hetzner/provision/branchleft-compose@.service`), added with the one-hour start
+limit. A stack that hangs to the template's 600 second
+start timeout fails about every ten minutes; with the old 900 second window the
+start limit never tripped and the unit retried for ever with no alert. The limit now
+trips after five starts (2520 seconds in), and these two rules are how the owner
+hears of it, by email and never by page (the severity is `warning`).
+
+- `ComposeUnitRestartLoop`: `increase(node_systemd_service_restart_total[1h]) >= 2`
+  for a `branchleft-compose@*` instance. It sees the loop from its third start, before
+  the limit stops it, and ignores a single retry (a start that raced a `containerd`
+  restart). There is no `for:`: the counter is the window.
+- `ComposeUnitFailed`: `node_systemd_unit_state{state="failed"} == 1` for ten minutes.
+  `start-limit-hit` is a failed state that nothing clears until `systemctl reset-failed`,
+  so this is the alert that stays up after the loop has ended.
+
+Both series come from the node exporter's systemd collector, which
+`hetzner/provision/node-exporter.service` switches on, limits to the compose
+instances with `--collector.systemd.unit-include`, and gives the restart counter
+(`--collector.systemd.enable-restarts-metrics`). Both rules are scoped to
+`expected_up="true"`, as the scanner group is. They see app1, db1 and ops1, whose
+exporters are the native one. edge1's exporter is the Compose container of the
+monitoring stack, which has no systemd bus, so a loop of an edge1 stack is not seen:
+the follow-up is a mount of the bus socket into that container, which is a change to
+a live stack and is not made here. `alert_rules_test.yml` holds a promtool case for
+each rule, including the single retry, a host not yet expected up and a unit that is
+not a compose instance.
+
 ## The `scanner` rule group
 
 Watches the upload scanner inside each tenant's Ghost process. The series are
