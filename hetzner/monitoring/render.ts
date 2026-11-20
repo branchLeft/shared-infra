@@ -548,36 +548,17 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            what each one reads.',
     '',
     // The edge lets a request through uninspected when its AppSec checker is
-    // slow or down (`appsec_timeout 1s`, then `appsec_fail_open`: posture.md,
-    // RUNBOOK-edge.md section 10b). The signal is Caddy's own, not CrowdSec's:
-    // the bouncer counts every AppSec call that errored (a refused connection
-    // or the one-second timeout) in `crowdsec_appsec_lapi_requests_failures_total`,
-    // served on the same listener as the `caddy` job once the rendered
-    // Caddyfile sets `enable_caddy_metrics`. CrowdSec cannot report its own
-    // absence: with it stopped its metrics port is simply gone, and `up` for
-    // the crowdsec job says the process is down, not that traffic is passing
-    // uninspected, nor how much. A log-derived counter was the other
-    // candidate and was rejected: nothing in the monitoring stack ships logs,
-    // and a log shipper would be a new service for one counter that the
-    // bouncer already keeps.
+    // slow or down (posture.md, RUNBOOK-edge.md section 10b). The signal is
+    // Caddy's own counter, `crowdsec_appsec_lapi_requests_failures_total`,
+    // which the bouncer keeps and the rendered Caddyfile exposes through
+    // `enable_caddy_metrics`. Why this signal, its limits, and how the
+    // threshold and `for:` were chosen are in RUNBOOK-monitoring.md, section
+    // "Responding to the AppSec fail-open alert".
     //
-    // The counter moves only on a transport failure. A checker that answers
-    // 401 or 500 also fails open and is not counted; that is a
-    // misconfiguration the first request shows, not an outage, and a stopped
-    // or stalled checker, the case this exists for, is counted on every
-    // request. Absent series (no failure since Caddy started) never fires.
-    //
-    // More than 5 failures in a 5-minute window, held for 10 minutes. The
-    // expression stays true for the 5-minute window after the last failure,
-    // so it holds for an outage's own length plus 5 minutes (the same shape
-    // RateLimitDeclinesSustained works around): a 10-minute `for:` fires only
-    // for an outage of 5 minutes or more. A CrowdSec restart or a deploy
-    // (seconds to a few minutes) stays silent; a stopped or wedged checker,
-    // which fails every request, fires about 15 minutes after it stopped.
-    // owner_action routes it to the off-host mailbox: the response (bring
-    // CrowdSec back, read its log) is the owner's, and it is not a page
-    // because the edge is serving and every other protection (the IP ban
-    // list, the throttle) still holds.
+    // More than 5 failures in a 5-minute window, held for 10 minutes, so a
+    // short restart stays silent. owner_action routes it to the off-host
+    // mailbox, not a page: the edge keeps serving and the IP ban list and
+    // throttle still hold.
     '      - alert: AppSecFailingOpen',
     '        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5',
     '        for: 10m',

@@ -1231,6 +1231,30 @@ dormant entry reaches no phone. Nothing here is applied to the host: this
 section's change is to the committed register, and the rendered Alertmanager
 config is unchanged until the entry is switched on.
 
+## Responding to the AppSec fail-open alert
+
+`AppSecFailingOpen` fires when the edge serves requests without WAF inspection.
+Caddy waits one second for the CrowdSec AppSec checker, then lets the request
+through (`appsec_timeout 1s`, `appsec_fail_open`; `RUNBOOK-edge.md` section 10b).
+Nothing is down for visitors, so it is a warning routed to the owner's mailbox.
+
+**The signal.** `increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5`,
+held for 10 minutes. The counter is Caddy's, not CrowdSec's: CrowdSec cannot report
+its own absence (stopped, its metrics port is gone), and a log-derived counter would
+need a log shipper the stack does not have.
+
+**Limits.** Only transport failures count (refused connection, timeout). A checker
+answering 401 or 500 also fails open and is not counted; the first request shows
+that misconfiguration. An absent series never fires.
+
+**Timing.** The expression stays true for 5 minutes after the last failure, so the
+alert fires only for an outage of 5 minutes or more: about 15 minutes after a
+stopped checker. A CrowdSec restart or a deploy stays silent.
+
+**Response.** On edge1, `docker ps` shows whether the crowdsec container is running,
+and `docker logs --since 15m crowdsec` says why it is not answering. Bringing it back
+and reading its log is the owner's action.
+
 ## Responding to the mail-delivery alerts
 
 Three rules read Stalwart's own counters from the `stalwart` job. They answer
