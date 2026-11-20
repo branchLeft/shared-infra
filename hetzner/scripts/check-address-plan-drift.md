@@ -3,7 +3,7 @@
 `hetzner-host/addressPlan.ts` is the one place `NETWORK_CIDR`, `SUBNET_CIDR`
 and `HOST_IPS`/`APP_HOST_IPS` are decided. `hetzner/network.ts` and
 `hetzner/egress.ts` import that module, so Pulumi always sees a plan change.
-The NAT gateway script, the DOCKER-USER isolation-policy script, and the
+The NAT gateway script, the DOCKER-USER isolation-policy script, edge1's playbook (where the edge_firewall role is given the subnet it masquerades), and the
 provisioning runbook cannot: the scripts run on a host with no repository
 checkout to import from, and the runbook is prose a human reads, not code
 anything executes. All three therefore carry a copy of the plan's subnet
