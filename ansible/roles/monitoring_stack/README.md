@@ -123,6 +123,17 @@ it with a stamp that it writes only after a restart was read back as active.
   read-back that finds the unit `active`. The directory `/var/lib/branchleft` is
   shared with `broker_deploy`, which sets it to `0755` `root:root`, so this role
   sets the same.
+- **The stamp steps** (read the stamp, decide whether a restart is due, record the stamp) are
+  the `restart_stamp` module, shared with `edge_stack` and any later restart-by-fingerprint role.
+  Its source is `ansible/patterns/restart_stamp/library/restart_stamp.py`; this role holds it as a
+  symbolic link in `library/`, with its unit test in `tests/unit/`, because a role may not load
+  another role (ANS-12). The role works out its fingerprint and its unit state itself and calls the
+  module three times: `read` (a stamp that is not there, or is there and cannot be read, is
+  `none`), `decide` (the unit being enabled is the gate, and a unit that is down counts as a file
+  that differs) and `record` (only for a restart that was read back, and never in check mode).
+  Each call is `no_log`, and the module refuses a fingerprint that is not a sha256. A fix to the
+  stamp steps is made once, in the pattern; run this role's harness and `edge_stack`'s before
+  proposing it.
 - **A restart is due** when the unit is enabled (`enabled` or `enabled-runtime`)
   and either the fingerprint differs from the stamp, or the unit is `failed` or
   `inactive` (`monitoring_stack_down_states`). The second term matters when a bad
@@ -488,7 +499,10 @@ The reload and the files:
 | A new file added to `hetzner/monitoring/stack/`           | `verify`        | the same task names the file                                                  |
 | The stamp written with mode `0644`                        | `verify`        | "Assert the stamp is one sha256 and a newline, in a root-only file ..."       |
 
-The restart decision:
+The restart decision. The decision and the stamp read and write are the shared module's
+(`ansible/patterns/restart_stamp/library/restart_stamp.py`): a row that names `restart_due` is
+made in `decide` there, or in this role's call of it, and the module's own unit test names the same
+breaks (it fails at `lint`, before any container):
 
 | Edit to the role                                                                         | Step that fails | Assertion or task that names it                                                                                                                             |
 | ---------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
