@@ -110,7 +110,7 @@ class KarmaComposeTests(unittest.TestCase):
 
     def test_it_reads_the_stacks_own_alertmanager(self) -> None:
         env = environment(self.block)
-        self.assertEqual(env.get("ALERTMANAGER_URI"), "http://alertmanager:9093")
+        self.assertEqual(env.get("ALERTMANAGER_URI"), "http://alertmanager:9094")
 
     def test_it_cannot_create_or_expire_a_silence(self) -> None:
         env = environment(self.block)
