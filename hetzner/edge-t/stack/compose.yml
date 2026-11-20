@@ -29,6 +29,10 @@ services:
       - caddy-data:/data
       - caddy-config:/config
       - caddy-logs:/var/log/caddy
+      # What the tenant register decides about media, written by the host and read here:
+      # the media address's site block and its folder map (render.md, "The media address").
+      # Empty until the register holds a tenant.
+      - /etc/branchleft/edge-media:/etc/caddy-media:ro
     depends_on:
       crowdsec:
         condition: service_started
@@ -83,9 +87,117 @@ services:
     mem_limit: 1024m
     cpu_shares: 256
 
+  # The media cache. Every object read from a shared bucket passes through it, because the
+  # provider allows 750 requests a second per source address and per bucket and this edge
+  # is one source. Caddy decides what may be read and which bucket holds it; this service
+  # only remembers the answers (render.md, "The media address").
+  media-cache:
+    image: docker.io/nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+    restart: unless-stopped
+    # Not `read_only`: Compose writes an inline config into the container's own layer.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    configs:
+      - source: media_cache_conf
+        target: /etc/nginx/nginx.conf
+    volumes:
+      - media-cache:/var/cache/nginx
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8081/stub_status']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 256m
+    cpu_shares: 512
+
+  # The cache's request counter as Prometheus metrics, on edge-t's private address only.
+  media-cache-exporter:
+    image: docker.io/nginx/nginx-prometheus-exporter:1.5.0@sha256:bf76e58df548a13e52bd543ac70f6d3d667e14884e8b51c149bd81994ca75ccd
+    restart: unless-stopped
+    command:
+      - --nginx.scrape-uri=http://media-cache:8081/stub_status
+    ports:
+      - '10.20.1.210:9113:9113'
+    depends_on:
+      media-cache:
+        condition: service_started
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpu_shares: 128
+
+configs:
+  media_cache_conf:
+    content: |
+      pid /tmp/nginx.pid;
+      worker_processes auto;
+      error_log /dev/stderr warn;
+
+      events {
+          worker_connections 1024;
+      }
+
+      http {
+          access_log off;
+          server_tokens off;
+          client_body_temp_path /tmp/client_temp;
+          proxy_temp_path /tmp/proxy_temp;
+          fastcgi_temp_path /tmp/fastcgi_temp;
+          uwsgi_temp_path /tmp/uwsgi_temp;
+          scgi_temp_path /tmp/scgi_temp;
+
+          resolver 127.0.0.11 valid=10s ipv6=off;
+          proxy_cache_path /var/cache/nginx/media levels=1:2 keys_zone=media:64m max_size=4g inactive=30d use_temp_path=off;
+
+          server {
+              listen 8081;
+              location = /stub_status {
+                  stub_status;
+              }
+          }
+
+          server {
+              listen 8080 default_server;
+
+              location / {
+                  limit_except GET HEAD {
+                      deny all;
+                  }
+                  set $$shard_upstream caddy:18080;
+                  proxy_pass http://$$shard_upstream;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_set_header Host $$host;
+                  proxy_set_header Range "";
+                  proxy_set_header If-Range "";
+                  proxy_set_header Cookie "";
+                  proxy_set_header Authorization "";
+                  proxy_connect_timeout 5s;
+                  proxy_read_timeout 20s;
+                  proxy_cache media;
+                  proxy_cache_key $$host$$request_uri;
+                  proxy_cache_lock on;
+                  proxy_cache_lock_timeout 10s;
+                  proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+                  proxy_cache_background_update on;
+                  proxy_force_ranges on;
+                  add_header X-Cache-Status $$upstream_cache_status always;
+              }
+          }
+      }
+
 volumes:
   caddy-data:
   caddy-config:
   caddy-logs:
   crowdsec-config:
   crowdsec-data:
+  media-cache:

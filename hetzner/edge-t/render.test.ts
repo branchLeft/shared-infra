@@ -126,7 +126,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
     expect(renderTenantGhostAdminAppsecConfig).toHaveLength(0);
     expect(renderTenantGhostAdminPostoverflow).toHaveLength(0);
     expect(renderTenantGhostBruteForceScenario).toHaveLength(0);
-    expect(renderTenantCaddyfile.length).toBeLessThanOrEqual(1);
+    expect(renderTenantCaddyfile.length).toBeLessThanOrEqual(2);
   });
 
   it('narrows no Ghost file to a hostname list, because every name here is a tenant’s', () => {
@@ -159,9 +159,17 @@ describe('the tenant Caddyfile', () => {
     expect(block).not.toContain('appsec');
   });
 
-  it('has the catch-all, the two probes and the metrics listener, and no site of any name', () => {
-    expect(addresses).toEqual([':80', 'http://edge-probe.invalid:8080', ':8080', ':9091']);
-    expect(caddyfile).not.toContain('reverse_proxy');
+  it('has the catch-all, the two probes, the metrics listener, the media snippet and its shard listener, and no site of any name', () => {
+    expect(addresses).toEqual([
+      ':80',
+      'http://edge-probe.invalid:8080',
+      ':8080',
+      ':9091',
+      '(tenant_media)',
+      'http://:18080',
+    ]);
+    expect(caddyfile.match(/reverse_proxy/g)).toEqual(['reverse_proxy']);
+    expect(caddyfile).toContain('reverse_proxy media-cache:8080');
     expect(caddyfile).not.toMatch(/^\s*tls\b/m);
   });
 
