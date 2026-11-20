@@ -1023,6 +1023,7 @@ class Git:
         for setting in (
             "core.hooksPath=/dev/null",
             "gc.auto=0",
+            "transfer.fsckObjects=true",
             *settings,
         ):
             argv += ["-c", setting]
