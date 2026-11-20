@@ -817,6 +817,70 @@
           not_reason: bad-bundle
           floor_after: '{{ pull_trigger_pr_commits.malformed }}'
 
+    # The two copies of git's object check are the fetch's own setting and the explicit fsck. Each
+    # is cut out alone; the copy is then shown by its refusal sentence, which names the step that
+    # stopped the bundle. The installed program is shown to give the other sentence first.
+    - name: The installed program refuses a malformed object at the fetch, with the unpack sentence
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a malformed object, installed program
+        request_text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/malformed.bundle'
+
+    - name: The installed program names the unpack step for a malformed object
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 10
+          - "'could not be unpacked' in pull_trigger_pr_result.stderr"
+        fail_msg: 'the installed program did not refuse the malformed object at the fetch: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the installed program refuses it at the fetch
+
+    - name: Cut out git's object check on the fetch, the setting only
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-fetch-object-check
+        sabotage_edits:
+          - regexp: '^\s+"transfer\.fsckObjects=true",\n'
+            replace: ''
+
+    - name: Without the fetch's check the malformed object is refused by the explicit check, not the fetch
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a malformed object, no fetch-time check
+          text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+          bundle: malformed
+          program: /var/tmp/ptt/mut/no-fetch-object-check
+          rc: 10
+
+    - name: Without the fetch's check the refusal is the explicit check's sentence, not the unpack sentence
+      ansible.builtin.assert:
+        that:
+          - "'failed the object check' in pull_trigger_pr_result.stderr"
+          - "'could not be unpacked' not in pull_trigger_pr_result.stderr"
+        fail_msg: 'the copy without the fetch check still refused at the fetch, so the copy is not what is tested: {{ pull_trigger_pr_result.stderr }}'
+        success_msg: 'red as it must be: the fetch no longer refuses, the explicit check does'
+
+    - name: Cut out the explicit object check, the fsck only
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-explicit-object-check
+        sabotage_edits:
+          - regexp: '^(\s+)if self\._git\.attempt\("fsck", .*\)\.returncode != 0:$'
+            replace: '\1if False:'
+
+    - name: Without the explicit check the malformed object is accepted
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a malformed object, no explicit check
+          text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+          bundle: malformed
+          program: /var/tmp/ptt/mut/no-explicit-object-check
+          rc: 0
+          not_reason: bad-bundle
+          floor_after: '{{ pull_trigger_pr_commits.malformed }}'
+
     - name: Cut out the byte limit, on top of the small one
       ansible.builtin.include_tasks: tasks/sabotage.yml
       vars:
