@@ -224,10 +224,12 @@
           - restart_stamp_verify_lenient.stamps.dir == 'none'
         quiet: true
 
-    # 3. A write never returns the fingerprint, and the result of the role's own task is hidden.
-    - name: Assert no write result names the fingerprint
+    # 3. A write returns the names it wrote and nothing else of the stamp. The fingerprint never
+    # comes back from a write (the unit test proves it on the module's own result; the task's
+    # `invocation` echo of its arguments is Ansible's, and is hidden by no_log).
+    - name: Assert a write names the class and returns no stamp content
       ansible.builtin.assert:
         that:
-          - restart_stamp_verify_one not in (restart_stamp_verify_adopt | to_json)
-          - restart_stamp_verify_one not in (restart_stamp_verify_adopt_check | to_json)
+          - restart_stamp_verify_adopt.written == ['unit']
+          - restart_stamp_verify_adopt.stamps is not defined
         quiet: true

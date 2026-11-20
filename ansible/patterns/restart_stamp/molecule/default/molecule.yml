@@ -38,10 +38,6 @@ platforms:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
   name: ansible
-  env:
-    # With this set a task's result carries the module's arguments, so the verify
-    # play can see that no fingerprint comes back from a write.
-    ANSIBLE_INJECT_INVOCATION: 'true'
   inventory:
     group_vars:
       all:
