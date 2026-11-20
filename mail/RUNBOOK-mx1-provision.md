@@ -372,6 +372,13 @@ back the _script's_ `blobId`, not the upload response's.
 
 ### Idempotency
 
+> **Captured output, not current state.** The console transcript below is a
+> record of one historical mx1 run, pasted into this runbook on 2026-08-17
+> (commit `1509de5e`). The run it captured predates that date. It was never
+> regenerated, so it does not reflect the current mailbox set: the set today is
+> `MAILBOXES` in `mail/provision/provision_mailboxes.py`. Compare a live run
+> against that list, not against this transcript.
+
 `provision_mailboxes.py` follows `configure_stalwart.py`'s diff-before-write
 pattern: an existing mailbox is never touched (this script does not rotate
 passwords — that's `rotate_admin_credential.py`'s model, not this one's) and
@@ -404,6 +411,11 @@ run above shows exactly the mixed "some already there, some new" case a real
 re-run hits.)
 
 ### Live validation
+
+> **Captured result, not current state.** The table below was recorded on
+> 2026-08-17 (commit `1509de5e`) from the same historical run as the
+> idempotency transcript above. It covers the four forwarding pairs that existed
+> then, not the current forwarding set.
 
 Forwarding is proven rather than assumed: send a real message to each role
 address and confirm it lands both there and in `rob@`. Done via
