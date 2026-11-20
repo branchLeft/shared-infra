@@ -247,6 +247,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   node_filesystem_size_bytes: 'node_exporter',
   node_cpu_seconds_total:
     'node_exporter (cpu collector, on by default; the role sets no collector flags)',
+  // The systemd collector, limited to the compose template's instances and with the restart counter on,
+  // by hetzner/provision/node-exporter.service (held by ansible/roles/node_exporter/tests/unit).
+  node_systemd_unit_state: 'node_exporter systemd collector, on app1, db1 and ops1 (not edge1)',
+  node_systemd_service_restart_total:
+    'node_exporter systemd collector with --collector.systemd.enable-restarts-metrics, on app1, db1 and ops1 (not edge1)',
   mysql_global_status_threads_connected: 'mysqld_exporter, on db1',
   mysql_global_variables_max_connections: 'mysqld_exporter, on db1',
   mysql_up: 'mysqld_exporter, on db1',

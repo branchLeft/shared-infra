@@ -2394,3 +2394,65 @@ tests:
       - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
         eval_time: 5m
         exp_samples: []
+
+  # ComposeUnitRestartLoop: a compose unit whose start hangs to its
+  # 600 s timeout is restarted by systemd about every ten minutes. tenant-a restarts at 10 min and
+  # at 20 min, and so is a loop from the second restart on. blog has a single retry (a
+  # containerd restart, a slow start), which must not alert. publicpress-website is on a host not yet expected
+  # up. ssh.service is not a compose unit and loops without an alert from this rule. After the
+  # last restart the hour window moves on and the alert resolves.
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service"}'
+        values: '0x9 1x10 2x80'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service"}'
+        values: '0x9 1x90'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", name="branchleft-compose@publicpress-website.service"}'
+        values: '0x9 1x10 2x80'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="ssh.service"}'
+        values: '0x9 1x10 2x80'
+    promql_expr_test:
+      # One restart is not a loop.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 15m
+        exp_samples: []
+      # The second restart is.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 25m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service"}'
+            value: 1
+      # An hour after the last restart it is over.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 95m
+        exp_samples: []
+
+  # ComposeUnitFailed: the unit the start limit stopped stays failed until someone resets it. It
+  # is pending for ten minutes and then fires; a failed non-compose unit and a failed unit on a
+  # host not yet expected up do not. A unit that is not failed (state="active") is the control.
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+        values: '0x5 1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service", state="active", type="oneshot"}'
+        values: '1x65'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service", state="failed", type="oneshot"}'
+        values: '0x65'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", name="branchleft-compose@publicpress-website.service", state="failed", type="oneshot"}'
+        values: '0x5 1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="ssh.service", state="failed", type="simple"}'
+        values: '0x5 1x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="firing"}
+        eval_time: 12m
+        exp_samples: []
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="pending"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitFailed", alertstate="pending", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+            value: 1
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="firing"}
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+            value: 1
