@@ -69,9 +69,10 @@ SPOOL_GRACE_SECONDS: Final = 60
 # The spool as a whole. Each upload is held to MAX_BUNDLE_BYTES, but uploads arrive before the
 # lock is taken, so several can sit in the spool at once. These bound how many, and how many
 # bytes in all, so a sender that opens many sessions cannot fill the host's disk. When either
-# is reached the next request is refused as `spool-full`, before it writes anything.
+# is reached the next request is refused as `spool-full`, before it writes anything. The byte
+# bound is its own number, not a multiple of MAX_BUNDLE_BYTES: the harness lowers that one.
 MAX_SPOOL_FILES: Final = 4
-MAX_SPOOL_BYTES: Final = 2 * MAX_BUNDLE_BYTES
+MAX_SPOOL_BYTES: Final = 400 * 1024 * 1024
 SPOOL_NAME: Final = "spool"
 QUARANTINE_NAME: Final = "quarantine"
 QUARANTINE_REF: Final = "refs/pull-trigger/head"
