@@ -1,0 +1,30 @@
+---
+# Applies the role with the public key of the controller key pair made by prepare.yml, without
+# the comment ssh-keygen adds (the role refuses a key that has one), and
+# the address in apply_address. When apply_check is set the role runs in check mode on
+# purpose, whatever the play was started with; when it is not, the play's own mode applies,
+# which is what Molecule's check steps need.
+- name: Read the controller's public key
+  ansible.builtin.slurp:
+    src: '{{ scenario_key_dir }}/controller.pub'
+  register: db_t1_tenant_entry_scenario_public
+  check_mode: false
+  no_log: true
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.db_t1_tenant_entry
+  vars:
+    db_t1_tenant_entry_controller_key: "{{ (db_t1_tenant_entry_scenario_public.content | b64decode | trim).split(' ')[:2] | join(' ') }}"
+    db_t1_tenant_entry_controller_address: '{{ apply_address }}'
+  when: apply_check is not defined
+
+- name: Apply the role in check mode
+  ansible.builtin.include_role:
+    name: branchleft.db_t1_tenant_entry
+    apply:
+      check_mode: true
+  vars:
+    db_t1_tenant_entry_controller_key: "{{ (db_t1_tenant_entry_scenario_public.content | b64decode | trim).split(' ')[:2] | join(' ') }}"
+    db_t1_tenant_entry_controller_address: '{{ apply_address }}'
+  when: apply_check is defined

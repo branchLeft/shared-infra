@@ -423,10 +423,12 @@ wrong source. To add a secret option, add its row here.
 | `backup_worker`            | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
 | `binlog_pull`              | `binlog_pull_db_ca_pem`                   | none                      |
 | `binlog_pull`              | `binlog_pull_db_password`                 | none                      |
+| `broker_deploy`            | `broker_deploy_owner_due_diligence_email` | none                      |
 | `ci_jump`                  | `ci_jump_user`                            | host_inputs: edge1, edget |
 | `control_plane`            | `control_plane_env_content`               | none                      |
 | `control_plane`            | `control_plane_masterkey`                 | none                      |
 | `db1_stack`                | `db1_stack_exporter_password`             | host_inputs: db1          |
+| `db_t1_tenant_entry`       | `db_t1_tenant_entry_controller_key`       | none                      |
 | `monitoring_stack`         | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |
