@@ -537,6 +537,9 @@ jobs:
           verdict-step: noop
           summary-step: Write the plan to the job summary
           plan-file: preview-plan.json
+          required-operands: |
+            github.event_name == 'push'
+            github.ref == 'refs/heads/main'
 
   pulumi-inventory-audit:
     name: Audit (Pulumi secrets + state backends)
