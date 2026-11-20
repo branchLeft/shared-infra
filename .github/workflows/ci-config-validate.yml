@@ -139,8 +139,11 @@ jobs:
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
-    # Observed 0.3-0.62min over the last 20 successful runs (p95 0.5min).
-    timeout-minutes: 10
+    # The promtool step alone took 5.2 to 6.4 min on healthy main runs
+    # (44761941918, 44779408332, 44790350557), so the job limit is set to
+    # cover a worst case of two promtool invocations, each retried once at
+    # its own cap, plus the other steps. Under 8 min is the healthy total.
+    timeout-minutes: 60
     # Same reasoning as edge-config-validate above and deliberately not in
     # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
     # program, it renders config for a Compose stack colocated on edge1, so
@@ -211,9 +214,11 @@ jobs:
         if: steps.skip.outputs.run != 'false'
         # Bounded, because a `docker run` here has been seen to stall with no
         # output until the job's own timeout cancelled it. Each invocation is
-        # capped and retried once, but only when it timed out (124 or 137
+        # capped at 10 min (healthy runs: the slowest invocation was about
+        # 6.4 min) and retried once, but only when it timed out (124 or 137
         # after the kill): a real promtool failure exits 1 and fails at once.
-        timeout-minutes: 7
+        # The step limit covers two invocations x two attempts x 10 min.
+        timeout-minutes: 45
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
@@ -224,7 +229,7 @@ jobs:
             local attempt
             for attempt in 1 2; do
               docker rm -f "$name" >/dev/null 2>&1 || true
-              if timeout --kill-after=10 90 docker run --name "$name" --rm "$@"; then
+              if timeout --kill-after=30 600 docker run --name "$name" --rm "$@"; then
                 return 0
               else
                 local rc=$?
