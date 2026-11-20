@@ -1,9 +1,9 @@
 #!/usr/bin/python3 -I
 """Backs up the control plane's two databases, proves the copy restores, ships ciphertext.
 
-Commands: take, verify DIR, seal DIR, ship SEALED, offsite-check SEALED, run. Exit 0 proven,
-1 a check failed, 2 a precondition is missing so nothing was proven. A database is read in one
-repeatable-read snapshot that pg_dump also reads, and its rows are counted in that same
+Commands: take, verify DIR, seal DIR, ship SEALED, offsite-check SEALED, run, mark-failed. Exit
+0 proven, 1 a check failed, 2 a precondition is missing so nothing was proven. A database is read
+in one repeatable-read snapshot that pg_dump also reads, and its rows are counted in that same
 snapshot, so the recorded counts are exactly what the dump holds. The copy is restored into a
 throwaway PostgreSQL with no network and counted again. Only table names and counts are ever
 printed; the output of docker, psql, pg_dump and age is withheld because it can quote a row.
@@ -47,6 +47,10 @@ ENV_FILE = pathlib.Path("/etc/branchleft/state-copy.env")
 RELEASE_SCRIPTS = pathlib.Path("/opt/branchleft/backup-worker/current/infra/provisioning/scripts")
 METRICS_DIR = pathlib.Path("/var/lib/branchleft/backup-worker-exporter")
 METRICS_FILE = "control_plane_backup.prom"
+# The failure mark has its own file: record_success rewrites METRICS_FILE from the success
+# lines it can read, so a line of another kind kept there would be lost on the next success.
+FAILED_METRICS_FILE = "control_plane_backup_failed.prom"
+FAILURE_METRIC = "control_plane_backup_last_failure_timestamp_seconds"
 OFFSITE_PREFIX = "state/ops1-control-plane/generations"
 OFFSITE_OBJECT = "control-plane.tar.age"
 DEFAULT_KEEP = 7
@@ -68,6 +72,11 @@ END_MARK = "@@END@@"
 MANIFEST_FILE = "manifest.json"
 MANIFEST_VERSION = 1
 SEALED_SUFFIX = ".tar.age"
+# Written beside a directory, never inside it, because `seal` encrypts the whole directory.
+PROVEN_SUFFIX = ".proven"
+# A directory not proven this long after its stamp is abandoned, not in progress: the service
+# stops a run at two hours (TimeoutStartSec in the unit; a unit test holds this above it).
+ABANDONED_AFTER = datetime.timedelta(hours=3)
 
 BACKUP_NAME = re.compile(r"\A\d{8}T\d{6}Z\Z")
 DATABASE_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,31}\Z")
@@ -76,9 +85,8 @@ SNAPSHOT_ID = re.compile(r"\A[0-9A-F]{8}-[0-9A-F]{8}-[0-9]+\Z")
 TABLE_LINE = re.compile(r"\A(?P<table>[^|]+)\|(?P<rows>[0-9]+)\Z")
 RECIPIENT = re.compile(r"\Aage1[0-9a-z]{50,100}\Z")
 AGE_HEADER = b"age-encryption.org/v1\n"
-METRIC_LINE = re.compile(
-    r'\Acontrol_plane_backup_last_success_timestamp_seconds\{stage="([a-z_]+)"\} ([0-9.]+)\Z'
-)
+SUCCESS_METRIC = "control_plane_backup_last_success_timestamp_seconds"
+METRIC_LINE = re.compile(rf'\A{SUCCESS_METRIC}\{{stage="([a-z_]+)"\}} ([0-9.]+)\Z')
 ENV_LINE = re.compile(r"\A(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)\Z")
 
 # Every user table once: partitions are left out because their parent's count holds them.
@@ -649,6 +657,8 @@ def verify(
             compare_counts(db, live[db], restored)
             rows = sum(restored.values())
             say(f"verified {db}: tables={len(restored)} rows={rows}, equal to live")
+    mark_proven(backup)
+    say(f"proven {backup.name}: counted toward retention")
 
 
 def load_env(path: pathlib.Path) -> dict[str, str]:
@@ -857,28 +867,108 @@ def offsite_check(
     say(f"offsite {key}: sha256={expected} bytes={len(blob)} equals the sealed copy")
 
 
+def proof_path(backup: pathlib.Path) -> pathlib.Path:
+    return backup.parent / f"{backup.name}{PROVEN_SUFFIX}"
+
+
+def manifest_digest(backup: pathlib.Path) -> str | None:
+    """The digest of the backup's manifest, or None when it has none a restore could trust."""
+    path = backup / MANIFEST_FILE
+    if path.is_symlink() or not path.is_file():
+        return None
+    return sha256_file(path)
+
+
+def mark_proven(backup: pathlib.Path) -> None:
+    """Record that this backup's dumps were restored and counted equal to live.
+
+    The mark carries the digest of the manifest it proves, so a manifest rewritten afterwards
+    is no longer proven. It is written last, after every comparison has passed.
+    """
+    digest = manifest_digest(backup)
+    if digest is None:
+        fail(f"{backup} has no {MANIFEST_FILE} to prove")
+    path = proof_path(backup)
+    temporary = path.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(f"{digest}\n")
+    temporary.replace(path)
+
+
+def is_proven(backup: pathlib.Path) -> bool:
+    """True only for a directory with a manifest and a mark written for exactly that manifest."""
+    digest = manifest_digest(backup)
+    if digest is None:
+        return False
+    try:
+        return proof_path(backup).read_text().strip() == digest
+    except OSError:
+        return False
+
+
+def stamp_time(name: str) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.strptime(name, "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.UTC)
+    except ValueError:
+        return None
+
+
+def remove_backup(backup: pathlib.Path) -> None:
+    """Remove a copy, its mark first: a removal that stops half way must not leave a proven copy."""
+    proof_path(backup).unlink(missing_ok=True)
+    shutil.rmtree(backup)
+    for sidecar in (
+        backup.parent / f"{backup.name}{SEALED_SUFFIX}",
+        backup.parent / f"{backup.name}{SEALED_SUFFIX}.sha256",
+    ):
+        sidecar.unlink(missing_ok=True)
+
+
 def prune(
-    root: pathlib.Path, keep: int, *, protect: pathlib.Path, say: Callable[[str], None] = print
+    root: pathlib.Path,
+    keep: int,
+    *,
+    protect: pathlib.Path,
+    now: datetime.datetime | None = None,
+    say: Callable[[str], None] = print,
 ) -> None:
-    """Remove on-host copies beyond the newest `keep`, never the one just proven."""
+    """Keep the newest `keep` proven copies; sweep a directory that was never proven.
+
+    Only a proven copy (a manifest, and a mark written by `verify` for that manifest) counts
+    toward `keep`, so a run killed half way, or one whose restore failed, cannot push a proven
+    copy out. Such a directory is swept once it is older than ABANDONED_AFTER, so a take that is
+    still running is left alone. The copy just proven is never removed.
+    """
     if keep < 1:
         refuse("--keep must be at least 1")
+    present = (now or datetime.datetime.now(datetime.UTC)).astimezone(datetime.UTC)
     names = sorted(
-        (p for p in root.iterdir() if p.is_dir() and BACKUP_NAME.match(p.name)), reverse=True
+        (
+            p
+            for p in root.iterdir()
+            if p.is_dir() and not p.is_symlink() and BACKUP_NAME.match(p.name)
+        ),
+        reverse=True,
     )
-    removed = 0
-    for old in names[keep:]:
-        if old.resolve() == protect.resolve():
+    proven = [p for p in names if is_proven(p)]
+    kept = {*proven[:keep], protect.resolve()}
+    older = swept = 0
+    for old in names:
+        if old in kept or old.resolve() in kept:
             continue
-        shutil.rmtree(old)
-        for sidecar in (
-            root / f"{old.name}{SEALED_SUFFIX}",
-            root / f"{old.name}{SEALED_SUFFIX}.sha256",
-        ):
-            sidecar.unlink(missing_ok=True)
-        removed += 1
-    if removed:
-        say(f"pruned {removed} older on-host copies")
+        if old in proven:
+            remove_backup(old)
+            older += 1
+            continue
+        taken = stamp_time(old.name)
+        if taken is not None and present - taken >= ABANDONED_AFTER:
+            remove_backup(old)
+            swept += 1
+    if older:
+        say(f"pruned {older} older proven on-host copies")
+    if swept:
+        say(f"swept {swept} unproven directories")
 
 
 def record_success(metrics_dir: pathlib.Path, stage: str, *, now: float | None = None) -> None:
@@ -895,9 +985,29 @@ def record_success(metrics_dir: pathlib.Path, stage: str, *, now: float | None =
                 stages[match[1]] = float(match[2])
     stages[stage] = time.time() if now is None else now
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    name = "control_plane_backup_last_success_timestamp_seconds"
+    name = SUCCESS_METRIC
     body = [f"# HELP {name} Unix time of the last success of each stage.", f"# TYPE {name} gauge"]
     body += [f'{name}{{stage="{s}"}} {stages[s]:.0f}' for s in sorted(stages)]
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text("\n".join(body) + "\n")
+    temporary.chmod(0o644)
+    temporary.replace(path)
+
+
+def record_failure(metrics_dir: pathlib.Path, *, now: float | None = None) -> None:
+    """Write the time the nightly unit entered a failed state, for the failure alert.
+
+    The alert reads it against the last success: a later success clears it. Started by the
+    unit's OnFailure, so it covers what the program cannot report itself (a kill, the
+    timeout, a crash before any line of its own ran).
+    """
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    path = metrics_dir / FAILED_METRICS_FILE
+    body = [
+        f"# HELP {FAILURE_METRIC} Unix time the nightly backup unit last entered a failed state.",
+        f"# TYPE {FAILURE_METRIC} gauge",
+        f"{FAILURE_METRIC} {time.time() if now is None else now:.0f}",
+    ]
     temporary = path.with_suffix(".tmp")
     temporary.write_text("\n".join(body) + "\n")
     temporary.chmod(0o644)
@@ -928,6 +1038,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("take")
     sub.add_parser("run")
+    sub.add_parser("mark-failed")
     for name in ("verify", "seal", "ship", "offsite-check"):
         sub.add_parser(name).add_argument("path", type=pathlib.Path)
     return parser
@@ -942,6 +1053,9 @@ def execute(args: argparse.Namespace, say: Callable[[str], None]) -> None:
     elif command == "ship":
         ship(args.path, env_file=args.env_file, scripts=args.release_scripts, say=say)
         record_success(args.metrics_dir, "shipped_offsite")
+    elif command == "mark-failed":
+        record_failure(args.metrics_dir)
+        say(f"marked the failure in {args.metrics_dir / FAILED_METRICS_FILE}")
     elif command == "offsite-check":
         if args.read_env_file is None:
             refuse("offsite-check needs --read-env-file, a file holding the read-only copy-1 key")

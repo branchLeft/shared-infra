@@ -93,11 +93,11 @@ describe('renderAnnouncements', () => {
 
 describe('loadPostmortems', () => {
   let repo: string;
-  // Run under a git hook, the environment names the outer repository's index and
-  // directory (GIT_INDEX_FILE, GIT_DIR), and every git command here, the loader's
-  // included, would read and write that index instead of this throwaway
-  // repository's. They are taken out of the environment for each test and put back.
-  let outerGitEnv: [string, string][] = [];
+  // A git hook (pre-commit) exports GIT_INDEX_FILE and GIT_DIR. Inherited, they point
+  // this scratch repo's `git add`, and the loader's own git calls, at the real repository
+  // (stage a file into its index, read the wrong tree), so the commit that runs this test
+  // is corrupted. Drop every GIT_ variable for the test and put them back after.
+  let savedGitEnv: [string, string][] = [];
   const run = (...args: string[]): void => {
     execFileSync(
       'git',
@@ -121,16 +121,16 @@ describe('loadPostmortems', () => {
   };
 
   beforeEach(() => {
-    outerGitEnv = Object.entries(process.env).filter(
+    savedGitEnv = Object.entries(process.env).filter(
       (entry): entry is [string, string] => entry[0].startsWith('GIT_') && entry[1] !== undefined
     );
-    for (const [name] of outerGitEnv) delete process.env[name];
+    for (const [name] of savedGitEnv) delete process.env[name];
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
-    for (const [name, value] of outerGitEnv) process.env[name] = value;
+    for (const [name, value] of savedGitEnv) process.env[name] = value;
   });
 
   it('shows a merged post-mortem of a resolved incident', () => {
