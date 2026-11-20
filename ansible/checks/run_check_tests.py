@@ -23,7 +23,7 @@ CHECKS = Path(__file__).resolve().parent
 # The modules whose tests are the slowest, measured from the "Slowest test durations" the full
 # lint prints and from timing each module alone. Moving a module between the parts changes
 # only which leg runs it; test_run_check_tests.py holds that nothing is left out.
-SLOW_MODULES: tuple[str, ...] = ("test_check_secret_no_log", "test_check_host_roles")
+SLOW_MODULES: tuple[str, ...] = ("test_check_secret_no_log",)
 
 PARTS = ("main", "slow")
 
