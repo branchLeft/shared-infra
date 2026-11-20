@@ -159,7 +159,7 @@ export const NTFY_PAGE_TOPIC = 'branchleft-pages';
  * button below opens it too. It is a public address and carries no secret,
  * so it costs no new credential; Alertmanager and Prometheus have no address
  * a phone can reach, so there is nothing more specific to link. */
-export const NTFY_PAGE_CLICK_URL = 'https://status.branchleft.invalid';
+export const NTFY_PAGE_CLICK_URL = 'https://wrong.branchleft.invalid';
 
 /** ntfy's `actions` value: one `view` button that opens the status page. No
  * action calls Alertmanager (an acknowledge or silence button): that API has

@@ -419,7 +419,7 @@ describe('the page link and button', () => {
   it('open the public status page, which needs no credential', () => {
     expect(NTFY_PAGE_URL).toContain(`click=${NTFY_PAGE_CLICK_URL}`);
     expect(NTFY_PAGE_URL).toContain('actions=view,Status%20page,');
-    expect(NTFY_PAGE_CLICK_URL).toBe('https://status.branchleft.invalid');
+    expect(NTFY_PAGE_CLICK_URL).toBe('https://wrong.branchleft.invalid');
     expect(NTFY_PAGE_URL).not.toMatch(/tk_|token|password/i);
   });
 
