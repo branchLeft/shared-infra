@@ -10,7 +10,7 @@
 # (sha256 of the git blob of each file at that commit). The role does not fetch
 # the programs: the directory they live in is another role's. It only refuses to
 # run one whose bytes differ from these.
-db1_grants_source_commit: 5e52f78427cab104438057164e4baa16b329875c
+db1_grants_source_commit: 01afa64bb98822116f6824573943304baafe2849
 
 # Where ghost-platform, the one home of the programs, serves them at that commit.
 # Only the test reads this (the scenario's prepare and the unit tests fetch each
@@ -23,9 +23,9 @@ db1_grants_source_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-
 # unit test fails when those two pins disagree with this table. A bump of this
 # table and of the commit above is one reviewed change to this file.
 db1_grants_program_sha256:
-  provision_tenant_db.py: d4115369168125ea0e72f46aa66f90a2443d6f26fda603dd8a76ec882e4d5e3e
+  provision_tenant_db.py: 425dd1ce0b0731f83baa82dfcd9c65f587338a0269f1a88481a4bb25da9369ac
   naming.py: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
-  dump_nightly.py: fd0ce0daa21a40dae42f4e2913248f25c9fd6bd1977fad2f754ed1f83c26c88d
+  dump_nightly.py: d65b5f4135a1d07d5334ab8c6d8e92790ee90b88fe7f2bf3b55b953a4e5c0326
 
 # The files the provisioning program imports from its own directory. They are
 # copied together into a private directory and run from there, so no other file
