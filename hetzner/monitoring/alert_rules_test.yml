@@ -2394,3 +2394,177 @@ tests:
       - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
         eval_time: 5m
         exp_samples: []
+
+  # ReleaseWatcherStale: the watcher runs every six
+  # hours as a scheduled GitHub Actions workflow and the gauge reaches Prometheus
+  # through the release_watcher scrape job, so every case below feeds the series
+  # that job would produce. The incident this exists for: the watcher failed on
+  # every run from 11 November, the committed timestamp never moved, and nothing
+  # alerted. A constant gauge is what a scrape of an unchanged file returns.
+  #
+  # Sample spacing is kept under Prometheus's five-minute lookback in every
+  # case below, as a scrape every two minutes does: wider spacing makes the
+  # series vanish between samples, and the `or absent(...)` half would then
+  # fire for a reason that has nothing to do with the age.
+  #
+  # The gauge was last advanced a day and more ago. Time is 0 at the start, so
+  # the value 0 is "last success at t=0": 86400s (24h) is not yet over at 24h,
+  # the condition holds from just after it, and `for: 30m` makes the alert
+  # fire from 24h30m.
+  - interval: 4m
+    input_series:
+      - series: 'ghost_release_watcher_last_success_timestamp_seconds{job="release_watcher", host="github"}'
+        values: '0x400'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 24h20m
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: ReleaseWatcherStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host: github
+              job: release_watcher
+            exp_annotations:
+              summary: 'The Ghost release watcher has not polled the registry successfully in over 24 hours.'
+              description: >-
+                The watcher runs every six hours as a scheduled GitHub Actions workflow in branchLeft/ghost-platform and commits the time of its last successful poll to release-watcher.prom on the state/release-watcher branch, which the release_watcher scrape job reads. 86400s (24h) is four missed ticks, wide enough that one late or skipped scheduled run does not alert. The `or absent(...)` half covers the file being unreadable or the gauge vanishing, which the time() subtraction alone cannot see (subtracting from an absent series yields no series at all); `for: 30m` keeps a single failed scrape of the raw-content host from firing it. A run that fails leaves the timestamp where it was, so a watcher that errors on every run and one that is switched off look the same here. Read the latest run of release-watcher-run.yml in ghost-platform. A repository with no activity for 60 days has its schedules disabled by GitHub, which is the other silent stop this alert exists for. See render.md#the-release-watcher-scrape-path.
+
+  # The shape of the real failure: the gauge advanced on every poll for ten
+  # hours (the value is the time of the poll), then the watcher stopped and the
+  # file kept returning the last value. Silent until 24h after that last poll
+  # (34h), firing from 34h30m.
+  - interval: 4m
+    input_series:
+      - series: 'ghost_release_watcher_last_success_timestamp_seconds{job="release_watcher", host="github"}'
+        values: '0+240x150 36000x400'
+    alert_rule_test:
+      - eval_time: 9h
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 33h
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 35h
+        alertname: ReleaseWatcherStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              host: github
+              job: release_watcher
+            exp_annotations:
+              summary: 'The Ghost release watcher has not polled the registry successfully in over 24 hours.'
+              description: >-
+                The watcher runs every six hours as a scheduled GitHub Actions workflow in branchLeft/ghost-platform and commits the time of its last successful poll to release-watcher.prom on the state/release-watcher branch, which the release_watcher scrape job reads. 86400s (24h) is four missed ticks, wide enough that one late or skipped scheduled run does not alert. The `or absent(...)` half covers the file being unreadable or the gauge vanishing, which the time() subtraction alone cannot see (subtracting from an absent series yields no series at all); `for: 30m` keeps a single failed scrape of the raw-content host from firing it. A run that fails leaves the timestamp where it was, so a watcher that errors on every run and one that is switched off look the same here. Read the latest run of release-watcher-run.yml in ghost-platform. A repository with no activity for 60 days has its schedules disabled by GitHub, which is the other silent stop this alert exists for. See render.md#the-release-watcher-scrape-path.
+
+  # A watcher that keeps succeeding: the gauge equals the time of each poll,
+  # so its age never passes four minutes here and the alert stays silent for the
+  # whole window.
+  - interval: 4m
+    input_series:
+      - series: 'ghost_release_watcher_last_success_timestamp_seconds{job="release_watcher", host="github"}'
+        values: '0+240x600'
+    alert_rule_test:
+      - eval_time: 39h
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+
+  # A gauge that was never scraped: no series exists, which `time() - <absent>`
+  # cannot see (no series to subtract from), so the `or absent(...)` half
+  # carries it. Pending until `for: 30m` has passed, firing after it.
+  - interval: 10m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ReleaseWatcherStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 'The Ghost release watcher has not polled the registry successfully in over 24 hours.'
+              description: >-
+                The watcher runs every six hours as a scheduled GitHub Actions workflow in branchLeft/ghost-platform and commits the time of its last successful poll to release-watcher.prom on the state/release-watcher branch, which the release_watcher scrape job reads. 86400s (24h) is four missed ticks, wide enough that one late or skipped scheduled run does not alert. The `or absent(...)` half covers the file being unreadable or the gauge vanishing, which the time() subtraction alone cannot see (subtracting from an absent series yields no series at all); `for: 30m` keeps a single failed scrape of the raw-content host from firing it. A run that fails leaves the timestamp where it was, so a watcher that errors on every run and one that is switched off look the same here. Read the latest run of release-watcher-run.yml in ghost-platform. A repository with no activity for 60 days has its schedules disabled by GitHub, which is the other silent stop this alert exists for. See render.md#the-release-watcher-scrape-path.
+
+  # One failed scrape of the raw-content host: the series is missing for
+  # about seventeen minutes (past the five-minute lookback, so absent() is
+  # true) and then comes back fresh. `for: 30m` keeps that from firing.
+  - interval: 2m
+    input_series:
+      - series: 'ghost_release_watcher_last_success_timestamp_seconds{job="release_watcher", host="github"}'
+        values: '0+120x25 _x10 4200+120x60'
+    alert_rule_test:
+      - eval_time: 69m
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: ReleaseWatcherStale
+        exp_alerts: []
+
+  # ComposeUnitRestartLoop: a compose unit whose start hangs to its
+  # 600 s timeout is restarted by systemd about every ten minutes. tenant-a restarts at 10 min and
+  # at 20 min, and so is a loop from the second restart on. blog has a single retry (a
+  # containerd restart, a slow start), which must not alert. publicpress-website is on a host not yet expected
+  # up. ssh.service is not a compose unit and loops without an alert from this rule. After the
+  # last restart the hour window moves on and the alert resolves.
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service"}'
+        values: '0x9 1x10 2x80'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service"}'
+        values: '0x9 1x90'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", name="branchleft-compose@publicpress-website.service"}'
+        values: '0x9 1x10 2x80'
+      - series: 'node_systemd_service_restart_total{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="ssh.service"}'
+        values: '0x9 1x10 2x80'
+    promql_expr_test:
+      # One restart is not a loop.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 15m
+        exp_samples: []
+      # The second restart is.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 25m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service"}'
+            value: 1
+      # An hour after the last restart it is over.
+      - expr: ALERTS{alertname="ComposeUnitRestartLoop", alertstate="firing"}
+        eval_time: 95m
+        exp_samples: []
+
+  # ComposeUnitFailed: the unit the start limit stopped stays failed until someone resets it. It
+  # is pending for ten minutes and then fires; a failed non-compose unit and a failed unit on a
+  # host not yet expected up do not. A unit that is not failed (state="active") is the control.
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+        values: '0x5 1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service", state="active", type="oneshot"}'
+        values: '1x65'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@blog.service", state="failed", type="oneshot"}'
+        values: '0x65'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.31:9100", host="app2", expected_up="false", name="branchleft-compose@publicpress-website.service", state="failed", type="oneshot"}'
+        values: '0x5 1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="ssh.service", state="failed", type="simple"}'
+        values: '0x5 1x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="firing"}
+        eval_time: 12m
+        exp_samples: []
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="pending"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitFailed", alertstate="pending", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+            value: 1
+      - expr: ALERTS{alertname="ComposeUnitFailed", alertstate="firing"}
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ComposeUnitFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.100:9100", host="app1", expected_up="true", name="branchleft-compose@tenant-a.service", state="failed", type="oneshot"}'
+            value: 1

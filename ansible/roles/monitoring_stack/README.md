@@ -19,10 +19,10 @@ It does four things:
    `GRAFANA_ADMIN_PASSWORD` and `SNDS_DATA_URL`. The values are inputs (see
    "Secrets" below). It creates the directory and the file when they are absent,
    and closes the file to `root:root` `0600` before any value is written.
-2. It copies the eight committed files of the stack from
+2. It copies the fourteen committed files of the stack from
    `hetzner/monitoring/stack/` into the project directory on the host: the
    Compose file, the Prometheus configuration and alert rules, the Blackbox
-   configuration, the Grafana datasource, the Alertmanager and ntfy templates and
+   configuration, the Grafana datasource, dashboard provider and five dashboards, the Alertmanager and ntfy templates and
    the Alertmanager email template. They are copied as files. Nothing is
    rendered, because the Compose file holds `${...}` and `$$` for Compose to read
    and the `.tmpl` files hold placeholders a later step fills.
@@ -35,7 +35,7 @@ It does four things:
    from differs from the stamp of the last restart that was read back as active,
    and only when the unit is enabled (see "Restart").
 
-It is the only role that delivers the eight stack files and the only role that
+It is the only role that delivers the fourteen stack files and the only role that
 restarts `branchleft-compose@monitoring.service`.
 `ansible/checks/test_monitoring_single_home.py` fails if another role names
 either. It checks, and does not write, the renderer
@@ -107,7 +107,7 @@ finds nothing changed. Instead the role works out, at the end of every run, a
 fingerprint of everything the unit runs from, as it is on disk now, and compares
 it with a stamp that it writes only after a restart was read back as active.
 
-- **The fingerprint** is a sha256 over the sha256 of each of: the eight stack
+- **The fingerprint** is a sha256 over the sha256 of each of: the fourteen stack
   files, the monitoring drop-in, the renderer and the pager's secrets file
   (`ntfy-pager.env`, written by `ntfy_pager`), and the sha256 of the secrets
   file with its `SNDS_DATA_URL` line removed. The list is `monitoring_stack_fingerprint_files`
@@ -323,10 +323,13 @@ replaces produced (`--no-owner --no-group --chmod=u=rwX,go=rX` followed by
 their own user, so a file or directory tighter than this makes a container fail.
 
 - The project directory `/opt/branchleft/monitoring` and under it the directories
-  `alertmanager`, `blackbox`, `grafana/provisioning/datasources`, `ntfy` and
+  `alertmanager`, `blackbox`, `grafana/provisioning/dashboard-json`,
+  `grafana/provisioning/dashboards`, `grafana/provisioning/datasources`, `ntfy` and
   `prometheus`.
 - Files in it: `compose.yml`, `alertmanager/alertmanager.yml.tmpl`,
-  `alertmanager/email.gotmpl`, `blackbox/blackbox.yml`,
+  `alertmanager/email.gotmpl`, `blackbox/blackbox.yml`, the five dashboards
+  `grafana/provisioning/dashboard-json/{backups,host-health,mail-queue,support-access,tenant-health}.json`,
+  `grafana/provisioning/dashboards/dashboards.yaml`,
   `grafana/provisioning/datasources/prometheus.yaml`, `ntfy/server.yml.tmpl`,
   `prometheus/alerts.yml` and `prometheus/prometheus.yml`.
 - `/etc/systemd/system/branchleft-compose@monitoring.service.d/`, mode `0755`,
@@ -405,7 +408,7 @@ What each part of the scenario does:
   systemd has loaded (`DropInPaths`, `MemoryMax`, `CPUWeight`); the secrets file is
   `root:root` `0600` and holds each key once; every image in the Compose file is
   pinned by digest; and the stamp is one sha256 and a newline, `0600`, in a
-  directory of mode `0755`, and the fingerprint's list names the eight files, the
+  directory of mode `0755`, and the fingerprint's list names the fourteen files, the
   monitoring drop-in, the renderer and the pager's secrets file.
 - `verify.yml`, the project directory: a play applies the role with a play variable
   that names another project directory, and that directory must not exist and the
@@ -501,7 +504,7 @@ The restart decision:
 | The unit's state removed from `restart_due` (fingerprint only)                           | `verify`        | "Assert the revert restarted the failed unit, once, and left the stamp as it was"                                                                           |
 | The renderer left out of the fingerprint list                                            | `verify`        | the fingerprint-definition assertion for `monitoring_stack_renderer`                                                                                        |
 | The monitoring drop-in left out of the fingerprint list                                  | `verify`        | the same assertion for `monitoring_stack_dropin_dest`                                                                                                       |
-| The eight stack files left out of the fingerprint list                                   | `verify`        | the same assertion for `monitoring_stack_files`                                                                                                             |
+| The fourteen stack files left out of the fingerprint list                                | `verify`        | the same assertion for `monitoring_stack_files`                                                                                                             |
 | The `env=` part of the fingerprint removed                                               | `verify`        | "Assert a rotated key restarted the unit once ..."                                                                                                          |
 | The `SNDS_DATA_URL` line hashed                                                          | `verify`        | "Assert the rotated SNDS_DATA_URL is in the file and restarted nothing"                                                                                     |
 | The pager's secrets file left out of the fingerprint list                                | `verify`        | the fingerprint-definition assertion for `monitoring_stack_ntfy_env_file`, and "Assert the NTFY_ rotation restarted the unit on this role's next run, once" |

@@ -13,7 +13,7 @@ the order the standard sets for a role README (ANS-14).
    pinned commit in `vars/main.yml`. Each is installed root-owned with mode 0644 at
    `/opt/branchleft/db/provision` or `/opt/branchleft/db/recovery`. Each fetch is
    checked against its pinned sha256 digest, and a file whose bytes differ fails.
-   The directory holds ten programs under `provision/`. One of them,
+   The directory holds eleven programs under `provision/`, `gtid_snapshot.py` among them, the module `extract_tenant_binlog.py` imports. One of them,
    `provision_tenant_db.py`, no unit of this role runs: the `db1_grants` role runs it
    and only consumes it, so this role is where it is delivered. The fetches are
    skipped in check mode (a check-mode run creates no directory), so the file
