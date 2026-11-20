@@ -124,6 +124,7 @@
         name: branchleft.pull_trigger
         tasks_from: _floor_seed
       vars:
+        enrolled_host: demo1
         pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
 
     - name: Read the floor again
@@ -151,6 +152,7 @@
             name: branchleft.pull_trigger
             tasks_from: _floor_seed
           vars:
+            enrolled_host: demo1
             pull_trigger_floor_seed: not-a-commit-id
             pull_trigger_state_dir: /var/tmp/ptt/st-malformed
         - name: The malformed seed was accepted, which it must not be
@@ -174,6 +176,7 @@
         name: branchleft.pull_trigger
         tasks_from: _floor_seed
       vars:
+        enrolled_host: demo1
         pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
         pull_trigger_state_dir: /var/tmp/ptt/st-seed
 
@@ -216,6 +219,10 @@
     - name: Run the task file without the guard over a floor that exists
       ansible.builtin.include_tasks: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_forced.yml"
       vars:
+        enrolled_host: demo1
+        # include_tasks does not load the role's vars, so the copy is given the list it reads.
+        pull_trigger_bundle_hosts:
+          - demo1
         pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
         pull_trigger_state_dir: /var/tmp/ptt/st-seed
 
@@ -230,6 +237,83 @@
           - (pull_trigger_pr_seed_floor_forced.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c2 ~ "\n"
         fail_msg: the floor did not move without the guard, so the test proves nothing
         success_msg: red without the guard, green with it
+
+    # A seed on a host that pulls is refused before anything is written. The control is the same
+    # task file with the host check replaced by a true test, run as a pulling host: it writes.
+    - name: A seed on a host that pulls is refused before anything is written
+      block:
+        - name: Seed a host that pulls, which has no floor of its own
+          ansible.builtin.include_role:
+            name: branchleft.pull_trigger
+            tasks_from: _floor_seed
+          vars:
+            enrolled_host: pull1
+            pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
+            pull_trigger_state_dir: /var/tmp/ptt/st-pullhost
+        - name: The seed on a host that pulls was accepted, which it must not be
+          ansible.builtin.fail:
+            msg: a seed on a host that pulls was accepted
+      rescue:
+        - name: Look for a floor the refused seed might have written
+          ansible.builtin.stat:
+            path: /var/tmp/ptt/st-pullhost/last-applied
+          register: pull_trigger_pr_pullhost_floor
+        - name: The refusal came from the host check and nothing was written
+          ansible.builtin.assert:
+            that:
+              - not pull_trigger_pr_pullhost_floor.stat.exists
+              - "'must not be seeded' in ansible_failed_result.msg | default('')"
+            fail_msg: 'the seed on a host that pulls was not refused for its host: {{ ansible_failed_result | default({}) }}'
+            success_msg: the seed on a host that pulls was refused and nothing was written
+
+    - name: Make a copy of the task file with the host check cut out, on the controller
+      ansible.builtin.copy:
+        src: '{{ verify_role_directory }}/tasks/_floor_seed.yml'
+        dest: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_hostless.yml"
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Cut out the host check
+      ansible.builtin.replace:
+        path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_hostless.yml"
+        regexp: "^(\\s+)- enrolled_host \\| default\\(''\\) in pull_trigger_bundle_hosts$"
+        replace: '\1- true'
+      delegate_to: localhost
+      register: pull_trigger_pr_hostless_copy
+
+    - name: The copy lost the host check
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_hostless_copy.changed
+        fail_msg: the task file no longer matches the line this test changes; update the test
+        success_msg: the host check was cut out of the copy
+
+    - name: Make the state directory of the copy, which has no floor
+      ansible.builtin.file:
+        path: /var/tmp/ptt/st-pullhost-cut
+        state: directory
+        mode: '0700'
+
+    - name: Run the task file without the host check as a host that pulls
+      ansible.builtin.include_tasks: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_hostless.yml"
+      vars:
+        enrolled_host: pull1
+        pull_trigger_bundle_hosts:
+          - demo1
+        pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
+        pull_trigger_state_dir: /var/tmp/ptt/st-pullhost-cut
+
+    - name: Read the floor after the task file without the host check
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/st-pullhost-cut/last-applied
+      register: pull_trigger_pr_pullhost_cut_floor
+
+    - name: Without the host check a host that pulls takes the seed, so the check is what refuses it
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_pullhost_cut_floor.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c2 ~ "\n"
+        fail_msg: the seed was not written without the host check, so the test proves nothing
+        success_msg: red without the host check, green with it
 
     # ---------------------------------- the installed program, end to end
     - name: Check mode of a commit that descends from the floor
