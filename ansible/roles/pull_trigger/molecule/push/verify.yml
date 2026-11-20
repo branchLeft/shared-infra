@@ -872,17 +872,42 @@
           - regexp: '^(\s+)if self\._git\.attempt\("fsck", .*\)\.returncode != 0:$'
             replace: '\1if False:'
 
-    - name: Without the explicit check the malformed object is accepted
-      ansible.builtin.include_tasks: tasks/red.yml
+    # The fetch's own setting refuses the malformed object before the explicit check is reached,
+    # so cutting the explicit check alone changes nothing: the copy still refuses at the fetch.
+    # The case shows that, not a red: the same unpack sentence, exit 20, and the floor unmoved.
+    - name: Read the floor before the malformed object with the explicit check cut out
+      ansible.builtin.slurp:
+        src: '{{ verify_state }}/last-applied'
+      register: pull_trigger_pr_explicit_floor_before
+
+    - name: With the explicit check cut out the fetch still refuses the malformed object
+      ansible.builtin.include_tasks: tasks/request.yml
       vars:
-        case:
-          name: a malformed object, no explicit check
-          text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
-          bundle: malformed
-          program: /var/tmp/ptt/mut/no-explicit-object-check
-          rc: 0
-          not_reason: bad-bundle
-          floor_after: '{{ pull_trigger_pr_commits.malformed }}'
+        request_name: a malformed object, no explicit check
+        request_text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_program: /var/tmp/ptt/mut/no-explicit-object-check
+        request_input: '{{ pull_trigger_pr_bundles }}/malformed.bundle'
+
+    - name: The fetch refuses it first, with exit 20 and the unpack sentence
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 20
+          - "'could not be unpacked' in pull_trigger_pr_result.stderr"
+        fail_msg: 'the explicit check cut out still changed the answer: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the fetch refuses the malformed object before the explicit check
+
+    - name: Read the floor after the malformed object with the explicit check cut out
+      ansible.builtin.slurp:
+        src: '{{ verify_state }}/last-applied'
+      register: pull_trigger_pr_explicit_floor_after
+
+    - name: The floor did not move
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_explicit_floor_after.content == pull_trigger_pr_explicit_floor_before.content
+        fail_msg: a malformed object moved the floor with the explicit check cut out
+        success_msg: the floor is unmoved
 
     - name: Cut out the byte limit, on top of the small one
       ansible.builtin.include_tasks: tasks/sabotage.yml
