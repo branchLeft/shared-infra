@@ -368,8 +368,8 @@ switched off, and does not need to: both leave the timestamp where it was. The
 promtool cases are at the end of `alert_rules_test.yml`.
 
 It exists because the watcher failed every run from 11 November 2026 and
-nothing alerted (branchLeft/workspace#3790). The alert rule is an owner merge
-(branchLeft/workspace#2002); the gauge appears in Prometheus once the
+nothing alerted. The alert rule is an owner merge; the gauge appears in
+Prometheus once the
 rendered `prometheus.yml` and `alerts.yml` are applied to edge1.
 
 ## renderAlertmanagerTemplate

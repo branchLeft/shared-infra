@@ -2395,7 +2395,7 @@ tests:
         eval_time: 5m
         exp_samples: []
 
-  # ReleaseWatcherStale (branchLeft/workspace#2002): the watcher runs every six
+  # ReleaseWatcherStale: the watcher runs every six
   # hours as a scheduled GitHub Actions workflow and the gauge reaches Prometheus
   # through the release_watcher scrape job, so every case below feeds the series
   # that job would produce. The incident this exists for: the watcher failed on
