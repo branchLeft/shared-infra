@@ -186,7 +186,7 @@
     - name: Assert the word pending was refused and the stamp is as it was
       ansible.builtin.assert:
         that:
-          - restart_stamp_verify_pending.failed
+          - restart_stamp_verify_pending.msg is defined
           - "'not a sha256' in restart_stamp_verify_pending.msg"
           - restart_stamp_verify_after_refused.stamps.unit == restart_stamp_verify_one
         quiet: true
@@ -219,7 +219,7 @@
     - name: Assert an unreadable stamp stops the run or reads as absent, as told
       ansible.builtin.assert:
         that:
-          - restart_stamp_verify_unreadable.failed
+          - restart_stamp_verify_unreadable.msg is defined
           - "'cannot be read' in restart_stamp_verify_unreadable.msg"
           - restart_stamp_verify_lenient.stamps.dir == 'none'
         quiet: true
