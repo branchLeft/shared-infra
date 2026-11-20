@@ -47,6 +47,7 @@ DEPLOY_TIME_SOURCES = {
 # or to prove safe, and the test below fails a stale entry.
 SINGLE_FILE_MOUNTS = {
     "edge": {"./crowdsec/config.yaml.local"},
+    "edge-t": {"./crowdsec/config.yaml.local"},
     "monitoring": {
         "./alertmanager/email.gotmpl",
         "./blackbox/blackbox.yml",
