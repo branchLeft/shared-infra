@@ -257,13 +257,23 @@ class Context:
         return self.profile.subnet
 
 
+NFT_TABLE = "branchleft_edge_nat"
+NFT_ABSENT = "No such file or directory"
+# `nft list table` prints a counter before the verdict: `... oifname "eth0" counter packets 3 bytes 180 masquerade`.
+NFT_MASQUERADE = re.compile(r'^\s*ip saddr (\S+) oifname "([^"]+)"(?: counter packets (\d+) bytes \d+)? masquerade\s*$')
+
+
 @dataclass(frozen=True)
 class Counters:
-    """Packet counters of the three rules; None means the rule is not there."""
+    """Packet counters of the three rules; None means the rule is not there.
+
+    `home` says where the masquerade was read: "nft" (the edge_firewall role's table) or "iptables".
+    """
 
     masquerade: int | None
     out_accept: int | None
     return_accept: int | None
+    home: str
 
 
 def rule_rows(table: str, chain: str) -> list[list[str]]:
@@ -295,7 +305,40 @@ def one_counter(rows: list[list[str]], what: str) -> int | None:
     return int(rows[0][0])
 
 
+def nft_listing() -> str | None:
+    """The edge_firewall role's nftables table as `nft` prints it; None when it is not loaded."""
+    if which("nft") is None:
+        return None
+    code, out, err = run(["nft", "list", "table", "ip", NFT_TABLE])
+    if code == 0:
+        return out
+    if NFT_ABSENT in err:
+        return None
+    raise Refused(f"reading nft table ip {NFT_TABLE}: exit {code}: {err.strip()}")
+
+
+def nft_masquerade(ctx: Context, listing: str) -> int | None:
+    found = []
+    for line in listing.splitlines():
+        match = NFT_MASQUERADE.match(line)
+        if match and match.group(1) == ctx.subnet and match.group(2) == ctx.uplink:
+            found.append(match)
+    if not found:
+        return None
+    if len(found) > 1:
+        raise Refused(f"the MASQUERADE for {ctx.subnet} out of {ctx.uplink} is in nft table ip {NFT_TABLE} "
+                      f"{len(found)} times; refusing to guess which one counts")
+    if found[0].group(3) is None:
+        raise Refused(f"the nft MASQUERADE for {ctx.subnet} out of {ctx.uplink} has no counter, so the probe cannot "
+                      "show it carries traffic; add `counter` to the rule in the edge_firewall template")
+    return int(found[0].group(3))
+
+
 def read_counters(ctx: Context) -> Counters:
+    """The masquerade is read from the nft table when it is loaded, otherwise from iptables.
+
+    It must be in exactly one place: a masquerade in iptables while the nft table is loaded is refused.
+    """
     up = ctx.uplink
     nat = rule_rows("nat", "POSTROUTING")
     masquerade = [
@@ -303,6 +346,16 @@ def read_counters(ctx: Context) -> Counters:
         for r in nat
         if r[2] == "MASQUERADE" and r[5] == "*" and r[6] == up and r[7] == ctx.subnet and r[8] == "0.0.0.0/0"
     ]
+    listing = nft_listing()
+    if listing is None:
+        masq = one_counter(masquerade, f"the MASQUERADE rule for {ctx.subnet} out of {up}")
+        home = "iptables"
+    else:
+        if masquerade:
+            raise Refused(f"the MASQUERADE for {ctx.subnet} out of {up} is in both nft table ip {NFT_TABLE} "
+                          "and iptables; refusing to guess which one carries the traffic")
+        masq = nft_masquerade(ctx, listing)
+        home = "nft"
     flt = rule_rows("filter", ctx.chain)
     outbound = [
         r
@@ -317,9 +370,10 @@ def read_counters(ctx: Context) -> Counters:
         and r[8] == ctx.subnet and re.search(r"ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED)$", " ".join(r[9:]))
     ]
     return Counters(
-        one_counter(masquerade, f"the MASQUERADE rule for {ctx.subnet} out of {up}"),
+        masq,
         one_counter(outbound, f"the {ctx.chain} accept for {ctx.subnet} out of {up}"),
         one_counter(returning, f"the {ctx.chain} return accept for {ctx.subnet} in from {up}"),
+        home,
     )
 
 
@@ -479,6 +533,12 @@ INSIDE_CONTROL = "inside-subnet-egress-via-masquerade"
 OUTSIDE_CONTROL = "outside-subnet-no-reply"
 
 
+def masquerade_name(counters: Counters) -> str:
+    if counters.home == "nft":
+        return f"nft table ip {NFT_TABLE} MASQUERADE"
+    return "nat/POSTROUTING MASQUERADE"
+
+
 def control_inside(ctx: Context, lab: Lab, state: str = "live") -> Verdict:
     before = read_counters(ctx)
     reply, seen = lab.probe(ctx.host, ctx.port)
@@ -487,7 +547,7 @@ def control_inside(ctx: Context, lab: Lab, state: str = "live") -> Verdict:
     if reply is not True:
         fails.append(f"no reply from {ctx.host}:{ctx.port} ({seen})")
     for name, b, a in (
-        (f"the nat/POSTROUTING MASQUERADE for {ctx.subnet}", before.masquerade, after.masquerade),
+        (f"the {masquerade_name(before)} for {ctx.subnet}", before.masquerade, after.masquerade),
         (f"the {ctx.chain} accept for {ctx.subnet} out of {ctx.uplink}", before.out_accept, after.out_accept),
         (f"the {ctx.chain} return accept for {ctx.subnet} in from {ctx.uplink}", before.return_accept, after.return_accept),
     ):
@@ -616,7 +676,10 @@ class Sabotage:
 def sabotage_sequence(ctx: Context, lab: Lab, state: Sabotage) -> None:
     """Delete the masquerade, show red, restore, show green. Restores on any exit."""
     # Quiet first: deleting the masquerade now would cut any other source's new flows.
-    settle(ctx)
+    before = settle(ctx)
+    if before.home != "iptables":
+        raise Refused(f"--sabotage deletes an iptables rule, but the MASQUERADE is in nft table ip {NFT_TABLE}; "
+                      "nothing was changed")
     say(f"sabotage: deleting the MASQUERADE rule for {ctx.subnet}; if this process is killed, run as root: systemctl restart {UNIT}")
     state.began = True
     code, _, err = run(masquerade_argv(ctx, "-D"))
