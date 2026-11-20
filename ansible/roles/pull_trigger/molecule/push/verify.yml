@@ -832,7 +832,9 @@
         that:
           - pull_trigger_pr_result.rc == 10
           - "'could not be unpacked' in pull_trigger_pr_result.stderr"
-        fail_msg: 'the installed program did not refuse the malformed object at the fetch: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stderr }}'
+        fail_msg: >-
+          the installed program did not refuse the malformed object at the fetch:
+          rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stderr }}
         success_msg: the installed program refuses it at the fetch
 
     - name: Cut out git's object check on the fetch, the setting only
