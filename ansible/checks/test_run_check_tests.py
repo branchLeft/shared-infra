@@ -7,7 +7,10 @@ test's name states the rule it holds; the reasons are in run_check_tests.md.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,15 +68,47 @@ class PartsCoverEveryModuleOnce(unittest.TestCase):
     def test_an_empty_part_is_not_a_pass(self) -> None:
         self.assertEqual(1, _run_main_on_empty())
 
+    def test_a_part_with_a_failing_test_exits_one(self) -> None:
+        body = (
+            "import unittest\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_fails(self) -> None:\n"
+            "        self.fail('a check that fails')\n"
+        )
+        self.assertEqual(1, _run_main_on({"test_exit_fails_x1.py": body}))
+
+    def test_a_part_with_a_module_that_cannot_import_exits_one(self) -> None:
+        self.assertEqual(
+            1, _run_main_on({"test_exit_broken_x2.py": "import not_a_module_at_all\n"})
+        )
+
+    def test_a_part_whose_tests_all_pass_exits_zero(self) -> None:
+        body = (
+            "import unittest\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_passes(self) -> None:\n"
+            "        self.assertTrue(True)\n"
+        )
+        self.assertEqual(0, _run_main_on({"test_exit_passes_x3.py": body}))
+
 
 def _run_main_on_empty() -> int:
+    return _run_main_on({})
+
+
+def _run_main_on(modules: dict[str, str]) -> int:
+    """The exit status of `main(["main"])` over a directory holding `modules`."""
     with tempfile.TemporaryDirectory() as tmp:
+        for name, body in modules.items():
+            (Path(tmp) / name).write_text(body, encoding="utf-8")
         original = rct.CHECKS
         rct.CHECKS = Path(tmp)
         try:
-            return rct.main(["main"])
+            with contextlib.redirect_stderr(io.StringIO()):
+                return rct.main(["main"])
         finally:
             rct.CHECKS = original
+            sys.path[:] = [p for p in sys.path if p != tmp]
 
 
 class WorkflowRunsBothParts(unittest.TestCase):
