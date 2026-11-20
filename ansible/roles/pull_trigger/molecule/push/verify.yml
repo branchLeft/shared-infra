@@ -831,7 +831,7 @@
     - name: The installed program names the unpack step for a malformed object
       ansible.builtin.assert:
         that:
-          - pull_trigger_pr_result.rc == 10
+          - pull_trigger_pr_result.rc == 20
           - "'could not be unpacked' in pull_trigger_pr_result.stderr"
         fail_msg: >-
           the installed program did not refuse the malformed object at the fetch:
@@ -854,7 +854,7 @@
           text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
           bundle: malformed
           program: /var/tmp/ptt/mut/no-fetch-object-check
-          rc: 10
+          rc: 20
 
     - name: Without the fetch's check the refusal is the explicit check's sentence, not the unpack sentence
       ansible.builtin.assert:
