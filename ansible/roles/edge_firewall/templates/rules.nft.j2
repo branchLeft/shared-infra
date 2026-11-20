@@ -50,6 +50,6 @@ delete table ip {{ edge_firewall_nat_table }}
 table ip {{ edge_firewall_nat_table }} {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        ip saddr {{ edge_firewall_nat_source }} oifname "{{ edge_firewall_uplink }}" masquerade
+        ip saddr {{ edge_firewall_nat_source }} oifname "{{ edge_firewall_uplink }}" counter masquerade
     }
 }
