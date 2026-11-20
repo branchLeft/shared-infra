@@ -155,7 +155,7 @@ services:
     user: '65534:65534'
     environment:
       ALERTMANAGER_NAME: branchleft
-      ALERTMANAGER_URI: http://alertmanager:9094
+      ALERTMANAGER_URI: http://alertmanager:9093
       ALERTMANAGER_READONLY: 'true'
       KARMA_NAME: branchLeft
     # 8084 is free on edge1's loopback (Caddy's probe holds 8080);
