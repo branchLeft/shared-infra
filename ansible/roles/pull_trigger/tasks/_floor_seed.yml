@@ -11,7 +11,7 @@
 - name: Refuse a floor seed on a host that pulls, which takes no seed
   ansible.builtin.assert:
     that:
-      - true
+      - enrolled_host | default('') in pull_trigger_bundle_hosts
     fail_msg: a floor seed takes its floor from the bootstrap of a host that takes bundles; this host pulls and must not be seeded.
     quiet: true
   when: pull_trigger_floor_seed | length > 0

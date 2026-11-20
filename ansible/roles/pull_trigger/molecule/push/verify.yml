@@ -240,6 +240,12 @@
 
     # A seed on a host that pulls is refused before anything is written. The control is the same
     # task file with the host check replaced by a true test, run as a pulling host: it writes.
+    - name: Make the state directory of the host that pulls, which has no floor
+      ansible.builtin.file:
+        path: /var/tmp/ptt/st-pullhost
+        state: directory
+        mode: '0700'
+
     - name: A seed on a host that pulls is refused before anything is written
       block:
         - name: Seed a host that pulls, which has no floor of its own
