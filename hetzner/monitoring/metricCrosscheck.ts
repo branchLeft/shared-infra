@@ -288,6 +288,15 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
   db_binlog_ship_last_success_timestamp_seconds:
     'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
+  // The control-plane backup's two textfile gauges, written on ops1 by the program the
+  // control_plane_backup Ansible role installs (ansible/roles/control_plane_backup/files): the success
+  // times by its `run`, the failure time by its `mark-failed`, which the service's OnFailure= starts.
+  // The program lives outside this directory, so nothing here can scan it; a unit test in the role
+  // pins both names, and the stage label values, to the rules' expressions in alerts.yml.
+  control_plane_backup_last_success_timestamp_seconds:
+    "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py), a textfile gauge on ops1",
+  control_plane_backup_last_failure_timestamp_seconds:
+    "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py mark-failed), a textfile gauge on ops1",
   // The scanning storage adapter's textfile export, written by each tenant's
   // Ghost process on its app host. Names and label values are the contract in
   // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the

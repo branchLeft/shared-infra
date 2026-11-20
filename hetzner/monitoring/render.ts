@@ -113,6 +113,14 @@ export const DB_DUMP_ABSENT_FOR = '30h';
 /** The binlog timer fires every 15m and the unit stops at 10m: 25m is healthy; 1h is three runs in a row failed or missed. */
 export const DB_BINLOG_STALE_SECONDS = 3600;
 export const DB_BINLOG_ABSENT_FOR = '1h';
+/**
+ * The control-plane backup (ansible/roles/control_plane_backup) runs nightly at 02:40 UTC with up to 5m of
+ * random delay, and its unit is stopped at 2h, so two healthy successes are at most 26h05m apart. 36h
+ * (1.5 x the cadence, as for TenantBackupAgeHigh) leaves 9h55m of margin. Backup copy 1 expires an object
+ * 10 days after it is put, so a night missed at 36h still leaves about 8.5 days to put a copy back.
+ */
+const OPS1_SERIES = 'host="ops1"';
+export const CONTROL_PLANE_BACKUP_STALE_SECONDS = 129600;
 
 /**
  * The scanner series reach Prometheus through a host's node_exporter textfile
@@ -889,6 +897,63 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            script delivered after this rule writes its first status within',
     '            one 15 minute timer period. If db1 itself is down,',
     '            HostOrServiceDown pages first.',
+    '',
+    // The control plane's own database backup, from the two textfile gauges the program writes on
+    // ops1 (ansible/roles/control_plane_backup): its per-stage success times, and the time the nightly
+    // unit last failed, written by the unit its OnFailure= starts. Warnings, same route as the group.
+    // Neither uses absent(): the role's timer is off until the owner's apply turns it on, and a rule
+    // that fired for a backup nobody has switched on would be noise. See render.md#the-backup-rule-group.
+    '      - alert: ControlPlaneBackupStale',
+    '        expr: >-',
+    `          time() - control_plane_backup_last_success_timestamp_seconds{${OPS1_SERIES}} > ${CONTROL_PLANE_BACKUP_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The control-plane backup has not completed its {{ $labels.stage }} step for over 36 hours."',
+    '          description: >-',
+    '            control_plane_backup_last_success_timestamp_seconds is written',
+    '            on ops1 by the control-plane backup program after each stage',
+    '            succeeds: verified_on_host once the copy has been restored into a',
+    '            throwaway server and counted equal to live, and shipped_offsite',
+    '            once the sealed copy has been put to backup copy 1. The timer fires',
+    '            at 02:40 UTC with up to 5 minutes of random delay and the unit is',
+    '            stopped at 2 hours, so two healthy successes are at most 26h05m',
+    '            apart. 129600s (36h) leaves 9h55m of margin and fires on the first',
+    '            missed night. Backup copy 1 expires an object 10 days after it is',
+    '            put, so nothing is lost yet and about 8.5 days remain to run the',
+    '            backup by hand before copy 1 holds no control-plane backup. On',
+    '            ops1, read journalctl -u branchleft-control-plane-backup.service;',
+    '            a stopped timer shows in systemctl list-timers. Warning, never',
+    '            page. Nothing fires before the first success is written, so a',
+    '            timer that has never run is not seen by this rule.',
+    '',
+    // Written once per failure and flat otherwise, so no for:, as for DbNightlyDumpFailed. The
+    // mark counts only while it is strictly newer than the last full success (shipped_offsite), so
+    // the next night's success clears it, and a failure after a success (the prune that follows the
+    // ship) is not hidden by it. With no success series at all the mark still fires.
+    '      - alert: ControlPlaneBackupRunFailed',
+    '        expr: >-',
+    `          control_plane_backup_last_failure_timestamp_seconds{${OPS1_SERIES}}`,
+    '          unless on(instance)',
+    `          (control_plane_backup_last_success_timestamp_seconds{${OPS1_SERIES}, stage="shipped_offsite"} > on(instance) control_plane_backup_last_failure_timestamp_seconds{${OPS1_SERIES}})`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The control-plane backup on {{ $labels.instance }} failed and no later run has shipped a copy."',
+    '          description: >-',
+    '            branchleft-control-plane-backup.service entered a failed state: a',
+    '            check that did not pass, a missing precondition, a kill, the',
+    '            two-hour timeout or a crash. systemd then started',
+    '            branchleft-control-plane-backup-failed.service, which wrote the',
+    '            time to control_plane_backup_failed.prom in the textfile',
+    '            directory. This rule holds while that time is newer than the last',
+    '            shipped_offsite success, so the next run that ships a copy clears',
+    '            it, and a failure that comes after a ship (the prune that follows',
+    '            it) is not hidden by an earlier success. It fires the night it',
+    '            happens, about 36 hours before ControlPlaneBackupStale could.',
+    '            On ops1, read journalctl -u branchleft-control-plane-backup.service',
+    '            for the reason; a run by hand with systemctl start clears it once',
+    '            it ships. The previous proven copies are still on the host.',
     // The scanning storage adapter's own metrics, written by each tenant's
     // Ghost process as a node_exporter textfile. Every rule is scoped to
     // expected_up="true" on the node target, so nothing fires for a host
