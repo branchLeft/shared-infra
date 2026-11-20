@@ -320,6 +320,9 @@ jobs:
           route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
+          # The abuse-report entry is dormant until its mx1 producer lands:
+          # a page under its alertname reaches no route either.
+          route email alertname=AbuseReportReceived severity=page
           # A page-severity alertname the register has never heard of
           # reaches no route either -- the wiring half of the control
           # sabotage. pageRegister.test.ts's `findUnregisteredPageSeverityAlerts`
