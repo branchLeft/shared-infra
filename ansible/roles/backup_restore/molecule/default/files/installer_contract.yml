@@ -14,18 +14,18 @@
 # role's lists and pins together, and let the scenario compare them. Nothing
 # here is fetched at test time, so the scenario cannot see an installer that
 # changed after this commit; that is the README's named limit.
-installer_contract_commit: 5e52f78427cab104438057164e4baa16b329875c
+installer_contract_commit: 01afa64bb98822116f6824573943304baafe2849
 
 # The sha256 of each program the role stages and the installers' own files; the
 # role's pin for each (backup_worker_release_files) must equal it.
 installer_contract_sha256:
-  control/provision/install_backup_worker.py: 272a223cba74530a2defa6f3f512f4cdc175b9483ec72263e70db95cf1fbe30b
-  control/provision/install_restore_drill.py: 51cdea6bfc3524e6359c523948441c00749a359cded99ef2643e37658cbb80cc
+  control/provision/install_backup_worker.py: e16a2d023add173f8191574c5bb651939aa32afade3b914943640451f19bc2c6
+  control/provision/install_restore_drill.py: dc9b618410412897fd4ffcd068c2487f66c2ecfdb7b880d0291b6cf85e0909e8
   control/provision/install_state_copy.py: fdf301377f51b60107154ae389f3ddea41c426f2b9f6c00a8b6f097f65e8d6c7
-  control/provision/nextcloud_backup.py: dd451d0652606e5b229dbe6ade7271d5c1a88a7eea12c226e04fed82a8010132
-  infra/provisioning/scripts/restore_drill.py: 0b598b2be1edfbe44b00a477f27242045582ebe3f958aa970aa07d349040732b
+  control/provision/nextcloud_backup.py: 2b2a19b94a0e90eca0e7666e8d9595a1ad8b6438d23f0bb8179451952bad0c15
+  infra/provisioning/scripts/restore_drill.py: 788d4241bfc1c3dd07daafc1aaff9ae4e576ca82d313646ce589e40c78fc5595
   infra/provisioning/scripts/state_copy.py: 0fb1031a373760d0bb81c32f02adbe8be286826f145e14a642a859a1359b8cd7
-  db/recovery/restore_drained.py: cfd6a02d990359596056dea785fc4881001c20282ba55a77cbfb0c88be97c1d0
+  db/recovery/restore_drained.py: 62b9c6519b75b04994df3e676883867e76f64e65e47d33c46fab88106c5fbcfa
   control/provision/branchleft-restore-drill.service: 9482c19f09dd69505ac15c3aee0cd851826b8a20d54f313ad5501fb961896abc
   control/provision/branchleft-restore-drill.timer: 8b01aa0f6969b2598bdf6764e4e1d7184e972b24d74f0f3950207329207ca4bf
   control/provision/branchleft-state-copy.service: fb1d8581605fb6d6a2e7256d0fe55ed22328b1d25df81d1269c884da1b2c9558

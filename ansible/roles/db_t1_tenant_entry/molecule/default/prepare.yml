@@ -1,0 +1,149 @@
+---
+# Test setup only, never part of the role. It makes the instance look as the tenant database
+# host does before the role: a stand-in for docker and the database client with one tenant that
+# already exists, and a real sshd of its own on a local port, so the verify play can connect with
+# the controller's key and see what the forced command lets through. The key pairs are made
+# here, inside the container, for this run only: no key leaves it except the public half the
+# converge reads. The account the role makes does not exist yet, as on the real host.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    # sudo is already in the image; naming it makes the build stop here, with its own
+    # message, on an image that ever drops it.
+    - name: Install the SSH server, its client and sudo
+      ansible.builtin.apt:
+        name:
+          - openssh-server
+          - openssh-client
+          - sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the directory the stand-in records into
+      ansible.builtin.file:
+        path: '{{ scenario_record_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the container's identifier where the stand-in reads it
+      ansible.builtin.copy:
+        content: '{{ scenario_container_id }}'
+        dest: '{{ scenario_record_dir }}/container-id'
+        owner: root
+        group: root
+        mode: '0644'
+
+    # One tenant exists before the role is applied, so a request for its name can be refused.
+    - name: Seed the stand-in's database with the tenant that already exists
+      ansible.builtin.copy:
+        content: '{{ {"users": ["ghost_" + scenario_existing_tenant], "databases": ["ghost_" + scenario_existing_tenant]} | to_json }}'
+        dest: '{{ scenario_record_dir }}/db.json'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make the record of creations the stand-in appends to
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ scenario_record_dir }}/creates.log'
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+
+    - name: Put the stand-in for docker in place
+      ansible.builtin.copy:
+        src: fake_docker.py
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the directory the key pairs are made in
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used
+    # (ANS-9). The creates argument makes it report truthfully.
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - controller
+        - other
+      no_log: true
+
+    - name: Make the directory sshd separates privileges in
+      ansible.builtin.file:
+        path: /run/sshd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the SSH server's host keys
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -A
+        creates: /etc/ssh/ssh_host_ed25519_key
+
+    # Close to the Debian defaults: key authentication only, StrictModes on, the default
+    # AuthorizedKeysFile, no user environment, and the sftp subsystem present so a refused
+    # one can be seen. Only the port and the address are the test's, and PAM is off because
+    # a container has no login session for it to open. The real host's own sshd configuration
+    # is read on the first live run.
+    - name: Put the test SSH server's configuration in place
+      ansible.builtin.copy:
+        content: |
+          Port {{ scenario_ssh_port }}
+          ListenAddress 127.0.0.1
+          HostKey /etc/ssh/ssh_host_ed25519_key
+          PidFile /run/sshd-entry-test.pid
+          UsePAM no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          StrictModes yes
+          AllowUsers tenantdb
+          Subsystem sftp /usr/lib/openssh/sftp-server
+        dest: /etc/ssh/sshd_config_entry_test
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/sshd -t -f %s
+
+    - name: Start the test SSH server
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -f
+          - /etc/ssh/sshd_config_entry_test
+          - -E
+          - '{{ scenario_record_dir }}/sshd.log'
+        creates: /run/sshd-entry-test.pid
+
+    - name: Wait for the test SSH server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ scenario_ssh_port }}'
+        timeout: 30

@@ -22,6 +22,7 @@ from lib.proof_harness import (
     count_lines_containing,
     keep_containers,
     packet_count,
+    rule_position,
     wait_until,
 )
 
@@ -104,6 +105,36 @@ class Counters(unittest.TestCase):
         self.assertIsNone(packet_count(""))
         self.assertIsNone(packet_count("Chain DOCKER-USER\npkts\n3"))
         self.assertIsNone(packet_count("-3"))
+
+
+class RulePosition(unittest.TestCase):
+    DROP = "-i br-mailspool ! -o br-mailspool -j DROP"
+
+    def test_the_rule_is_found_by_its_text_not_by_its_place(self) -> None:
+        rules = (
+            "-N DOCKER-USER\n"
+            "-A DOCKER-USER -j RETURN\n"
+            f"-A DOCKER-USER {self.DROP}\n"
+        )
+        self.assertEqual(rule_position(rules, "DOCKER-USER", self.DROP), 2)
+
+    def test_a_rule_in_first_place_is_position_one(self) -> None:
+        rules = f"-N DOCKER-USER\n-A DOCKER-USER {self.DROP}\n-A DOCKER-USER -j RETURN\n"
+        self.assertEqual(rule_position(rules, "DOCKER-USER", self.DROP), 1)
+
+    def test_a_missing_rule_is_none_never_a_neighbour(self) -> None:
+        rules = "-N DOCKER-USER\n-A DOCKER-USER -j RETURN\n"
+        self.assertIsNone(rule_position(rules, "DOCKER-USER", self.DROP))
+        self.assertIsNone(rule_position("", "DOCKER-USER", self.DROP))
+
+    def test_a_longer_or_other_chain_rule_does_not_match(self) -> None:
+        rules = (
+            "-N DOCKER-USER\n"
+            f"-A DOCKER-USER {self.DROP} -m comment --comment x\n"
+            f"-A DOCKER-USER2 {self.DROP}\n"
+            "-A DOCKER-USER -i br-mailspool -j DROP\n"
+        )
+        self.assertIsNone(rule_position(rules, "DOCKER-USER", self.DROP))
 
 
 class StandInCommands(unittest.TestCase):

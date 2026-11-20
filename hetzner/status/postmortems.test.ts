@@ -93,6 +93,11 @@ describe('renderAnnouncements', () => {
 
 describe('loadPostmortems', () => {
   let repo: string;
+  // A git hook (pre-commit) exports GIT_INDEX_FILE and GIT_DIR. Inherited, they point
+  // this scratch repo's `git add`, and the loader's own git calls, at the real repository
+  // (stage a file into its index, read the wrong tree), so the commit that runs this test
+  // is corrupted. Drop every GIT_ variable for the test and put them back after.
+  let savedGitEnv: [string, string][] = [];
   const run = (...args: string[]): void => {
     execFileSync(
       'git',
@@ -115,29 +120,17 @@ describe('loadPostmortems', () => {
     writeFileSync(path.join(repo, POSTMORTEM_DIR, file), text);
   };
 
-  // A commit hook runs with GIT_INDEX_FILE (an absolute path in a linked worktree)
-  // and GIT_DIR in its environment. Inherited, they point every git command here at
-  // the committer's own index: the test repository would never be used, and the
-  // committer's staged files would be emptied. So none is passed on.
-  const GIT_LOCATION_VARIABLES = ['GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE'] as const;
-  const inherited: Partial<Record<(typeof GIT_LOCATION_VARIABLES)[number], string>> = {};
-
   beforeEach(() => {
-    for (const name of GIT_LOCATION_VARIABLES) {
-      const value = process.env[name];
-      if (value !== undefined) inherited[name] = value;
-      delete process.env[name];
-    }
+    savedGitEnv = Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[0].startsWith('GIT_') && entry[1] !== undefined
+    );
+    for (const [name] of savedGitEnv) delete process.env[name];
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
-    for (const name of GIT_LOCATION_VARIABLES) {
-      const value = inherited[name];
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
+    for (const [name, value] of savedGitEnv) process.env[name] = value;
   });
 
   it('shows a merged post-mortem of a resolved incident', () => {
