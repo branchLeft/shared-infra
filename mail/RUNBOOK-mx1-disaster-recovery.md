@@ -5,7 +5,7 @@
 > `mail/RUNBOOK-import-mail-host.md`, `mail/provision/`, the `mail/` Pulumi
 > program and `mail/RUNBOOK-mx1-prometheus-metrics.md` — it has not been
 > tested against a lab host or a real loss. The first time any step here runs
-> for real **is** the rehearsal that [branchLeft/workspace#173](https://github.com/branchLeft/workspace/issues/173)
+> for real **is** the rehearsal that the mx1 disaster-recovery issue
 > also asks for, and that rehearsal has not happened. Treat every step marked
 > **[inferred]** below as a best-effort reconstruction, not a proven
 > procedure, until it has actually been run once and this file updated with
@@ -46,7 +46,7 @@ Written under a hard constraint: no SSH to mx1, no Pulumi, no Hetzner API
 call, of any kind, including read-only ones. Two consequences:
 
 - **The primary IP's `auto_delete` and delete-protection state is unknown.**
-  This is [branchLeft/workspace#173](https://github.com/branchLeft/workspace/issues/173)'s
+  This is the mx1 disaster-recovery issue's
   action item 1. The first live action for whoever
   rehearses this runbook should be `hcloud primary-ip describe mx1` (or the
   console equivalent) to find out, before trusting anything below that
@@ -402,7 +402,7 @@ State this plainly rather than assume a mitigation exists:
 
 ## The rehearsal this runbook still needs
 
-[branchLeft/workspace#173](https://github.com/branchLeft/workspace/issues/173)'s
+The mx1 disaster-recovery issue's
 action item 3 — "rehearse against a lab host, a real restore, not a config
 review" — is **not done by this document**. It cannot be: the hard
 constraints this runbook was written under forbid SSH to mx1, forbid any
