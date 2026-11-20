@@ -458,7 +458,7 @@ class HostRoleLists(unittest.TestCase):
     # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
     # reads the worker's variables in the same play, so it follows the worker. The database role
     # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
-    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # any role moves or is dropped, green with the roles named in this order. The node exporter
     # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,

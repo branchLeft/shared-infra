@@ -297,6 +297,7 @@ BOOTSTRAP_GUARD_PATHS = [
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
+    "ansible/roles/safety_channel_key/vars/main.yml",
     "ansible/roles/ring_controller_host/tasks/main.yml",
     "ansible/roles/ring_controller_host/vars/main.yml",
     "ansible/roles/ring_controller_host/meta/argument_specs.yml",
@@ -426,6 +427,13 @@ HOST_APPLIER_PATHS = [
     "hetzner/provision/branchleft_promote.py",
     "hetzner/provision/test_branchleft_promote.py",
     "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
+]
+
+# The control-plane database role provisions the portal logins and reads the admin credentials, so its
+# tasks and its variables are the owner's; its CODEOWNERS line is pinned here, as the key roles are.
+CONTROL_PLANE_DB_PATHS = [
+    "ansible/roles/control_plane_db/tasks/main.yml",
+    "ansible/roles/control_plane_db/vars/main.yml",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
@@ -604,6 +612,9 @@ class CodeownersTests(unittest.TestCase):
         self.assertGreaterEqual(len(found), 8)
         self.assert_owned(found)
 
+    def test_the_control_plane_db_role_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(CONTROL_PLANE_DB_PATHS)
+
     def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
         patterns = {pattern for pattern, _ in self.rules}
         self.assertIn("/ansible/roles/ring_controller_host/", patterns)
@@ -759,6 +770,7 @@ class CodeownersTests(unittest.TestCase):
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS
+            + CONTROL_PLANE_DB_PATHS
             + ACCESS_PATHS
             + ACCOUNT_TASK_PATHS
             + ACCESS_TEST_PATHS
