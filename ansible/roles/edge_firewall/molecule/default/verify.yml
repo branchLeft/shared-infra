@@ -266,7 +266,7 @@
       ansible.builtin.assert:
         that:
           - edge_firewall_verify_masquerade | length == 1
-          - edge_firewall_verify_masquerade[0] is match('ip saddr 10\.20\.1\.0/24 oifname "' ~ edge_firewall_scenario_uplink_dev ~ '" counter packets [0-9]+ bytes [0-9]+ masquerade$')
+          - edge_firewall_verify_masquerade[0] is match(edge_firewall_verify_expected)
           - edge_firewall_verify_tables.results[1].stdout | regex_findall('masquerade') | length == 1
         quiet: true
         fail_msg: >-
@@ -276,6 +276,9 @@
         edge_firewall_verify_masquerade: >-
           {{ edge_firewall_verify_tables.results[1].stdout.splitlines() | map('trim')
           | select('search', 'masquerade$') | list }}
+        # The listing prints the packet counter the role's rule carries, so the rule is pinned with it.
+        edge_firewall_verify_expected: >-
+          ip saddr 10\.20\.1\.0/24 oifname "{{ edge_firewall_scenario_uplink_dev }}" counter packets [0-9]+ bytes [0-9]+ masquerade$
 
     # ---------------------------------------------------------------------------------------
     # Docker's stand-in rules, and the legacy rule.
