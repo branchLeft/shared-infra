@@ -166,6 +166,26 @@
         quiet: true
         fail_msg: A changed renderer did not restart the unit exactly once.
 
+    # ----- Put the inputs back -----
+    # With the scenario's own inputs the keys are rotated back, so the host is the converged host
+    # the stale-lines play that follows expects.
+    - name: Apply the role with the scenario's own inputs, at the end of this scenario's cases
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Snapshot with the inputs put back
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: restored_pager
+
+    - name: Assert the unit is active and enabled with the inputs put back
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.restored_pager.active == 'active'
+          - monitoring_stack_verify_snaps.restored_pager.enabled == 'enabled'
+        quiet: true
+        fail_msg: The host was not put back to the converged state with the scenario's own inputs.
+
 # The pager secrets split: stale NTFY_ lines in monitoring.env and the pager gauge.
 # The host here has ntfy-pager.env from the plays above (written by the real
 # ntfy_pager role) and monitoring.env without NTFY_ lines. Throwaway values only.

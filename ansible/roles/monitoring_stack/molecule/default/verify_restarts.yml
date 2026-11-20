@@ -8,6 +8,15 @@
   vars_files:
     - '{{ playbook_dir }}/../default/vars/restart_decision.yml'
   tasks:
+    # ----- The role from the repository runs first -----
+    # Ansible keeps the path it first finds a module at for the rest of the run. The case below
+    # applies a copy of the role in a scratch directory and removes it, so if the copy were the
+    # first place the role's own modules were found, every later apply would look for them in a
+    # directory that is gone. The converged host is the host this applies to, so nothing changes.
+    - name: Apply the role from the repository, to the host as the converge left it
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
     # ----- The monitoring drop-in is in the fingerprint: a new release of its ExecStart restarts the unit -----
     # A release of the repository that changes the drop-in is made on the
     # controller: a copy of this role, links followed, in a scratch directory, with

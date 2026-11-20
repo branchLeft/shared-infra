@@ -697,5 +697,25 @@
         fail_msg: A rotation of SNDS_DATA_URL was not written, or restarted the unit, or moved the stamp.
       no_log: true
 
+    # ----- Put the inputs back -----
+    # With the scenario's own inputs the keys are rotated back, so the host is the converged host
+    # the check-mode step that follows verify expects.
+    - name: Apply the role with the scenario's own inputs, at the end of this scenario's cases
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Snapshot with the inputs put back
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: restored_default
+
+    - name: Assert the unit is active and enabled with the inputs put back
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_snaps.restored_default.active == 'active'
+          - monitoring_stack_verify_snaps.restored_default.enabled == 'enabled'
+        quiet: true
+        fail_msg: The host was not put back to the converged state with the scenario's own inputs.
+
 - name: Scan the log as every scenario does
   ansible.builtin.import_playbook: verify_log_scan.yml
