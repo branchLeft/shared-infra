@@ -47,8 +47,6 @@
 # The reload is queued by the drop-in and runs here, after the two checks
 # above and before the read-back below. A failed check stops the play before
 # this line, so the handler never runs.
-- name: Reload sshd now that its configuration has been checked
-  ansible.builtin.meta: flush_handlers
 
 # The file being present is not the property that matters; the resolved value
 # is. sshd -T prints what the configuration evaluates to across every drop-in,
