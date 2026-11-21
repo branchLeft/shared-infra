@@ -1728,5 +1728,116 @@ class ProductionContextTests(unittest.TestCase):
         self.assertIs(tool.run_volume_program, ctx.list_claims)
 
 
+VALID_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "B" * 43
+APPT1_KEY = VALID_KEY
+DBT1_KEY = VALID_KEY
+
+
+class TenantEntryInputTests(unittest.TestCase):
+    """appt1 and dbt1 are seeded the way app1 is: one command per host, each input typed hidden."""
+
+    def test_appt1_is_filled_from_two_typed_answers_and_the_addresses_are_a_list(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 10.20.0.0/24"])
+        self.assertEqual(0, rig.run("--host", "appt1"))
+        self.assertEqual(
+            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7", "10.20.0.0/24"]},
+            rig.document(),
+        )
+        self.assertEqual(2, len(rig.prompts))
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(APPT1_KEY, rig.stdout)
+        self.assertNotIn("203.0.113.7", rig.stdout)
+
+    def test_dbt1_is_filled_from_its_key_and_its_one_address(self) -> None:
+        rig = Rig(self, answers=[DBT1_KEY, "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(
+            {
+                "db_t1_tenant_entry_controller_key": DBT1_KEY,
+                "db_t1_tenant_entry_controller_address": "203.0.113.8",
+            },
+            rig.document(),
+        )
+        self.assertNotIn(DBT1_KEY, rig.stdout)
+
+    def test_a_token_that_is_not_an_address_or_range_writes_nothing_and_is_not_echoed(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 not-an-address"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertNotIn("not-an-address", rig.everything)
+
+    def test_an_empty_address_line_writes_nothing(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, ""])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_range_wider_than_slash_24_is_refused(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "10.0.0.0/16"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_set_changes_the_address_list_and_keeps_the_key(self) -> None:
+        rig = Rig(self, answers=["198.51.100.4"])
+        rig.put(
+            tool.DEST_NAME,
+            json.dumps({"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7"]}),
+        )
+        self.assertEqual(0, rig.run("--host", "appt1", "--set", "tenant_entry_from"))
+        self.assertEqual(
+            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["198.51.100.4"]},
+            rig.document(),
+        )
+
+
+class TypedValueCheckTests(unittest.TestCase):
+    """The key lines and the controller address are checked when typed, before any write."""
+
+    BAD_KEYS = (
+        ("an option in front", "no-pty " + VALID_KEY),
+        ("a comment", VALID_KEY + " owner@laptop"),
+        ("another key type", "ssh-rsa " + VALID_KEY.split(" ", 1)[1]),
+        ("two keys on one line", VALID_KEY + " " + VALID_KEY),
+        ("a body of the wrong shape", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "B" * 10),
+        ("a private key", "-----BEGIN OPENSSH PRIVATE KEY----- " + VALID_KEY),
+        ("nothing", ""),
+    )
+    BAD_ADDRESSES = ("256.1.1.1", "203.0.113", "203.0.113.8/24", "", "not-an-address")
+
+    def test_a_key_is_trimmed_and_stored_exactly(self) -> None:
+        rig = Rig(self, answers=["   " + VALID_KEY + "  ", "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(VALID_KEY, rig.document()["db_t1_tenant_entry_controller_key"])
+
+    def test_an_address_is_trimmed_and_stored_exactly(self) -> None:
+        rig = Rig(self, answers=[VALID_KEY, "  203.0.113.8  "])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual("203.0.113.8", rig.document()["db_t1_tenant_entry_controller_address"])
+
+    def test_a_key_that_is_not_exactly_one_ed25519_line_writes_nothing(self) -> None:
+        for label, bad in self.BAD_KEYS:
+            with self.subTest(label):
+                rig = Rig(self, answers=[bad, "203.0.113.8"])
+                self.assertEqual(1, rig.run("--host", "dbt1"))
+                self.assertFalse(rig.dest.exists())
+                if bad:
+                    self.assertNotIn(bad, rig.everything)
+
+    def test_the_appt1_key_is_checked_the_same_way(self) -> None:
+        for label, bad in self.BAD_KEYS:
+            with self.subTest(label):
+                rig = Rig(self, answers=[bad, "203.0.113.7"])
+                self.assertEqual(1, rig.run("--host", "appt1"))
+                self.assertFalse(rig.dest.exists())
+
+    def test_an_address_that_is_not_one_ipv4_address_writes_nothing(self) -> None:
+        for bad in self.BAD_ADDRESSES:
+            with self.subTest(bad):
+                rig = Rig(self, answers=[VALID_KEY, bad])
+                self.assertEqual(1, rig.run("--host", "dbt1"))
+                self.assertFalse(rig.dest.exists())
+                if bad:
+                    self.assertNotIn(bad, rig.everything)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,17 +1,19 @@
 ---
 # appt1: the logical name of the tenant app host app-t1 (HOST_NAME allows [a-z][a-z0-9]*; the
-# server and its hostname keep the hyphen). Under the gated pull. Seven roles, in order: the
-# Ansible toolchain the host runs this playbook with, the trigger that runs it, the host
-# baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the host egress
-# reconciler (egress_nat, with the gateway switch left at its default, off: this host is no
-# NAT gateway), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
-# (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), and the host's
-# metrics exporter (node_exporter, last, so a disk refusal holds nothing back). The tenant
-# stack itself, the two colours and the drain sidecar, is a later role: this playbook brings
-# the host to the point where one can be delivered. The host has no private inputs, so
-# host_inputs is not applied and its row is absent from checks/host_roles.yml. The gateway
-# switch is not set here, so checks/test_egress_nat_single_gateway.py holds that this host
-# stays off the gateway list.
+# server and its hostname keep the hyphen). Under the gated pull. Eleven roles, in order: the
+# Ansible toolchain the host runs this playbook with, the trigger that runs it, the loader of the
+# host's private inputs (host_inputs: the controller's key and source addresses for the tenant
+# entry point), the host baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the
+# host egress reconciler (egress_nat, with the gateway switch left at its default, off: this host
+# is no NAT gateway), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
+# (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), the deploy slot keys
+# (deploy_slot_keys) and the tenant volume program (tenant_onboarding), which tenant_entry calls,
+# the tenant entry point itself (tenant_entry), and the host's metrics exporter (node_exporter,
+# last, so a disk refusal holds nothing back). The tenant stack itself, the two colours and the
+# drain sidecar, is a later role: this playbook brings the host to the point where one can be
+# delivered. Its private inputs are the two keys of checks/host_roles.yml's loader row for appt1,
+# seeded by the owner before the first apply. The gateway switch is not set here, so
+# checks/test_egress_nat_single_gateway.py holds that this host stays off the gateway list.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files: the
@@ -40,8 +42,12 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
+    - role: ../roles/deploy_slot_keys # noqa: role-name[path]
+    - role: ../roles/tenant_onboarding # noqa: role-name[path]
+    - role: ../roles/tenant_entry # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]

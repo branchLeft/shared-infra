@@ -1,5 +1,14 @@
 ---
 # Root's, so the account that runs the program through sudo cannot replace it.
+# ANS-16: the program prints one status line whose key is the word "secrets", followed by "=", and
+# the program's verb table names "secrets". The plan's secret scan reads both as a credential
+# assignment. The key is the program's output contract, which the controller reads, so it cannot be
+# reworded here. The file holds no secret: its values arrive on stdin or by path, and the
+# credential-shaped text is those two lines. The diff of this copy is hidden under the owner's
+# ruling of 2 November on the plan-diff scan, choice A: reword prose, and hide a diff only where
+# the match cannot be reworded. The other route, a named allowance in the scan (two entries, in two repos,
+# needing code-owner approval), was not taken, so an approver cannot read changes to this program
+# in the plan; the program runs as root through sudo as a forced command.
 - name: Install the tenant entry program
   ansible.builtin.copy:
     src: branchleft_tenant_entry.py
@@ -7,6 +16,7 @@
     owner: root
     group: root
     mode: '0755'
+  diff: false
 
 # The program refuses a register directory that is not a real directory, root's, mode 0700.
 # It holds the marker of each tenant the entry point claimed, so only a claimed tenant can be

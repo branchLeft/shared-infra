@@ -126,6 +126,14 @@ def _required_options(ansible: Path, role: str) -> dict[str, bool]:
     return found
 
 
+def _declared_without_default(ansible: Path, role: str, name: str) -> bool:
+    """The role's main entry point declares the option, required or not, and gives it no default."""
+    spec = _mapping(_read(ansible / "roles" / role / "meta" / "argument_specs.yml"))
+    options = _mapping(_mapping(_mapping(spec.get("argument_specs")).get("main")).get("options"))
+    defaults = _mapping(_read(ansible / "roles" / role / "defaults" / "main.yml"))
+    return name in options and "default" not in _mapping(options[name]) and name not in defaults
+
+
 def _declared_with_default(ansible: Path, role: str, name: str) -> bool:
     spec = _mapping(_read(ansible / "roles" / role / "meta" / "argument_specs.yml"))
     options = _mapping(_mapping(_mapping(spec.get("argument_specs")).get("main")).get("options"))
@@ -192,7 +200,13 @@ def _check_rows(
                         f"{label}: {name} is optional but role {role} requires it,"
                         " so the play would stop when it is absent"
                     )
-            elif not required:
+            elif not required and not any(
+                _declared_without_default(ansible, r, name) for r in listed if r != LOADER
+            ):
+                # A row name is a row-required input (the loader stops the run when it is absent),
+                # so a role on the list may take it as an argument that is optional in its spec: the
+                # role then receives the value on every run, and the row keeps it required. Only an
+                # argument no role on the list declares at all is refused here.
                 findings.append(
                     f"{label}: {name} is not a required argument, without a default, "
                     f"of any role on {host}'s list"
@@ -272,7 +286,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_edge1_edget_ops1_db1_and_app1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_edget_ops1_db1_app1_appt1_and_dbt1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -325,6 +339,11 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_user",
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
+                ],
+                "appt1": ["tenant_entry_key", "tenant_entry_from"],
+                "dbt1": [
+                    "db_t1_tenant_entry_controller_key",
+                    "db_t1_tenant_entry_controller_address",
                 ],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
@@ -398,13 +417,17 @@ class Mutations(unittest.TestCase):
             "nextcloud_stack",
             "backup_worker",
             "backup_restore",
+            "tenant_onboarding",
+            "tenant_entry",
+            "db_t1",
+            "db_t1_tenant_entry",
             "broker_deploy",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "edget", "ops1", "demo1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1", "appt1", "dbt1", "demo1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -478,9 +501,9 @@ class Mutations(unittest.TestCase):
         self._edit(
             "roles/host_inputs/vars/main.yml",
             "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  appt1:\n    - ci_jump_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n  mx1:\n    - ci_jump_user\n\n# A value",
         )
-        self._expect("optional appt1: the host has no row")
+        self._expect("optional mx1: the host has no row")
 
     def test_an_optional_name_that_a_role_requires_is_found(self) -> None:
         # An optional input absent from the file leaves the argument unset; a role that requires
