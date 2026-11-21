@@ -205,6 +205,22 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "write one path). It is registered because the scan reads the path as a "
         "stack name. No Compose file exists for it anywhere."
     ),
+    "abuse-page": (
+        "Not an instance of the template: `/opt/branchleft/abuse-page` is the "
+        "directory the ansible/roles/mx1_abuse_page role of branchLeft/shared-infra "
+        "installs its program into, which a systemd oneshot service and timer of "
+        "that role run on the mail host. It never starts through "
+        "branchleft-compose@ or branchleft-deploy. It is registered because the "
+        "scan reads the path as a stack name. No Compose file exists for it "
+        "anywhere."
+    ),
+    "mx1-abuse-page": (
+        "Not an instance of the template: `/etc/branchleft/mx1-abuse-page.env` is "
+        "the token file of the abuse-report page, written by the "
+        "ansible/roles/mx1_abuse_page role of branchLeft/shared-infra and read by "
+        "that role's program. It is registered because the scan reads the path as "
+        "a stack name. No Compose file exists for it anywhere."
+    ),
     "mail-spool": (
         "An instance of the template on the demo host, and its Compose text is "
         "rendered by branchLeft/ghost-platform's render-core and committed there "
