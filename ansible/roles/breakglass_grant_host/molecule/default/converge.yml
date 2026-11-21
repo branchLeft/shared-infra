@@ -13,6 +13,9 @@
       - /usr/local/sbin/branchleft-break-glass
       - /etc/systemd/system/branchleft-break-glass-expire.service
       - /etc/systemd/system/branchleft-break-glass-expire.timer
+      - /usr/local/sbin/branchleft-break-glass-textfile
+      - /etc/systemd/system/branchleft-break-glass-textfile.service
+      - /etc/systemd/system/branchleft-break-glass-textfile.timer
       - /usr/local/lib/branchleft/break-glass/break-glass-grant.mjs
       - /usr/local/lib/branchleft/break-glass/docker-engine.mjs
       - /usr/local/lib/branchleft/break-glass/provision-support-account.mjs
