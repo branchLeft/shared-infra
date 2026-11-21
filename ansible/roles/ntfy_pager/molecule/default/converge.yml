@@ -1,5 +1,5 @@
 ---
-# The four values are fixed test sentinels, not credentials. They are literals so
+# The five values are fixed test sentinels, not credentials. They are literals so
 # that a second converge produces the same lines and reports no change.
 - name: Converge
   hosts: all
@@ -9,6 +9,7 @@
     ntfy_pager_watcher_token: test-sentinel-watcher-token-0002
     ntfy_pager_owner_password_hash: test-sentinel-owner-hash-0003
     ntfy_pager_machine_password_hash: test-sentinel-machine-hash-0004
+    ntfy_pager_mx1_token: test-sentinel-mx1-token-0006
   tasks:
     - name: Apply the role
       ansible.builtin.include_role:

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  NTFY_ABUSE_TOPIC,
   NTFY_PAGE_TOPIC,
   NTFY_PAGE_URL,
   NTFY_PAGER_TOKEN_PLACEHOLDER,
@@ -19,8 +20,8 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly seven entries -- six Alertmanager and the drain worker outside it', () => {
-    expect(PAGE_REGISTER).toHaveLength(7);
+  it('has exactly eight entries -- six Alertmanager, the drain worker and the abuse report outside it', () => {
+    expect(PAGE_REGISTER).toHaveLength(8);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
@@ -28,11 +29,12 @@ describe('PAGE_REGISTER', () => {
       'readers-cannot-read',
       'edge-ban',
       'drain-worker-stopped',
+      'abuse-report',
       'stopped-demo-reaper',
     ]);
   });
 
-  it('routes six entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
+  it('routes six entries through Alertmanager, the drain worker through Healthchecks.io and the abuse report straight to ntfy', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -44,6 +46,7 @@ describe('PAGE_REGISTER', () => {
       'stopped-demo-reaper',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
+    expect(byPath('ntfy_direct')).toEqual(['abuse-report']);
   });
 
   it('carries no Alertmanager alertname for the drain worker -- it never becomes an alert here', () => {
@@ -248,12 +251,22 @@ describe('the ntfy server config', () => {
     expect(active).not.toMatch(/upstream-base-url/);
   });
 
-  it('grants the two publishers write-only and the owner read-only, on the one topic', () => {
+  it('grants the two publishers write-only and the owner read-only, on the page topic', () => {
     expect(active).toContain(`'alertmanager:${NTFY_PAGE_TOPIC}:write-only'`);
     expect(active).toContain(`'watcher:${NTFY_PAGE_TOPIC}:write-only'`);
     expect(active).toContain(`'owner:${NTFY_PAGE_TOPIC}:read-only'`);
-    const grants = active.match(/^\s+- '[a-z]+:[^:']+:(read-only|write-only|read-write)'$/gm) ?? [];
-    expect(grants).toHaveLength(3);
+  });
+
+  it('gives the mail host one grant, write-only on the abuse topic, and nothing on the page topic', () => {
+    expect(active).toContain(`'mx1:${NTFY_ABUSE_TOPIC}:write-only'`);
+    expect(active).toContain(`'owner:${NTFY_ABUSE_TOPIC}:read-only'`);
+    const grants =
+      active.match(/^\s+- '[a-z0-9]+:[^:']+:(read-only|write-only|read-write)'$/gm) ?? [];
+    expect(grants).toHaveLength(5);
+    const mx1 = grants.filter((line) => line.includes("'mx1:"));
+    expect(mx1).toHaveLength(1);
+    expect(mx1[0]).not.toContain(NTFY_PAGE_TOPIC);
+    expect(mx1[0]).toContain('write-only');
   });
 
   it('commits only placeholders for every secret', () => {
@@ -264,6 +277,7 @@ describe('the ntfy server config', () => {
       '__NTFY_WATCHER_TOKEN__',
       '__NTFY_OWNER_PASSWORD_HASH__',
       '__NTFY_MACHINE_PASSWORD_HASH__',
+      '__NTFY_MX1_TOKEN__',
     ]) {
       expect(active).toContain(token);
     }

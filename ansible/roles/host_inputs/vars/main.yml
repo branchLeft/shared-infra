@@ -45,6 +45,7 @@ host_inputs_required_by_host:
     - ntfy_pager_watcher_token
     - ntfy_pager_owner_password_hash
     - ntfy_pager_machine_password_hash
+    - ntfy_pager_mx1_token
     - ci_jump_user
   edget:
     - ci_jump_user
@@ -79,6 +80,8 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - deploy_slot_keys_slots
+  mx1:
+    - mx1_abuse_page_token
 
 # The inputs of a row that the file may leave out. Each is a name from the same host's row above
 # (checks/test_host_inputs_registry.py), and each feeds a role that does nothing with it until the
@@ -91,9 +94,12 @@ host_inputs_required_by_host:
 # any other, and a name outside the row is refused as ever.
 host_inputs_optional_by_host:
   edge1:
+    - ntfy_pager_mx1_token
     - ci_jump_user
   edget:
     - ci_jump_user
+  mx1:
+    - mx1_abuse_page_token
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.
