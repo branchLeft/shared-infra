@@ -77,8 +77,11 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
-# order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
+# order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
+# of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and
+# app1's export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back),
+
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
 # (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
@@ -137,6 +140,7 @@ APPLIED_ON_MAIN = {
         "publicpress_website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
+        "promote_host",
         "tenant_onboarding",
         "export_bundler",
         "node_exporter",
@@ -151,7 +155,13 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"],
+    "demo1": [
+        "host_inputs",
+        "broker_deploy",
+        "demo1_build",
+        "demo1_egress_spool",
+        "spool_path_account",
+    ],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
@@ -336,6 +346,29 @@ class HostRoleLists(unittest.TestCase):
         self._list_file("ops1", text.replace("- ring_controller_host\n", "", 1))
         self._assert_refused("ops1", "role ring_controller_host is not on ops1's list")
 
+    # Safety class: promote_host installs the applier that moves a tenant stack to the image a
+    # signed ledger names, with the one signer it trusts, so it is on app1's list and on no other
+    # host's.
+    # The control is the list, which is the owner's merge. Green first: the real tree passes and
+    # the role is on exactly one list. Red when the role is added to another host's list and that
+    # host's playbook applies it, and red when it is dropped from app1's list.
+    def test_promote_host_is_on_app1_list_and_no_other(self) -> None:
+        self.assertEqual(check(ROOT), [])
+        holders = [host for host, names in self.listed.items() if "promote_host" in names]
+        self.assertEqual(holders, ["app1"])
+        for host in ("ops1", "edge1"):
+            with self.subTest(host=host):
+                self.assertNotIn("promote_host", self.listed[host])
+                self._playbook(host, _entry("promote_host"))
+                self._assert_refused(host, f"role promote_host is not on {host}'s list")
+
+    def test_promote_host_dropped_from_app1_list_is_refused(self) -> None:
+        path = self.ansible / HOST_ROLES_DIR / "app1.yml"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("- promote_host\n", text, "the sabotage matched nothing")
+        self._list_file("app1", text.replace("- promote_host\n", "", 1))
+        self._assert_refused("app1", "role promote_host is not on app1's list")
+
     # Safety class: mail_collector installs the unit that carries the sending credentials on ops1,
     # so it is on ops1's list and on no other host's. The control is the list, which is the owner's
     # merge. Green first: the real tree passes and the role is on exactly one list. Red when the
@@ -469,7 +502,7 @@ class HostRoleLists(unittest.TestCase):
     # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
     # reads the worker's variables in the same play, so it follows the worker. The database role
     # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
-    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # any role moves or is dropped, green with the roles named in this order. The node exporter
     # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
@@ -543,6 +576,7 @@ class HostRoleLists(unittest.TestCase):
                 "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "promote_host",
                 "tenant_onboarding",
                 "export_bundler",
                 "node_exporter",
@@ -583,6 +617,7 @@ class HostRoleLists(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",

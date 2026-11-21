@@ -7,6 +7,8 @@ delivers it, is in effect in the running server once the role's reload script ha
 See test_control_plane_hba_server.md.
 """
 
+from __future__ import annotations
+
 import concurrent.futures
 import os
 import pathlib
@@ -19,12 +21,6 @@ import tempfile
 import time
 import unittest
 import uuid
-
-if sys.version_info < (3, 10):
-    raise RuntimeError(
-        "test_control_plane_hba_server.py requires Python 3.10 or newer; running under "
-        f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9."
-    )
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import test_control_plane_stack as stack  # noqa: E402  (needs the path above when run by file)
@@ -435,7 +431,10 @@ class Server:
         """The admit-or-refuse answer for every probed login and database."""
         pairs = [(login, database) for login in PROBED_LOGINS for database in PROBED_DATABASES]
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            return dict(zip(pairs, pool.map(lambda pair: self.probe(*pair), pairs), strict=True))
+            answers = list(pool.map(lambda pair: self.probe(*pair), pairs))
+        # zip(strict=True) is 3.10+; the suite's floor is 3.9.
+        assert len(answers) == len(pairs)
+        return dict(zip(pairs, answers))
 
     def remove(self) -> None:
         """Remove this run's container and its anonymous volume, and nothing else."""

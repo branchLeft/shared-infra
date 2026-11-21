@@ -110,7 +110,6 @@ DNSBLS: tuple[DnsblSpec, ...] = (
         "https://www.barracudacentral.org/rbl/removal-request",
     ),
     DnsblSpec("spamcop", "SpamCop Blocking List", "bl.spamcop.net", "https://www.spamcop.net/bl.shtml"),
-    DnsblSpec("sorbs", "SORBS", "dnsbl.sorbs.net", "http://www.sorbs.net/lookup.shtml"),
     DnsblSpec(
         "uceprotect_l1",
         "UCEPROTECT Level 1",
@@ -196,7 +195,7 @@ def evaluate_dnsbl(
     self-test gates whether the target result can be trusted at all -- a
     zone that doesn't list the sentinel is providing no real signal, and the
     target is reported ZONE_UNRESPONSIVE rather than a possibly-false
-    NOT_LISTED. See module docstring for why this matters (SORBS)."""
+    NOT_LISTED. See module docstring for why this matters."""
     sentinel_verdict = classify_outcome(sentinel_outcome)
     if sentinel_verdict != Verdict.LISTED:
         return CheckResult(

@@ -615,6 +615,205 @@ class IsolationTests(unittest.TestCase):
         )
 
 
+def with_host_end(document: Document, slug: str, uid: int) -> Document:
+    """Add a slot's verdict host end to a tenant stack, run as the slot's own uid and gid.
+
+    Ghost mounts the slot's verdict volume read-only, as the renderer does; the host end mounts
+    it writable, which is how it makes the socket there.
+    """
+    volume = f"ghost-{slug}-verdict"
+    service(document)["volumes"] = [
+        *cast("list[str]", service(document)["volumes"]),
+        f"{volume}:/var/lib/ghost/verdict:ro",
+    ]
+    cast("dict[str, object]", document["services"])["verdict-host"] = {
+        "image": "${IMAGE}",
+        "user": f"{uid}:{uid}",
+        "environment": {
+            "VERDICT_HOST_SOCKET": "/var/lib/ghost/verdict/verdict.sock",
+            "VERDICT_HOST_SOCKET_UID": str(uid),
+            "VERDICT_HOST_SOCKET_GID": str(uid),
+        },
+        "volumes": [f"{volume}:/var/lib/ghost/verdict"],
+    }
+    cast("dict[str, object]", document["volumes"])[volume] = {"external": True}
+    return document
+
+
+def host_end(document: Document) -> dict[str, object]:
+    """Return the verdict host end of a document for editing."""
+    return cast("dict[str, dict[str, object]]", document["services"])["verdict-host"]
+
+
+class VerdictSocketOwnerTests(unittest.TestCase):
+    """Each slot's host end makes its socket as the slot's own uid and gid."""
+
+    SLOTS = (("tenant-a", 30901), ("tenant-b", 30902), ("tenant-c", 30977))
+
+    def stack(self, slug: str, uid: int) -> Document:
+        """Return a slot's stack with its verdict host end."""
+        return with_host_end(tenant_document(slug, uid), slug, uid)
+
+    def refused(self, verdict: check.Verdict, expected: str) -> None:
+        """Assert that the verdict is a refusal that mentions ``expected``."""
+        self.assertFalse(verdict.ok)
+        self.assertTrue(
+            any(expected in refusal for refusal in verdict.refusals), (expected, verdict.refusals)
+        )
+
+    def test_each_slots_host_end_is_accepted_with_its_own_uid_and_gid(self) -> None:
+        for slug, uid in self.SLOTS:
+            with self.subTest(slug=slug):
+                document = self.stack(slug, uid)
+                verdict = tenant(document, slug=slug, uid=uid)
+                self.assertTrue(verdict.ok, verdict.refusals)
+                end = host_end(document)
+                environment = cast("dict[str, str]", end["environment"])
+                self.assertEqual(end["user"], f"{uid}:{uid}")
+                self.assertEqual(environment["VERDICT_HOST_SOCKET_UID"], str(uid))
+                self.assertEqual(environment["VERDICT_HOST_SOCKET_GID"], str(uid))
+
+    def test_no_two_slots_are_given_the_same_socket_owner(self) -> None:
+        owners = {
+            (
+                cast("dict[str, str]", host_end(self.stack(slug, uid))["environment"])[
+                    "VERDICT_HOST_SOCKET_UID"
+                ],
+                host_end(self.stack(slug, uid))["user"],
+            )
+            for slug, uid in self.SLOTS
+        }
+        self.assertEqual(len(owners), len(self.SLOTS))
+
+    def test_a_slot_whose_host_end_runs_as_another_slots_uid_is_refused(self) -> None:
+        for slug, uid in self.SLOTS:
+            for other_slug, other_uid in self.SLOTS:
+                if other_slug == slug:
+                    continue
+                with self.subTest(slug=slug, other=other_slug):
+                    document = self.stack(slug, uid)
+                    host_end(document)["user"] = f"{other_uid}:{other_uid}"
+                    self.refused(tenant(document, slug=slug, uid=uid), "does not run as user")
+
+    def test_a_user_that_is_not_exactly_uid_colon_uid_is_refused(self) -> None:
+        for user in ("30901", "30901:0", "0:30901", "root", "30901:30902", 30901, None):
+            with self.subTest(user=user):
+                document = self.stack("tenant-a", 30901)
+                host_end(document)["user"] = user
+                self.refused(tenant(document), "does not run as user 30901:30901")
+
+    def test_a_missing_user_is_refused(self) -> None:
+        document = self.stack("tenant-a", 30901)
+        del host_end(document)["user"]
+        self.refused(tenant(document), "does not run as user 30901:30901")
+
+    def test_a_socket_uid_or_gid_that_is_missing_or_another_slots_is_refused(self) -> None:
+        for key in ("VERDICT_HOST_SOCKET_UID", "VERDICT_HOST_SOCKET_GID"):
+            for value in (None, "30902", "0", "", 30902):
+                with self.subTest(key=key, value=value):
+                    document = self.stack("tenant-a", 30901)
+                    environment = cast("dict[str, object]", host_end(document)["environment"])
+                    if value is None:
+                        del environment[key]
+                    else:
+                        environment[key] = value
+                    self.refused(tenant(document), "VERDICT_HOST_SOCKET_UID and _GID")
+
+    def test_the_environment_may_be_a_list_of_assignments(self) -> None:
+        document = self.stack("tenant-a", 30901)
+        host_end(document)["environment"] = [
+            "VERDICT_HOST_SOCKET=/var/lib/ghost/verdict/verdict.sock",
+            "VERDICT_HOST_SOCKET_UID=30901",
+            "VERDICT_HOST_SOCKET_GID=30901",
+        ]
+        self.assertTrue(tenant(document).ok)
+        host_end(document)["environment"] = [
+            "VERDICT_HOST_SOCKET_UID=30901",
+            "VERDICT_HOST_SOCKET_GID=30902",
+        ]
+        self.refused(tenant(document), "VERDICT_HOST_SOCKET_UID and _GID")
+
+    def test_ghost_may_not_write_the_verdict_volume(self) -> None:
+        # Ghost has the slot's uid and no socket identity in its environment: a writable
+        # mount is the host end's alone.
+        document = self.stack("tenant-a", 30901)
+        service(document)["volumes"] = [
+            "ghost-tenant-a-content:/var/lib/ghost/content",
+            "ghost-tenant-a-verdict:/var/lib/ghost/verdict",
+        ]
+        self.refused(tenant(document), "service app writes the verdict volume")
+
+    def test_every_form_of_a_writable_mount_is_judged(self) -> None:
+        for entry in (
+            "ghost-tenant-a-verdict:/v",
+            "ghost-tenant-a-verdict:/v:rw",
+            "ghost-tenant-a-verdict:/v:rw,z",
+            "ghost-tenant-a-verdict:/v:ro,rw",
+            {"type": "volume", "source": "ghost-tenant-a-verdict", "target": "/v"},
+            {
+                "type": "volume",
+                "source": "ghost-tenant-a-verdict",
+                "target": "/v",
+                "read_only": False,
+            },
+        ):
+            with self.subTest(entry=entry):
+                document = self.stack("tenant-a", 30901)
+                cast("dict[str, object]", document["services"])["probe"] = {
+                    "image": "${IMAGE}",
+                    "volumes": [entry],
+                }
+                self.refused(tenant(document), "service probe writes the verdict volume")
+
+    def test_a_read_only_mount_is_not_a_host_end(self) -> None:
+        for entry in (
+            "ghost-tenant-a-verdict:/v:ro",
+            "ghost-tenant-a-verdict:/v:ro,z",
+            {
+                "type": "volume",
+                "source": "ghost-tenant-a-verdict",
+                "target": "/v",
+                "read_only": True,
+            },
+        ):
+            with self.subTest(entry=entry):
+                document = self.stack("tenant-a", 30901)
+                cast("dict[str, object]", document["services"])["probe"] = {
+                    "image": "${IMAGE}",
+                    "volumes": [entry],
+                }
+                self.assertTrue(tenant(document).ok)
+
+    def test_another_slots_verdict_volume_is_refused_in_any_mode_and_form(self) -> None:
+        for entry in (
+            "ghost-tenant-b-verdict:/v:ro",
+            "ghost-tenant-b-verdict:/v",
+            "/var/lib/docker/volumes/ghost-tenant-b-verdict/_data:/v:ro",
+            {
+                "type": "volume",
+                "source": "ghost-tenant-b-verdict",
+                "target": "/v",
+                "read_only": True,
+            },
+        ):
+            with self.subTest(entry=entry):
+                document = self.stack("tenant-a", 30901)
+                host_end(document)["volumes"] = [entry]
+                self.refused(tenant(document), "verdict volume that is not this slot's own")
+
+    def test_a_stack_with_no_verdict_volume_is_judged_as_before(self) -> None:
+        self.assertTrue(tenant().ok)
+
+    def test_the_refusal_names_the_service_and_the_rule_and_no_environment_value(self) -> None:
+        document = self.stack("tenant-a", 30901)
+        cast("dict[str, object]", host_end(document)["environment"])["VERDICT_HOST_SOCKET_UID"] = (
+            SECRET_ONE
+        )
+        verdict = tenant(document)
+        self.assertFalse(verdict.ok)
+        self.assertNotIn(SECRET_ONE, "\n".join(verdict.refusals))
+
+
 class SecrecyAndPurityTests(unittest.TestCase):
     """The verdict is safe to print, and the judgement touches nothing."""
 

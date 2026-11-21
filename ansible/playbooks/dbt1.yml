@@ -1,12 +1,13 @@
 ---
 # dbt1: the logical name of the database host db-t1 (HOST_NAME allows [a-z][a-z0-9]*; the
-# server and its hostname keep the hyphen). Under the gated pull. Seven roles, in order: the
+# server and its hostname keep the hyphen). Under the gated pull. Eight roles, in order: the
 # Ansible toolchain the host runs this playbook with, the trigger that runs it, the host
 # baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the host egress
 # reconciler (egress_nat, with the gateway switch left at its default, off: this host is no
 # NAT gateway), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
-# (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), and the tenant
-# database stack (db_t1), last, so a refusal in it holds nothing else back. The host has no
+# (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), the host's metrics
+# exporter (node_exporter), and the tenant database stack (db_t1), last, so a refusal in it
+# holds nothing else back, the exporter included. The host has no
 # private inputs, so host_inputs is not applied and its row is absent from
 # checks/host_roles.yml. The gateway switch is not set here, so
 # checks/test_egress_nat_single_gateway.py holds that this host stays off the gateway list.
@@ -20,6 +21,9 @@
   vars:
     enrolled_host: dbt1
     deploy_tooling_host_class: internal
+    # The host's journal keeps an entry for at most 30 days, inside the 90 days the
+    # website's privacy notice states for server logs. Pinned by checks/test_tenant_host_monitoring.py.
+    host_baseline_journal_retention_days: 30
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/dbt1.yml'
@@ -39,4 +43,5 @@
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
+    - role: ../roles/node_exporter # noqa: role-name[path]
     - role: ../roles/db_t1 # noqa: role-name[path]
