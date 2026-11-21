@@ -225,7 +225,7 @@ has needed a passphrase secret until now. **This is a fact about that
 repo's history, not a promise about its current state — check before relying
 on it:** `gh secret list --repo branchLeft/ghost-tenant-blog`. If
 `PULUMI_CONFIG_PASSPHRASE` is already there, this stack has already been
-through the mint-escrow-set sequence below (`branchLeft/workspace#128` is
+through the mint-escrow-set sequence below (the passphrase re-wrap issue is
 where that re-wrap is tracked) — do not repeat it. If it is not there, that
 sequence is what to run when this stack's turn comes; see "The hazard that
 decision creates" below for the exact steps.

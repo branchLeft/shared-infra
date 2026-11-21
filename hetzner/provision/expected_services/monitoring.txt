@@ -2,6 +2,7 @@ alertmanager
 blackbox-exporter
 cadvisor
 grafana
+karma
 node-exporter
 ntfy
 prometheus

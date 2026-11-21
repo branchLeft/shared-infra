@@ -525,8 +525,7 @@ decides again at the next boot unless the script itself can re-derive it.
 **`ops1` also gets a source rule on its published control-plane ports.** The
 same self-identification adds, on `ops1` only, a drop of every new connection
 to ports 8300, 8301 and 8302 from any source but `edge1`, matched on the
-original destination because a published port is a DNAT
-([ISSUE branchLeft/workspace#1284](https://github.com/branchLeft/workspace/issues/1284)).
+original destination because a published port is a DNAT.
 Port 8300 is the sign-in service's private listener, which the edge proxies to;
 8301 and 8302 are the portal and the console.
 

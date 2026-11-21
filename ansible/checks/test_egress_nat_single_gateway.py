@@ -131,8 +131,12 @@ class EgressNatSingleGateway(unittest.TestCase):
             {"edge_firewall_nat_source", "edge_firewall_enforce"},
         )
 
-    def test_the_checker_table_pins_edget_to_exactly_the_switch(self) -> None:
-        self.assertEqual(HOST_PLAY_VARS["edget"], {SWITCH: True})
+    def test_the_checker_table_pins_edget_to_exactly_the_switch_and_its_journal_retention(
+        self,
+    ) -> None:
+        self.assertEqual(
+            HOST_PLAY_VARS["edget"], {SWITCH: True, "host_baseline_journal_retention_days": 30}
+        )
 
     # (b) one gateway per network, and no host outside the listed gateways.
     def test_no_network_has_two_gateways(self) -> None:

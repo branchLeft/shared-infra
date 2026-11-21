@@ -615,6 +615,7 @@ TENANT_DIGEST = "b" * 64
 TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
 TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 PERCONA_SIGNER = "branchLeft/ghost-platform/.github/workflows/percona-image.yml"
+MYSQLD_EXPORTER_SIGNER = "branchLeft/ghost-platform/.github/workflows/mysqld-exporter-image.yml"
 # The digest the Percona image workflow pushed, scanned (blocking=0) and attested on
 # ghost-platform main, run 43331723453 at commit 1289eb507b95. The db_t1 role pins the same one.
 PERCONA_DIGEST = "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
@@ -702,6 +703,7 @@ class AttestationTests(unittest.TestCase):
                     "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
                 ),
                 "ghcr.io/branchleft/percona-server": PERCONA_SIGNER,
+                "ghcr.io/branchleft/mysqld-exporter": MYSQLD_EXPORTER_SIGNER,
             },
         )
 
@@ -908,7 +910,7 @@ class AttestationTests(unittest.TestCase):
                 "edge": frozenset(
                     {"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}
                 ),
-                "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+                "db": frozenset({"mysql"}),
                 "control-plane": frozenset(
                     {"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}
                 ),
@@ -1606,13 +1608,18 @@ PROBE = "    healthcheck:\n      test: ['CMD', 'true']\n"
 OVERRIDE = "compose.override.yml"
 
 # The third-party sidecars the committed stacks run beside their pin, by stack. Each is named
-# for its stack in UNATTESTED_STACK_IMAGES: none has a signing workflow that registers it. The
-# db exporter's entry is temporary, until the exporter image is signed and registered.
+# for its stack in UNATTESTED_STACK_IMAGES: none has a signing workflow that registers it.
 SIDECARS = {
-    "db": frozenset({"prom/mysqld-exporter"}),
     "edge": frozenset({"docker.io/crowdsecurity/crowdsec"}),
     "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
 }
+
+# The sidecars the committed stacks run that a signing workflow attests: each is in
+# ATTESTED_IMAGES, so the wrapper verifies it and no exemption list names it.
+ATTESTED_SIDECARS = {
+    "db": frozenset({"ghcr.io/branchleft/mysqld-exporter"}),
+}
+MYSQLD_EXPORTER_DIGEST = "sha256:25d73600fb442f5f50fa772a9201d0a5a5bdc90d82dbbb6c75e83c1656329290"
 
 
 def service_block(name, image, extra=""):
@@ -2293,7 +2300,10 @@ class CommittedStackTests(unittest.TestCase):
     def test_each_committed_stack_runs_exactly_the_sidecars_the_tests_count(self):
         for stack in COMMITTED_STACKS:
             with self.subTest(stack):
-                self.assertEqual(self.sidecars_of(stack), set(SIDECARS.get(stack, ())))
+                self.assertEqual(
+                    self.sidecars_of(stack),
+                    set(SIDECARS.get(stack, ())) | set(ATTESTED_SIDECARS.get(stack, ())),
+                )
 
     def test_each_sidecar_is_registered_or_named_for_its_stack(self):
         for stack in COMMITTED_STACKS:
@@ -2303,6 +2313,24 @@ class CommittedStackTests(unittest.TestCase):
                         name in bd.ATTESTED_IMAGES
                         or name in bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset())
                     )
+
+    def test_the_db_exporter_is_the_registered_image_pinned_by_digest_and_verified(self):
+        directory = self.stack_directory(COMMITTED_STACKS["db"])
+        pin = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
+        run = FakeRun([0, 0])
+        bd.verify_compose_images("db", directory, pin, run=run, render=self.render)
+        exporter = f"ghcr.io/branchleft/mysqld-exporter@{MYSQLD_EXPORTER_DIGEST}"
+        self.assertEqual(
+            [call[:4] for call in run.calls],
+            [[bd.VERIFIER, exporter, bd.ATTESTED_REPO, MYSQLD_EXPORTER_SIGNER]],
+        )
+
+    def test_the_db_exporter_the_verifier_refuses_stops_the_db_deploy(self):
+        directory = self.stack_directory(COMMITTED_STACKS["db"])
+        pin = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.verify_compose_images("db", directory, pin, run=FakeRun([1]), render=self.render)
+        self.assertIn("mysqld-exporter", str(raised.exception))
 
     def test_each_committed_stack_verifies_with_the_shipped_lists(self):
         for stack, relative in COMMITTED_STACKS.items():
