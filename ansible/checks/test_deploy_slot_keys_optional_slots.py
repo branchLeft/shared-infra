@@ -42,7 +42,7 @@ def _reconcile(text: str) -> dict[str, object]:
 def _runs(task: Mapping[str, object], slots: object, check_mode: bool, changed: bool) -> bool:
     """Whether the task would run: its `when`, evaluated as Ansible does, for these facts."""
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True)
-    env.tests["changed"] = lambda value: bool(value.get("changed"))  # type: ignore[attr-defined]
+    env.tests["changed"] = lambda value: bool(value.get("changed"))
     when = str(task.get("when", "true"))
     facts: dict[str, object] = {
         "ansible_check_mode": check_mode,
@@ -86,7 +86,8 @@ def sabotaged(text: str) -> str:
             args = task[RECONCILE]
             assert isinstance(args, dict)  # noqa: S101
             args["slots"] = "{{ deploy_slot_keys_slots | default([]) }}"
-    return yaml.safe_dump(tasks, sort_keys=False)
+    dumped: str = yaml.safe_dump(tasks, sort_keys=False)
+    return dumped
 
 
 class OptionalSlotsTests(unittest.TestCase):
