@@ -1,0 +1,26 @@
+# Managed by Ansible. Changes made here by hand are overwritten.
+[Unit]
+Description=Classify the edge's CrowdSec bans as owned or unowned, for the pager
+After=docker.service
+
+[Service]
+# Root, because the state directory and the textfile are root-owned and the Docker command
+# needs the daemon socket. Every other option below narrows what that root process may touch.
+Type=oneshot
+User=root
+TimeoutStartSec={{ edge_ban_owner_start_timeout_seconds }}
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths={{ edge_ban_owner_state_dir }} {{ edge_ban_owner_textfile_path | dirname }}
+ExecStart=/usr/bin/python3 -I {{ edge_ban_owner_program_dir }}/{{ edge_ban_owner_program_name }} \
+  --docker-binary {{ edge_ban_owner_docker_binary }} \
+  --compose-project {{ edge_ban_owner_compose_project }} \
+  --caddy-service {{ edge_ban_owner_caddy_service }} \
+  --crowdsec-service {{ edge_ban_owner_crowdsec_service }} \
+  --log-dir {{ edge_ban_owner_log_dir }} \
+  --log-stem {{ edge_ban_owner_log_stem }} \
+  --window-days {{ edge_ban_owner_window_days }} \
+  --state-file {{ edge_ban_owner_state_file }} \
+  --textfile {{ edge_ban_owner_textfile_path }}
