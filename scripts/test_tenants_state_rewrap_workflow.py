@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: S101
 """Pin tests for .github/workflows/tenants-state-rewrap.yml, read as parsed YAML.
 
 Narrative: scripts/tenants_state_rewrap.md.
@@ -25,13 +24,13 @@ Mapping = dict[str, object]
 def load() -> Mapping:
     """The workflow, parsed. YAML 1.1 reads the bare key `on` as `True`; it is renamed back."""
     parsed = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    assert isinstance(parsed, dict)
+    assert isinstance(parsed, dict)  # noqa: S101
     return {("on" if key is True else str(key)): value for key, value in parsed.items()}
 
 
 def jobs(doc: Mapping) -> dict[str, Mapping]:
     found = doc["jobs"]
-    assert isinstance(found, dict)
+    assert isinstance(found, dict)  # noqa: S101
     return found
 
 
@@ -41,13 +40,13 @@ def job_named(name: str) -> Mapping:
 
 def steps_of(job: Mapping) -> list[Mapping]:
     found = job["steps"]
-    assert isinstance(found, list)
+    assert isinstance(found, list)  # noqa: S101
     return found
 
 
 def step_named(job: Mapping, prefix: str) -> Mapping:
     matches = [s for s in steps_of(job) if str(s.get("name", "")).startswith(prefix)]
-    assert len(matches) == 1, prefix
+    assert len(matches) == 1, prefix  # noqa: S101
     return matches[0]
 
 
@@ -65,7 +64,7 @@ class TriggerTests(unittest.TestCase):
         found = jobs(load())
         self.assertEqual(sorted(found), ["inspect", "rewrap"])
         for name, job in found.items():
-            assert isinstance(job, dict)
+            assert isinstance(job, dict)  # noqa: S101
             self.assertEqual(job["if"], "github.ref == 'refs/heads/main'", name)
 
     def test_the_default_token_is_read_only(self) -> None:
@@ -139,7 +138,7 @@ class RewrapTests(unittest.TestCase):
         self.assertEqual(rewrap["id"], "rewrap")
         self.assertIn("--delete-guard scripts/assert-no-hetzner-deletes.py", str(rewrap["run"]))
         env = rewrap["env"]
-        assert isinstance(env, dict)
+        assert isinstance(env, dict)  # noqa: S101
         self.assertEqual(
             env["PULUMI_CONFIG_PASSPHRASE"], "${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}"
         )

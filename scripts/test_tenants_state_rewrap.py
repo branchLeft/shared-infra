@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: S101, S105, TRY003
 """Tests for tenants_state_rewrap: unit tests, and a real pulumi on a throwaway file backend.
 
 The real-pulumi tests skip with no binary on PATH; REWRAP_REQUIRE_PULUMI=1 makes that a failure.
@@ -74,15 +73,15 @@ def deployment(doc: dict[str, object]) -> dict[str, object]:
 
 def child(obj: dict[str, object], key: str) -> dict[str, object]:
     value = obj[key]
-    assert isinstance(value, dict)
+    assert isinstance(value, dict)  # noqa: S101
     return value
 
 
 def resource(doc: dict[str, object], index: int) -> dict[str, object]:
     resources = deployment(doc)["resources"]
-    assert isinstance(resources, list)
+    assert isinstance(resources, list)  # noqa: S101
     item = resources[index]
-    assert isinstance(item, dict)
+    assert isinstance(item, dict)  # noqa: S101
     return item
 
 
@@ -192,7 +191,7 @@ class SwapTests(unittest.TestCase):
         old = export_doc()
         new = self.with_new_block(old)
         resources = deployment(new)["resources"]
-        assert isinstance(resources, list)
+        assert isinstance(resources, list)  # noqa: S101
         del resources[1]
         with self.assertRaises(rw.RefusalError):
             rw.require_only_provider_changed(old, new)
@@ -425,7 +424,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(backend.resolved_prefix, "s3://example-bucket")
         self.assertIsNone(backend.backend_url)
         store = backend.store
-        assert isinstance(store, rw.AwsCliStore)
+        assert isinstance(store, rw.AwsCliStore)  # noqa: S101
         self.assertEqual(
             (store.bucket, store.endpoint_url, store.region),
             ("example-bucket", "https://objects.example.test", "hel1"),
@@ -444,7 +443,7 @@ class StoreTests(unittest.TestCase):
         project_dir = pathlib.Path(__file__).resolve().parent.parent / "hetzner" / "tenants"
         backend = rw.resolve_backend(project_dir, {}, self.tmp)
         store = backend.store
-        assert isinstance(store, rw.AwsCliStore)
+        assert isinstance(store, rw.AwsCliStore)  # noqa: S101
         self.assertTrue(store.endpoint_url.startswith("https://"))
         self.assertTrue(store.env["AWS_CONFIG_FILE"].endswith("aws-config"))
         text = (project_dir / "Pulumi.yaml").read_text(encoding="utf-8")
@@ -485,9 +484,9 @@ class ChildEnvTests(unittest.TestCase):
 # A real pulumi binary on a throwaway file backend
 # ---------------------------------------------------------------------------
 
-OLD_PASSPHRASE = "old-passphrase-nobody-remembers"
-NEW_PASSPHRASE = "new-passphrase-for-the-rewrap"
-OTHER_PASSPHRASE = "the-estate-stacks-own-passphrase"
+OLD_PASSPHRASE = "old-passphrase-nobody-remembers"  # noqa: S105
+NEW_PASSPHRASE = "new-passphrase-for-the-rewrap"  # noqa: S105
+OTHER_PASSPHRASE = "the-estate-stacks-own-passphrase"  # noqa: S105
 
 ESTATE_PROGRAM = "name: otherfixture\nruntime: yaml\noutputs:\n  edgeIp: 203.0.113.9\n"
 
@@ -615,7 +614,7 @@ class RealPulumiTests(unittest.TestCase):
 
     def assert_nothing_private(self, text: str, *extra: str) -> None:
         salt = child(child(deployment(self.export()), "secrets_providers"), "state")["salt"]
-        assert isinstance(salt, str)
+        assert isinstance(salt, str)  # noqa: S101
         self.assertNotIn(salt, text)
         for private in (
             "urn:pulumi",
@@ -830,7 +829,7 @@ class RealPulumiTests(unittest.TestCase):
             def write(self, key: str, data: bytes) -> None:
                 WriteOnce.writes += 1
                 if WriteOnce.writes > 1:
-                    raise rw.ToolError("the bucket went away")
+                    raise rw.ToolError("the bucket went away")  # noqa: TRY003
                 super().write(key, data)
 
         ctx.store = WriteOnce(self.state)
