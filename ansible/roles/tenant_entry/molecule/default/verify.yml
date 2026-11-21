@@ -353,6 +353,26 @@
         refused_from:
           - '!192.0.2.10'
 
+    # The host's own address is one private address: a public, loopback or wildcard one would
+    # publish a tenant's ports where they must not be.
+    - name: Refuse a public address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 8.8.8.8
+
+    - name: Refuse the loopback address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 127.0.0.1
+
+    - name: Refuse the wildcard address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 0.0.0.0
+
     # A source address that brings an option of its own through a quote or a comma.
     - name: Refuse a source address that carries a second option
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -376,6 +396,7 @@
       vars:
         tenant_entry_key: '{{ scenario_entry_public }}'
         tenant_entry_from: '{{ scenario_from }}'
+        tenant_entry_bind_address: '{{ scenario_bind_address }}'
 
     - name: Assert the refusals left the host as it was and the account is as the role makes it
       ansible.builtin.include_tasks: tasks/assert_state.yml
@@ -395,6 +416,7 @@
       vars:
         tenant_entry_key: '{{ scenario_entry_public }}'
         tenant_entry_from: '{{ scenario_from }}'
+        tenant_entry_bind_address: '{{ scenario_bind_address }}'
 
     - name: Assert the key the role was not given is gone
       ansible.builtin.include_tasks: tasks/assert_state.yml
