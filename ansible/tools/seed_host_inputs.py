@@ -90,6 +90,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ci_jump_user",
     ),
     "edget": ("ci_jump_user",),
+    "demo1": ("broker_deploy_owner_due_diligence_email",),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -213,6 +214,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "tenant_entry_from": (Source(ADDRESSES, ""),),
     "db_t1_tenant_entry_controller_key": (Source(TYPED, ""),),
     "db_t1_tenant_entry_controller_address": (Source(TYPED, ""),),
+    "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
