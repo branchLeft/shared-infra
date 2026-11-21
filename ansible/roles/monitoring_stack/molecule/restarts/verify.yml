@@ -1,0 +1,5 @@
+---
+# The default scenario's verify_restarts.yml, which holds this scenario's cases (verify.yml there says how
+# they are shared out). Imported, not copied, so the cases have one home.
+- name: Verify as the default scenario does
+  ansible.builtin.import_playbook: ../default/verify_restarts.yml

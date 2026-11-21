@@ -172,9 +172,12 @@ db1_stack_reload_marker: /var/cache/db1-stack/legacy-drop-in-reloaded
 db1_stack_private_address: 10.20.1.20
 db1_stack_exporter_metrics_port: 9104
 
-# The exporter image, pinned by digest because nothing else writes it. This is
-# the v0.21.0 release, whose digest was read from the registry on 2026-11-10. The
-# ghost-platform db/stack/compose.yml copy of this pin is still v0.20.0 and moves
-# in its own change there. A bump is a human-reviewed change here, the same rule
-# as the key pin in part one.
-db1_stack_exporter_image: prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318
+# The exporter image, pinned by digest because nothing else writes it. It is
+# ghcr.io/branchleft/mysqld-exporter, built and attested by ghost-platform's
+# mysqld-exporter-image.yml from main, and registered in ATTESTED_IMAGES in
+# hetzner/provision/branchleft_deploy.py, so branchleft-deploy verifies the
+# attestation before the stack restarts. The digest is the one pushed by the green
+# main run of that workflow (commit 03be174e), and `gh attestation verify` accepted
+# it against that workflow on refs/heads/main. A bump is a human-reviewed change
+# here, the same rule as the key pin in part one.
+db1_stack_exporter_image: ghcr.io/branchleft/mysqld-exporter@sha256:25d73600fb442f5f50fa772a9201d0a5a5bdc90d82dbbb6c75e83c1656329290

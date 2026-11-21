@@ -216,6 +216,19 @@ export const STALWART_METRICS_USERNAME = 'prometheus';
 export const STALWART_METRICS_PASSWORD_FILE = '/etc/prometheus/mx1-metrics-password';
 
 /**
+ * The release watcher's poll-age gauge. The watcher is a scheduled GitHub
+ * Actions run in branchLeft/ghost-platform (no host of ours runs it), and it
+ * commits `release-watcher.prom` to that repository's `state/release-watcher`
+ * branch. The repository is public, so Prometheus scrapes the file straight
+ * from the raw-content host: nothing is pushed, no token is held, and a
+ * watcher that stops running leaves the file's timestamp where it was. See
+ * render.md#the-release-watcher-scrape-path.
+ */
+export const RELEASE_WATCHER_HOST = 'raw.githubusercontent.com';
+export const RELEASE_WATCHER_METRICS_PATH =
+  '/branchLeft/ghost-platform/state/release-watcher/release-watcher.prom';
+
+/**
  * One static_configs group per probe module: a job's `params:` block can
  * only carry one module for every target underneath it, so two modules in
  * one job need `__param_module` set as a target label instead -- a label
@@ -397,6 +410,20 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    relabel_configs:',
     '      - target_label: instance',
     `        replacement: '${MX1_HOSTNAME}:${STALWART_METRICS_PORT}'`,
+    '',
+    '  - job_name: release_watcher',
+    // The raw host caches a file for five minutes, so scraping more often
+    // than that reads the same bytes; every two minutes keeps a sample inside
+    // Prometheus's five-minute lookback, which a slower interval would not.
+    '    scrape_interval: 2m',
+    '    scheme: https',
+    `    metrics_path: ${RELEASE_WATCHER_METRICS_PATH}`,
+    '    static_configs:',
+    `      - targets: ['${RELEASE_WATCHER_HOST}:443']`,
+    // No expected_up label, on purpose: an outage of GitHub's raw host is not
+    // ours to page for. TargetDownUnmarked reads it at 24 hours instead, and
+    // ReleaseWatcherStale's absent() branch is the signal that matters.
+    '        labels: {host: github}',
   ].join('\n')}\n`;
 }
 
@@ -569,13 +596,13 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // decides the vCPU count, and the rule covers every node_exporter host.
     // Busy and steal are one alert: either one sustained is the same ceiling.
     '      - alert: HostCPUSaturated',
-    '        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
+    '        expr: (1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance, host) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
     '        for: 30m',
     '        labels:',
     '          severity: warning',
     '          owner_action: "true"',
     '        annotations:',
-    '          summary: "{{ $labels.instance }} has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
+    '          summary: "{{ $labels.host }} ({{ $labels.instance }}) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
     '          description: "Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores."',
     '',
     '      - alert: HostDiskSpaceLow',
@@ -1533,6 +1560,39 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            sized to absorb a normal one, not a link pasted a week late. This',
     '            is the only alert in this group that fires BEFORE an outage rather',
     '            than after one; treat it as a chore, not an incident.',
+    '',
+    // A GitHub Actions schedule, not a host of ours: see
+    // render.md#the-release-watcher-scrape-path. Warning, which Alertmanager
+    // routes to the on-host mailbox: a stalled version watcher is an alert,
+    // never a page, and its fix is a repository change the agents make.
+    '  - name: release-watcher',
+    '    rules:',
+    '      - alert: ReleaseWatcherStale',
+    '        expr: >-',
+    '          (time() - ghost_release_watcher_last_success_timestamp_seconds > 86400)',
+    '          or absent(ghost_release_watcher_last_success_timestamp_seconds)',
+    '        for: 30m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The Ghost release watcher has not polled the registry successfully in over 24 hours."',
+    '          description: >-',
+    '            The watcher runs every six hours as a scheduled GitHub Actions',
+    '            workflow in branchLeft/ghost-platform and commits the time of its',
+    '            last successful poll to release-watcher.prom on the',
+    '            state/release-watcher branch, which the release_watcher scrape job',
+    '            reads. 86400s (24h) is four missed ticks, wide enough that one',
+    '            late or skipped scheduled run does not alert. The `or absent(...)`',
+    '            half covers the file being unreadable or the gauge vanishing, which',
+    '            the time() subtraction alone cannot see (subtracting from an absent',
+    '            series yields no series at all); `for: 30m` keeps a single failed',
+    '            scrape of the raw-content host from firing it. A run that fails',
+    '            leaves the timestamp where it was, so a watcher that errors on',
+    '            every run and one that is switched off look the same here. Read',
+    '            the latest run of release-watcher-run.yml in ghost-platform. A',
+    '            repository with no activity for 60 days has its schedules disabled',
+    '            by GitHub, which is the other silent stop this alert exists for.',
+    '            See render.md#the-release-watcher-scrape-path.',
   ].join('\n')}\n`;
 }
 
