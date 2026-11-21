@@ -277,7 +277,13 @@ function nodeTarget(host: MonitoredHost): string {
  * hostnames and its redirect sources, since a redirect is still a public
  * endpoint someone can hit and expect a 2xx-after-redirect chain from. */
 export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
-  return sites.flatMap((site) => site.hostnames).map((hostname) => `https://${hostname}`);
+  return sites.flatMap((site) =>
+    // A signed object gateway answers 404 at `/` by design; its health path is
+    // the one the edge forwards for a probe.
+    site.hostnames.map((hostname) =>
+      site.signedObjectGateway === true ? `https://${hostname}/healthz` : `https://${hostname}`
+    )
+  );
 }
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {

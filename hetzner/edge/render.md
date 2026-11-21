@@ -446,6 +446,68 @@ would answer for a host that serves nothing. The same test refuses a hostname th
 not a real lowercase DNS name, so an ALL_CAPS placeholder cannot reach a rendered
 configuration. The record's apply, like every DNS apply, is the owner's.
 
+## `siteBlock`: signed object gateway
+
+`EdgeSite.signedObjectGateway` marks a site that is an S3-compatible gateway whose clients
+sign their own requests (the tenant-state gateway, which tenant CI on GitHub-hosted runners
+reaches over the public internet). It renders through `gatewaySiteBlock`. The edge's job is
+to terminate TLS, bound what can reach the gateway, and change nothing the client's
+signature covers; the gateway verifies the signature and decides what each credential may do.
+
+What the block lets through, and nothing else:
+
+- A path-style request: one non-empty first segment (`/<bucket>` or `/<bucket>/<key>`), by
+  `GET`, `HEAD`, `PUT`, `POST` or `DELETE`, with a body of at most the site's
+  `requestBodyMaxSize` (8 MiB for the shipped entry, an order of magnitude above a Pulumi
+  checkpoint), from a client under the general throttle, CrowdSec and AppSec, to the one
+  upstream the entry names.
+- `/healthz` and `/readyz` by `GET` and `HEAD`. `PUT`, `POST` and `DELETE` on them get 405
+  with `Allow: GET, HEAD` from the edge, because they would otherwise match as a bucket
+  of that name.
+- Any other method gets 405 with `Allow` listing the five, from the edge. `/` (a bucket
+  listing) and anything else with no first segment gets 404, from the edge. The final
+  `respond 404` is matcher-less and last, so a case the lines above forgot fails closed.
+- A `.` or `..` segment in the raw path, literal or percent-encoded, gets 400 from the edge.
+  This is an expression on `{http.request.orig_uri}` and not `path_regexp`: Caddy matches
+  `path` and `path_regexp` on the path with dot segments resolved, and proxies the path as
+  sent, so `/bucket/..` is matched as `/` and forwarded unchanged. Measured against Caddy
+  2.11.9 with a stand-in upstream, not assumed. The expression has no brace, because Caddy
+  reads one as a placeholder.
+
+What it does not do, on purpose: it sets no `header_up`, strips no query parameter, rewrites
+no path, and adds no `encode`. The client's `Authorization` and `x-amz-*` headers, the
+`Host` it signed, the path and the query all reach the gateway as sent. Caddy adds
+`X-Forwarded-*` headers, which a signature does not cover unless the client lists them in
+`SignedHeaders`. The break-glass query strip and the Ghost and Nextcloud matchers are not in
+this block. It cannot be combined with a webhook path, `discardRoute`,
+`injectionWafPreviewOnly`, `trustedSession` or a `backend` other than `other`.
+
+Caching: no cache module exists on this edge. `header >Cache-Control "no-store"` is
+deferred, so it replaces a `Cache-Control` the gateway sends instead of adding a second
+value, and it also reaches the edge's own 404, 405 and 400. A 413 from the body cap does
+not carry it (measured), which is no loss: 413 is not cacheable by default.
+
+Timeouts: `dial_timeout 5s` and `response_header_timeout 30s` on the upstream transport. A
+slow client sending a body is bounded only by the server-wide read timeouts in the global
+block, as for the webhook route: Caddy 2.11.9 has no per-route `request_body` read timeout
+(its parser refuses `read_timeout`, measured), and changing the global value affects every
+site.
+
+The upstream address is not in this repository yet: the gateway host is not in the address
+plan, so `sites.ts` holds two `undefined` constants and the entry claims no hostname and no
+upstream until both are set (`sites.md`, "Signed object gateway sites"). Until then the
+committed `stack/caddy/Caddyfile` is unchanged, and `validation/Caddyfile.state-gateway`
+is the same block rendered with a stand-in upstream so CI loads it through Caddy.
+
+Not proven here: AppSec's behaviour against a real Pulumi checkpoint body (the state is
+JSON with arbitrary plaintext config, and a rule firing on it would fail an apply with a
+403; AppSec reads only the first 64 KiB); the general throttle's 200 requests per minute per
+address against several tenants applying at once from one GitHub runner address; and
+CrowdSec's 404 scenarios against the `HEAD` and `GET` of keys that do not exist yet, which
+an S3 client sends as normal traffic. Each is for the first live inspection, and the
+remedy for the first two is a deliberate change in this file and `posture.ts`, not a
+setting.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for
