@@ -7,3 +7,4 @@
 - egress_nat
 - deploy_verifier
 - deploy_tooling
+- node_exporter

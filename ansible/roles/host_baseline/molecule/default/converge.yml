@@ -12,3 +12,7 @@
         # Molecule links the role under its namespace and name, the namespace
         # from galaxy_info in meta/main.yml.
         name: branchleft.host_baseline
+      # The opt-in journal bound is applied here as the tenant hosts apply it, so verify.yml
+      # can read the drop-in. A host that sets nothing gets no drop-in (the role's default, 0).
+      vars:
+        host_baseline_journal_retention_days: 30

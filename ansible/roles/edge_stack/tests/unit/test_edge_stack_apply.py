@@ -173,6 +173,8 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
                 "parsers/nextcloud-profile.yaml",
             "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml":
                 "scenarios/ghost-admin-login-bruteforce.yaml",
+            "/etc/crowdsec/scenarios/branchleft/http-admin-interface-probing.yaml":
+                "scenarios/http-admin-interface-probing.yaml",
             "/etc/crowdsec-remediation/profiles.yaml": "remediation/profiles.yaml",
             "/etc/crowdsec-remediation/simulation.yaml": "remediation/simulation.yaml",
         }
@@ -318,6 +320,7 @@ class Tree:
             ("parsers/edge-trusted-session.yaml", b"name: c\n"),
             ("parsers/nextcloud-profile.yaml", b"name: f\n"),
             ("scenarios/ghost-admin-login-bruteforce.yaml", b"name: d\n"),
+            ("scenarios/http-admin-interface-probing.yaml", b"name: e\n"),
             ("remediation/profiles.yaml", b"name: g\n"),
             ("remediation/simulation.yaml", b"simulation: false\n"),
         ):
@@ -525,9 +528,9 @@ class LockHeldAcrossBothPhases(TreeCase):
                 "restart-crowdsec",
                 "lapi",
                 # config.yaml.local, the two Ghost admin files, the verified-session
-                # whitelist, the Nextcloud profile, the brute-force scenario, the
-                # two remediation files, then a.yaml in acquis.d.
-                *["sha-crowdsec"] * 9,
+                # whitelist, the Nextcloud profile, the brute-force and admin-probing
+                # scenarios, the two remediation files, then a.yaml in acquis.d.
+                *["sha-crowdsec"] * 10,
                 "ls-crowdsec",
                 "ps",
                 "reload",

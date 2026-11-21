@@ -15,9 +15,10 @@ import {
   renderAppsecAcquisition,
   renderBlock,
   renderCaddyLogAcquisition,
+  renderAdminProbingScenario,
   renderGhostAdminAppsecConfig,
-  renderGhostAdminPostoverflow,
   renderGhostBruteForceScenario,
+  renderHubAdminProbingPostoverflow,
   renderProfiles,
   renderSimulation,
   type Block,
@@ -135,9 +136,20 @@ export function renderTenantGhostAdminAppsecConfig(): string {
   return tenantBanner(renderGhostAdminAppsecConfig(EVERY_HOST));
 }
 
-/** The admin API post-overflow whitelist, with no hostname list, for the same reason. */
+/**
+ * The post-overflow whitelist that silences the hub's admin-interface probing
+ * scenario, so that ours is the only one that bans. It names no hostname.
+ */
 export function renderTenantGhostAdminPostoverflow(): string {
-  return tenantBanner(renderGhostAdminPostoverflow(EVERY_HOST));
+  return tenantBanner(renderHubAdminProbingPostoverflow());
+}
+
+/**
+ * The admin-interface probing scenario, with no hostname list: every site this
+ * edge serves is a tenant's Ghost, so a Ghost admin API answer is never counted.
+ */
+export function renderTenantAdminProbingScenario(): string {
+  return tenantBanner(renderAdminProbingScenario(EVERY_HOST));
 }
 
 /** The admin brute-force scenario, with no hostname list, for the same reason. */
@@ -174,6 +186,7 @@ export function renderTenantStack(
       renderTenantGhostAdminPostoverflow(),
     ],
     ['crowdsec/scenarios/ghost-admin-login-bruteforce.yaml', renderTenantGhostBruteForceScenario()],
+    ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/remediation/profiles.yaml', renderTenantProfiles()],
     ['crowdsec/remediation/simulation.yaml', renderTenantSimulation()],
   ]);

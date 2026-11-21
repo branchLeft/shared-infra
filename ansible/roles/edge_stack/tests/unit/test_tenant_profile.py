@@ -84,7 +84,10 @@ class TenantStackIsClassified(unittest.TestCase):
         estate = set(names(VARS["edge_stack_crowdsec_files"]))
         self.assertLessEqual(tenant, estate, "the tenant profile adds no class of file of its own")
         self.assertEqual(
-            {"crowdsec/parsers/edge-trusted-session.yaml", "crowdsec/parsers/nextcloud-profile.yaml"},
+            {
+                "crowdsec/parsers/edge-trusted-session.yaml",
+                "crowdsec/parsers/nextcloud-profile.yaml",
+            },
             estate - tenant,
         )
 
@@ -109,12 +112,14 @@ class ProfileSwitch(unittest.TestCase):
     def tasks(self) -> list[dict[str, object]]:
         document = load(ROLE / "tasks" / "main.yml")
         self.assertIsInstance(document, list)
-        assert isinstance(document, list)
+        assert isinstance(document, list)  # noqa: S101 - narrows the type for the line below
         return [task for task in document if isinstance(task, dict)]
 
     def test_the_default_is_the_estate_and_the_tenant_source_is_the_tenant_link(self) -> None:
         self.assertEqual("estate", DEFAULTS["edge_stack_profile"])
-        self.assertEqual("{{ role_path }}/files/stack-tenant", DEFAULTS["edge_stack_tenant_source_dir"])
+        self.assertEqual(
+            "{{ role_path }}/files/stack-tenant", DEFAULTS["edge_stack_tenant_source_dir"]
+        )
         self.assertEqual("{{ role_path }}/files/stack", DEFAULTS["edge_stack_source_dir"])
 
     def test_the_links_point_at_the_two_stack_directories(self) -> None:
@@ -132,7 +137,7 @@ class ProfileSwitch(unittest.TestCase):
         self.assertEqual("edge_stack_profile != 'tenant'", estate["when"])
         self.assertNotIn("vars", estate, "the estate profile sets nothing")
         facts = tenant["vars"]
-        assert isinstance(facts, dict)
+        assert isinstance(facts, dict)  # noqa: S101 - narrows the type for the line below
         self.assertEqual(
             {"edge_stack_source_dir", "edge_stack_crowdsec_files", "edge_stack_dirs"}, set(facts)
         )
@@ -161,9 +166,11 @@ class ProfileSwitch(unittest.TestCase):
 
     def test_the_profile_is_chosen_before_anything_reads_the_stack(self) -> None:
         main = [t for t in self.tasks() if "ansible.builtin.include_tasks" in t]
-        self.assertEqual(["_run.yml", "_run.yml"], [t["ansible.builtin.include_tasks"] for t in main])
+        self.assertEqual(
+            ["_run.yml", "_run.yml"], [t["ansible.builtin.include_tasks"] for t in main]
+        )
         run = load(ROLE / "tasks" / "_run.yml")
-        assert isinstance(run, list)
+        assert isinstance(run, list)  # noqa: S101 - narrows the type for the line below
         self.assertEqual(
             ["_assert.yml", "_classify.yml", "_decide.yml", "_deliver.yml"],
             [t["ansible.builtin.include_tasks"] for t in run if isinstance(t, dict)],
@@ -172,7 +179,7 @@ class ProfileSwitch(unittest.TestCase):
     def test_the_spec_offers_exactly_the_two_profiles(self) -> None:
         spec = mapping(ROLE / "meta" / "argument_specs.yml")
         options = spec["argument_specs"]
-        assert isinstance(options, dict)
+        assert isinstance(options, dict)  # noqa: S101 - narrows the type for the line below
         profile = options["main"]["options"]["edge_stack_profile"]
         self.assertEqual(["estate", "tenant"], profile["choices"])
         self.assertEqual("estate", profile["default"])

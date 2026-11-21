@@ -120,12 +120,14 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/host_inputs/                                  @branchLeft/branchleft-admin
 /ansible/roles/mail_collector/                               @branchLeft/branchleft-admin
 /ansible/roles/node_exporter/tasks/_node_exporter.yml        @branchLeft/branchleft-admin
+/ansible/roles/promote_host/                                 @branchLeft/branchleft-admin
 /ansible/roles/pull_trigger/                                 @branchLeft/branchleft-admin
 /ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
 /ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
 /ansible/roles/safety_service/                               @branchLeft/branchleft-admin
 /ansible/roles/spool_path_account/                           @branchLeft/branchleft-admin
 /ansible/roles/spool_paths/                                  @branchLeft/branchleft-admin
+/ansible/roles/tenant_entry/                                @branchLeft/branchleft-admin
 /ansible/roles/tunnel_account/                               @branchLeft/branchleft-admin
 /ansible/tools/*ci_key_line*                                 @branchLeft/branchleft-admin
 /ansible/tools/*pubkey_only*                                 @branchLeft/branchleft-admin

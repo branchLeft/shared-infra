@@ -6,7 +6,16 @@
 #
 # It is written only when the host has no floor (force: false) and never over one, so no seed can
 # move a floor that exists, up or down. A seed that is not exactly one commit id is refused before
-# anything is written.
+# anything is written. A seed on a host that does not take bundles is refused too: a host that
+# pulls keeps no floor of its own from a seed, so the check is by the host's name, as the source is.
+- name: Refuse a floor seed on a host that pulls, which takes no seed
+  ansible.builtin.assert:
+    that:
+      - enrolled_host | default('') in pull_trigger_bundle_hosts
+    fail_msg: a floor seed takes its floor from the bootstrap of a host that takes bundles; this host pulls and must not be seeded.
+    quiet: true
+  when: pull_trigger_floor_seed | length > 0
+
 - name: Refuse a floor seed that is not exactly one commit id
   ansible.builtin.assert:
     that:

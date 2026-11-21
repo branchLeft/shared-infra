@@ -9,13 +9,14 @@ import { POSTURE } from '../edge/posture';
 import {
   renderCaddyfile,
   renderGhostAdminAppsecConfig,
-  renderGhostAdminPostoverflow,
+  renderAdminProbingScenario,
   renderGhostBruteForceScenario,
 } from '../edge/render';
 import {
   TENANT_POSTURE,
   UNKNOWN_HOST_STATUS,
   renderTenantCaddyfile,
+  renderTenantAdminProbingScenario,
   renderTenantGhostAdminAppsecConfig,
   renderTenantGhostAdminPostoverflow,
   renderTenantGhostBruteForceScenario,
@@ -106,7 +107,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
       'blog.branchleft.co.uk'
     );
     expect(estateNames(renderGhostAdminAppsecConfig(sites))).toContain('blog.branchleft.co.uk');
-    expect(estateNames(renderGhostAdminPostoverflow(sites))).toContain('blog.branchleft.co.uk');
+    expect(estateNames(renderAdminProbingScenario(sites))).toContain('blog.branchleft.co.uk');
     expect(estateNames(renderGhostBruteForceScenario(sites))).toContain('blog.branchleft.co.uk');
   });
 
@@ -125,6 +126,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
   it('takes no hostname or registry as an argument that could carry one in', () => {
     expect(renderTenantGhostAdminAppsecConfig).toHaveLength(0);
     expect(renderTenantGhostAdminPostoverflow).toHaveLength(0);
+    expect(renderTenantAdminProbingScenario).toHaveLength(0);
     expect(renderTenantGhostBruteForceScenario).toHaveLength(0);
     expect(renderTenantCaddyfile.length).toBeLessThanOrEqual(2);
   });
@@ -135,6 +137,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
       'crowdsec/appsec-configs/ghost-admin-previews.yaml',
       'crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml',
       'crowdsec/scenarios/ghost-admin-login-bruteforce.yaml',
+      'crowdsec/scenarios/http-admin-interface-probing.yaml',
     ]) {
       const text = files.get(file) ?? '';
       expect(text, file).not.toMatch(/req\.Host in|target_fqdn'?\)? in|target_fqdn in/);

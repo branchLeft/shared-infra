@@ -697,9 +697,37 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(module_of(check), "assert")
         self.assertEqual(check["when"], "mail_collector_credentials_stat.stat.exists")
         that = "\n".join(str(item) for item in cast("list[object]", args_of(check)["that"]))
+        self.assertIn("stat.isreg", that)
         self.assertIn("stat.uid == 0", that)
         self.assertIn("stat.mode == mail_collector_credentials_mode", that)
+        # The look does not follow a link. test_credentials_check.py runs both controls.
+        self.assertIs(args_of(named("Look at the credentials file")).get("follow"), False)
         self.assertEqual(role_vars()["mail_collector_credentials_mode"], "0600")
+
+    def test_the_descriptor_and_record_directories_are_looked_at_without_following_a_link(
+        self,
+    ) -> None:
+        # The behaviour is run in test_descriptors.py. A stat does not follow a link unless asked,
+        # so leaving `follow: false` out changes nothing there; this holds that it is written, as
+        # the parents' look is, and that the look and the assert come before any change.
+        look = named("Look at the descriptor directory")
+        self.assertEqual(module_of(look), "stat")
+        self.assertIs(args_of(look).get("follow"), False)
+        self.assertEqual(
+            look["loop"],
+            ["{{ mail_collector_descriptor_dir }}", "{{ mail_collector_descriptor_record_dir }}"],
+        )
+        check = named("Require the descriptor directory")
+        self.assertEqual(module_of(check), "assert")
+        self.assertIn(
+            "item.stat.isdir", "\n".join(map(str, cast("list[object]", args_of(check)["that"])))
+        )
+        names = [str(task.get("name")) for task in tasks()]
+        first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in CHANGING_MODULES)
+        for start in ("Make the descriptor directory", "Make the record directory"):
+            self.assertLess(names.index(str(check["name"])), names.index(start))
+        self.assertLess(tasks().index(look), tasks().index(check))
+        self.assertLess(tasks().index(check), first_change)
 
     def test_the_inputs_are_refused_before_anything_changes(self) -> None:
         first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in CHANGING_MODULES)

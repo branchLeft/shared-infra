@@ -4,27 +4,13 @@
 The contract, and why each assertion exists, is in `test_compose_unit_contract.md`.
 """
 
+from __future__ import annotations
+
 import pathlib
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
-
-# `drop_in_for` below returns `pathlib.Path | None`: PEP 604 syntax that a
-# function-signature annotation evaluates eagerly, before Python 3.10. Under
-# an older interpreter that eager evaluation is a `TypeError` on a line deep
-# in the file, which unittest reports as a bare import error -- a reader has
-# no way to tell "this module needs a newer Python" from "this module is
-# broken". Checking the version first turns that into a message that names
-# the actual requirement, before the incompatible syntax is ever reached.
-if sys.version_info < (3, 10):
-    raise RuntimeError(
-        "test_compose_unit_contract.py requires Python 3.10 or newer (drop_in_for's "
-        f"`pathlib.Path | None` return annotation is PEP 604 syntax); running under "
-        f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9 -- "
-        "run this suite with `python3` from PATH instead."
-    )
 
 import branchleft_deploy as bd
 from branchleft_deploy import (
@@ -312,6 +298,7 @@ SCANNED_SUFFIXES = frozenset(
         ".py",
         ".service",
         ".sh",
+        ".state-gateway",
         ".timer",
         ".tmpl",
         ".toml",
@@ -579,6 +566,7 @@ def retry_faults(unit_text: str) -> list[str]:
     faults = []
     pause_seconds: float | None = None
     interval_seconds: float | None = None
+    timeout_seconds: float | None = None
 
     restart = last_assignment(service, "Restart")
     if restart is None:
@@ -593,6 +581,18 @@ def retry_faults(unit_text: str) -> list[str]:
         pause_seconds = parse_seconds(pause.partition("=")[2])
         if pause_seconds < MINIMUM_RESTART_SECONDS:
             faults.append(f"[Service] `{pause}` is under {MINIMUM_RESTART_SECONDS}s")
+
+    timeout = last_assignment(service, "TimeoutStartSec")
+    if timeout is None:
+        faults.append("[Service] has no finite `TimeoutStartSec=`")
+    else:
+        timeout_seconds = parse_seconds(timeout.partition("=")[2])
+        if timeout_seconds == 0 or timeout_seconds == INFINITY:
+            timeout_seconds = None
+            faults.append(
+                f"[Service] `{timeout}` is not finite: systemd reads 0 and infinity as no "
+                "timeout, so a hung start never fails and is never retried or counted"
+            )
 
     interval = last_assignment(unit, "StartLimitIntervalSec")
     if interval is None:
@@ -614,13 +614,23 @@ def retry_faults(unit_text: str) -> list[str]:
             raise UnparseableUnitValue(f"`{burst}` is not a whole number")
         if int(count) < MINIMUM_START_LIMIT_BURST:
             faults.append(f"[Unit] `{burst}` is under {MINIMUM_START_LIMIT_BURST}")
-        elif pause_seconds is not None and interval_seconds is not None:
-            # The limit trips on the burst-th start inside the interval, and
-            # the burst-th start comes (burst - 1) pauses after the first.
-            if (int(count) - 1) * pause_seconds >= interval_seconds:
+        elif (
+            pause_seconds is not None
+            and interval_seconds is not None
+            and timeout_seconds is not None
+        ):
+            # The limit trips on the burst-th start inside the interval. A start
+            # that hangs runs to its timeout and the retry follows one pause
+            # later, so the burst-th start comes (burst - 1) x (timeout + pause)
+            # after the first. A start that fails at once is the shorter case
+            # this covers too.
+            spacing = timeout_seconds + pause_seconds
+            if (int(count) - 1) * spacing >= interval_seconds:
                 faults.append(
-                    f"[Unit] `{burst}` with `{pause}` and `{interval}` can never trip: "
-                    f"({int(count)} - 1) x {pause_seconds:g}s is not under {interval_seconds:g}s"
+                    f"[Unit] `{burst}` with `{pause}`, `{timeout}` and `{interval}` can never "
+                    f"trip for a start that hangs to its timeout: ({int(count)} - 1) x "
+                    f"({timeout_seconds:g}s + {pause_seconds:g}s) is not under "
+                    f"{interval_seconds:g}s"
                 )
     return faults
 
@@ -1170,8 +1180,8 @@ class UnitRetryContractTests(unittest.TestCase):
     # A unit that meets the contract, so that each fault below is the only
     # thing wrong with its text and does not move with the real template.
     compliant_unit = (
-        "[Unit]\nStartLimitIntervalSec=900\nStartLimitBurst=5\n\n"
-        "[Service]\nType=oneshot\nRestart=on-failure\nRestartSec=30s\n\n"
+        "[Unit]\nStartLimitIntervalSec=3600\nStartLimitBurst=5\n\n"
+        "[Service]\nType=oneshot\nTimeoutStartSec=600\nRestart=on-failure\nRestartSec=30s\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )
 
@@ -1265,11 +1275,19 @@ class UnitRetryContractTests(unittest.TestCase):
                 faults = retry_faults(text)
                 self.assertEqual(len(faults), 1, faults)
                 self.assertIn(f"`StartLimitIntervalSec={interval}` is not finite", faults[0])
+        # A hung start with no timeout never fails, so it is never retried or counted.
+        for timeout in ("0", "infinity"):
+            with self.subTest(timeout=timeout):
+                faults = retry_faults(self.with_line("TimeoutStartSec", timeout))
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"`TimeoutStartSec={timeout}` is not finite", faults[0])
 
-    def test_a_missing_start_limit_interval_is_refused(self):
-        faults = retry_faults(self.without_line("StartLimitIntervalSec"))
-        self.assertEqual(len(faults), 1, faults)
-        self.assertIn("no finite `StartLimitIntervalSec=`", faults[0])
+    def test_a_missing_start_limit_interval_or_start_timeout_is_refused(self):
+        for directive in ("StartLimitIntervalSec", "TimeoutStartSec"):
+            with self.subTest(directive=directive):
+                faults = retry_faults(self.without_line(directive))
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn(f"no finite `{directive}=`", faults[0])
 
     def test_a_start_limit_burst_under_three_is_refused_naming_its_line(self):
         for burst in ("2", "1", "0"):
@@ -1280,36 +1298,44 @@ class UnitRetryContractTests(unittest.TestCase):
                 self.assertIn(f"`StartLimitBurst={burst}` is under 3", faults[0])
 
     def test_a_start_limit_that_can_never_trip_is_refused_naming_its_lines(self):
-        # The limit trips on the burst-th start inside the interval, and the
-        # burst-th start is (burst - 1) restart pauses after the first.
+        # A start that hangs runs to its timeout, then waits one restart pause, so
+        # the burst-th start is (burst - 1) x (timeout + pause) after the first.
+        # The 600s timeout is the template's own; the first case is the old
+        # fifteen-minute limit, which a hung start never reached.
         for burst, pause, interval in (
-            ("1000", "30s", "900"),
-            ("5", "30s", "120"),
-            ("5", "30s", "119"),
-            ("5", "5min", "900"),
-            ("31", "30s", "900"),
+            ("5", "30s", "900"),
+            ("1000", "30s", "3600"),
+            ("5", "30s", "2520"),
+            ("5", "30s", "2519"),
+            ("5", "5min", "3600"),
+            ("31", "30s", "3600"),
         ):
             with self.subTest(burst=burst, pause=pause, interval=interval):
                 text = self.with_line("StartLimitBurst", burst)
                 text = text.replace("RestartSec=30s", f"RestartSec={pause}")
-                text = text.replace("StartLimitIntervalSec=900", f"StartLimitIntervalSec={interval}")
+                text = text.replace(
+                    "StartLimitIntervalSec=3600", f"StartLimitIntervalSec={interval}"
+                )
                 faults = retry_faults(text)
                 self.assertEqual(len(faults), 1, faults)
                 self.assertIn("can never trip", faults[0])
                 self.assertIn(f"`StartLimitBurst={burst}`", faults[0])
                 self.assertIn(f"`RestartSec={pause}`", faults[0])
+                self.assertIn("`TimeoutStartSec=600`", faults[0])
                 self.assertIn(f"`StartLimitIntervalSec={interval}`", faults[0])
 
     def test_a_start_limit_that_trips_inside_its_interval_is_accepted(self):
         for burst, pause, interval in (
-            ("5", "30s", "900"),
-            ("5", "30s", "121"),
-            ("3", "30s", "61"),
-            ("31", "30s", "901"),
+            ("5", "30s", "3600"),
+            ("5", "30s", "2521"),
+            ("3", "30s", "1261"),
+            ("6", "30s", "3151"),
         ):
             with self.subTest(burst=burst, pause=pause, interval=interval):
                 text = self.with_line("StartLimitBurst", burst)
-                text = text.replace("StartLimitIntervalSec=900", f"StartLimitIntervalSec={interval}")
+                text = text.replace(
+                    "StartLimitIntervalSec=3600", f"StartLimitIntervalSec={interval}"
+                )
                 self.assertEqual(retry_faults(text), [])
 
     def test_the_trip_relation_is_not_reported_on_top_of_a_missing_or_disabled_value(self):
@@ -1317,6 +1343,8 @@ class UnitRetryContractTests(unittest.TestCase):
         # three values and would only repeat the same cause.
         for text in (
             self.without_line("RestartSec"),
+            self.without_line("TimeoutStartSec"),
+            self.with_line("TimeoutStartSec", "infinity"),
             self.without_line("StartLimitIntervalSec"),
             self.without_line("StartLimitBurst"),
             self.with_line("StartLimitIntervalSec", "0"),
