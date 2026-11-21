@@ -34,7 +34,10 @@ It runs in this order, and each step changes only what it names.
 5. Creates the system user `node-exporter` with no home and no login shell, only
    when it is absent.
 6. Creates `/var/lib/branchleft/backup-worker-exporter` (root, 0755) for the
-   textfile collector.
+   textfile collector, and `/var/lib/branchleft/support-access-exporter` (root,
+   0755), the second directory the unit names. The second is the one the
+   break-glass textfile writer of `breakglass_grant_host` replaces its file in on
+   an app host (it makes the directory too); on every other host it stays empty.
 7. Writes `/etc/default/node-exporter` with the one line
    `NODE_EXPORTER_LISTEN_ADDRESS=<the host's private address>`, rewritten every
    run so a rebuilt host does not keep a stale address.
@@ -71,6 +74,13 @@ names them. None of the variables is a secret.
   That is fail-safe: the grants then stay as they were.
 - `edge1`, before `exporters_and_collectors`, in `ansible/playbooks/edge1.yml`.
 - `app1`, last, in `ansible/playbooks/app1.yml`, so a disk refusal holds nothing back.
+
+- `dbt1`, `appt1` and `edget`, the tenants project's three hosts (ws#1810).
+  On `dbt1` it comes before `db_t1`, so a refusal in the database role holds monitoring back
+  from nothing; on `appt1` and `edget` it is last. The tenants network reuses the estate's
+  range, so the default subnet prefix `10.20.1.` finds the host's own address there too. The
+  tenant hosts are in `hetzner/monitoring/render.ts` as `expectedUp: false`; the flip is made
+  when each is enrolled and read back answering live.
 
 On `ops1`, the last role, a disk refusal holds nothing else back.
 

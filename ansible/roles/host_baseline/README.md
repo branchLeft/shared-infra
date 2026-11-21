@@ -1,10 +1,10 @@
 # host_baseline
 
-This role is the baseline every container host needs, in four parts that run in
-this order: a key-only sshd, unattended upgrades with fail2ban, Docker CE, and a daily
-prune of old Docker images. The first three write what three provisioning scripts write,
-one script for each part, and keep their files, modes, owners and order. The fourth has no
-script behind it.
+This role is the baseline every container host needs, in five parts that run in
+this order: a key-only sshd, unattended upgrades with fail2ban, Docker CE, a daily
+prune of old Docker images, and an opt-in bound on how long the journal keeps an entry. The
+first three write what three provisioning scripts write, one script for each part, and keep
+their files, modes, owners and order. The fourth and fifth have no script behind them.
 
 This README is written for a maintainer who is new to the repository. It
 follows the order the standard sets for a role README (ANS-14).
@@ -47,6 +47,15 @@ follows the order the standard sets for a role README (ANS-14).
    unit file is not on the host yet (ANS-10): check mode writes no file, so there is
    nothing for systemd to enable.
 
+5. **Journal retention (opt-in).** On a host that sets `host_baseline_journal_retention_days`
+   to a number from 1 to 90, it writes `/etc/systemd/journald.conf.d/50-branchleft-retention.conf`
+   with `MaxRetentionSec=<n>day` and `SystemMaxUse=<size>` (default `500M`), and restarts
+   `systemd-journald` when the file changed. The default is 0, which writes nothing, so a host
+   that does not ask is unchanged. 90 is the ceiling the website's privacy notice states for
+   server logs. The three tenant hosts (`dbt1`, `appt1`, `edget`) set 30 in their playbooks
+   (ws#1810), the same figure the edge keeps its logs for; the live hosts do
+   not set it. Container logs are bounded by each stack's own compose file, not here.
+
 It does not set up host egress, install the deploy tooling, configure the
 firewall or the NAT gateway, create users, or write any secret. Those belong to
 other roles and tickets. It removes nothing but those old images, and it does not pin a
@@ -77,6 +86,11 @@ newline, or a token that does not parse as an IPv4 or IPv6 address or CIDR range
 before the jail is written, so a host name such as `cafe` is refused too. Every other value the role writes is the same on every
 container host. None of the role's values is a secret and the role handles no
 secret.
+
+Two more inputs bound the journal and are off by default: `host_baseline_journal_retention_days`
+(0, which writes nothing, or a whole number of days up to 90) and `host_baseline_journal_max_use`
+(a size such as `500M`, used only when the retention is on). Both are checked before anything
+is written, and neither is a secret.
 
 A second input, `host_baseline_fail2ban_ignoreip_none`, defaults to `false`. A host
 that must write no `ignoreip` line sets it `true` in its own playbook, and the jail
@@ -119,6 +133,9 @@ inventory variable.
 | `/etc/apt/sources.list.d/docker.list`                       | file      | root:root   | `0644` |
 | `/etc/systemd/system/branchleft-docker-image-prune.service` | file      | root:root   | `0644` |
 | `/etc/systemd/system/branchleft-docker-image-prune.timer`   | file      | root:root   | `0644` |
+| `/etc/systemd/journald.conf.d/50-branchleft-retention.conf` | file      | root:root   | `0644` |
+
+The last row is written only on a host that sets `host_baseline_journal_retention_days`.
 
 - Packages installed when missing: `unattended-upgrades`, `apt-listchanges`,
   `fail2ban`, `docker-ce`, `docker-ce-cli`, `containerd.io`,
@@ -267,6 +284,7 @@ to see the message.
 | Break the quote in the unattended-upgrades origins file                     | `converge`                 | failed to validate: Syntax error: Malformed tag.                                                                                                 |
 | Remove the resolved-settings assertion                                      | `verify`                   | Expected the role to stop at the read-back; it stopped at "NOTHING: the role accepted it".                                                       |
 | Remove the architecture-name assertion                                      | `verify`                   | the role stopped at "Work out the architecture name apt uses" instead of the architecture check.                                                 |
+| Change `MaxRetentionSec` in the journald drop-in template to another figure | `verify`                   | /etc/systemd/journald.conf.d/50-branchleft-retention.conf does not hold the content the baseline requires.                                       |
 | Change `until=168h` in the prune service to another age                     | `verify`                   | /etc/systemd/system/branchleft-docker-image-prune.service does not hold the content the baseline requires.                                       |
 | Remove the task that enables the prune timer                                | `verify`                   | The Docker image prune timer is not enabled and active, or its service is enabled on its own.                                                    |
 | Change one character of the pinned primary fingerprint in `vars/main.yml`   | `verify`                   | The key file does not hold exactly one key with the primary fingerprint ...EBFCD89.                                                              |

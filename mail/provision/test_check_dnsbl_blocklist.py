@@ -121,8 +121,7 @@ class EvaluateDnsblTests(unittest.TestCase):
 
     def test_dead_zone_reports_unresponsive_not_a_false_clean(self):
         # The load-bearing case this script exists to prevent: a zone with
-        # no delegation at all (e.g. SORBS, confirmed live -- see RUNBOOK)
-        # answers NXDOMAIN for *everything*, including the sentinel. Without
+        # no delegation at all answers NXDOMAIN for *everything*, including the sentinel. Without
         # the self-test gate this would misreport as NOT_LISTED forever.
         result = evaluate_dnsbl(SPEC, NOT_LISTED, NOT_LISTED)
         self.assertEqual(result.verdict, Verdict.ZONE_UNRESPONSIVE)
@@ -240,7 +239,7 @@ class RunChecksTests(unittest.TestCase):
         self.assertTrue(all(v == "not_listed" for v in new_state.values()))
 
     def test_a_zone_with_no_delegation_never_reports_false_clean(self):
-        # Regression test for the SORBS finding: a zone that NXDOMAINs on
+        # Regression test: a zone that NXDOMAINs on
         # every query, including the sentinel, must come back
         # ZONE_UNRESPONSIVE for that entry, not folded into "all clean".
         def dead_zone_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
@@ -396,16 +395,21 @@ class DefaultSendingDomainProofTests(unittest.TestCase):
 
 
 class DnsblConfigTests(unittest.TestCase):
-    def test_at_least_the_five_minimum_lists_are_configured(self):
+    def test_at_least_the_four_minimum_lists_are_configured(self):
         required_zones = {
             "zen.spamhaus.org",
             "b.barracudacentral.org",
             "bl.spamcop.net",
-            "dnsbl.sorbs.net",
             "dnsbl-1.uceprotect.net",
         }
         configured_zones = {spec.zone for spec in DNSBLS}
         self.assertTrue(required_zones.issubset(configured_zones))
+
+    def test_sorbs_is_not_configured(self):
+        # SORBS is shut down: its sentinel never comes back listed, so every
+        # run would report ZONE_UNRESPONSIVE and exit 1. It must not be checked.
+        configured_zones = {spec.zone for spec in DNSBLS}
+        self.assertNotIn("dnsbl.sorbs.net", configured_zones)
 
     def test_every_spec_has_a_delisting_url(self):
         for spec in DNSBLS:
