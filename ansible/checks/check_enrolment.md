@@ -160,7 +160,7 @@ is not loaded there.
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
   `control_plane_app_image`, the image the control plane runs, is allowed on ops1 only and is
-  the one key a file may leave out (`OPTIONAL_OWNER_KEYS`): it must be text when present, and
+  a key a file may leave out (`OPTIONAL_OWNER_KEYS`): it must be text when present, and
   `test_step_allowlist.py` holds it to the `control_plane` role's digest pattern. Absent, the role
   keeps the running image; present, the next gated apply moves the pin.
   The `ring_controller_host` role adds two more, both text and both allowed on ops1 only:
@@ -170,6 +170,12 @@ is not loaded there.
   file that still sets it is refused here, and the role refuses the name too. The push remote and the
   known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
   refused here (Ansible's own spec check does not read an owner file's values).
+  The `mail_collector` role adds its eight inputs (`MAIL_COLLECTOR_KEYS`), allowed on ops1 only and
+  each optional, since an absent key leaves the role's inert default: `mail_collector_image`,
+  `mail_collector_smtp_host`, `mail_collector_demo_mail_domain` and `mail_collector_shim_scheme`
+  (text), `mail_collector_hosts` (a list), `mail_collector_smtp_port` and `mail_collector_shim_port`
+  (whole numbers) and `mail_collector_smtp_secure` (a bool). What a value may look like is the
+  role's rule alone. The sending credential is never a key here: it is the file the owner places.
   The `ci_step_login` role adds two, allowed on ops1 only: `ci_step_login_key`, text, and
   `ci_step_login_from`, a list of text. `test_ci_step_login_pins.py` holds the real key and
   addresses to the owner's values.

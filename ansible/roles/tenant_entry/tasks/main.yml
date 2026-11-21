@@ -1,0 +1,17 @@
+---
+# The program and its folders come first, and the key last: a key must never be live while the
+# program it is bound to is absent.
+- name: Install the tenant entry program and its register directory
+  ansible.builtin.import_tasks: _program.yml
+
+- name: Fetch the secrets program the entry program calls
+  ansible.builtin.import_tasks: _secrets_program.yml
+
+- name: Make sure the entry account exists, locked, with a real shell
+  ansible.builtin.import_tasks: _account.yml
+
+- name: Install the sudoers file of the entry account
+  ansible.builtin.import_tasks: _sudoers.yml
+
+- name: Keep the one key line of the entry account
+  ansible.builtin.import_tasks: _keys.yml

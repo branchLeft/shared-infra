@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from runbook_sections import runbook_section
 
@@ -796,11 +797,29 @@ class RunbookRestartCheckExecutionTests(unittest.TestCase):
         self.assertNotIn("gateway survives a docker restart", result.stdout)
 
 
+def _join_continued_lines(lines):
+    """Join backslash-continued lines, so each logical command is one string."""
+    logical = []
+    pending = []
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.endswith("\\"):
+            pending.append(stripped[:-1].rstrip())
+            continue
+        pending.append(stripped)
+        logical.append(" ".join(part for part in pending if part))
+        pending = []
+    if pending:
+        logical.append(" ".join(part for part in pending if part))
+    return logical
+
+
 def _extract_scp_commands():
-    """Pull every provisioning `scp` line out of RUNBOOK-provision-host.md."""
+    """Pull every provisioning `scp` command out of RUNBOOK-provision-host.md,
+    with any backslash-continued line joined onto its first."""
     with open(RUNBOOK, encoding="utf-8") as handle:
         lines = handle.readlines()
-    return [line.strip() for line in lines if line.strip().startswith("scp ")]
+    return [line for line in _join_continued_lines(lines) if line.startswith("scp ")]
 
 
 class RunbookScpCommandTests(unittest.TestCase):
@@ -828,6 +847,28 @@ class RunbookScpCommandTests(unittest.TestCase):
                 "a destination trailing slash makes scp fail outright in "
                 f"SFTP mode when the destination does not yet exist: {command}",
             )
+
+
+class ContinuedScpCommandTests(unittest.TestCase):
+    """A backslash-continued scp command is one command, not its first line."""
+
+    def test_a_continued_scp_command_is_extracted_whole(self):
+        runbook_text = (
+            "```bash\n"
+            "scp -r hetzner/provision/. \\\n"
+            "  root@example.com:/root/platform-provision\n"
+            "```\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "RUNBOOK.md")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(runbook_text)
+            with mock.patch.object(sys.modules[__name__], "RUNBOOK", path):
+                commands = _extract_scp_commands()
+        self.assertEqual(
+            commands,
+            ["scp -r hetzner/provision/. root@example.com:/root/platform-provision"],
+        )
 
 
 PYCACHE_CLEANUP = (

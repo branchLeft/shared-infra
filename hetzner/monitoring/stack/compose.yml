@@ -142,6 +142,46 @@ services:
     mem_limit: 128m
     cpu_shares: 512
 
+  # The incident view: Karma reads open alerts and silences from Alertmanager's
+  # API and groups them in one place. It holds no state and no secret, so its
+  # whole configuration is the environment below and nothing is rendered.
+  # Reached as Alertmanager and Prometheus are, over an SSH tunnel to edge1's
+  # loopback (RUNBOOK-monitoring.md, "Karma"). It has no login of its own, so it
+  # is never on a private-network or public address, in sites.ts or behind
+  # Caddy. Read-only: silences stay Alertmanager's own UI.
+  karma:
+    image: ghcr.io/prymitive/karma:v0.134@sha256:479c7bfad3c176b9c35c5a48c2ad8fa72d748f204314daff748fb51488f043da
+    restart: unless-stopped
+    user: '65534:65534'
+    environment:
+      ALERTMANAGER_NAME: branchleft
+      ALERTMANAGER_URI: http://alertmanager:9093
+      ALERTMANAGER_READONLY: 'true'
+      KARMA_NAME: branchLeft
+    # 8084 is free on edge1's loopback (Caddy's probe holds 8080);
+    # test_karma_compose.py pins the binding.
+    ports:
+      - '127.0.0.1:8084:8080'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # The image is distroless, with no shell and no wget, so the probe is the
+    # binary's own `--check-config`: it proves the configuration this container
+    # runs with parses, not that the server answers. CI proves the live read of
+    # Alertmanager (.github/workflows/ci-config-validate.yml).
+    healthcheck:
+      test: ['CMD', '/karma', '--check-config']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    mem_limit: 64m
+    cpu_shares: 64
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+
   grafana:
     image: docker.io/grafana/grafana:12.4.9@sha256:615caa575e7272e2f65f423f4c6b2c901334c5ba72bbae71f4bab1b7c3211fe9
     restart: unless-stopped

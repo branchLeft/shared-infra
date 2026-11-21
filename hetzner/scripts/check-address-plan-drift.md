@@ -25,6 +25,14 @@ still matches them -- every occurrence, not the first one found, because a
 file edited in one place and left stale in another is the half-updated state
 the gate exists to catch.
 
+`hetzner/README.md` (the host table) and `hetzner/RUNBOOK-edge.md` (the
+opening line naming `edge1`) are read line by line. Any line that names a plan
+host and carries an in-network address must carry a current plan value. A
+host's address that moves in the plan and stays old on such a line fails with
+the file, the line, the stale value and the value the plan now has for each
+named host. Adding a host to the plan needs no edit to the gate, because host
+names are read from the plan. A line that names no host is not read.
+
 Two things a naive text match over these files would get wrong, both handled
 below:
 
