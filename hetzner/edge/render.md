@@ -282,7 +282,13 @@ is inert for links Ghost still writes, and serves any request that does reach th
 - **What goes to the bucket.** The path only. The query is replaced with an empty one (an S3
   query selects a version or a sub-resource), `Cookie` and `Authorization` are removed, and `Host`
   is the storage host's. A `..` segment under the prefixes is a 404 before any of it
-  (`@tenant_media_traversal`, over the URI as received, because Caddy's path matcher cleans).
+  (`@tenant_media_traversal`). It reads the request three ways, because the bucket path is built
+  from the decoded path and Caddy's path matcher cleans its own copy: the URI as received (a `..`
+  after a slash or an encoded slash), the decoded path (a `..` however the separators were
+  written, so `a%2f..%2fb` is caught), and the decoded path for a leftover `%2e`, `%2f` or `%25`
+  (escaped twice: the edge's own rewrites read the path a second time and would turn it into a
+  dot segment). Ghost writes no `%` into an upload's name. `tenantMediaTraversal.test.ts` sends
+  these forms through the rendered lines under a real Caddy in front of an echoing upstream.
 - **What comes back.** `2xx`, `304` and `416` are passed on with `Cache-Control: public,
 max-age=31536000, immutable` (Ghost never overwrites an upload: it picks a new name, and a
   resized copy is named by size and source) and with the bucket's request id, version id,

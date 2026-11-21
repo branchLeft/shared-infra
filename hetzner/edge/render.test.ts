@@ -1546,7 +1546,7 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 const TENANT_MEDIA_ROUTE_LINES = `
 		@tenant_media_traversal {
 			path /content/images/* /content/media/* /content/files/*
-			expression \`{http.request.orig_uri}.matches('(?i)(?:^|/)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')\`
+			expression \`{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)') || {http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)') || {http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')\`
 		}
 		respond @tenant_media_traversal 404
 		@tenant_media_resize {

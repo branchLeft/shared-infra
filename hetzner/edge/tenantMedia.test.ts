@@ -42,7 +42,8 @@ describe('a Ghost site with a media bucket answers its upload paths itself', () 
 
   it('refuses a dot segment under the upload paths before the bucket is asked', () => {
     expect(block).toContain('@tenant_media_traversal {');
-    expect(block).toContain('(?:[.]|%2e){2}');
+    // What the guard refuses is proved against a real Caddy in tenantMediaTraversal.test.ts.
+    expect(block).toContain('{http.request.uri.path}.matches(');
     expect(block).toContain('respond @tenant_media_traversal 404');
     expect(block.indexOf('respond @tenant_media_traversal 404')).toBeLessThan(
       block.indexOf('route @tenant_media_resize')

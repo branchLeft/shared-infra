@@ -585,9 +585,22 @@ const MEDIA_STRIPPED_RESPONSE_HEADERS = [
   'x-rgw-object-type',
   'Strict-Transport-Security',
 ];
-/** Over the URI as received: a `..` segment, plain or percent-encoded, anywhere in it. */
-const MEDIA_TRAVERSAL_EXPRESSION =
-  "{http.request.orig_uri}.matches('(?i)(?:^|/)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')";
+/**
+ * Three reads of the one request, because the bucket path is built from the
+ * decoded one (`{http.request.uri.path}`) and Caddy's `path` matcher cleans
+ * its own copy, so no single read sees every form. The URI as received: a
+ * `..` segment, plain or percent-encoded, after a slash plain or encoded.
+ * The decoded path: a `..` segment, however the separators and dots were
+ * written. The decoded path again: an escape left in it (`%2e`, `%2f`, `%25`)
+ * was escaped twice, and the edge's own rewrites (to the bucket after a Ghost
+ * round, to Ghost on a missing resized copy) read it a second time into a
+ * dot segment. Ghost writes no `%` into an upload's name.
+ */
+const MEDIA_TRAVERSAL_EXPRESSION = [
+  "{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')",
+  "{http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)')",
+  "{http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')",
+].join(' || ');
 
 function mediaBucketProxy(media: SiteMedia, suffix: string, onMiss: string[]): string[] {
   return [
