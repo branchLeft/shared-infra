@@ -257,6 +257,15 @@
 
 # The program is run from a private copy, but it is copied from here, so this
 # directory and every directory above it must be root's and closed to writes.
+#
+# In check mode a directory or a program that is not there yet is not refused. The
+# role that delivers them, db1_backup_timers, runs before this one and its fetches are
+# skipped in check mode (a plan creates no directory to fetch into), so on a host it
+# has not yet been applied to the plan finds nothing here, and a refusal would stop the
+# plan of every host (ANS-10). That role reports what it would fetch as a change. A
+# directory or program that is there is checked in check mode as in a real run, and a
+# real run checks every one: the refusals below cannot be reached around by running the
+# role in check mode.
 - name: Look at the program directory and its parents
   ansible.builtin.stat:
     path: '{{ item }}'
@@ -281,6 +290,7 @@
   loop: '{{ db1_grants_parent_stat.results }}'
   loop_control:
     label: '{{ item.item }}'
+  when: (item.stat.exists | default(false)) or not ansible_check_mode
 
 - name: Look at the programs the role may run
   ansible.builtin.stat:
@@ -303,6 +313,25 @@
   loop: '{{ db1_grants_program_stat.results }}'
   loop_control:
     label: '{{ item.item }}'
+  when: (item.stat.exists | default(false)) or not ansible_check_mode
+
+# What the two checks above let through in check mode is said in the plan, so a reader
+# of it knows they were not made for these paths. Not a change: the change is the
+# delivering role's to report.
+- name: Note the paths a plan finds missing that the delivering role would create
+  ansible.builtin.debug:
+    msg: >-
+      db1_grants: check mode, {{ db1_grants_absent_paths | length }} path(s) the role reads are not on the
+      host yet ({{ db1_grants_absent_paths | join(', ') }}). The role that delivers the programs reports what
+      it would fetch; a real run checks these paths and refuses if they are still missing.
+  vars:
+    db1_grants_absent_paths: >-
+      {{ (db1_grants_parent_stat.results | rejectattr('stat.exists') | map(attribute='item') | list)
+      + (db1_grants_program_stat.results | rejectattr('stat.exists') | map(attribute='item') | list) }}
+  when:
+    - ansible_check_mode
+    - >-
+      (db1_grants_parent_stat.results + db1_grants_program_stat.results) | rejectattr('stat.exists') | list | length > 0
 
 # ----- What the role manages -----
 
@@ -398,7 +427,11 @@
       dump program on the host is not the pinned one (commit {{ db1_grants_source_commit }}). The grants and the
       program change together or not at all: deliver the pinned dump program first, then run the role again.
     quiet: true
-  when: db1_grants_backup_drift
+  when:
+    - db1_grants_backup_drift
+    # In check mode a dump program that is not there yet is the delivering role's fetch, which check
+    # mode skips (see the program directory checks above). A real run refuses it.
+    - (db1_grants_dump_stat.stat.exists | default(false)) or not ansible_check_mode
 
 - name: Read the time in UTC
   ansible.builtin.command:
