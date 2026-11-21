@@ -50,15 +50,40 @@ PRINTABLE_PATTERN: Final = re.compile(r"\A[ -~]+\Z")
 OWNER_TEXT_PATTERN: Final = re.compile(r"\A(?!-)[ -~]+\Z")
 SITE_URL_PATTERN: Final = re.compile(r"\Ahttps://[a-z0-9]([a-z0-9.-]{0,250}[a-z0-9])?\Z")
 
-# The one image a tenant's stack may run, as its pin line, and the two modes of what `stack` writes.
-# Held equal to tenant_compose's own pattern by tests/unit/test_branchleft_tenant_entry.py.
-TENANT_IMAGE_PATTERN: Final = re.compile(
-    r"\AIMAGE=ghcr\.io/branchleft/ghost-tenant@sha256:[0-9a-f]{64}\n\Z"
-)
+# What `stack` writes: one compose file, built here from the claim and a few checked parameters.
+# The modes are tenant_compose's own, held equal by tests/unit/test_branchleft_tenant_entry.py.
 COMPOSE_MODE: Final = 0o644
 STACK_DIR_MODE: Final = 0o755
-IMAGE_ENV_MODE: Final = 0o600
 DETAIL_LIMIT: Final = 1000
+
+# The parameters a `stack` request may carry, and what each may hold. Nothing else is read.
+STACK_KEYS: Final = frozenset({"size", "mail", "environment"})
+# A request that carries a pin or a compose text of its own is refused by name: the first pin
+# comes only from branchleft-deploy (which verifies the attestation), and the host writes the stack.
+PIN_KEYS: Final = frozenset({"image_env_text", "image_env", "image", "pin"})
+COMPOSE_KEYS: Final = frozenset({"compose_text", "compose"})
+MAX_ENVIRONMENT: Final = 64
+ENV_KEY_PATTERN: Final = re.compile(r"\A[A-Za-z][A-Za-z0-9_]{0,99}\Z")
+# Printable ASCII but for `$`, which compose would read as a reference.
+ENV_LITERAL_PATTERN: Final = re.compile(r"\A[ -#%-~]{0,500}\Z")
+SECRET_NAME_PATTERN: Final = re.compile(r"\AGHOST_[A-Z0-9_]{1,56}\Z")
+# The app host's own private address, written by the role: where a tenant's ports are published.
+BIND_ADDRESS_FILE: Final = "bind-address"
+BIND_ADDRESS_PATTERN: Final = re.compile(
+    r"\A(10(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}"
+    r"|172\.(1[6-9]|2[0-9]|3[01])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}"
+    r"|192\.168(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2})\n?\Z"
+)
+# The stack's fixed posture. Mirrors the platform renderer's runtime posture for a paying tenant.
+GHOST_CONTAINER_PORT: Final = 2368
+GHOST_STOP_GRACE_PERIOD: Final = "60s"
+TMPFS_SIZE: Final = "128m"
+MEMORY_LIMIT: Final = "640m"
+CONTENT_MOUNT: Final = "/var/lib/ghost/content"
+ADAPTERS_MOUNT: Final = "/var/lib/ghost/content/adapters"
+METRICS_MOUNT: Final = "/var/lib/ghost/metrics"
+# The judge insists on a pin line. This one is never written: it only lets the judge read the rest.
+JUDGE_PLACEHOLDER_PIN: Final = "IMAGE=ghcr.io/branchleft/ghost-tenant@sha256:" + "0" * 64 + "\n"
 
 CHILD_ENVIRONMENT: Final = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"}
 
@@ -192,18 +217,24 @@ def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def read_payload(host: Host, keys: frozenset[str]) -> dict[str, object]:
-    """Read one JSON object from stdin whose keys are exactly `keys`."""
+def read_object(host: Host) -> dict[str, object]:
+    """Read one JSON object from stdin, of at most MAX_PAYLOAD bytes, with no repeated key."""
     raw = host.stdin.read(MAX_PAYLOAD + 1)
     if len(raw) > MAX_PAYLOAD:
         refuse("payload-too-large")
     try:
         parsed: object = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
-    except ValueError:
+    except (ValueError, RecursionError):
         refuse("payload-not-json")
     if not isinstance(parsed, dict):
         refuse("payload-not-object")
     payload: dict[str, object] = parsed
+    return payload
+
+
+def read_payload(host: Host, keys: frozenset[str]) -> dict[str, object]:
+    """Read one JSON object from stdin whose keys are exactly `keys`."""
+    payload = read_object(host)
     if set(payload) != set(keys):
         refuse("payload-keys")
     return payload
@@ -575,22 +606,25 @@ def secret_values(secrets_text: str) -> list[str]:
     return [value for value in values if value]
 
 
-def check_slot_targets(host: Host, slug: str) -> tuple[str, str]:
-    """Return the two files `stack` may write, after checking they are inside the slug's own slot.
+def check_slot_targets(host: Host, slug: str) -> str:
+    """Return the one file `stack` may write, after checking it is inside the slug's own slot.
 
-    The slot is the slug's stack directory under the stack root, and the slug's own image pin
-    name in the configuration directory. A stack directory that is a link, not a directory or not
-    root's, a configuration directory that is not root's, and a path that resolves anywhere else
-    are refused, so no request can place a file outside it.
+    The slot is the slug's stack directory under the stack root. A stack root that is not a
+    directory, not root's or open to a write by group or other, a stack directory that is a link,
+    not a directory or not root's, and a path that resolves anywhere else are refused, so no
+    request can place a file outside it.
     """
     root = host.paths.root_uid
-    for base in (host.paths.opt_dir, host.paths.etc_dir):
-        try:
-            base_info = os.stat(base)
-        except OSError:
-            refuse("path-outside-slot")
-        if not stat.S_ISDIR(base_info.st_mode) or base_info.st_uid != root:
-            refuse("path-outside-slot")
+    try:
+        base_info = os.stat(host.paths.opt_dir)
+    except OSError:
+        refuse("path-outside-slot")
+    if (
+        not stat.S_ISDIR(base_info.st_mode)
+        or base_info.st_uid != root
+        or stat.S_IMODE(base_info.st_mode) & 0o022
+    ):
+        refuse("path-outside-slot")
     directory = stack_dir(host, slug)
     try:
         info = os.lstat(directory)
@@ -602,85 +636,254 @@ def check_slot_targets(host: Host, slug: str) -> tuple[str, str]:
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != root:
             refuse("path-outside-slot")
     compose = compose_path(host, slug)
-    pin = image_env_path(host, slug)
-    inside = (
-        os.path.realpath(os.path.dirname(compose))
-        == os.path.join(os.path.realpath(host.paths.opt_dir), slug)
-        and os.path.realpath(os.path.dirname(pin)) == os.path.realpath(host.paths.etc_dir)
-        and os.path.basename(pin) == f"{slug}.image.env"
+    inside = os.path.realpath(os.path.dirname(compose)) == os.path.join(
+        os.path.realpath(host.paths.opt_dir), slug
     )
     if not inside:
         refuse("path-outside-slot")
-    return compose, pin
+    return compose
 
 
 @dataclass(frozen=True)
-class Staged:
-    """One file written whole under a temporary name in its final directory, not yet in place."""
+class StackParameters:
+    """The checked parameters of one `stack` request. Nothing else reaches the stack."""
 
-    temp: str
-    final: str
+    size: str
+    mail: bool
+    environment: dict[str, str]
 
 
-def stage_file(final: str, data: str, mode: int, root_uid: int) -> Staged:
+@dataclass(frozen=True)
+class SizeCaps:
+    """The resource caps of one size, as the platform's renderer states them."""
+
+    cpus: str
+    cpu_shares: int
+    pids_limit: int
+    nofile: int
+
+
+# The three caps a stack may have. The host holds the numbers; a request only names one.
+SIZES: Final = {
+    "small": SizeCaps("0.5", 256, 128, 2048),
+    "standard": SizeCaps("1.0", 512, 256, 4096),
+    "large": SizeCaps("2.0", 1024, 512, 8192),
+}
+
+
+def read_stack_parameters(host: Host) -> StackParameters:
+    """Read the request's parameters and check each against its schema, or refuse by name.
+
+    A request that carries a pin or a compose text is refused for that: the first pin is
+    branchleft-deploy's, which verifies the attestation, and the stack is built here. Any other
+    key is `payload-keys`. A refusal names the field and never repeats a value.
+    """
+    payload = read_object(host)
+    if PIN_KEYS & set(payload):
+        refuse("pin-not-accepted")
+    if COMPOSE_KEYS & set(payload):
+        refuse("compose-not-accepted")
+    if set(payload) != STACK_KEYS:
+        refuse("payload-keys")
+    size, mail, environment = payload["size"], payload["mail"], payload["environment"]
+    if not isinstance(size, str) or size not in SIZES:
+        refuse("field-size")
+    if not isinstance(mail, bool):
+        refuse("field-mail")
+    if not isinstance(environment, dict) or not 0 < len(environment) <= MAX_ENVIRONMENT:
+        refuse("field-environment")
+    checked: dict[str, str] = {}
+    for name, value in environment.items():
+        if not isinstance(name, str) or ENV_KEY_PATTERN.match(name) is None:
+            refuse("field-environment")
+        checked[name] = environment_value(value)
+    return StackParameters(size, mail, checked)
+
+
+def environment_value(value: object) -> str:
+    """One environment value as compose text: a literal with no `$`, or a reference to a secret."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        if not 0 <= value <= 2**31:
+            refuse("field-environment")
+        return str(value)
+    if isinstance(value, str):
+        if ENV_LITERAL_PATTERN.match(value) is None:
+            refuse("field-environment")
+        return value
+    if isinstance(value, dict) and set(value) == {"secret"}:
+        name = value["secret"]
+        if not isinstance(name, str) or SECRET_NAME_PATTERN.match(name) is None:
+            refuse("field-environment")
+        return f"${{{name}:?set {name} in the env file}}"
+    refuse("field-environment")
+
+
+def read_bind_address(host: Host) -> str:
+    """The app host's private address, from the file the role writes (root's, closed, one line)."""
+    path = os.path.join(host.paths.entry_dir, BIND_ADDRESS_FILE)
+    if not file_is_closed(host, path):
+        fail("bind-address")
+    try:
+        with open(path, encoding="ascii") as handle:
+            text = handle.read(64)
+    except (OSError, UnicodeDecodeError):
+        fail("bind-address")
+    if BIND_ADDRESS_PATTERN.match(text) is None:
+        fail("bind-address")
+    return text.strip()
+
+
+def ghost_service(
+    slug: str, uid: int, port: int, bind: str, caps: SizeCaps, parameters: StackParameters
+) -> dict[str, object]:
+    """One colour's Ghost service, fixed but for its port, its caps and its environment."""
+    mail_network = f"branchleft-mail-{uid}"
+    service: dict[str, object] = {
+        "image": "${IMAGE}",
+        "restart": "unless-stopped",
+        "stop_grace_period": GHOST_STOP_GRACE_PERIOD,
+        "user": f"{uid}:{uid}",
+        "init": True,
+        "read_only": True,
+        "tmpfs": [f"/tmp:rw,noexec,nosuid,nodev,size={TMPFS_SIZE}"],  # noqa: S108  # in the container.
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges:true"],
+        "pids_limit": caps.pids_limit,
+        "mem_limit": MEMORY_LIMIT,
+        "memswap_limit": MEMORY_LIMIT,
+        "cpus": caps.cpus,
+        "cpu_shares": caps.cpu_shares,
+        "ulimits": {"nofile": {"soft": caps.nofile, "hard": caps.nofile}},
+        "logging": {"driver": "json-file", "options": {"max-size": "10m", "max-file": "3"}},
+        "ports": [f"{bind}:{port}:{GHOST_CONTAINER_PORT}"],
+        "environment": dict(sorted(parameters.environment.items())),
+    }
+    if parameters.mail:
+        service["networks"] = ["default", mail_network]
+    service["volumes"] = [
+        f"ghost-{slug}-content:{CONTENT_MOUNT}",
+        f"ghost-{slug}-adapters:{ADAPTERS_MOUNT}:ro",
+        f"ghost-{slug}-metrics:{METRICS_MOUNT}",
+    ]
+    service["healthcheck"] = {
+        "test": [
+            "CMD",
+            "wget",
+            "-q",
+            "-O",
+            "/dev/null",
+            "--header",
+            "X-Forwarded-Proto: https",
+            f"http://127.0.0.1:{GHOST_CONTAINER_PORT}/",
+        ],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "60s",
+    }
+    return service
+
+
+def build_stack(
+    slug: str, marker: Mapping[str, int], bind: str, parameters: StackParameters
+) -> str:
+    """The tenant's compose text, from the host's own template, its claim and the parameters.
+
+    The text is JSON, which is YAML, so every value is quoted by the encoder and none can add a
+    key. The uid and the ports are the claim's: colour a on the claimed port, colour b on the next.
+    """
+    uid, port = marker["uid"], marker["port"]
+    caps = SIZES[parameters.size]
+    document: dict[str, object] = {
+        "name": slug,
+        "services": {
+            "ghost-a": ghost_service(slug, uid, port, bind, caps, parameters),
+            "ghost-b": ghost_service(slug, uid, port + 1, bind, caps, parameters),
+        },
+    }
+    if parameters.mail:
+        network = f"branchleft-mail-{uid}"
+        document["networks"] = {network: {"name": network, "external": True}}
+    document["volumes"] = {
+        f"ghost-{slug}-content": {"external": True},
+        f"ghost-{slug}-adapters": {"external": True},
+        f"ghost-{slug}-metrics": {"external": True},
+    }
+    return json.dumps(document, indent=2) + "\n"
+
+
+def compose_matches(host: Host, path: str, text: str) -> bool:
+    """True when the file at `path` is a plain root-owned file holding exactly `text`."""
+    try:
+        info = os.lstat(path)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != host.paths.root_uid
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            return False
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read(len(text.encode("utf-8")) + 1) == text.encode("utf-8")
+
+
+def stage_file(final: str, data: str, mode: int, root_uid: int) -> str:
     """Write `data` to a new temporary file beside `final`, closed to everyone but root."""
-    directory = os.path.dirname(final)
-    temp = os.path.join(directory, f".stack-{os.urandom(8).hex()}")
+    temp = os.path.join(os.path.dirname(final), f".stack-{os.urandom(8).hex()}")
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        os.fchown(handle.fileno(), root_uid, -1)
-        handle.write(data.encode("utf-8"))
-        handle.flush()
-        os.fchmod(handle.fileno(), mode)
-        os.fsync(handle.fileno())
-    return Staged(temp, final)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            os.fchown(handle.fileno(), root_uid, -1)
+            handle.write(data.encode("utf-8"))
+            handle.flush()
+            os.fchmod(handle.fileno(), mode)
+            os.fsync(handle.fileno())
+    except BaseException:
+        os.unlink(temp)
+        raise
+    return temp
 
 
-def place_files(staged: Sequence[Staged]) -> None:
-    """Put each staged file in its final place with no way to replace one that is there.
+def place_file(temp: str, final: str) -> None:
+    """Put the staged file in its place with no way to replace one that is there.
 
     A hard link fails when the name exists, whoever made it and whatever it is, so a file that
-    appeared since the check is refused and not overwritten. Either both files are placed or
-    neither: the first is taken back if the second cannot be placed.
+    appeared since the check is refused and not overwritten. The temporary name always goes.
     """
-    placed: list[str] = []
     try:
-        for item in staged:
-            try:
-                os.link(item.temp, item.final)
-            except FileExistsError:
-                refuse("stack-exists")
-            placed.append(item.final)
-    except BaseException:
-        for final in placed:
-            os.unlink(final)
-        raise
+        os.link(temp, final)
+    except FileExistsError:
+        refuse("stack-exists")
     finally:
-        for item in staged:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(item.temp)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp)
 
 
 def step_stack(host: Host, slug: str) -> list[str]:
-    """Write the tenant's compose file and first image pin, once, after the judge has passed them.
+    """Write the tenant's compose file, built here from its claim and a few checked parameters.
 
-    Only for a slug this entry point claimed whose secrets file is in place. The judge is the one
-    tenant_compose runs, given the tenant's own uid, the volume program's claims and the secrets
-    file, so a stack it refuses is never written. Nothing is replaced and nothing is written
-    outside the slug's own slot.
+    Only for a slug this entry point claimed whose secrets file is in place. The request carries
+    parameters and never a compose text or an image pin: the stack comes from the host's own
+    template, so its shape is not the caller's, and the first pin is written only by
+    branchleft-deploy after it has verified the image's attestation. The tenant compose judge,
+    the one tenant_compose runs, then reads the built text against the tenant's uid, the volume
+    program's claims and the secrets file. A request repeated with the same parameters finds its
+    file in place and succeeds; different parameters over an existing file are `stack-exists`.
+    Nothing is replaced and nothing is written outside the slug's own slot.
     """
     marker = require_secrets(host, slug)
-    payload = read_payload(host, frozenset({"compose_text", "image_env_text"}))
-    compose_text = payload["compose_text"]
-    image_env_text = payload["image_env_text"]
-    if not isinstance(compose_text, str) or not compose_text or "\x00" in compose_text:
-        refuse("field-compose_text")
-    if not isinstance(image_env_text, str) or not image_env_text or "\x00" in image_env_text:
-        refuse("field-image_env_text")
-    compose, pin = check_slot_targets(host, slug)
-    if os.path.lexists(compose) or os.path.lexists(pin):
-        refuse("stack-exists")
+    parameters = read_stack_parameters(host)
+    compose = check_slot_targets(host, slug)
     secrets_text = read_secrets_text(host, slug)
+    text = build_stack(slug, marker, read_bind_address(host), parameters)
+    if os.path.lexists(compose):
+        if compose_matches(host, compose, text):
+            return ["compose.yml already in place"]
+        refuse("stack-exists")
     claims = list_claims(host)
     judge = load_judge(host)
     try:
@@ -690,9 +893,9 @@ def step_stack(host: Host, slug: str) -> list[str]:
                     "slug": slug,
                     "profile": "tenant",
                     "uid": marker["uid"],
-                    "compose_text": compose_text,
+                    "compose_text": text,
                     "secrets_env_text": secrets_text,
-                    "image_env_text": image_env_text,
+                    "image_env_text": JUDGE_PLACEHOLDER_PIN,
                     "claims_text": "".join(f"{name}={uid}\n" for name, uid in claims.items()),
                 }
             )
@@ -708,19 +911,18 @@ def step_stack(host: Host, slug: str) -> list[str]:
         refuse("judge-refused", sentences)
     if verdict.claim_state != "same":
         refuse("claim-mismatch")
-    if TENANT_IMAGE_PATTERN.match(verdict.image_env) is None:
-        refuse("image-not-tenant")
     directory = os.path.dirname(compose)
-    if not os.path.lexists(directory):
-        os.mkdir(directory, STACK_DIR_MODE)
-        os.chmod(directory, STACK_DIR_MODE)
-    place_files(
-        [
-            stage_file(compose, compose_text, COMPOSE_MODE, host.paths.root_uid),
-            stage_file(pin, verdict.image_env, IMAGE_ENV_MODE, host.paths.root_uid),
-        ]
-    )
-    return ["compose.yml and image.env written"]
+    try:
+        if not os.path.lexists(directory):
+            os.mkdir(directory, STACK_DIR_MODE)
+            os.chmod(directory, STACK_DIR_MODE)
+        staged = stage_file(compose, text, COMPOSE_MODE, host.paths.root_uid)
+    except FileExistsError:
+        refuse("stack-exists")
+    except OSError:
+        fail("write")
+    place_file(staged, compose)
+    return ["compose.yml written"]
 
 
 def step_key(host: Host, slug: str) -> list[str]:
@@ -800,12 +1002,16 @@ def step_owner(host: Host, slug: str) -> list[str]:
 
 
 def stack_is_in_place(host: Host, slug: str) -> bool:
-    """True when the compose file is a regular file, not a link, and the image pin is closed."""
+    """True when the compose file is a regular file, root's and closed to writes by others."""
     try:
         info = os.lstat(compose_path(host, slug))
     except OSError:
         return False
-    return stat.S_ISREG(info.st_mode) and file_is_closed(host, image_env_path(host, slug))
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == host.paths.root_uid
+        and not stat.S_IMODE(info.st_mode) & 0o022
+    )
 
 
 def step_status(host: Host, slug: str) -> list[str]:
@@ -813,9 +1019,14 @@ def step_status(host: Host, slug: str) -> list[str]:
     check_register_dir(host)
     if not os.path.lexists(marker_path(host, slug)):
         return ["claimed-here=no"]
-    read_marker(host, marker_path(host, slug))
+    marker = read_marker(host, marker_path(host, slug))
+    port = marker["port"]
     return [
         "claimed-here=yes",
+        f"uid={marker['uid']}",
+        f"port_a={port}",
+        f"port_b={port + 1}",
+        f"port_health={port + 2}",
         f"volumes={'yes' if slug in list_claims(host) else 'no'}",
         f"secrets={'yes' if file_is_closed(host, env_path(host, slug)) else 'no'}",
         f"stack={'yes' if stack_is_in_place(host, slug) else 'no'}",

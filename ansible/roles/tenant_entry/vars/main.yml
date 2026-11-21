@@ -11,6 +11,16 @@ tenant_entry_program: /usr/local/sbin/branchleft-tenant-entry
 tenant_entry_serve_flag: --from-ssh
 # The register of tenants this entry point has claimed: root-owned, mode 0700.
 tenant_entry_register_dir: /etc/branchleft/tenant-entry
+# The app host's private address, kept for the stack verb in a file beside the register (the
+# program's own BIND_ADDRESS_FILE, held equal by a test). A private IPv4 address and no other:
+# a stack never publishes a tenant's ports on a public or a wildcard address.
+tenant_entry_bind_address_file: '{{ tenant_entry_register_dir }}/bind-address'
+tenant_entry_private_address_pattern: |-
+  (?x)^(
+    10(\.{{ tenant_entry_octet }}){3}
+    |172\.(1[6-9]|2[0-9]|3[01])(\.{{ tenant_entry_octet }}){2}
+    |192\.168(\.{{ tenant_entry_octet }}){2}
+  )\Z
 
 # The tenant compose judge, a byte-identical copy of tenant_compose's library/tenant_compose_check.py
 # (held equal by a test), and the python3 the program's first line names, which must be able to

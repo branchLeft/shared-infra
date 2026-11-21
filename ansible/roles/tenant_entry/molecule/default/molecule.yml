@@ -57,6 +57,7 @@ provisioner:
         # Written out here, not read from the role, so a changed pin fails the comparison.
         scenario_secrets_sha256: 1d67b290515ba642aa507b7bbe1ef6e489b845c9feb09419c6fd489233d8580f
         scenario_opt_dir: /opt/branchleft
+        scenario_bind_address: 10.20.2.30
         scenario_etc_dir: /etc/branchleft
         # A directory outside every slot, which the scenario links a stack directory to.
         scenario_outside_dir: /var/tmp/outside-the-slot

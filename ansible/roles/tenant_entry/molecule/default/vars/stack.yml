@@ -1,30 +1,34 @@
 ---
-# A fresh tenant's stack as the renderer produces it, for the slug and uid a task sets
-# (tenant_entry_stack_slug and tenant_entry_stack_uid), the values of its secrets and its image pins. All placeholders.
-# Kept out of molecule.yml, where Molecule reads a dollar sign as one of its own placeholders.
+# What the controller sends for a fresh tenant: the values of its secrets, and the parameters of
+# its stack. A stack request carries parameters only: never a compose text and never an image pin.
+# All placeholders. Kept out of molecule.yml, where Molecule reads a dollar sign as one of its own
+# placeholders.
 tenant_entry_stack_slug: example-tenant
-tenant_entry_stack_uid: 30000
 tenant_entry_stack_secrets_template: "GHOST_DB_PASSWORD=\nGHOST_OWNER_EMAIL=\n"
 tenant_entry_stack_secrets_values:
   GHOST_DB_PASSWORD: PLACEHOLDER_db_secret_value
   GHOST_OWNER_EMAIL: owner@example.invalid
 tenant_entry_stack_pin: "IMAGE=ghcr.io/branchleft/ghost-tenant@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"
-tenant_entry_stack_other_pin: "IMAGE=example.invalid/app@sha256:2222222222222222222222222222222222222222222222222222222222222222\n"
-tenant_entry_stack_compose_doc:
-  name: '{{ tenant_entry_stack_slug }}'
-  services:
-    app:
-      image: '${IMAGE}'
-      user: '{{ tenant_entry_stack_uid }}:{{ tenant_entry_stack_uid }}'
-      ports:
-        - '10.20.2.30:40000:2368'
-      environment:
-        db: '${GHOST_DB_PASSWORD:?set GHOST_DB_PASSWORD in the env file}'
-        owner: '${GHOST_OWNER_EMAIL:?set GHOST_OWNER_EMAIL in the env file}'
-      volumes:
-        - 'ghost-{{ tenant_entry_stack_slug }}-content:/var/lib/ghost/content'
-  volumes:
-    'ghost-{{ tenant_entry_stack_slug }}-content':
-      external: true
-tenant_entry_stack_compose: '{{ tenant_entry_stack_compose_doc | to_json }}'
-tenant_entry_stack_compose_privileged: "{{ tenant_entry_stack_compose_doc | combine({'services': {'app': {'privileged': true}}}, recursive=True) | to_json }}"
+
+tenant_entry_stack_parameters:
+  size: standard
+  mail: true
+  environment:
+    url: https://blog.example.invalid
+    database__client: mysql
+    database__connection__password:
+      secret: GHOST_DB_PASSWORD
+    mail__options__port: 587
+    privacy__useGravatar: false
+tenant_entry_stack_request: '{{ tenant_entry_stack_parameters | to_json }}'
+
+# Each of these is a way to reach beyond the schema or the template. The request is the plain
+# parameters with one change.
+tenant_entry_stack_with_mount: "{{ tenant_entry_stack_parameters | combine({'volumes': ['/:/host:rw']}) | to_json }}"
+tenant_entry_stack_with_user: "{{ tenant_entry_stack_parameters | combine({'user': '0:0'}) | to_json }}"
+tenant_entry_stack_with_pin: "{{ tenant_entry_stack_parameters | combine({'image_env_text': tenant_entry_stack_pin}) | to_json }}"
+tenant_entry_stack_with_compose: "{{ tenant_entry_stack_parameters | combine({'compose_text': 'name: x'}) | to_json }}"
+tenant_entry_stack_with_reference: "{{ tenant_entry_stack_parameters | combine({'environment': {'k': '${IMAGE}'}}) | to_json }}"
+tenant_entry_stack_with_key_injection: "{{ tenant_entry_stack_parameters | combine({'environment': {'user: 0:0': 'x'}}) | to_json }}"
+tenant_entry_stack_with_unknown_secret: "{{ tenant_entry_stack_parameters | combine({'environment': {'k': {'secret': 'GHOST_NOT_IN_THE_FILE'}}}) | to_json }}"
+tenant_entry_stack_larger: "{{ tenant_entry_stack_parameters | combine({'size': 'large'}) | to_json }}"

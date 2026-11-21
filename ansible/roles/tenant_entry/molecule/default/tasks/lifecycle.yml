@@ -3,6 +3,9 @@
 # judge and the real secrets program, run as root through sudo: claim (done by the caller),
 # secrets, stack, enable, and `status` after each. Then each way the stack verb must refuse,
 # by name, with the files it must not write shown absent or unchanged.
+# The stack request carries parameters only. The host builds the compose file from its own
+# template and the claim, and the verb never writes an image pin: the first pin is
+# branchleft-deploy's, after it has verified the image's attestation.
 # The stand-ins are the volume program (it keeps the claims) and the placeholder unit; the
 # template unit is real systemd file state, enabled with no systemd running.
 - name: Ask for the status of the claimed tenant
@@ -10,11 +13,13 @@
   vars:
     request: status example-tenant
 
-- name: Assert the status shows the claim and nothing after it
+- name: Assert the status shows the claim, its uid and its ports, and nothing after it
   ansible.builtin.assert:
     that:
       - tenant_entry_request.rc | int == 0
-      - tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'volumes=yes', 'secrets=no', 'stack=no', 'enabled=no', 'slot=no']
+      - >-
+        tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'uid=30000', 'port_a=40000', 'port_b=40001',
+        'port_health=40002', 'volumes=yes', 'secrets=no', 'stack=no', 'enabled=no', 'slot=no']
     quiet: true
 
 - name: Fill the tenant's secrets file through the real secrets program
@@ -38,45 +43,75 @@
 - name: Assert the status shows the secrets and no stack yet
   ansible.builtin.assert:
     that:
-      - tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'volumes=yes', 'secrets=yes', 'stack=no', 'enabled=no', 'slot=no']
+      - >-
+        tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'uid=30000', 'port_a=40000', 'port_b=40001',
+        'port_health=40002', 'volumes=yes', 'secrets=yes', 'stack=no', 'enabled=no', 'slot=no']
     quiet: true
 
 # ----- The stack verb refuses, by name, and writes nothing -----
 
-- name: Refuse a stack the judge refuses (a privileged service)
+- name: Refuse a stack the judge refuses (a secret the tenant's secrets file does not hold)
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-tenant
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose_privileged, 'image_env_text': tenant_entry_stack_pin} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_with_unknown_secret }}'
     expect: judge-refused
 
 - name: Assert the judge's own sentence names the rule it broke and holds no secret value
   ansible.builtin.assert:
     that:
-      - "'example-tenant: service app is privileged' in tenant_entry_request.stderr"
+      - "'secrets file has no key GHOST_NOT_IN_THE_FILE' in tenant_entry_request.stderr"
       - tenant_entry_stack_secrets_values.values() | select('in', tenant_entry_request.stderr) | list | length == 0
     quiet: true
   no_log: true
 
-- name: Refuse a first pin that is not the tenant image
+- name: Refuse a stack call that carries a first pin
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-tenant
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose, 'image_env_text': tenant_entry_stack_other_pin} | to_json }}"
-    expect: image-not-tenant
+    request_stdin: '{{ tenant_entry_stack_with_pin }}'
+    expect: pin-not-accepted
 
-- name: Refuse a payload with a key the verb does not take
+- name: Refuse a stack call that carries a compose text
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-tenant
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose, 'image_env_text': tenant_entry_stack_pin, 'path': '/etc/passwd'} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_with_compose }}'
+    expect: compose-not-accepted
+
+- name: Refuse a parameter that tries to add a mount
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: stack example-tenant
+    request_stdin: '{{ tenant_entry_stack_with_mount }}'
     expect: payload-keys
+
+- name: Refuse a parameter that tries to set the user
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: stack example-tenant
+    request_stdin: '{{ tenant_entry_stack_with_user }}'
+    expect: payload-keys
+
+- name: Refuse an environment value that is a compose reference
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: stack example-tenant
+    request_stdin: '{{ tenant_entry_stack_with_reference }}'
+    expect: field-environment
+
+- name: Refuse an environment name that tries to carry a key of its own
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: stack example-tenant
+    request_stdin: '{{ tenant_entry_stack_with_key_injection }}'
+    expect: field-environment
 
 - name: Refuse a tenant this entry point never claimed
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-other
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose, 'image_env_text': tenant_entry_stack_pin} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_request }}'
     expect: not-claimed-here
 
 - name: Read the files the refused requests must not have made
@@ -98,50 +133,64 @@
 
 # ----- The stack verb, once -----
 
-- name: Write the tenant's compose file and first image pin
+- name: Write the tenant's compose file
   ansible.builtin.include_tasks: request.yml
   vars:
     request: stack example-tenant
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose, 'image_env_text': tenant_entry_stack_pin} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_request }}'
 
 - name: Assert the stack was written
   ansible.builtin.assert:
     that:
       - tenant_entry_request.rc | int == 0
-      - tenant_entry_request.stdout == 'compose.yml and image.env written'
+      - tenant_entry_request.stdout == 'compose.yml written'
       - tenant_entry_request.stderr == ''
     quiet: true
 
-- name: Read the two files the verb wrote
+- name: Read the directory and the file the verb wrote
   ansible.builtin.stat:
     path: '{{ item }}'
   loop:
     - '{{ scenario_opt_dir }}/example-tenant'
     - '{{ scenario_opt_dir }}/example-tenant/compose.yml'
-    - '{{ scenario_etc_dir }}/example-tenant.image.env'
   register: tenant_entry_lifecycle_written
 
-- name: Assert the files are root's and have the modes tenant_compose gives them
+- name: Assert they are root's and have the modes tenant_compose gives them
   ansible.builtin.assert:
     that:
       - tenant_entry_lifecycle_written.results | map(attribute='stat.pw_name') | unique | list == ['root']
-      - tenant_entry_lifecycle_written.results | map(attribute='stat.mode') | list == ['0755', '0644', '0600']
+      - tenant_entry_lifecycle_written.results | map(attribute='stat.mode') | list == ['0755', '0644']
     quiet: true
 
 - name: Read what the verb wrote
   ansible.builtin.slurp:
-    src: '{{ item }}'
-  loop:
-    - '{{ scenario_opt_dir }}/example-tenant/compose.yml'
-    - '{{ scenario_etc_dir }}/example-tenant.image.env'
+    src: '{{ scenario_opt_dir }}/example-tenant/compose.yml'
   register: tenant_entry_lifecycle_content
   no_log: true
 
-- name: Assert the content is what the controller sent, and the directory holds nothing else
+- name: Parse the compose file
+  ansible.builtin.set_fact:
+    tenant_entry_lifecycle_document: '{{ tenant_entry_lifecycle_content.content | b64decode | from_json }}'
+  no_log: true
+
+# The uid and the ports are the claim's (status said 30000 and 40000 above), the address is the
+# host's own, and nothing in the file but the environment came from the request.
+- name: Assert the stack is the host's template filled from the claim and the parameters
   ansible.builtin.assert:
     that:
-      - tenant_entry_lifecycle_content.results[0].content | b64decode == tenant_entry_stack_compose
-      - tenant_entry_lifecycle_content.results[1].content | b64decode == tenant_entry_stack_pin
+      - tenant_entry_lifecycle_document.name == 'example-tenant'
+      - tenant_entry_lifecycle_document.services.keys() | sort | list == ['ghost-a', 'ghost-b']
+      - tenant_entry_lifecycle_document.services['ghost-a'].user == '30000:30000'
+      - tenant_entry_lifecycle_document.services['ghost-a'].image == '${IMAGE}'
+      - tenant_entry_lifecycle_document.services['ghost-a'].ports == [scenario_bind_address ~ ':40000:2368']
+      - tenant_entry_lifecycle_document.services['ghost-b'].ports == [scenario_bind_address ~ ':40001:2368']
+      - tenant_entry_lifecycle_document.services['ghost-a'].environment.url == 'https://blog.example.invalid'
+      - >-
+        tenant_entry_lifecycle_document.services['ghost-a'].environment.database__connection__password
+        == '${GHOST_DB_PASSWORD:?set GHOST_DB_PASSWORD in the env file}'
+      - tenant_entry_lifecycle_document.services['ghost-a'].cap_drop == ['ALL']
+      - "'privileged' not in tenant_entry_lifecycle_document.services['ghost-a']"
+      - tenant_entry_lifecycle_document.volumes.values() | map(attribute='external') | unique | list == [true]
     quiet: true
   no_log: true
 
@@ -158,29 +207,52 @@
       - tenant_entry_lifecycle_dir.files | map(attribute='path') | map('basename') | list == ['compose.yml']
     quiet: true
 
-# Never over an existing file: the same request again is refused and the files are as they were.
-- name: Refuse the same stack a second time
+- name: Read the first pin's file
+  ansible.builtin.stat:
+    path: '{{ scenario_etc_dir }}/example-tenant.image.env'
+    get_checksum: false
+  register: tenant_entry_lifecycle_pin
+
+# The verb never writes a pin. Without one the compose unit asserts a missing pin file and does
+# not start; only branchleft-deploy writes it, after it has verified the image's attestation.
+- name: Assert the verb wrote no image pin
+  ansible.builtin.assert:
+    that:
+      - not tenant_entry_lifecycle_pin.stat.exists
+    quiet: true
+
+# The same parameters again are a retry: the file is found in place and the verb succeeds.
+- name: Send the same stack request again
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: stack example-tenant
+    request_stdin: '{{ tenant_entry_stack_request }}'
+
+- name: Assert the retry succeeded and said the file was already in place
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 0
+      - tenant_entry_request.stdout == 'compose.yml already in place'
+    quiet: true
+
+# Never over an existing file: other parameters are refused and the file is as it was.
+- name: Refuse other parameters over the existing stack
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-tenant
-    request_stdin: "{{ {'compose_text': tenant_entry_stack_compose ~ '\n# changed', 'image_env_text': tenant_entry_stack_other_pin} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_larger }}'
     expect: stack-exists
 
 - name: Read what the verb wrote, again
   ansible.builtin.slurp:
-    src: '{{ item }}'
-  loop:
-    - '{{ scenario_opt_dir }}/example-tenant/compose.yml'
-    - '{{ scenario_etc_dir }}/example-tenant.image.env'
+    src: '{{ scenario_opt_dir }}/example-tenant/compose.yml'
   register: tenant_entry_lifecycle_content_again
   no_log: true
 
-- name: Assert the refused request changed neither file
+- name: Assert the refused request changed nothing
   ansible.builtin.assert:
     that:
-      - >-
-        tenant_entry_lifecycle_content_again.results | map(attribute='content') | list
-        == tenant_entry_lifecycle_content.results | map(attribute='content') | list
+      - tenant_entry_lifecycle_content_again.content == tenant_entry_lifecycle_content.content
     quiet: true
   no_log: true
 
@@ -205,24 +277,33 @@
   changed_when: false
   check_mode: false
 
+- name: Read the first pin's file after the unit was enabled
+  ansible.builtin.stat:
+    path: '{{ scenario_etc_dir }}/example-tenant.image.env'
+    get_checksum: false
+  register: tenant_entry_lifecycle_pin_after
+
 - name: Ask for the status of the tenant after claim, secrets, stack and enable
   ansible.builtin.include_tasks: request.yml
   vars:
     request: status example-tenant
 
-- name: Assert the status reports each step as done and the slot as not yet granted
+- name: Assert the status reports each step as done, the slot as not yet granted, and still no pin
   ansible.builtin.assert:
     that:
       - tenant_entry_lifecycle_unit.stdout == 'enabled'
-      - tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'volumes=yes', 'secrets=yes', 'stack=yes', 'enabled=yes', 'slot=no']
+      - not tenant_entry_lifecycle_pin_after.stat.exists
+      - >-
+        tenant_entry_request.stdout.splitlines() == ['claimed-here=yes', 'uid=30000', 'port_a=40000', 'port_b=40001',
+        'port_health=40002', 'volumes=yes', 'secrets=yes', 'stack=yes', 'enabled=yes', 'slot=no']
     quiet: true
 
 # ----- Nothing outside the slot -----
 
 # A second tenant is claimed and given its secrets; its stack directory is then made a link to a
 # directory elsewhere, which is the way a file could land outside the slot. The verb must refuse
-# by name and the target directory must stay empty. The stack is valid for that tenant, so the
-# judge would pass it: only the slot check stands between it and the directory outside.
+# by name and the target directory must stay empty. The parameters are valid for that tenant, so
+# the judge would pass the stack: only the slot check stands between it and the directory outside.
 - name: Claim a second tenant
   ansible.builtin.include_tasks: request.yml
   vars:
@@ -259,10 +340,8 @@
   ansible.builtin.include_tasks: stack_refused.yml
   vars:
     request: stack example-linked
-    request_stdin: "{{ {'compose_text': (tenant_entry_stack_compose_doc | to_json), 'image_env_text': tenant_entry_stack_pin} | to_json }}"
+    request_stdin: '{{ tenant_entry_stack_request }}'
     expect: path-outside-slot
-    tenant_entry_stack_slug: example-linked
-    tenant_entry_stack_uid: 30001
 
 - name: List the directory outside the slot
   ansible.builtin.find:
@@ -271,15 +350,8 @@
     hidden: true
   register: tenant_entry_lifecycle_outside_files
 
-- name: Read the second tenant's image pin
-  ansible.builtin.stat:
-    path: '{{ scenario_etc_dir }}/example-linked.image.env'
-    get_checksum: false
-  register: tenant_entry_lifecycle_linked_pin
-
-- name: Assert nothing was written outside the slot or for the second tenant
+- name: Assert nothing was written outside the slot
   ansible.builtin.assert:
     that:
       - tenant_entry_lifecycle_outside_files.files | length == 0
-      - not tenant_entry_lifecycle_linked_pin.stat.exists
     quiet: true

@@ -18,3 +18,21 @@
     owner: root
     group: root
     mode: '0700'
+
+# Where a tenant's ports are published: this host's own private address. The program builds each
+# stack from it and refuses a file that is not root's and closed, so it is the host's setting and
+# never part of a request.
+- name: Check the app host's private address
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_bind_address is match(tenant_entry_private_address_pattern)
+    fail_msg: tenant_entry_bind_address must be one private IPv4 address (10/8, 172.16/12 or 192.168/16).
+    quiet: true
+
+- name: Keep the app host's private address for the stack verb
+  ansible.builtin.copy:
+    content: '{{ tenant_entry_bind_address }}\n'
+    dest: '{{ tenant_entry_bind_address_file }}'
+    owner: root
+    group: root
+    mode: '0600'

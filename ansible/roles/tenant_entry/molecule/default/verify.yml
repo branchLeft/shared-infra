@@ -141,10 +141,10 @@
         hidden: true
       register: tenant_entry_verify_register_clean
 
-    - name: Assert the hostile requests wrote nothing but the lock file
+    - name: Assert the hostile requests wrote nothing but the lock file and the address file
       ansible.builtin.assert:
         that:
-          - tenant_entry_verify_register_clean.files | map(attribute='path') | map('basename') | difference(['.lock']) | length == 0
+          - tenant_entry_verify_register_clean.files | map(attribute='path') | map('basename') | difference(['.lock', 'bind-address']) | length == 0
         quiet: true
 
     - name: Try to read the register directory as the entry account
@@ -247,10 +247,10 @@
         hidden: true
       register: tenant_entry_verify_register_after
 
-    - name: Assert the register holds the lock file and the one marker, and no leftover template
+    - name: Assert the register holds the lock file, the address file and the one marker, and no leftover template
       ansible.builtin.assert:
         that:
-          - tenant_entry_verify_register_after.files | map(attribute='path') | map('basename') | sort | list == ['.lock', 'example-tenant.json']
+          - tenant_entry_verify_register_after.files | map(attribute='path') | map('basename') | sort | list == ['.lock', 'bind-address', 'example-tenant.json']
         quiet: true
 
     # A fresh tenant through claim (above), secrets, stack and enable, with status after each,

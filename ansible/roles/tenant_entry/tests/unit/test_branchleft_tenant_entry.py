@@ -9,14 +9,17 @@ and the case beside it fails. Placeholders only; no value here is a real name, k
 import base64
 import dataclasses
 import fcntl
+import inspect
 import io
 import json
 import os
+import re
+import shutil
 import stat
 import sys
 import tempfile
 import unittest
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from unittest import mock
 
@@ -36,6 +39,55 @@ VALUES = {"GHOST_DB_PASSWORD": CANARY, "GHOST_OWNER_EMAIL": OWNER_EMAIL}
 CONTAINER_ID = "a" * 64
 IMAGE_DIGEST = "sha256:" + "b" * 64
 PIN = f"IMAGE=ghcr.io/branchleft/ghost-tenant@{IMAGE_DIGEST}\n"
+BIND = "10.20.2.30"
+# Every key of a Ghost service the host's template writes, with mail on. A parameter adds none.
+FIXED_SERVICE_KEYS = {
+    "image", "restart", "stop_grace_period", "user", "init", "read_only", "tmpfs", "cap_drop",
+    "security_opt", "pids_limit", "mem_limit", "memswap_limit", "cpus", "cpu_shares", "ulimits",
+    "logging", "ports", "environment", "networks", "volumes", "healthcheck",
+}  # fmt: skip
+
+
+def jget(document: object, *path: str) -> object:
+    """Walk a parsed JSON document by keys.
+
+    Raises:
+        TypeError: at the first step that is not an object.
+    """
+    for key in path:
+        if not isinstance(document, dict):
+            raise TypeError(path)
+        document = document[key]
+    return document
+
+
+def jmap(document: object, *path: str) -> dict[str, object]:
+    """Like jget, for a step that must be an object.
+
+    Raises:
+        TypeError: when it is not.
+    """
+    value = jget(document, *path)
+    if not isinstance(value, dict):
+        raise TypeError(path)
+    return value
+
+
+def stack_parameters(**changes: object) -> dict[str, object]:
+    """The parameters of a plain `stack` request: a size, mail on, and a small environment."""
+    parameters: dict[str, object] = {
+        "size": "standard",
+        "mail": True,
+        "environment": {
+            "url": "https://blog.example.invalid",
+            "database__client": "mysql",
+            "database__connection__password": {"secret": "GHOST_DB_PASSWORD"},
+            "mail__options__port": 587,
+            "privacy__useGravatar": False,
+        },
+    }
+    parameters.update(changes)
+    return parameters
 
 
 def make_key(number: int) -> str:
@@ -112,6 +164,9 @@ class FakeHost:
         os.chmod(self.entry, 0o700)
         self.opt.mkdir()
         (self.etc / "deploy-slots").mkdir()
+        address = self.entry / entry.BIND_ADDRESS_FILE
+        address.write_text(BIND + "\n", encoding="ascii")
+        os.chmod(address, 0o600)
         self.calls: list[Call] = []
         self.claims: dict[str, int] = {}
         self.enabled: set[str] = set()
@@ -231,14 +286,13 @@ class FakeHost:
             else:
                 self.case.assertEqual(self.request(f"key {slug}", {"public_key": KEY})[0], 0)
 
-    def stack(
-        self, slug: str = SLUG, compose_text: str | None = None, image_env_text: str = PIN
-    ) -> tuple[int, str, str]:
-        """Ask for the compose file and the first image pin of a slug, as the controller does."""
-        text = compose_text if compose_text is not None else tenant_compose_text(slug)
-        return self.request(
-            f"stack {slug}", {"compose_text": text, "image_env_text": image_env_text}
-        )
+    def stack(self, slug: str = SLUG, /, **parameters: object) -> tuple[int, str, str]:
+        """Ask for a slug's compose file as the controller does: parameters, and nothing else.
+
+        With no keyword arguments the request is a plain one; with some, it carries exactly those.
+        """
+        body = parameters if parameters else stack_parameters()
+        return self.request(f"stack {slug}", body)
 
     def hand_made_tenant(self, slug: str = OTHER) -> None:
         """A tenant set up by hand: a claim, a secrets file, a stack directory and a slot."""
@@ -448,7 +502,9 @@ class ClaimTests(EntryTestCase):
         code, _out, err = self.host.request(f"claim {SLUG}")
         self.assertEqual(code, entry.EXIT_FAILED)
         self.assertIn("failed: timeout\n", err)
-        self.assertEqual(list(self.host.entry.iterdir()), [self.host.entry / ".lock"])
+        self.assertEqual(
+            sorted(p.name for p in self.host.entry.iterdir()), [".lock", entry.BIND_ADDRESS_FILE]
+        )
 
     def test_an_unreadable_claim_list_stops_the_request(self) -> None:
         original = self.host.volume
@@ -462,7 +518,9 @@ class ClaimTests(EntryTestCase):
         code, _out, err = self.host.request(f"claim {SLUG}")
         self.assertEqual(code, entry.EXIT_FAILED)
         self.assertIn("claims-unreadable", err)
-        self.assertEqual(list(self.host.entry.iterdir()), [self.host.entry / ".lock"])
+        self.assertEqual(
+            sorted(p.name for p in self.host.entry.iterdir()), [".lock", entry.BIND_ADDRESS_FILE]
+        )
 
     def test_the_uid_range_can_run_out(self) -> None:
         self.host.claims = {f"example-{n}": n for n in range(entry.UID_MIN, entry.UID_MAX + 1)}
@@ -573,7 +631,8 @@ class SecretsTests(EntryTestCase):
             self.assertNotIn(OWNER_EMAIL, text)
         # The template file the program read is gone, and the secrets file is closed.
         self.assertEqual(
-            sorted(p.name for p in self.host.entry.iterdir()), [".lock", f"{SLUG}.json"]
+            sorted(p.name for p in self.host.entry.iterdir()),
+            [".lock", "bind-address", f"{SLUG}.json"],
         )
         self.assertEqual(stat.S_IMODE((self.host.etc / f"{SLUG}.env").stat().st_mode), 0o600)
 
@@ -836,7 +895,7 @@ class OwnerTests(EntryTestCase):
 
 
 class StackTests(EntryTestCase):
-    """The compose file and first pin are written once, after the judge, for a claimed slug only."""
+    """The compose file is built here and written once, after the judge, for a claimed slug only."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -844,9 +903,14 @@ class StackTests(EntryTestCase):
         self.compose = self.host.opt / SLUG / "compose.yml"
         self.pin = self.host.etc / f"{SLUG}.image.env"
 
+    def document(self, path: Path | None = None) -> object:
+        loaded: object = json.loads((path or self.compose).read_text())
+        return loaded
+
     def assert_nothing_written(self) -> None:
         self.assertFalse((self.host.opt / SLUG).exists())
         self.assertFalse(self.pin.exists() or self.pin.is_symlink())
+        self.assertEqual([p for p in self.host.etc.iterdir() if p.name.startswith(".stack")], [])
 
     def use_judge(self, judge: Path) -> None:
         self.host.paths = dataclasses.replace(self.host.paths, judge_module=str(judge))
@@ -873,92 +937,264 @@ class StackTests(EntryTestCase):
         os.chmod(path, 0o644)
         return path
 
-    def test_a_stack_the_judge_passes_is_written_with_the_modes_tenant_compose_uses(self) -> None:
-        text = tenant_compose_text()
-        code, out, err = self.host.stack(compose_text=text)
-        self.assertEqual(
-            (code, out, err), (entry.EXIT_DONE, "compose.yml and image.env written\n", "")
-        )
-        self.assertEqual(self.compose.read_text(), text)
-        self.assertEqual(self.pin.read_text(), PIN)
+    def test_a_stack_is_built_from_the_claim_and_written_with_the_modes_tenant_compose_uses(
+        self,
+    ) -> None:
+        code, out, err = self.host.stack()
+        self.assertEqual((code, out, err), (entry.EXIT_DONE, "compose.yml written\n", ""))
         self.assertEqual(stat.S_IMODE(self.compose.stat().st_mode), 0o644)
-        self.assertEqual(stat.S_IMODE(self.pin.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.compose.parent.stat().st_mode), 0o755)
-        # No temporary file is left behind in either directory.
+        # No temporary file is left behind, and no image pin is written by this verb.
         self.assertEqual([p.name for p in self.compose.parent.iterdir()], ["compose.yml"])
         self.assertEqual([p.name for p in self.host.etc.iterdir() if p.name.startswith(".")], [])
+        self.assertFalse(self.pin.exists())
+        document = self.document()
+        self.assertEqual(jget(document, "name"), SLUG)
+        a = ("services", "ghost-a")
+        # The claim's uid and ports, and the host's own address: nothing from the request.
+        self.assertEqual(jget(document, *a, "user"), "30000:30000")
+        self.assertEqual(jget(document, *a, "ports"), [f"{BIND}:40000:2368"])
+        self.assertEqual(jget(document, "services", "ghost-b", "ports"), [f"{BIND}:40001:2368"])
+        self.assertEqual(jget(document, *a, "image"), "${IMAGE}")
+        self.assertEqual(jget(document, *a, "networks"), ["default", "branchleft-mail-30000"])
+        self.assertEqual(
+            jget(document, *a, "environment", "database__connection__password"),
+            "${GHOST_DB_PASSWORD:?set GHOST_DB_PASSWORD in the env file}",
+        )
+        self.assertEqual(jget(document, *a, "environment", "url"), "https://blog.example.invalid")
+        self.assertEqual(jget(document, *a, "environment", "mail__options__port"), "587")
+        self.assertEqual(jget(document, *a, "environment", "privacy__useGravatar"), "false")
+        self.assertEqual(jget(document, *a, "cpus"), "1.0")
+        volumes = jmap(document, "volumes")
+        self.assertEqual(
+            sorted(volumes),
+            [f"ghost-{SLUG}-{name}" for name in ("adapters", "content", "metrics")],
+        )
+        self.assertNotIn(CANARY, self.compose.read_text())
+
+    def test_the_second_tenant_gets_its_own_claim_and_the_stack_follows_it(self) -> None:
+        self.host.get_to("secrets", OTHER)
+        result = self.host.stack(OTHER, **stack_parameters(size="small", mail=False))
+        self.assertEqual(result[0], entry.EXIT_DONE)
+        document = self.document(self.host.opt / OTHER / "compose.yml")
+        self.assertEqual(jget(document, "services", "ghost-a", "user"), "30001:30001")
+        self.assertEqual(jget(document, "services", "ghost-a", "ports"), [f"{BIND}:40004:2368"])
+        self.assertEqual(jget(document, "services", "ghost-b", "ports"), [f"{BIND}:40005:2368"])
+        self.assertEqual(jget(document, "services", "ghost-a", "cpus"), "0.5")
+        self.assertNotIn("networks", jmap(document, "services", "ghost-a"))
+        self.assertIn("port_a=40004\n", self.host.request(f"status {OTHER}")[1])
+
+    def test_hostile_values_that_pass_the_schema_cannot_change_the_stacks_shape(self) -> None:
+        # Guard: build_stack encodes every value; it adds no key from a parameter.
+        hostile = {
+            "mount": "/:/host:rw",
+            "root": "0:0",
+            "quote": 'a", "user": "0:0", "volumes": ["/:/host',
+            "braces": "}}, 'privileged': true, {",
+            "yaml": "x\\n  privileged: true",
+            "colon": "key: value # comment",
+            "image": "ghcr.io/example/evil@sha256:" + "c" * 64,
+        }
+        code, _out, err = self.host.stack(**stack_parameters(environment=hostile))
+        self.assertEqual(code, entry.EXIT_DONE, err)
+        document = self.document()
+        self.assertEqual(sorted(jmap(document)), ["name", "networks", "services", "volumes"])
+        for name in ("ghost-a", "ghost-b"):
+            service = jmap(document, "services", name)
+            self.assertEqual(set(service), FIXED_SERVICE_KEYS)
+            self.assertEqual(service["user"], "30000:30000")
+            self.assertEqual(service["image"], "${IMAGE}")
+            self.assertEqual(service["environment"], dict(sorted(hostile.items())))
+            self.assertEqual(
+                service["volumes"],
+                [
+                    f"ghost-{SLUG}-content:/var/lib/ghost/content",
+                    f"ghost-{SLUG}-adapters:/var/lib/ghost/content/adapters:ro",
+                    f"ghost-{SLUG}-metrics:/var/lib/ghost/metrics",
+                ],
+            )
+            self.assertEqual(service["security_opt"], ["no-new-privileges:true"])
+            self.assertEqual(service["cap_drop"], ["ALL"])
+
+    def test_a_parameter_that_tries_to_inject_a_mount_a_user_or_a_key_is_refused_by_name(
+        self,
+    ) -> None:
+        # Guard: read_stack_parameters. Each case is one way to reach beyond the schema.
+        base = stack_parameters()
+        extra: dict[str, dict[str, object]] = {
+            "a mount": {"volumes": ["/:/host:rw"]},
+            "a user": {"user": "0:0"},
+            "an entrypoint": {"entrypoint": ["/bin/sh"]},
+            "a port": {"ports": ["0.0.0.0:22:22"]},
+            "a uid": {"uid": 0},
+            "a slug": {"slug": OTHER},
+            "a bind address": {"bind": "0.0.0.0"},  # noqa: S104  # a key the request must not carry.
+            "a service key": {"privileged": True},
+            "host pid": {"pid": "host"},
+            "another document": {"services": {"x": {}}},
+        }
+        for case, more in extra.items():
+            with self.subTest(case=case):
+                self.assert_refused(self.host.stack(**{**base, **more}), "payload-keys")
+                self.assert_nothing_written()
+        for case, missing in {"size": "size", "mail": "mail", "environment": "environment"}.items():
+            with self.subTest(missing=case):
+                self.assert_refused(
+                    self.host.stack(**{k: v for k, v in base.items() if k != missing}),
+                    "payload-keys",
+                )
+        self.assert_nothing_written()
+
+    def test_parameters_outside_the_schema_are_refused_by_the_field_name(self) -> None:
+        secret = {"secret": "GHOST_DB_PASSWORD"}
+        cases: list[tuple[str, dict[str, object]]] = [
+            ("field-size", {"size": "huge"}),
+            ("field-size", {"size": 1}),
+            ("field-size", {"size": None}),
+            ("field-mail", {"mail": "yes"}),
+            ("field-mail", {"mail": 1}),
+            ("field-environment", {"environment": {}}),
+            ("field-environment", {"environment": []}),
+            ("field-environment", {"environment": {f"k{n}": "v" for n in range(65)}}),
+            ("field-environment", {"environment": {"user: 0": "v"}}),
+            ("field-environment", {"environment": {"a b": "v"}}),
+            ("field-environment", {"environment": {"a-b": "v"}}),
+            ("field-environment", {"environment": {"1a": "v"}}),
+            ("field-environment", {"environment": {"": "v"}}),
+            ("field-environment", {"environment": {"a\nvolumes": "v"}}),
+            ("field-environment", {"environment": {"k": "${IMAGE}"}}),
+            ("field-environment", {"environment": {"k": "$$"}}),
+            ("field-environment", {"environment": {"k": "a\nb"}}),
+            ("field-environment", {"environment": {"k": "a\x00b"}}),
+            ("field-environment", {"environment": {"k": "é"}}),
+            ("field-environment", {"environment": {"k": "x" * 501}}),
+            ("field-environment", {"environment": {"k": None}}),
+            ("field-environment", {"environment": {"k": 1.5}}),
+            ("field-environment", {"environment": {"k": -1}}),
+            ("field-environment", {"environment": {"k": 2**40}}),
+            ("field-environment", {"environment": {"k": ["a"]}}),
+            ("field-environment", {"environment": {"k": {"volumes": ["/:/host"]}}}),
+            ("field-environment", {"environment": {"k": {}}}),
+            ("field-environment", {"environment": {"k": {**secret, "extra": 1}}}),
+            ("field-environment", {"environment": {"k": {"secret": "ghost_db"}}}),
+            ("field-environment", {"environment": {"k": {"secret": "OTHER_KEY"}}}),
+            ("field-environment", {"environment": {"k": {"secret": "GHOST_" + "A" * 57}}}),
+            ("field-environment", {"environment": {"k": {"secret": 1}}}),
+            ("field-environment", {"environment": {"k": {"secret": "GHOST_X:-/etc/shadow"}}}),
+        ]
+        for reason, change in cases:
+            with self.subTest(reason=reason, change=str(change)[:60]):
+                params = {**stack_parameters(), **change}
+                code, out, err = self.host.stack(**params)
+                self.assertEqual((code, out, err), (entry.EXIT_REFUSED, "", f"refused: {reason}\n"))
+                self.assert_nothing_written()
+
+    def test_a_stack_call_that_carries_a_pin_is_refused_by_name_and_no_pin_is_ever_written(
+        self,
+    ) -> None:
+        # Guard: PIN_KEYS. The first pin is branchleft-deploy's, after its attestation check.
+        for key in ("image_env_text", "image_env", "image", "pin"):
+            with self.subTest(key=key):
+                self.assert_refused(
+                    self.host.stack(**{**stack_parameters(), key: PIN}), "pin-not-accepted"
+                )
+                self.assert_nothing_written()
+        # The renderer's old payload, a compose text with its first pin, is refused for the pin.
+        self.assert_refused(
+            self.host.stack(compose_text="name: x\n", image_env_text=PIN), "pin-not-accepted"
+        )
+        self.assert_nothing_written()
+        # A successful stack, and the enable after it, leave no pin: the unit cannot start.
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        self.assertEqual(self.host.request(f"enable {SLUG}")[0], entry.EXIT_DONE)
+        self.assertFalse(self.pin.exists() or self.pin.is_symlink())
+        self.assertEqual(
+            sorted(p.name for p in self.host.etc.iterdir() if "image" in p.name), [], "a pin"
+        )
+
+    def test_a_request_that_carries_a_compose_text_is_refused_by_name(self) -> None:
+        # Guard: COMPOSE_KEYS. The stack is the host's own; a caller never sends one.
+        for key in ("compose_text", "compose"):
+            with self.subTest(key=key):
+                self.assert_refused(
+                    self.host.stack(**{**stack_parameters(), key: tenant_compose_text()}),
+                    "compose-not-accepted",
+                )
+                self.assert_nothing_written()
 
     def test_the_stack_is_never_enabled_or_started_by_the_verb(self) -> None:
         self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
         self.assertEqual(self.host.enabled, set())
         self.assertFalse(any(c.argv[0] == "/fake/systemctl" for c in self.host.calls))
 
-    def test_status_reports_the_stack_step(self) -> None:
+    def test_status_reports_the_stack_step_from_the_compose_file_alone(self) -> None:
         self.assertIn("stack=no\n", self.host.request(f"status {SLUG}")[1])
         self.host.stack()
         self.assertIn("stack=yes\n", self.host.request(f"status {SLUG}")[1])
-        self.pin.unlink()
+        self.compose.chmod(0o666)
+        self.assertIn("stack=no\n", self.host.request(f"status {SLUG}")[1])
+        self.compose.chmod(0o644)
+        self.compose.unlink()
         self.assertIn("stack=no\n", self.host.request(f"status {SLUG}")[1])
 
     def test_a_stack_the_judge_refuses_is_refused_by_name_and_nothing_is_written(self) -> None:
-        # Guard: the judge's verdict. Each case breaks one rule the judge owns.
+        # Guard: the judge's verdict, on the text built here. A secret the stack needs and the
+        # secrets file lacks, and a uid another slug already holds, are both the judge's.
         broken = {
-            "privileged": tenant_compose_text(privileged=True),
-            "the docker socket": tenant_compose_text(volumes=["/var/run/docker.sock:/s"]),
-            "another image": tenant_compose_text(image="example.invalid/app@" + IMAGE_DIGEST),
-            "a wildcard port": tenant_compose_text(ports=["40000:2368"]),
-            "a secret nobody supplies": tenant_compose_text(
-                environment={"x": "${GHOST_NOT_IN_THE_SECRETS_FILE:?set it}"}
+            "a secret nobody supplies": (
+                {"environment": {"x": {"secret": "GHOST_NOT_IN_THE_SECRETS_FILE"}}},
+                "secrets file has no key GHOST_NOT_IN_THE_SECRETS_FILE",
             ),
-            "another tenant's verdict volume": tenant_compose_text(
-                volumes=[f"ghost-{OTHER}-verdict:/verdict"]
-            ),
-            "not yaml": "name: [unclosed",
         }
-        for case, text in broken.items():
+        for case, (change, sentence) in broken.items():
             with self.subTest(case=case):
-                code, out, err = self.host.stack(compose_text=text)
+                code, out, err = self.host.stack(**{**stack_parameters(), **change})
                 self.assertEqual((code, out), (entry.EXIT_REFUSED, ""))
                 self.assertTrue(err.startswith("refused: judge-refused\n"), err)
-                self.assertIn(f"{SLUG}: ", err)
+                self.assertIn(sentence, err)
                 self.assertNotIn(CANARY, err)
                 self.assertNotIn(OWNER_EMAIL, err)
                 self.assert_nothing_written()
-        self.assertEqual(
-            self.host.log[-1], f"verb=stack slug={SLUG} result=refused reason=judge-refused"
-        )
-
-    def test_the_judge_is_given_the_tenants_own_uid_claims_and_secrets_file(self) -> None:
-        # The same inputs tenant_compose gives it: another slug holding this uid is refused.
         self.host.claims["example-hand"] = 30000
         code, _out, err = self.host.stack()
         self.assertEqual(code, entry.EXIT_REFUSED, err)
         self.assertTrue(err.startswith("refused: judge-refused\n"), err)
         self.assertIn("uid 30000 is already claimed by example-hand", err)
         self.assert_nothing_written()
-        # A secret the compose file needs and the secrets file lacks is refused by its name.
-        self.host.claims.pop("example-hand")
-        code, _out, err = self.host.stack(
-            compose_text=tenant_compose_text(environment={"x": "${GHOST_MISSING:?set it}"})
+        self.assertEqual(
+            self.host.log[-1], f"verb=stack slug={SLUG} result=refused reason=judge-refused"
         )
-        self.assertIn("secrets file has no key GHOST_MISSING", err)
 
-    def test_an_image_pin_that_is_not_the_tenant_image_is_refused(self) -> None:
-        # Guard: TENANT_IMAGE_PATTERN. The judge accepts any digest-pinned name.
-        for pin in (
-            f"IMAGE=example.invalid/app@{IMAGE_DIGEST}\n",
-            f"IMAGE=ghcr.io/branchleft/ghost-tenant-evil@{IMAGE_DIGEST}\n",
-            f"IMAGE=ghcr.io/branchleft/other@{IMAGE_DIGEST}\n",
-        ):
-            with self.subTest(pin=pin):
-                self.assert_refused(self.host.stack(image_env_text=pin), "image-not-tenant")
-                self.assert_nothing_written()
-        # A pin the judge itself refuses is the judge's refusal.
-        code, _out, err = self.host.stack(
-            image_env_text="IMAGE=ghcr.io/branchleft/ghost-tenant:1\n"
-        )
-        self.assertEqual(code, entry.EXIT_REFUSED)
-        self.assertTrue(err.startswith("refused: judge-refused\n"), err)
+    def test_a_judge_refusal_stops_the_write_whatever_the_text(self) -> None:
+        # Guard: `if verdict.refusals`. The stand-in judge refuses a stack the real one passes.
+        self.use_judge(self.fake_judge(refusal="EXAMPLE rule"))
+        code, out, err = self.host.stack()
+        self.assertEqual((code, out), (entry.EXIT_REFUSED, ""))
+        self.assertEqual(err, "refused: judge-refused\nEXAMPLE rule\n")
+        self.assert_nothing_written()
+
+    def test_the_judge_is_given_the_built_text_the_claims_and_the_secrets_file(self) -> None:
+        seen: dict[str, object] = {}
+        real = entry.load_judge
+
+        def spy(host: entry.Host) -> entry.Judge:
+            judge = real(host)
+
+            def params(values: Mapping[str, object]) -> object:
+                seen.update(values)
+                return judge.params_from_mapping(values)
+
+            return entry.Judge(params, judge.judge)
+
+        with mock.patch.object(entry, "load_judge", spy):
+            self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        self.assertEqual(seen["slug"], SLUG)
+        self.assertEqual(seen["profile"], "tenant")
+        self.assertEqual(seen["uid"], 30000)
+        self.assertEqual(seen["compose_text"], self.compose.read_text())
+        self.assertEqual(seen["claims_text"], f"{SLUG}=30000\n")
+        self.assertIn(CANARY, str(seen["secrets_env_text"]))
+        self.assertEqual(seen["image_env_text"], entry.JUDGE_PLACEHOLDER_PIN)
 
     def test_a_slug_never_claimed_here_is_refused_before_the_payload_is_read(self) -> None:
         # Guard: the marker. A tenant set up by hand has a claim and a secrets file, and no marker.
@@ -984,46 +1220,97 @@ class StackTests(EntryTestCase):
         self.assert_refused(self.host.stack(), "claim-missing")
         self.assert_nothing_written()
 
-    def test_an_existing_file_is_never_overwritten(self) -> None:
+    def test_the_same_parameters_again_succeed_and_change_nothing(self) -> None:
+        # Retries: a request whose reply was lost is sent again and finds its file.
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        first = self.compose.stat()
+        before = self.host.files()
+        code, out, err = self.host.stack()
+        self.assertEqual((code, out, err), (entry.EXIT_DONE, "compose.yml already in place\n", ""))
+        self.assertEqual(self.host.files(), before)
+        self.assertEqual(self.compose.stat().st_ino, first.st_ino)
+        self.assertEqual(self.compose.stat().st_mtime_ns, first.st_mtime_ns)
+
+    def test_different_parameters_over_an_existing_file_are_stack_exists(self) -> None:
+        # Guard: compose_matches and the no-replace link. Whatever differs, nothing is replaced.
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        held = self.compose.read_text()
+        before = self.host.files()
+        different: dict[str, dict[str, object]] = {
+            "size": {"size": "large"},
+            "mail": {"mail": False},
+            "environment": {"environment": {"url": "https://other.example.invalid"}},
+        }
+        for case, change in different.items():
+            with self.subTest(case=case):
+                self.assert_refused(
+                    self.host.stack(**{**stack_parameters(), **change}), "stack-exists"
+                )
+                self.assertEqual(self.compose.read_text(), held)
+                self.assertEqual(self.host.files(), before)
+
+    def test_an_existing_file_that_this_verb_did_not_write_is_never_overwritten(self) -> None:
         # Guard: the existence check and the no-replace link. Each starting state is refused.
-        for state in ("compose", "pin", "both", "dangling-link", "again"):
+        for state in ("foreign", "empty", "same-but-open", "same-but-link", "dangling-link"):
             with self.subTest(state=state):
                 self.setUp()
-                held = {"compose": "HELD COMPOSE\n", "pin": "HELD PIN\n"}
-                if state in ("compose", "both"):
-                    self.compose.parent.mkdir()
-                    self.compose.write_text(held["compose"])
-                if state in ("pin", "both"):
-                    self.pin.write_text(held["pin"])
-                if state == "dangling-link":
-                    self.compose.parent.mkdir()
-                    self.compose.symlink_to(self.host.root / "nowhere")
-                if state == "again":
+                self.compose.parent.mkdir()
+                if state == "foreign":
+                    self.compose.write_text("HELD COMPOSE\n")
+                elif state == "empty":
+                    self.compose.write_text("")
+                elif state == "same-but-open":
                     self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
-                    held = {"compose": self.compose.read_text(), "pin": self.pin.read_text()}
+                    self.compose.chmod(0o666)
+                elif state == "same-but-link":
+                    self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+                    held = self.compose.read_text()
+                    self.compose.unlink()
+                    (self.host.root / "copy").write_text(held)
+                    self.compose.symlink_to(self.host.root / "copy")
+                else:
+                    self.compose.symlink_to(self.host.root / "nowhere")
                 before = self.host.files()
+                held_text = self.compose.read_text() if self.compose.is_file() else ""
                 self.assert_refused(self.host.stack(), "stack-exists")
                 self.assertEqual(self.host.files(), before)
                 if self.compose.is_file():
-                    self.assertEqual(self.compose.read_text(), held["compose"])
-                if self.pin.exists():
-                    self.assertEqual(self.pin.read_text(), held["pin"])
-                self.assertFalse(self.compose.is_symlink() and self.compose.exists())
+                    self.assertEqual(self.compose.read_text(), held_text)
+                self.assertEqual([p for p in self.compose.parent.iterdir() if p.name[0] == "."], [])
 
-    def test_a_file_that_appears_after_the_check_is_not_replaced_and_the_first_is_taken_back(
-        self,
-    ) -> None:
-        # Guard: place_files. The pin shows up between the check and the second link.
+    def test_an_existing_empty_stack_directory_is_used(self) -> None:
+        (self.host.opt / SLUG).mkdir()
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        self.assertTrue(self.compose.is_file())
+
+    def test_a_file_that_appears_after_the_check_is_not_replaced(self) -> None:
+        # Guard: place_file. The file shows up between the check and the link.
         real_link = os.link
 
         def link(src: str, dst: str) -> None:
-            if dst.endswith(".image.env"):
-                self.pin.write_text("RACED\n")
+            Path(dst).write_text("RACED\n")
             real_link(src, dst)
 
         with mock.patch("os.link", side_effect=link):
             self.assert_refused(self.host.stack(), "stack-exists")
-        self.assertEqual(self.pin.read_text(), "RACED\n")
+        self.assertEqual(self.compose.read_text(), "RACED\n")
+        self.assertEqual([p.name for p in self.compose.parent.iterdir()], ["compose.yml"])
+
+    def test_a_directory_that_appears_after_the_check_is_refused_by_name(self) -> None:
+        real_mkdir = os.mkdir
+
+        def mkdir(path: str, mode: int = 0o777) -> None:
+            real_mkdir(path, mode)
+            raise FileExistsError
+
+        with mock.patch("os.mkdir", side_effect=mkdir):
+            self.assert_refused(self.host.stack(), "stack-exists")
+        self.assertFalse(self.compose.exists())
+
+    def test_a_write_that_fails_leaves_no_temporary_file_and_no_stack(self) -> None:
+        with mock.patch("os.fsync", side_effect=OSError("EXAMPLE disk full")):
+            code, out, err = self.host.stack()
+        self.assertEqual((code, out, err), (entry.EXIT_FAILED, "", "failed: write\n"))
         self.assertFalse(self.compose.exists())
         self.assertEqual([p.name for p in self.compose.parent.iterdir()], [])
 
@@ -1040,38 +1327,68 @@ class StackTests(EntryTestCase):
         self.assert_refused(self.host.stack(), "path-outside-slot")
         self.assertFalse(self.pin.exists())
 
-    def test_a_stack_root_that_is_not_a_directory_is_refused(self) -> None:
-        # Guard: check_slot_targets. A root that is not a directory is not a place to write.
+    def test_a_stack_root_that_is_missing_or_open_to_writes_is_refused(self) -> None:
+        # Guard: check_slot_targets. A root another user can write is not a place to write.
+        self.host.opt.chmod(0o777)
+        self.assert_refused(self.host.stack(), "path-outside-slot")
+        self.host.opt.chmod(0o775)
+        self.assert_refused(self.host.stack(), "path-outside-slot")
+        self.host.opt.chmod(0o755)
         self.host.opt.rmdir()
         self.assert_refused(self.host.stack(), "path-outside-slot")
         self.assertFalse(self.pin.exists())
 
-    def test_the_payload_is_exactly_two_strings_within_the_cap(self) -> None:
-        text = tenant_compose_text()
+    def test_the_hosts_address_must_be_one_private_address_in_a_closed_file(self) -> None:
+        address = self.host.entry / entry.BIND_ADDRESS_FILE
+        for text in (
+            "8.8.8.8\n",
+            "127.0.0.1\n",
+            "0.0.0.0\n",
+            "10.0.0.1 x\n",
+            "",
+            "10.20.2\n",
+            "10.20.2.300\n",
+            "172.32.0.1\n",
+            "192.169.0.1\n",
+            "::1\n",
+        ):
+            with self.subTest(text=text):
+                address.write_text(text)
+                code, out, err = self.host.stack()
+                self.assertEqual(
+                    (code, out, err), (entry.EXIT_FAILED, "", "failed: bind-address\n")
+                )
+                self.assert_nothing_written()
+        address.write_text(BIND + "\n")
+        address.chmod(0o644)
+        self.assertEqual(self.host.stack()[2], "failed: bind-address\n")
+        address.chmod(0o600)
+        address.unlink()
+        self.assertEqual(self.host.stack()[2], "failed: bind-address\n")
+        self.assert_nothing_written()
+
+    def test_a_private_address_in_each_private_range_is_accepted(self) -> None:
+        address = self.host.entry / entry.BIND_ADDRESS_FILE
+        for text in ("10.0.0.1", "172.16.5.9", "172.31.255.255", "192.168.1.1"):
+            with self.subTest(text=text):
+                self.setUp()
+                (self.host.entry / entry.BIND_ADDRESS_FILE).write_text(text + "\n")
+                self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+                self.assertIn(f'"{text}:40000:2368"', self.compose.read_text())
+        self.assertTrue(address.exists())
+
+    def test_the_payload_shapes_that_are_not_a_json_object_within_the_cap_are_refused(self) -> None:
         cases: list[tuple[object, bytes | None, str]] = [
-            ({"compose_text": text}, None, "payload-keys"),
-            (
-                {"compose_text": text, "image_env_text": PIN, "path": "/etc/passwd"},
-                None,
-                "payload-keys",
-            ),
-            ({"compose_text": text, "image_env_text": PIN, "slug": OTHER}, None, "payload-keys"),
-            ({"compose_text": 1, "image_env_text": PIN}, None, "field-compose_text"),
-            ({"compose_text": "", "image_env_text": PIN}, None, "field-compose_text"),
-            ({"compose_text": "a\u0000b", "image_env_text": PIN}, None, "field-compose_text"),
-            ({"compose_text": text, "image_env_text": None}, None, "field-image_env_text"),
-            ({"compose_text": text, "image_env_text": ""}, None, "field-image_env_text"),
-            ([text, PIN], None, "payload-not-object"),
+            ([1, 2], None, "payload-not-object"),
+            ("text", None, "payload-not-object"),
             (None, b"{nope", "payload-not-json"),
-            (
-                None,
-                b'{"compose_text": "a", "compose_text": "b", "image_env_text": "c"}',
-                "payload-not-json",
-            ),
+            (None, b"", "payload-not-json"),
+            (None, b'{"size": "standard", "size": "large"}', "payload-not-json"),
+            (None, b"[" * 60000, "payload-not-json"),
             (None, b" " * (entry.MAX_PAYLOAD + 1), "payload-too-large"),
         ]
         for payload, raw, reason in cases:
-            with self.subTest(reason=reason):
+            with self.subTest(reason=reason, raw=(raw or b"")[:8]):
                 self.assert_refused(self.host.request(f"stack {SLUG}", payload, raw), reason)
                 self.assert_nothing_written()
 
@@ -1138,12 +1455,14 @@ class StatusTests(EntryTestCase):
         self.host.claim()
         self.assertEqual(
             self.host.request(f"status {SLUG}")[1],
-            "claimed-here=yes\nvolumes=yes\nsecrets=no\nstack=no\nenabled=no\nslot=no\n",
+            "claimed-here=yes\nuid=30000\nport_a=40000\nport_b=40001\nport_health=40002\n"
+            "volumes=yes\nsecrets=no\nstack=no\nenabled=no\nslot=no\n",
         )
         self.host.get_to("key")
         self.assertEqual(
             self.host.request(f"status {SLUG}")[1],
-            "claimed-here=yes\nvolumes=yes\nsecrets=yes\nstack=no\nenabled=yes\nslot=yes\n",
+            "claimed-here=yes\nuid=30000\nport_a=40000\nport_b=40001\nport_health=40002\n"
+            "volumes=yes\nsecrets=yes\nstack=no\nenabled=yes\nslot=yes\n",
         )
 
 
@@ -1161,7 +1480,7 @@ class RegisterTests(EntryTestCase):
         elsewhere = self.host.root / "elsewhere"
         elsewhere.mkdir()
         os.chmod(elsewhere, 0o700)
-        os.rmdir(self.host.entry)
+        shutil.rmtree(self.host.entry)
         self.assert_refused(self.host.request(f"status {SLUG}"), "register-unsafe")
         self.host.entry.symlink_to(elsewhere)
         self.assert_refused(self.host.request(f"status {SLUG}"), "register-unsafe")
@@ -1302,21 +1621,61 @@ class RoleContractTests(unittest.TestCase):
         paths = entry.Paths()
         self.assertEqual(paths.opt_dir, compose["tenant_compose_stack_root"])
         self.assertEqual(paths.etc_dir, compose["tenant_compose_config_root"])
-        self.assertEqual(
-            entry.TENANT_IMAGE_PATTERN.pattern, compose["tenant_compose_tenant_image_pattern"]
-        )
         tasks = (ROLES / "tenant_compose" / "tasks" / "_stack.yml").read_text(encoding="utf-8")
-        for text in (
-            "dest: '{{ tenant_compose_project_dir }}/compose.yml'",
-            "mode: '0644'",
-            "'{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.image.env'",
-            "mode: '0600'",
-        ):
+        for text in ("dest: '{{ tenant_compose_project_dir }}/compose.yml'", "mode: '0644'"):
             self.assertIn(text, tasks)
+        self.assertEqual((entry.COMPOSE_MODE, entry.STACK_DIR_MODE), (0o644, 0o755))
+
+    def test_the_first_pin_is_never_this_programs_to_write(self) -> None:
+        # The pin is branchleft-deploy's, written after it verifies the attestation. The stack
+        # step does not name the pin file, and the program writes no IMAGE= line of its own.
+        source = inspect.getsource(entry)
+        for name in ("step_stack", "build_stack", "stage_file", "place_file"):
+            for needle in ("image_env_path", ".image.env"):
+                self.assertNotIn(needle, inspect.getsource(getattr(entry, name)), name)
+        self.assertEqual(source.count("IMAGE="), 1)  # the judge's placeholder, never written.
+        self.assertFalse(hasattr(entry, "IMAGE_ENV_MODE"))
+        self.assertFalse(hasattr(entry, "TENANT_IMAGE_PATTERN"))
+
+    def test_a_unit_with_no_pin_does_not_start(self) -> None:
+        # The compose unit asserts the pin file exists, so a stack with a compose file and no pin
+        # (what `stack` leaves, and what `enable` enables) stays inactive until branchleft-deploy
+        # has verified an image and written one. No leading dash: the pin is mandatory.
+        unit = ROLES.parent.parent / "hetzner" / "provision" / "branchleft-compose@.service"
+        lines = unit.read_text(encoding="utf-8").splitlines()
+        self.assertIn("AssertPathExists=/etc/branchleft/%i.image.env", lines)
+        self.assertIn("EnvironmentFile=/etc/branchleft/%i.image.env", lines)
+        self.assertFalse(any(line.startswith("AssertPathExists=-") for line in lines))
+        self.assertFalse(any(line.rstrip() == "AssertPathExists=" for line in lines))
+
+    def test_the_bind_address_file_and_pattern_are_the_ones_the_role_writes(self) -> None:
+        own = self.variables("tenant_entry")
         self.assertEqual(
-            (entry.COMPOSE_MODE, entry.IMAGE_ENV_MODE, entry.STACK_DIR_MODE),
-            (0o644, 0o600, 0o755),
+            os.path.join(str(own["tenant_entry_register_dir"]), entry.BIND_ADDRESS_FILE),
+            "/etc/branchleft/tenant-entry/bind-address",
         )
+        self.assertEqual(
+            own["tenant_entry_bind_address_file"],
+            "{{ tenant_entry_register_dir }}/bind-address",
+        )
+        octet = str(own["tenant_entry_octet"])
+        role_pattern = re.compile(
+            str(own["tenant_entry_private_address_pattern"]).replace(
+                "{{ tenant_entry_octet }}", octet
+            )
+        )
+        samples = [
+            "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.0.1", "192.168.0.1",
+            "172.15.0.1", "172.32.0.1", "192.169.0.1", "11.0.0.1", "127.0.0.1", "0.0.0.0",  # noqa: S104
+            "8.8.8.8", "10.0.0", "10.0.0.256", "10.0.0.1.1", "", "::1", "10.0.0.1\n",
+        ]  # fmt: skip
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    role_pattern.match(sample) is not None,
+                    entry.BIND_ADDRESS_PATTERN.match(sample) is not None
+                    and not sample.endswith("\n"),
+                )
 
     def test_the_port_and_uid_ranges_are_inside_what_the_stack_allows(self) -> None:
         self.assertGreaterEqual(entry.PORT_BASE, 1024)
