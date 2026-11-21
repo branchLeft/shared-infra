@@ -535,46 +535,6 @@
         label: '{{ item.path }}'
       no_log: true
 
-    # With no pin given, the role reads the portal container for the image unless the deploy
-    # wrapper's record holds a digest. This container has no docker, and a host that has
-    # deployed before has the record, so the record stands in for the portal read here.
-    - name: Put a digest in the deploy wrapper's record for the no-image refusal
-      ansible.builtin.copy:
-        content: "IMAGE={{ verify_recorded_image }}\n"
-        dest: /etc/branchleft/control-plane.image.env
-        owner: root
-        group: root
-        mode: '0600'
-
-    - name: Enable the provisioning API with no image given
-      block:
-        - name: Apply the role with the provisioning API enabled and an empty image
-          ansible.builtin.include_role:
-            name: branchleft.control_plane
-          vars:
-            control_plane_provisioning_enabled: true
-            control_plane_app_image: ''
-        - name: Fail if the role went on
-          ansible.builtin.fail:
-            msg: The role went on with the provisioning API enabled and no image.
-      rescue:
-        - name: Record the message the run stopped with
-          ansible.builtin.set_fact:
-            control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
-
-    - name: Assert the run stopped with its own code
-      ansible.builtin.assert:
-        that:
-          - "control_plane_verify_message.startswith('control_plane[provisioning-image-missing]: ')"
-          - "'THROWAWAY-' not in control_plane_verify_message"
-        quiet: true
-        fail_msg: 'The refusal was not the missing-image refusal: {{ control_plane_verify_message | truncate(200) }}'
-
-    - name: Remove the digest put in the deploy wrapper's record for the no-image refusal
-      ansible.builtin.file:
-        path: /etc/branchleft/control-plane.image.env
-        state: absent
-
     - name: Enable the provisioning API with the files placed and the image given
       ansible.builtin.include_role:
         name: branchleft.control_plane
@@ -681,6 +641,86 @@
               content: ''
           loop_control:
             label: '{{ item.name }}'
+
+        # The provisioning API enabled with no pin given. With no pin the role reads the running
+        # portal container for the image, so the stand-in answers; the run has an image and still
+        # refuses, because the image the stack runs now may predate the provisioning service.
+        # The owner's three files are placed so that the missing image is the only thing wrong.
+        - name: Place the three files the owner places, for the no-image refusal
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '{{ item.path }}'
+            owner: root
+            group: root
+            mode: '0600'
+          loop:
+            - path: /etc/branchleft/control-plane/provisioning/tenant/credentials
+              content: "11111111-1111-4111-8111-111111111111=THROWAWAY-TENANT-{{ scenario_secret }}\n"
+            - path: /etc/branchleft/control-plane/provisioning/owner/credential
+              content: "THROWAWAY-OWNER-{{ scenario_secret }}\n"
+            - path: /etc/branchleft/control-plane/provisioning/demos/demos.json
+              content: '{"demos": []}'
+          loop_control:
+            label: '{{ item.path }}'
+          no_log: true
+
+        - name: Remove a stack file, so that a run which got as far as the delivery would put it back
+          ansible.builtin.file:
+            path: '{{ verify_project_dir }}/compose.yml'
+            state: absent
+
+        - name: Enable the provisioning API with no image given
+          block:
+            - name: Apply the role with the provisioning API enabled and an empty image
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_provisioning_enabled: true
+                control_plane_app_image: ''
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on with the provisioning API enabled and no image.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the run stopped with its own code
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[provisioning-image-missing]: ')"
+              - "'THROWAWAY-' not in control_plane_verify_message"
+            quiet: true
+            fail_msg: 'The refusal was not the missing-image refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+        - name: Look at the stack file the refused run must not have written
+          ansible.builtin.stat:
+            path: '{{ verify_project_dir }}/compose.yml'
+          register: control_plane_verify_refused_image
+
+        - name: Assert the refused run wrote nothing
+          ansible.builtin.assert:
+            that:
+              - not control_plane_verify_refused_image.stat.exists
+            quiet: true
+            fail_msg: A run refused for want of an image pin for the provisioning API still wrote a stack file.
+
+        - name: Remove the three files, which the cases below do not use
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /etc/branchleft/control-plane/provisioning/tenant/credentials
+            - /etc/branchleft/control-plane/provisioning/owner/credential
+            - /etc/branchleft/control-plane/provisioning/demos/demos.json
+
+        - name: Empty the stand-in's call log, which the cases below read
+          ansible.builtin.copy:
+            content: ''
+            dest: /var/lib/docker-stub/calls
+            owner: root
+            group: root
+            mode: '0644'
 
         # A pin given, and nothing that uses Docker switched on: the role asks the stand-in
         # nothing and uses the pin as given.
