@@ -1,0 +1,30 @@
+---
+argument_specs:
+  main:
+    short_description: Install the forced command that creates one tenant's database on the tenant database host, and the key that may run it
+    description: >-
+      Makes an account of its own for the controller's key, installs the forced-command
+      program as root, grants that account the right to run that one program as root and
+      nothing else, and installs the one authorized key, restricted to one source address
+      and to that program. The program creates a tenant's database and account from a
+      validated name and prints a generated password once. The role holds no secret and
+      reads no root credential: the key is a public half and both inputs are private to
+      the estate, so they are supplied at run time and never committed.
+    author: branchLeft
+    options:
+      db_t1_tenant_entry_controller_key:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          The controller's SSH public key: one line of the form `ssh-ed25519 AAAA...`, with
+          no comment and no option. Any other shape is refused, because the line is written
+          into an authorized_keys file and a second line there would be a second, unrestricted
+          key. There is no default (ANS-7).
+      db_t1_tenant_entry_controller_address:
+        type: str
+        required: true
+        description: >-
+          The one IPv4 address the controller connects from, four decimal octets with no
+          leading zero and no wildcard. The key is accepted from this address only. There is
+          no default (ANS-7).

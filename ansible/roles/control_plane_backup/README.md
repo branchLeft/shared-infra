@@ -20,9 +20,11 @@ the order the standard sets for a role README (ANS-14).
 2. **Installs the program** `branchleft_control_plane_backup.py` (`root:root`
    `0755`) after the program's own `--check` passes on a temporary copy. A program that
    does not load is never installed and the previous one stays.
-3. **Installs the service and the timer** (`root:root` `0644`) and reloads systemd
-   once when either changed. The service is a oneshot that runs `run` as root
-   (`docker` needs it) with `UMask=0077`.
+3. **Installs the service, its failure unit and the timer** (`root:root` `0644`) and
+   reloads systemd once when any changed. The service is a oneshot that runs `run` as
+   root (`docker` needs it) with `UMask=0077`. Its `OnFailure=` names the failure
+   unit, which runs the program's `mark-failed` (see "The failure hook" below). The
+   failure unit is installed first, so the service never names a unit that is absent.
 4. **Holds the timer to a variable.** `control_plane_backup_timer_enabled` (default
    `false`). True enables and starts the timer, and is refused while
    `/etc/branchleft/state-copy.env` is not on the host: a nightly run with nowhere to
@@ -46,11 +48,12 @@ precondition is missing so nothing was proven.
 | Command                | What it does                                                                                                                                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `take`                 | Under the stack's deploy lock, dumps `portal` and `zitadel` into `/var/backups/branchleft/control-plane/<UTC stamp>/` and records the live row count of every table.                            |
-| `verify DIR`           | Restores `DIR` into a throwaway PostgreSQL and requires the same tables and the same count in each.                                                                                             |
+| `verify DIR`           | Restores `DIR` into a throwaway PostgreSQL and requires the same tables and the same count in each. Only when every comparison passes it writes the proof mark `<stamp>.proven` beside `DIR`.   |
 | `seal DIR`             | Encrypts `DIR` with `age -r` to the estate recipient into `DIR.tar.age`, and writes its sha256 beside it.                                                                                       |
 | `ship SEALED`          | Puts the sealed file to backup copy 1 at `state/ops1-control-plane/generations/<stamp>/control-plane.tar.age`. Refuses anything that is not an age file with one recipient.                     |
 | `offsite-check SEALED` | Downloads that object with a **read** key (`--read-env-file`, in the `restore-drill.env` format) and requires the digest sealed on the host. The put key cannot read, so `ship` cannot do this. |
-| `run`                  | `take`, `verify`, `seal`, `ship`, then prunes on-host copies past the newest seven. This is what the timer runs.                                                                                |
+| `run`                  | `take`, `verify`, `seal`, `ship`, then prunes: keeps the newest seven proven on-host copies and sweeps an unproven directory. This is what the timer runs.                                      |
+| `mark-failed`          | Writes the time the nightly unit failed to `control_plane_backup_failed.prom` in the textfile directory. Run by the failure unit, never by hand.                                                |
 
 Only table names and counts are printed. The output of docker, psql, pg_dump and
 age is withheld, because an error message can quote a row.
@@ -79,6 +82,29 @@ age file or that holds other than one recipient stanza, before it opens a connec
 The private half of the recipient is never on `ops1`, so the sealed copy cannot be
 opened there. That is the property: a copy of everything `ops1` holds is ciphertext.
 
+**Retention counts proven copies only.** A copy is proven when it has a `manifest.json`
+and a proof mark, `<stamp>.proven` beside its directory (never inside it, because `seal`
+encrypts the whole directory), that `verify` wrote after the restore counted equal to
+live. The mark holds the sha256 of the manifest it proves, so a manifest changed
+afterwards is no longer proven. `prune` keeps the newest seven proven copies, so a take
+killed outright (a directory with no manifest), or a night whose restore failed (a
+manifest and no mark), can never push a proven copy out of the seven. A directory that is
+not proven is swept once its stamp is more than three hours old (the service stops a run
+at two hours, so a take still running is left alone). The copy just proven is never
+removed, and the newest proven copy is never removed because it is always among the seven.
+A removal takes the mark first, so one that stops half way leaves a directory that is no
+longer counted as proven. A directory whose name is not a stamp, and a link, are left alone.
+
+**The failure hook.** The service names `OnFailure=branchleft-control-plane-backup-failed.service`.
+systemd starts it on any failed state of the service: a check that did not pass, a missing
+precondition, a kill, the two-hour timeout, a failed dependency, a crash before the program
+printed a line. The unit runs `mark-failed`, which writes
+`control_plane_backup_last_failure_timestamp_seconds` to its own file in the textfile
+directory (a separate file, because `run` rewrites the success file from the lines it can
+read). The alert rule `ControlPlaneBackupRunFailed` holds while that time is newer than the
+last `shipped_offsite` success, so a failed night is seen that night and the next night that
+ships a copy clears it.
+
 **The master key is not copied.** The sign-in service's master key is
 `/etc/branchleft/control-plane/zitadel-masterkey`. The program never reads it. A
 restored `zitadel` database is unreadable without it, so a restore needs the key from
@@ -99,10 +125,14 @@ its custody (the owner's password manager) as well as the database.
   files (`ansible/playbooks/ops1.yml`, `ansible/checks/host_roles.yml`); the role is
   not in either yet. The program needs `backup_worker` and `backup_restore` applied
   first, so it goes after them.
-- **The alert on a stale backup.** The program writes
-  `control_plane_backup_last_success_timestamp_seconds{stage=...}` to the backup
-  worker's textfile directory. The alert rule that reads it lives in the monitoring
-  stack.
+- **The alert rules.** The program writes
+  `control_plane_backup_last_success_timestamp_seconds{stage=...}` and, from the
+  failure unit, `control_plane_backup_last_failure_timestamp_seconds` to the backup
+  worker's textfile directory. The rules that read them, `ControlPlaneBackupStale`
+  (a stage not succeeded for 36 hours) and `ControlPlaneBackupRunFailed`, live in the
+  monitoring stack (`hetzner/monitoring/render.ts`, documented in `render.md`). Neither
+  fires for a backup that has never written a metric, so a timer that never ran is not
+  seen.
 - **Expiry of the off-site copies.** The object sits under `state/`, which copy 1's
   lifecycle already expires (current 10 days, noncurrent 35 days, set by
   `configure_backup_bucket.py`), so no lifecycle rule is added. A put-only key cannot
@@ -140,14 +170,16 @@ them. Unit tests pin each one to the program, to `backup_worker`, `backup_restor
 
 - `/opt/branchleft/control-plane-backup` (`0755`) and the program in it (`0755`).
 - `/var/backups/branchleft/control-plane` (`root:root` `0700`).
-- `/etc/systemd/system/branchleft-control-plane-backup.service` and `.timer`, `0644`,
-  and one systemd reload when either changed.
+- `/etc/systemd/system/branchleft-control-plane-backup.service`, `.timer` and
+  `branchleft-control-plane-backup-failed.service`, `0644`, and one systemd reload when
+  any changed.
 - The timer's enabled and active state, only when a variable asks.
 
 A run of the program, when the owner starts it, additionally: reads the two databases
 (read-only transactions), starts and removes one throwaway container, writes
-`<stamp>/` and `<stamp>.tar.age` under the backup directory, writes the textfile
-metric, and puts one object to copy 1.
+`<stamp>/`, `<stamp>.proven` and `<stamp>.tar.age` under the backup directory, writes the
+textfile metric, and puts one object to copy 1. A failed run additionally starts the
+failure unit, which writes `control_plane_backup_failed.prom` beside the metric.
 
 ## How to restore
 
@@ -181,24 +213,35 @@ The harness, with Docker running locally:
 The scenario runs the role on one systemd container. `converge.yml` applies it, proves
 the timer is refused while the state-copy file is absent (the assertion names that
 file), and proves a default apply leaves an enabled timer on. `verify.yml` checks the
-installed program and both units equal the role's files byte for byte, the owner and
+installed program and the three units equal the role's files byte for byte, the owner and
 mode of every path (the backup directory `0700`), that the timer is disabled and
-inactive, and that the installed program passes its own check.
+inactive, and that the installed program passes its own check. It then proves the failure
+hook end to end: systemd reports the failure unit as the service's `OnFailure`, a stand-in
+for `docker.service` lets the real service start and fail, and the mark the failure unit
+leaves must be the one gauge line the alert rule reads, mode `0644`.
 
 ### What breaks which test
 
 One row per edit to the program or role, with the unit suite run over it and a restore
 afterwards.
 
-| Edit                                                   | Test that fails                                                                                 |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `compare_counts` stops comparing the counts of a table | `test_a_different_count_names_the_table`, `test_a_restore_that_counts_differently_fails_...`    |
-| `compare_counts` accepts a restore with no tables      | `test_an_empty_restore_fails_against_a_live_database_with_tables`, `..._into_an_empty_database` |
-| `require_ciphertext` is not called in `ship`           | `test_nothing_that_is_not_an_age_file_leaves_the_host`                                          |
-| `take` stops removing its directory on failure         | `test_a_failed_dump_leaves_no_directory_to_be_mistaken_for_a_backup`                            |
-| The dump runs without the exported snapshot            | `test_the_dump_reads_the_snapshot_the_counts_were_taken_in`                                     |
-| The timer task loses its `may_disable` gate            | `test_the_timer_task_is_gated_on_both_switches`; Molecule `converge`                            |
-| The program's `--check` fails                          | Molecule `converge` (the copy's validator)                                                      |
+| Edit                                                   | Test that fails                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `compare_counts` stops comparing the counts of a table | `test_a_different_count_names_the_table`, `test_a_restore_that_counts_differently_fails_...`     |
+| `compare_counts` accepts a restore with no tables      | `test_an_empty_restore_fails_against_a_live_database_with_tables`, `..._into_an_empty_database`  |
+| `require_ciphertext` is not called in `ship`           | `test_nothing_that_is_not_an_age_file_leaves_the_host`                                           |
+| `take` stops removing its directory on failure         | `test_a_failed_dump_leaves_no_directory_to_be_mistaken_for_a_backup`                             |
+| The dump runs without the exported snapshot            | `test_the_dump_reads_the_snapshot_the_counts_were_taken_in`                                      |
+| `prune` counts a directory with no manifest            | `test_a_directory_without_a_manifest_does_not_push_out_a_proven_copy`                            |
+| `prune` counts a manifest with no proof mark           | `test_a_directory_whose_restore_failed_does_not_count_either`                                    |
+| `prune` sweeps a directory younger than three hours    | `test_a_take_still_running_is_left_alone`                                                        |
+| `remove_backup` removes the mark after the directory   | `test_a_removal_that_stops_half_way_leaves_no_proven_copy`                                       |
+| `verify` writes the mark before the comparisons end    | `test_a_restore_that_passes_marks_the_copy_proven_and_one_that_fails_does_not`                   |
+| The service loses its `OnFailure=`                     | `test_a_failed_run_starts_the_unit_that_marks_it`; Molecule `verify`                             |
+| The failure unit stops running `mark-failed`           | `test_the_failure_unit_runs_the_programs_mark_and_nothing_else`; Molecule `verify`               |
+| The stale bound moves below one healthy night          | `test_the_stale_bound_leaves_days_before_copy_1_expires_the_last_object`; `alert_rules_test.yml` |
+| The timer task loses its `may_disable` gate            | `test_the_timer_task_is_gated_on_both_switches`; Molecule `converge`                             |
+| The program's `--check` fails                          | Molecule `converge` (the copy's validator)                                                       |
 
 ### Named limits
 
@@ -216,6 +259,15 @@ afterwards.
   test setup and runs the role with the timer asked for, so the task runs and reports
   no change; a role run that enables or disables the timer would fail the idempotence
   step.
+- **Unproven directories are swept on the next success only.** `prune` runs at the end of
+  a run that shipped, so a run of failing nights leaves each night's directory until one
+  succeeds; the take refuses to start when the disk has less than a gibibyte of headroom
+  left, and the failure alert is already firing by then. A directory taken by hand with
+  `take` is swept by the next run once it is three hours old unless `verify` has proven it.
+- **Nothing fires before the first metric is written.** The alert rules do not use
+  `absent()`, so a timer that has never run, and has never failed, raises nothing.
+- **The failure hook proves a failed state, not its cause.** The unit cannot tell a kill from
+  a failed check; `journalctl -u branchleft-control-plane-backup.service` does.
 - **The restore is not a recovery drill.** It proves the dumps load and count the
   same in an empty PostgreSQL. It does not start the sign-in service on them.
 - **Two roles' units run on one disk.** The 02:40 UTC timer sits between the dump
@@ -238,5 +290,8 @@ a merge changes no host. The wiring is a small owner-merged change after the
    reads the copied program once the role is reached by a playbook); the shell
    wrapper in the program is written for that reason.
 3. A private value never becomes a default, and the program never prints a row.
-4. Run the unit suite and the harness before a pull request, then break the control
+4. A change to a metric name or the stage a success is recorded under goes in the program and
+   in the rules in `hetzner/monitoring/render.ts` together;
+   `test_the_alert_rules_read_the_names_the_program_writes` fails when they differ.
+5. Run the unit suite and the harness before a pull request, then break the control
    you touched and see the named test fail.

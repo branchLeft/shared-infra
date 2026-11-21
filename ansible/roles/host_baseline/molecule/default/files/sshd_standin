@@ -20,6 +20,7 @@ KNOWN = {
     "port",
 }
 DEFAULT_CONFIG = "/etc/ssh/sshd_config"
+DUMP_LOG = "/var/lib/host_baseline_test/sshd-dumps"
 USAGE_STATUS = 64
 
 
@@ -115,6 +116,9 @@ def main(argv: list[str]) -> int:
     if reader.status != 0:
         return reader.status
     if mode == "dump":
+        # Each dump is logged, so a case can show whether the role asked for the settings at all.
+        with open(DUMP_LOG, "a", encoding="utf-8") as log:
+            log.write("dump\n")
         lines = []
         for keyword, value in reader.resolved.items():
             if keyword == "permitrootlogin" and value == "prohibit-password":

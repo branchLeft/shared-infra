@@ -207,6 +207,7 @@ jobs:
             .yamllint
             .github/workflows/ansible.yml
             .github/workflows/ansible-delivery.yml
+            hetzner-host/addressPlan.ts
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
             mail/
@@ -330,10 +331,11 @@ jobs:
       - name: Test the shard selection
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_ci_select.py"'
 
-  # The full lint runs as three legs at once, each on its own runner, so it takes as long as
+  # The full lint runs as four legs at once, each on its own runner, so it takes as long as
   # the longest leg and not the sum. In one job its steps ran one after the other for 15 to 20
   # minutes (ansible-lint about 4, the checks' tests 6 to 9, the role unit tests about 4) and a
-  # slow runner reached the 20 minute limit. Each leg restores the same tool environment; a
+  # slow runner reached the 20 minute limit. The tests of the checks alone took 7 to 12 minutes
+  # in one leg, so they run in two (`checks` and `slow`, see run_check_tests.py). Each leg restores the same tool environment; a
   # step carries `if: matrix.part == '<leg>'` and a step with no condition runs in every leg.
   # test_ci_gate_order.py holds every condition to a leg of the matrix, so a typo cannot
   # skip a step in all of them. `needs.lint.result` is success only when every leg is.
@@ -343,11 +345,11 @@ jobs:
     if: needs.discover.outputs.ansible == 'true'
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        part: [static, checks, units]
+        part: [static, checks, slow, units]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -433,12 +435,19 @@ jobs:
         if: matrix.part == 'checks'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
-      # --durations 10 prints the ten slowest checks after the run, so the time the step takes
-      # can be attributed. unittest's flag needs Python 3.12 or later, the runner image's
-      # interpreter. It changes no result: a failing check still fails the step.
+      # The tests of the checks run in two parts on two runners: this step is every test module
+      # of ansible/checks except the ones run_check_tests.py names as slow, and the next step in
+      # the `slow` leg is those. The runner prints the ten slowest tests of its part, so the
+      # time can be attributed (unittest's durations needs Python 3.12 or later, the runner
+      # image's interpreter); that changes no result. test_run_check_tests.py holds that the
+      # two parts are every module exactly once.
       - name: Test the checks
         if: matrix.part == 'checks'
-        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py" --durations 10'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_check_tests.py main'
+
+      - name: Test the slow checks
+        if: matrix.part == 'slow'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_check_tests.py slow'
 
       # The tools build the record a new host's first-boot document is made from. Their
       # tests run the role's own configuration task with this job's ansible-playbook and

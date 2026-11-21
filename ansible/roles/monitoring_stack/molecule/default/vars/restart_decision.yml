@@ -1,0 +1,27 @@
+---
+# The values the restart-decision plays share (verify.yml, verify_pager.yml and
+# verify_restarts.yml read this file, so the plays have one set of names and sentinels).
+# Sentinels are throwaway test values; the log scan (verify_log_scan.yml) lists each one.
+monitoring_stack_verify_env_file: /etc/branchleft/monitoring.env
+monitoring_stack_verify_ntfy_env_file: /etc/branchleft/ntfy-pager.env
+monitoring_stack_verify_rot_a: test-sentinel-rotated-smtp-0008
+monitoring_stack_verify_rot_b: test-sentinel-rotated-smtp-0011
+monitoring_stack_verify_rot_c: test-sentinel-rotated-smtp-0012
+monitoring_stack_verify_rot_d: test-sentinel-rotated-smtp-0013
+monitoring_stack_verify_rot_e: test-sentinel-rotated-smtp-0014
+monitoring_stack_verify_rot_f: test-sentinel-rotated-smtp-0015
+monitoring_stack_verify_rot_g: test-sentinel-rotated-smtp-0016
+monitoring_stack_verify_rot_h: test-sentinel-rotated-smtp-0022
+monitoring_stack_verify_rot_i: test-sentinel-rotated-smtp-0023
+monitoring_stack_verify_rot_snds: https://test.invalid/snds/test-sentinel-rotated-0009
+monitoring_stack_verify_ntfy_pager_1: test-sentinel-ntfy-pager-0010
+monitoring_stack_verify_ntfy_pager_2: test-sentinel-ntfy-pager-0018
+monitoring_stack_verify_ntfy_watcher: test-sentinel-ntfy-watcher-0019
+monitoring_stack_verify_ntfy_owner: test-sentinel-ntfy-owner-0020
+monitoring_stack_verify_ntfy_machine: test-sentinel-ntfy-machine-0021
+monitoring_stack_verify_ntfy_role: '{{ playbook_dir }}/../../../ntfy_pager'
+monitoring_stack_verify_unit: branchleft-compose@monitoring.service
+monitoring_stack_verify_renderer_path: /opt/branchleft/monitoring/render_alertmanager_config.py
+monitoring_stack_verify_template_path: /etc/systemd/system/branchleft-compose@.service
+monitoring_stack_verify_fail_flag: /run/docker-standin.fail
+monitoring_stack_verify_dropin_repo: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/monitoring.override.conf'

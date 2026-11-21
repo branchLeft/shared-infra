@@ -1,0 +1,6 @@
+---
+# Both inputs have no default (ANS-7): a host that is not given the controller's key and
+# address gets no access at all, and the interface check stops the run when either is
+# absent. They are private to the estate and supplied at run time, never committed
+# (ANS-16). Every other value is fixed in vars/main.yml.
+{}

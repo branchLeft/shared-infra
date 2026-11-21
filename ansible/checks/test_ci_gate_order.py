@@ -61,10 +61,11 @@ LINT_STEPS_THAT_STILL_RUN = (
 )
 
 # The legs of the full lint and the steps each runs, in order. The static leg is the cheap
-# static checks, the checks leg is the unit tests of the harness, the checks and the tools, and
-# the units leg is every role's unit tests. They ran one after the other in one job that took
-# fifteen to twenty minutes; the legs run at once, so the job takes as long as the longest.
-LINT_LEGS = ["static", "checks", "units"]
+# static checks, the checks leg is the unit tests of the harness, the tools and most of the checks,
+# the slow leg is the checks' slowest test modules (run_check_tests.py), and the units leg is
+# every role's unit tests. They ran one after the other in one job that took fifteen to twenty
+# minutes; the legs run at once, so the job takes as long as the longest.
+LINT_LEGS = ["static", "checks", "slow", "units"]
 LINT_LEG_STEPS = {
     "static": (
         "Check the pins and the update route",
@@ -76,6 +77,7 @@ LINT_LEG_STEPS = {
         "Check each role's own library modules",
     ),
     "checks": ("Test the harness", "Test the checks", "Test the tools"),
+    "slow": ("Test the slow checks",),
     "units": ("Run every role's unit tests",),
 }
 
@@ -346,7 +348,7 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
             self.assertIsNone(get(step, "continue-on-error"), get(step, "name"))
 
     def test_the_full_lint_runs_as_parallel_legs_and_no_step_is_left_with_no_leg(self) -> None:
-        # The lint job is a matrix so its three kinds of work run at once, and a step carries
+        # The lint job is a matrix so its kinds of work run at once, and a step carries
         # `if: matrix.part == '<leg>'`. A condition naming a leg the matrix lacks would skip the
         # step in every leg and the job would still be green, so each condition must name a leg
         # of the matrix, every leg must hold a step of its own, and a step with no condition
@@ -375,6 +377,14 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         for leg, expected in LINT_LEG_STEPS.items():
             with self.subTest(leg=leg, kind="steps"):
                 self.assertEqual(list(expected), named[leg])
+
+    def test_the_full_lint_keeps_a_timeout_with_headroom_over_a_leg_under_ten_minutes(self) -> None:
+        # The legs are meant to finish in under ten minutes. A limit of 15 leaves half as much
+        # again; raising it again would hide a leg that creeps back up (the owner's ruling,
+        # rerun-si771: make the step faster, do not accept longer runs).
+        limit = int(str(get(self.job("lint"), "timeout-minutes")))
+        self.assertGreaterEqual(limit, 14)
+        self.assertLessEqual(limit, 15)
 
     def test_each_shard_job_runs_only_when_discover_chose_some_of_its_kind(self) -> None:
         for name, output in (("shard", "blocking"), ("shard-advisory", "advisory")):

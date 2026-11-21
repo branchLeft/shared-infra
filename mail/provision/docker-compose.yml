@@ -33,6 +33,14 @@ services:
     volumes:
       - stalwart-etc:/etc/stalwart
       - stalwart-data:/var/lib/stalwart
+    # Mail logs are email addresses (sender and recipient). Bound them with the
+    # same limits the shim's containers use (shim-compose.yml), so this stack
+    # cannot grow its log without limit on the host that holds the mailboxes.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
 
 volumes:
   stalwart-etc:

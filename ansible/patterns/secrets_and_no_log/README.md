@@ -421,11 +421,13 @@ wrong source. To add a secret option, add its row here.
 | `backup_worker`            | `backup_worker_db_password`               | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
+| `broker_deploy`            | `broker_deploy_owner_due_diligence_email` | host_inputs: demo1        |
 | `broker_tunnel_client`     | `broker_tunnel_client_demo1_address`      | host_inputs: ops1         |
 | `ci_jump`                  | `ci_jump_user`                            | host_inputs: edge1, edget |
 | `control_plane`            | `control_plane_env_content`               | none                      |
 | `control_plane`            | `control_plane_masterkey`                 | none                      |
 | `db1_stack`                | `db1_stack_exporter_password`             | host_inputs: db1          |
+| `db_t1_tenant_entry`       | `db_t1_tenant_entry_controller_key`       | none                      |
 | `monitoring_stack`         | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |

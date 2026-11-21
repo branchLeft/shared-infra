@@ -1,0 +1,81 @@
+---
+# The scenario starts from a host that has no entry account: the role must make it. Prepare
+# makes the throwaway keys on the controller (the image has no ssh-keygen), keeps a copy of the
+# main sudoers file for the verify play to compare against, and stages what other roles leave on
+# an app host: the program directory and a stand-in for the volume program.
+- name: Make the throwaway keys on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's throwaway keys
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used (ANS-9).
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - entry
+        - other
+        - stale
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Keep a copy of the main sudoers file as the image ships it
+      ansible.builtin.copy:
+        src: /etc/sudoers
+        dest: /var/tmp/sudoers.before
+        remote_src: true
+        mode: preserve
+
+    # What tenant_onboarding leaves on a host: the program directory and the volume program.
+    # This one is a stand-in that keeps the claims it is given in a file, so verify can run the
+    # entry program's real claim step through sudo. The real program has its own tests and its
+    # own role; the entry program only calls it.
+    - name: Make the program directory tenant_onboarding makes
+      ansible.builtin.file:
+        path: '{{ scenario_program_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put a stand-in for the tenant volume program in its place
+      ansible.builtin.copy:
+        content: |
+          #!/usr/bin/python3 -I
+          import sys
+
+          CLAIMS = "/var/tmp/stand-in-claims"
+          args = sys.argv[1:]
+          if args == ["--list-claims"]:
+              try:
+                  sys.stdout.write(open(CLAIMS, encoding="utf-8").read())
+              except FileNotFoundError:
+                  pass
+              sys.exit(0)
+          if len(args) == 3 and args[0] == "--uid":
+              with open(CLAIMS, "a", encoding="utf-8") as handle:
+                  handle.write(args[2] + "=" + args[1] + "\n")
+              sys.exit(0)
+          sys.exit(2)
+        dest: '{{ scenario_volume_program }}'
+        owner: root
+        group: root
+        mode: '0755'

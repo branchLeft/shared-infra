@@ -20,6 +20,7 @@ from check_enrolment import (
     _PARSED,
     JUMP_HOSTS,
     JUMP_VARS,
+    MAIL_COLLECTOR_KEYS,
     OPTIONAL_OWNER_KEYS,
     OWNER_VARS_KEYS,
     RING_CONTROLLER_TEXT_KEYS,
@@ -331,11 +332,12 @@ class Sabotage(unittest.TestCase):
     # R2: the loader is on the lists of the hosts with a row only, so another host (demo1) cannot
     # apply it.
     def test_r10_the_loader_on_another_host_is_refused(self) -> None:
+        # demo1's playbook applies the loader; its list must name it too. Deleting the list's
+        # entry makes the applied loader unlisted, which R2 refuses.
         self._edit(
-            "playbooks/demo1.yml",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "checks/host_roles/demo1.yml",
+            "- host_inputs\n",
+            "",
         )
         self._assert_rule("R2 demo1.yml: role host_inputs is not on demo1's list")
 
@@ -1375,7 +1377,8 @@ class Sabotage(unittest.TestCase):
     def test_r10_ops1_control_plane_pin_is_optional_and_ops1s_alone(self) -> None:
         self.assertEqual(check(self.root), [])
         self.assertEqual(
-            {"ops1": frozenset(("control_plane_app_image",))}, dict(OPTIONAL_OWNER_KEYS)
+            {"ops1": frozenset(("control_plane_app_image",)) | MAIL_COLLECTOR_KEYS},
+            dict(OPTIONAL_OWNER_KEYS),
         )
         self.assertNotIn("control_plane_app_image", self._ops1_keys())
         self._edit(
@@ -1384,6 +1387,89 @@ class Sabotage(unittest.TestCase):
             "ring_controller_host_bundle_url: ''\n" + PIN_LINE,
         )
         self.assertEqual(check(self.root), [])
+
+    # The mail collector role's eight inputs are ops1's owner values (ws#3501): the owner sets the
+    # image, the sending host, the demo domain and the drained hosts there. Each is optional, as
+    # an absent key leaves the role's own inert default. The positive control: a file that sets
+    # all eight passes. Without the keys in the allowed set it is refused as an inexact key set,
+    # which is the red the runbook's P2 reads for.
+    MAIL_COLLECTOR_LINES = (
+        "mail_collector_image: 'ghcr.io/branchleft/mail-collector@sha256:" + "a" * 64 + "'\n"
+        "mail_collector_smtp_host: 'smtp.example.test'\n"
+        "mail_collector_demo_mail_domain: 'demo.example.test'\n"
+        "mail_collector_hosts:\n"
+        "  - slug: demo1\n    kind: demo\n    app_host_ip: 10.0.0.5\n"
+        "mail_collector_smtp_port: 587\n"
+        "mail_collector_smtp_secure: false\n"
+        "mail_collector_shim_scheme: http\n"
+        "mail_collector_shim_port: 8080\n"
+    )
+
+    def _set_ops1_mail_collector(self, lines: str) -> None:
+        path = self.ansible / "owner_vars" / "ops1.yml"
+        path.write_text(path.read_text(encoding="utf-8") + lines, encoding="utf-8")
+
+    def test_r10_ops1_may_set_every_mail_collector_input(self) -> None:
+        self.assertEqual(check(self.root), [])
+        self.assertEqual(
+            {
+                "mail_collector_image",
+                "mail_collector_smtp_host",
+                "mail_collector_demo_mail_domain",
+                "mail_collector_hosts",
+                "mail_collector_smtp_port",
+                "mail_collector_smtp_secure",
+                "mail_collector_shim_scheme",
+                "mail_collector_shim_port",
+            },
+            set(MAIL_COLLECTOR_KEYS),
+        )
+        self.assertTrue(MAIL_COLLECTOR_KEYS <= OWNER_VARS_KEYS["ops1"])
+        self.assertTrue(MAIL_COLLECTOR_KEYS <= OPTIONAL_OWNER_KEYS["ops1"])
+        self._set_ops1_mail_collector(self.MAIL_COLLECTOR_LINES)
+        self.assertEqual(check(self.root), [])
+
+    def test_r10_ops1_each_mail_collector_input_alone_is_allowed(self) -> None:
+        for line in self.MAIL_COLLECTOR_LINES.replace("\n  - slug", " - slug").split("\n"):
+            key = line.split(":", 1)[0]
+            if key not in MAIL_COLLECTOR_KEYS:
+                continue
+            with self.subTest(key=key):
+                self._reset()
+                if key == "mail_collector_hosts":
+                    self._set_ops1_mail_collector("mail_collector_hosts: []\n")
+                else:
+                    self._set_ops1_mail_collector(line + "\n")
+                self.assertEqual(check(self.root), [])
+
+    def test_r10_ops1_mail_collector_inputs_must_have_the_right_type(self) -> None:
+        wrong = {
+            "mail_collector_image": ("7", "must be text"),
+            "mail_collector_smtp_host": ("[a]", "must be text"),
+            "mail_collector_demo_mail_domain": ("true", "must be text"),
+            "mail_collector_shim_scheme": ("7", "must be text"),
+            "mail_collector_hosts": ("demo1", "must be a list"),
+            "mail_collector_smtp_port": ("'587'", "must be a whole number"),
+            "mail_collector_shim_port": ("true", "must be a whole number"),
+            "mail_collector_smtp_secure": ("'no'", "must be a bool"),
+        }
+        for key, (value, problem) in wrong.items():
+            name = key
+            with self.subTest(key=name):
+                self._reset()
+                self._set_ops1_mail_collector(f"{name}: {value}\n")
+                self._assert_one(f"R10 owner_vars/ops1.yml: {name} {problem}")
+
+    def test_r10_the_mail_collector_inputs_are_ops1s_alone(self) -> None:
+        for host in ("edge1", "edget"):
+            with self.subTest(host=host):
+                self._reset()
+                path = self.ansible / "owner_vars" / f"{host}.yml"
+                path.write_text(
+                    path.read_text(encoding="utf-8") + "mail_collector_smtp_host: x\n",
+                    encoding="utf-8",
+                )
+                self._assert_one(f"R10 owner_vars/{host}.yml: must hold")
 
     def test_r10_ops1_control_plane_pin_must_be_text(self) -> None:
         self._edit(

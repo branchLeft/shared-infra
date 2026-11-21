@@ -93,6 +93,11 @@ describe('renderAnnouncements', () => {
 
 describe('loadPostmortems', () => {
   let repo: string;
+  // A git hook (pre-commit) exports GIT_INDEX_FILE and GIT_DIR. Inherited, they point
+  // this scratch repo's `git add`, and the loader's own git calls, at the real repository
+  // (stage a file into its index, read the wrong tree), so the commit that runs this test
+  // is corrupted. Drop every GIT_ variable for the test and put them back after.
+  let savedGitEnv: [string, string][] = [];
   const run = (...args: string[]): void => {
     execFileSync(
       'git',
@@ -116,10 +121,17 @@ describe('loadPostmortems', () => {
   };
 
   beforeEach(() => {
+    savedGitEnv = Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[0].startsWith('GIT_') && entry[1] !== undefined
+    );
+    for (const [name] of savedGitEnv) delete process.env[name];
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    for (const [name, value] of savedGitEnv) process.env[name] = value;
+  });
 
   it('shows a merged post-mortem of a resolved incident', () => {
     put('edge-outage.md', doc('Edge outage', '2026-12-01T10:42:00Z'));
