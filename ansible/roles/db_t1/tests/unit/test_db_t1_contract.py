@@ -97,22 +97,34 @@ def compose() -> dict[str, object]:
     return {str(key): value for key, value in loaded.items()}
 
 
-def mysql_service() -> dict[str, object]:
-    """Return the one service of the compose file.
+def services() -> dict[str, dict[str, object]]:
+    """Return the compose file's services, each as a mapping.
 
     Raises:
-        AssertionError: the file holds a service other than mysql.
-        TypeError: the service is not a mapping.
+        AssertionError: the file holds a service other than mysql and the exporter.
+        TypeError: the services or a service is not a mapping.
     """
-    services = compose()["services"]
-    if not isinstance(services, dict) or list(services) != ["mysql"]:
-        message = "the compose file must hold the mysql service and no other"
+    found = compose()["services"]
+    if not isinstance(found, dict) or sorted(found) != ["mysql", "mysqld-exporter"]:
+        message = "the compose file must hold the mysql and mysqld-exporter services and no other"
         raise AssertionError(message)
-    service = services["mysql"]
-    if not isinstance(service, dict):
-        message = "the mysql service is not a mapping"
-        raise TypeError(message)
-    return {str(key): value for key, value in service.items()}
+    result: dict[str, dict[str, object]] = {}
+    for name, service in found.items():
+        if not isinstance(service, dict):
+            message = f"the {name} service is not a mapping"
+            raise TypeError(message)
+        result[str(name)] = {str(key): value for key, value in service.items()}
+    return result
+
+
+def mysql_service() -> dict[str, object]:
+    """Return the mysql service of the compose file."""
+    return services()["mysql"]
+
+
+def exporter_service() -> dict[str, object]:
+    """Return the mysqld-exporter service of the compose file."""
+    return services()["mysqld-exporter"]
 
 
 def cnf_settings() -> dict[str, str]:
@@ -265,6 +277,84 @@ class ComposeContract(unittest.TestCase):
     def test_the_health_check_has_a_start_period_for_the_first_initialisation(self) -> None:
         health = mapping(mysql_service()["healthcheck"])
         self.assertEqual(health["start_period"], "120s")
+
+
+EXPORTER_IMAGE = re.compile(r"ghcr\.io/branchleft/mysqld-exporter@sha256:[0-9a-f]{64}")
+TUNNEL_UNIT = ROOT / "hetzner" / "provision" / "branchleft-db-tunnel.service"
+
+
+class ExporterContract(unittest.TestCase):
+    """The metrics exporter beside the database."""
+
+    def test_the_image_is_the_attested_one_pinned_by_digest(self) -> None:
+        self.assertEqual(exporter_service()["image"], VARS["db_t1_exporter_image"])
+        self.assertRegex(str(exporter_service()["image"]), EXPORTER_IMAGE.pattern)
+
+    def test_the_exporter_listens_on_loopback_and_publishes_nothing(self) -> None:
+        service = exporter_service()
+        self.assertEqual(service["network_mode"], "host")
+        self.assertNotIn("ports", service)
+        self.assertNotIn("expose", service)
+        listen = [
+            str(argument).split("=", 1)[1]
+            for argument in sequence(service["command"])
+            if str(argument).startswith("--web.listen-address=")
+        ]
+        self.assertEqual(listen, [f"127.0.0.1:{VARS['db_t1_exporter_metrics_port']}"])
+
+    def test_the_port_is_the_one_the_replica_tunnel_forwards(self) -> None:
+        unit = TUNNEL_UNIT.read_text(encoding="utf-8")
+        forward = re.search(r"-L \$\{DB_TUNNEL_SOURCE_ADDRESS\}:\d+:127\.0\.0\.1:(\d+)", unit)
+        self.assertIsNotNone(forward)
+        assert forward is not None  # noqa: S101 - narrows the type for the line below
+        self.assertEqual(int(forward.group(1)), VARS["db_t1_exporter_metrics_port"])
+
+    def test_the_credentials_are_a_read_only_file_that_must_already_exist(self) -> None:
+        mounts = [
+            mapping(volume)
+            for volume in sequence(exporter_service()["volumes"])
+            if isinstance(volume, dict)
+        ]
+        self.assertEqual(len(mounts), 1)
+        mount = mounts[0]
+        self.assertEqual(mount["source"], VARS["db_t1_exporter_cnf_path"])
+        self.assertEqual(mount["target"], "/etc/mysqld-exporter/.my.cnf")
+        self.assertIs(mount["read_only"], True)
+        self.assertIs(mapping(mount["bind"])["create_host_path"], False)
+
+    def test_no_credential_is_in_the_environment_or_the_command(self) -> None:
+        service = exporter_service()
+        self.assertNotIn("environment", service)
+        for argument in sequence(service["command"]):
+            self.assertNotRegex(str(argument).lower(), "password|pwd")
+
+    def test_it_starts_only_once_the_database_is_healthy_and_is_judged_on_mysql_up(self) -> None:
+        service = exporter_service()
+        self.assertEqual(
+            mapping(service["depends_on"]), {"mysql": {"condition": "service_healthy"}}
+        )
+        command = str(sequence(mapping(service["healthcheck"])["test"])[1])
+        self.assertIn('grep -qx "mysql_up 1"', command)
+        self.assertIn(f"127.0.0.1:{VARS['db_t1_exporter_metrics_port']}", command)
+
+    def test_the_exporter_file_is_not_one_this_role_writes_or_reads(self) -> None:
+        path = str(VARS["db_t1_exporter_cnf_path"])
+        for tasks in task_files().values():
+            self.assertNotIn(path, str(tasks))
+        self.assertNotIn(path, str(DEFAULTS))
+
+
+class LogRetentionContract(unittest.TestCase):
+    """Each container's log is bounded in size and rotated, never left to grow."""
+
+    def test_both_services_keep_three_files_of_ten_megabytes(self) -> None:
+        for name, service in services().items():
+            with self.subTest(name):
+                logging = mapping(service["logging"])
+                self.assertEqual(logging["driver"], "json-file")
+                self.assertEqual(
+                    mapping(logging["options"]), {"max-size": "10m", "max-file": "3"}
+                )
 
 
 class ConfigurationContract(unittest.TestCase):

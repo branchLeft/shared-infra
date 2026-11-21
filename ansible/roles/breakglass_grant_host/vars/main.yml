@@ -13,6 +13,12 @@ breakglass_grant_host_tool_dir: /usr/local/lib/branchleft/break-glass
 breakglass_grant_host_wrapper_path: /usr/local/sbin/branchleft-break-glass
 breakglass_grant_host_unit_dir: /etc/systemd/system
 breakglass_grant_host_timer_unit: branchleft-break-glass-expire.timer
+# The unit that writes each tenant's support-access state to a node_exporter textfile once a
+# minute, and the program it runs. Its output directory is made below and read by the
+# node_exporter role's unit; the program never makes it.
+breakglass_grant_host_textfile_timer_unit: branchleft-break-glass-textfile.timer
+breakglass_grant_host_textfile_path: /usr/local/sbin/branchleft-break-glass-textfile
+breakglass_grant_host_textfile_dir: /var/lib/branchleft/support-access-exporter
 breakglass_grant_host_docker_socket: /var/run/docker.sock
 
 # The files this role installs, each with the sha256 it must have. The download
@@ -43,6 +49,18 @@ breakglass_grant_host_files:
     sha256: 0d4c8b928040b2fe780f1f4fd699d6cc16d000b99c37c70deef1caf598667f49
     dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-expire.timer'
     mode: '0644'
+  - path: host/branchleft-break-glass-textfile.py
+    sha256: 879902ad7be3e32f290f7bcbc822fcc8f2a39b66717df38438219255daa9ec42
+    dest: '{{ breakglass_grant_host_textfile_path }}'
+    mode: '0700'
+  - path: systemd/branchleft-break-glass-textfile.service
+    sha256: 77a88faa20e7148c2cb9e9fd702ade54dffc288c5e60cb2027d35458df1b1595
+    dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-textfile.service'
+    mode: '0644'
+  - path: systemd/branchleft-break-glass-textfile.timer
+    sha256: fed602912d46838886971c78e03fba0b45c314b843c93b3cb37aac488e996caa
+    dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-textfile.timer'
+    mode: '0644'
 
 # Directories the role makes, parents first. The parents are shared with other
 # roles (broker_deploy sets /var/lib/branchleft to root 0755), so the owner and
@@ -59,6 +77,11 @@ breakglass_grant_host_directories:
     mode: '0700'
   - path: /var/log/branchleft
     mode: '0700'
+  # The textfile directory node_exporter reads (root 0755, as the node_exporter role makes it
+  # too: a directory made by two roles is not a path with two writers). The writer never
+  # makes it, and it holds only the one file the writer replaces whole each minute.
+  - path: '{{ breakglass_grant_host_textfile_dir }}'
+    mode: '0755'
 
 # The Node image the tool runs in. It is a constant, not an input, because the
 # wrapper and the expire unit installed above carry their own copy of this

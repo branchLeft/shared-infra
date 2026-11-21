@@ -1,9 +1,10 @@
 # host_baseline
 
-This role is the baseline every container host needs, in three parts that run in
-this order: a key-only sshd, unattended upgrades with fail2ban, and Docker CE.
-It writes what three provisioning scripts write, one script for each part, and keeps
-their files, modes, owners and order.
+This role is the baseline every container host needs, in five parts that run in
+this order: a key-only sshd, unattended upgrades with fail2ban, Docker CE, a daily
+prune of old Docker images, and an opt-in bound on how long the journal keeps an entry. The
+first three write what three provisioning scripts write, one script for each part, and keep
+their files, modes, owners and order. The fourth and fifth have no script behind them.
 
 This README is written for a maintainer who is new to the repository. It
 follows the order the standard sets for a role README (ANS-14).
@@ -29,9 +30,35 @@ follows the order the standard sets for a role README (ANS-14).
    check mode writes no source line and refreshes no index, so apt cannot see
    `docker-ce` and a first plan on a new host failed there. The apply installs it.
 
+4. **Docker image prune.** It delivers `branchleft-docker-image-prune.service` (a
+   oneshot running `docker image prune --all --force --filter until=168h`) and
+   `branchleft-docker-image-prune.timer` (daily, up to 30 minutes of random delay,
+   `Persistent=true`), reloads systemd when either changed, and enables and starts
+   the timer. The prune removes only an image that no container, running or stopped,
+   refers to and that is more than a week old, so a blue/green slot, a demo slot or a
+   mail container that exists keeps its image, and last week's image is still there
+   for a rollback. It never removes a container, a volume or a network. The timer
+   exists so node_exporter's disk rule (a delivery stops at 70% of the root disk) is
+   not tripped by old images: on 18 Nov 2026 app1 stood at 68% with 50 images, 3 in
+   use.
+   The timer is on every host that runs this role, `mx1` included: its playbook is
+   unchanged, and an image a mail container uses is never pruned. `demo1` does not run
+   this role, so it has no timer. In check mode the enable is skipped when the timer's
+   unit file is not on the host yet (ANS-10): check mode writes no file, so there is
+   nothing for systemd to enable.
+
+5. **Journal retention (opt-in).** On a host that sets `host_baseline_journal_retention_days`
+   to a number from 1 to 90, it writes `/etc/systemd/journald.conf.d/50-branchleft-retention.conf`
+   with `MaxRetentionSec=<n>day` and `SystemMaxUse=<size>` (default `500M`), and restarts
+   `systemd-journald` when the file changed. The default is 0, which writes nothing, so a host
+   that does not ask is unchanged. 90 is the ceiling the website's privacy notice states for
+   server logs. The three tenant hosts (`dbt1`, `appt1`, `edget`) set 30 in their playbooks
+   (ws#1810), the same figure the edge keeps its logs for; the live hosts do
+   not set it. Container logs are bounded by each stack's own compose file, not here.
+
 It does not set up host egress, install the deploy tooling, configure the
 firewall or the NAT gateway, create users, or write any secret. Those belong to
-other roles and tickets. It does not remove anything, and it does not pin a
+other roles and tickets. It removes nothing but those old images, and it does not pin a
 Docker version (see "Why Docker is unpinned").
 
 ### How it relates to the patterns
@@ -59,6 +86,11 @@ newline, or a token that does not parse as an IPv4 or IPv6 address or CIDR range
 before the jail is written, so a host name such as `cafe` is refused too. Every other value the role writes is the same on every
 container host. None of the role's values is a secret and the role handles no
 secret.
+
+Two more inputs bound the journal and are off by default: `host_baseline_journal_retention_days`
+(0, which writes nothing, or a whole number of days up to 90) and `host_baseline_journal_max_use`
+(a size such as `500M`, used only when the retention is on). Both are checked before anything
+is written, and neither is a secret.
 
 A second input, `host_baseline_fail2ban_ignoreip_none`, defaults to `false`. A host
 that must write no `ignoreip` line sets it `true` in its own playbook, and the jail
@@ -90,21 +122,30 @@ inventory variable.
 
 ## What it changes on a host
 
-| Path                                                  | Kind      | Owner:group | Mode   |
-| ----------------------------------------------------- | --------- | ----------- | ------ |
-| `/etc/ssh/sshd_config.d/01-branchleft-hardening.conf` | file      | root:root   | `0644` |
-| `/etc/apt/apt.conf.d/20auto-upgrades`                 | file      | root:root   | `0644` |
-| `/etc/apt/apt.conf.d/51branchleft-unattended-origins` | file      | root:root   | `0644` |
-| `/etc/fail2ban/jail.local`                            | file      | root:root   | `0644` |
-| `/etc/apt/keyrings`                                   | directory | root:root   | `0755` |
-| `/etc/apt/keyrings/docker.asc`                        | file      | root:root   | `0644` |
-| `/etc/apt/sources.list.d/docker.list`                 | file      | root:root   | `0644` |
+| Path                                                        | Kind      | Owner:group | Mode   |
+| ----------------------------------------------------------- | --------- | ----------- | ------ |
+| `/etc/ssh/sshd_config.d/01-branchleft-hardening.conf`       | file      | root:root   | `0644` |
+| `/etc/apt/apt.conf.d/20auto-upgrades`                       | file      | root:root   | `0644` |
+| `/etc/apt/apt.conf.d/51branchleft-unattended-origins`       | file      | root:root   | `0644` |
+| `/etc/fail2ban/jail.local`                                  | file      | root:root   | `0644` |
+| `/etc/apt/keyrings`                                         | directory | root:root   | `0755` |
+| `/etc/apt/keyrings/docker.asc`                              | file      | root:root   | `0644` |
+| `/etc/apt/sources.list.d/docker.list`                       | file      | root:root   | `0644` |
+| `/etc/systemd/system/branchleft-docker-image-prune.service` | file      | root:root   | `0644` |
+| `/etc/systemd/system/branchleft-docker-image-prune.timer`   | file      | root:root   | `0644` |
+| `/etc/systemd/journald.conf.d/50-branchleft-retention.conf` | file      | root:root   | `0644` |
+
+The last row is written only on a host that sets `host_baseline_journal_retention_days`.
 
 - Packages installed when missing: `unattended-upgrades`, `apt-listchanges`,
   `fail2ban`, `docker-ce`, `docker-ce-cli`, `containerd.io`,
   `docker-compose-plugin`.
-- Services enabled and started: `unattended-upgrades`, `fail2ban`, `docker`.
-- sshd and fail2ban are reloaded, each only when its file changed.
+- Services enabled and started: `unattended-upgrades`, `fail2ban`, `docker`, and the
+  timer `branchleft-docker-image-prune.timer`.
+- sshd and fail2ban are reloaded, each only when its file changed; the systemd manager is
+  reloaded only when one of the prune unit files changed.
+- Docker images that no container uses and that are more than 168 hours old are removed
+  once a day. This is the one thing the role removes.
 - No port, no user and no firewall rule is created.
 
 The sshd drop-in is named `01-`, not `99-`, on purpose: OpenSSH takes the first
@@ -193,7 +234,8 @@ What each part of the scenario does:
   resolved sshd settings are the hardened ones although the `50-cloud-init.conf`
   sibling allows passwords; the three services are enabled and running; sshd and
   fail2ban were each reloaded exactly once, by the first converge and not the
-  second; and, with `gpg` on the machine that runs the test, the key file holds
+  second; the two prune unit files hold exactly the required text; the prune timer is
+  enabled and active and its service is not enabled; and, with `gpg` on the machine that runs the test, the key file holds
   exactly one key with the pinned primary fingerprint.
 - It then runs four refusal cases. Each sets up one fault, applies the role,
   requires the role to stop at one named task, and undoes the fault:
@@ -242,6 +284,9 @@ to see the message.
 | Break the quote in the unattended-upgrades origins file                     | `converge`                 | failed to validate: Syntax error: Malformed tag.                                                                                                 |
 | Remove the resolved-settings assertion                                      | `verify`                   | Expected the role to stop at the read-back; it stopped at "NOTHING: the role accepted it".                                                       |
 | Remove the architecture-name assertion                                      | `verify`                   | the role stopped at "Work out the architecture name apt uses" instead of the architecture check.                                                 |
+| Change `MaxRetentionSec` in the journald drop-in template to another figure | `verify`                   | /etc/systemd/journald.conf.d/50-branchleft-retention.conf does not hold the content the baseline requires.                                       |
+| Change `until=168h` in the prune service to another age                     | `verify`                   | /etc/systemd/system/branchleft-docker-image-prune.service does not hold the content the baseline requires.                                       |
+| Remove the task that enables the prune timer                                | `verify`                   | The Docker image prune timer is not enabled and active, or its service is enabled on its own.                                                    |
 | Change one character of the pinned primary fingerprint in `vars/main.yml`   | `verify`                   | The key file does not hold exactly one key with the primary fingerprint ...EBFCD89.                                                              |
 
 Reviewed or asserted, but not proven by a sabotage run (a control with no row
@@ -274,9 +319,14 @@ above is not shown to fail):
   package or drop-in is not on the host yet (ANS-10); the harness does not catch
   a silent skip, and review is what checks the stated reason. On a host that has
   them, they run in check mode.
+- **The prune itself is not run.** The test shows the units are delivered, the timer is
+  enabled and the command line is the required one; the platform has no real Docker, so
+  that the command removes only unused old images rests on Docker's documentation of
+  `image prune --all --filter until`. The first live apply and the image count a week
+  later are the proof (ANS-17).
 - **A rotated Docker key is not picked up.** See "Where it differs".
 - **A file removed from the repository stays on the host.** The role removes
-  nothing, as the scripts did not.
+  no file, as the scripts did not.
 - **CI runs this scenario.** The Ansible workflow runs the harness over every
   directory under `ansible/roles/`. The harness does not install `gpg`: the
   runner has it. The image is the third-party Debian 13 systemd base the

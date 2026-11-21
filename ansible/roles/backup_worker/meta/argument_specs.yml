@@ -103,14 +103,14 @@ argument_specs:
           client is missing.
       backup_worker_source_sha:
         type: str
-        default: 5e52f78427cab104438057164e4baa16b329875c
+        default: 01afa64bb98822116f6824573943304baafe2849
         description: >-
           Full commit of branchLeft/ghost-platform the release is downloaded
           from. It names the release directory. Change it together with the
           checksums in backup_worker_release_files.
       backup_worker_source_base_url:
         type: str
-        default: https://raw.githubusercontent.com/branchLeft/ghost-platform/5e52f78427cab104438057164e4baa16b329875c
+        default: https://raw.githubusercontent.com/branchLeft/ghost-platform/01afa64bb98822116f6824573943304baafe2849
         description: >-
           URL each release file is downloaded from, as base/path. The default is
           the raw URL at the pinned commit. A test points it at a file:// copy.

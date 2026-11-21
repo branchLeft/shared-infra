@@ -26,8 +26,9 @@ edge_stack_enabled_states:
 edge_stack_image_pin_pattern: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
 
 # One stamp per class of file. Each holds a sha256 and a newline, or `pending`
-# while an action is under way, root only (README, "Restart shape"). The _stamp_*.yml
-# task files are the one place in this role that reads or writes a stamp.
+# while an action is under way, root only (README, "Restart shape"). The restart_stamp module reads, decides on, adopts and
+# records the stamps, and the locked module writes the `pending` mark: no other task of this role
+# reads or writes a stamp.
 edge_stack_stamp_dir: /var/lib/branchleft
 edge_stack_stamp_files:
   caddy: /var/lib/branchleft/edge.caddy.applied
@@ -55,6 +56,7 @@ edge_stack_crowdsec_files:
   - crowdsec/parsers/edge-trusted-session.yaml
   - crowdsec/parsers/nextcloud-profile.yaml
   - crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+  - crowdsec/scenarios/http-admin-interface-probing.yaml
   - crowdsec/remediation/profiles.yaml
   - crowdsec/remediation/simulation.yaml
 # Every regular file directly in this directory is CrowdSec's. It is the one

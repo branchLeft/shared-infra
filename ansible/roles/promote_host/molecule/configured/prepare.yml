@@ -1,0 +1,34 @@
+---
+# What the role expects to find on app1, plus a signing key made here for this run only. The
+# private half stays in root's home on the throwaway instance; only the public half is read by the
+# converge. ssh-keygen is what the applier checks a ledger's signature with, and the platform
+# image does not ship it, so the host is given the client as a real app host has it.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /var/lib/branchleft
+
+    - name: Install the OpenSSH client
+      ansible.builtin.apt:
+        name: openssh-client
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the ledger signer's key pair, and another key pair that is not the signer's
+      ansible.builtin.command:
+        argv: [ssh-keygen, -q, -t, ed25519, -N, '', -C, '', -f, '{{ item }}']
+        creates: '{{ item }}'
+      loop:
+        - '{{ scenario_signer_private }}'
+        - '{{ scenario_other_private }}'

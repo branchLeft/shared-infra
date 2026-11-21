@@ -4,6 +4,8 @@
 Full reasoning: `test_crowdsec_retention.md`.
 """
 
+from __future__ import annotations
+
 import pathlib
 import re
 import textwrap

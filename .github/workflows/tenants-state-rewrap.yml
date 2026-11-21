@@ -1,0 +1,187 @@
+name: tenants-state-rewrap
+
+# Re-keys the tenants stack's state under a new passphrase, once, when the old one is lost.
+# Run by hand from main (Actions tab, "Run workflow"); no schedule, no pull-request trigger.
+# `inspect` reads the state with no environment. `rewrap` waits for the owner's approval in
+# `production`. The steps, the gates and the way back are in scripts/tenants_state_rewrap.md.
+# Delete this file in the pull request after the stack has applied once from CI.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect the tenants state (read only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.ref == 'refs/heads/main'
+    # No environment, and no passphrase or Hetzner token in this job: it reads one
+    # object through the state bucket's key and writes nothing.
+    concurrency:
+      group: pulumi-hetzner-tenants-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+
+      - name: Check the tools the inspection drives
+        run: |
+          pulumi version
+          aws --version
+
+      - name: Count the encrypted values and pending operations in the state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+          AWS_REGION: hel1
+        run: >-
+          python3 scripts/tenants_state_rewrap.py inspect
+          --project-dir hetzner/tenants
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  rewrap:
+    name: Re-key the tenants state (production)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [inspect]
+    if: github.ref == 'refs/heads/main'
+    # The approval here is the owner's: the `inspect` job's counts are in the run summary
+    # before this job starts. Never `production-free`: this is a state rewrite, not a plan.
+    environment: production
+    concurrency:
+      group: pulumi-hetzner-tenants-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      # See hetzner-network-apply in ci.yml: an environment with no reviewer pauses
+      # nothing. Fails before any credential is read.
+      - name: Refuse to run through an ungated environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          reviewers=$(gh api "${api}" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          custom=0
+          if out=$(gh api "${api}/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the approval gate is not real." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # The tenants program shares hetzner/'s node_modules, as the plan job does.
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+
+      - name: Check the tools the rewrap drives
+        run: |
+          pulumi version
+          aws --version
+
+      # No secret is in scope for these two steps: the tests build their own throwaway
+      # file:// backend, and a skipped real-pulumi test is a failure here.
+      - name: Self-test the tool against a real pulumi binary
+        env:
+          REWRAP_REQUIRE_PULUMI: '1'
+        run: python3 -m unittest scripts/test_tenants_state_rewrap.py -v
+
+      - name: Self-test the delete guard
+        run: |
+          python3 scripts/assert-no-hetzner-deletes.py --self-test
+          python3 scripts/assert-no-hetzner-deletes.py --verify-coverage hetzner
+
+      - name: Verify the secrets are present
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          exit "$fail"
+
+      # Copy the state object aside and read it back, remove the stack, create it again
+      # under the new passphrase, put the old checkpoint back with only its secrets
+      # provider replaced, then preview and refresh-preview. Nothing is applied. Any
+      # failure after the removal puts the aside copy back.
+      - name: Re-key the state
+        id: rewrap
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+          AWS_REGION: hel1
+        run: >-
+          python3 scripts/tenants_state_rewrap.py rewrap
+          --project-dir hetzner/tenants
+          --delete-guard scripts/assert-no-hetzner-deletes.py
+          --summary-file "$GITHUB_STEP_SUMMARY"
+          --github-output "$GITHUB_OUTPUT"
+
+      # For a runner that was killed between the removal and the restore. A no-op when
+      # this run copied nothing aside, and idempotent when the tool already restored.
+      - name: Put the aside copy back if the re-key did not finish
+        if: always() && steps.rewrap.outcome != 'success'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+          AWS_REGION: hel1
+        run: >-
+          python3 scripts/tenants_state_rewrap.py restore
+          --project-dir hetzner/tenants
+          --summary-file "$GITHUB_STEP_SUMMARY"

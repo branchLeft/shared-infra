@@ -176,3 +176,21 @@ def packet_count(text: str) -> int | None:
     """
     value = text.strip()
     return int(value) if value.isdigit() else None
+
+
+def rule_position(rules: str, chain: str, rule_text: str) -> int | None:
+    """The 1-based position, among the chain's rules, of the rule whose text is exactly rule_text.
+
+    rules is `iptables -S CHAIN` output. A rule is read by what it says, never by where
+    it is expected to sit: None means no such rule, so the caller fails instead of reading
+    a neighbour's counter. The `-N` line that names the chain is not a rule.
+    """
+    prefix = f"-A {chain} "
+    position = 0
+    for line in rules.splitlines():
+        if not line.startswith(prefix):
+            continue
+        position += 1
+        if line[len(prefix) :].strip() == rule_text:
+            return position
+    return None

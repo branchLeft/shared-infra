@@ -1,7 +1,7 @@
 ---
 # One value that the role's input check must refuse, given in
 # monitoring_stack_verify_try. The role must fail, and the secrets file must still
-# hold the value of the last good run (verify_rot_e) with no second line in it.
+# hold the value of the last good run (monitoring_stack_verify_rot_e) with no second line in it.
 - name: Apply the role with SMTP_PASSWORD holding the value
   no_log: true
   block:
@@ -28,7 +28,7 @@
   ansible.builtin.assert:
     that:
       - monitoring_stack_verify_value_refused
-      - ('SMTP_PASSWORD=' ~ verify_rot_e) in (monitoring_stack_verify_value_env.content | b64decode).splitlines()
+      - ('SMTP_PASSWORD=' ~ monitoring_stack_verify_rot_e) in (monitoring_stack_verify_value_env.content | b64decode).splitlines()
       - "'test-sentinel-newline-0017' not in (monitoring_stack_verify_value_env.content | b64decode)"
     quiet: true
     fail_msg: >-

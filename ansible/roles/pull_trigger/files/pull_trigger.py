@@ -66,6 +66,13 @@ MAX_BUNDLE_BYTES: Final = 200 * 1024 * 1024
 BUNDLE_DEADLINE_SECONDS: Final = 300
 BUNDLE_READ_CHUNK: Final = 1024 * 1024
 SPOOL_GRACE_SECONDS: Final = 60
+# The spool as a whole. Each upload is held to MAX_BUNDLE_BYTES, but uploads arrive before the
+# lock is taken, so several can sit in the spool at once. These bound how many, and how many
+# bytes in all, so a sender that opens many sessions cannot fill the host's disk. When either
+# is reached the next request is refused as `spool-full`, before it writes anything. The byte
+# bound is its own number, not a multiple of MAX_BUNDLE_BYTES: the harness lowers that one.
+MAX_SPOOL_FILES: Final = 4
+MAX_SPOOL_BYTES: Final = 400 * 1024 * 1024
 SPOOL_NAME: Final = "spool"
 QUARANTINE_NAME: Final = "quarantine"
 QUARANTINE_REF: Final = "refs/pull-trigger/head"
@@ -277,6 +284,8 @@ class Why(enum.Enum):
     BUNDLE_NOT_A_BUNDLE = "standard input is not a git bundle"
     BUNDLE_OVERSIZE = "the bundle is larger than the limit"
     BUNDLE_STALLED = "the bundle was not received in time"
+    SPOOL_FULL_FILES = "the spool already holds as many uploads as it may"
+    SPOOL_FULL_BYTES = "the spool would hold more bytes than it may"
     BUNDLE_UNVERIFIABLE = "the bundle does not verify"
     BUNDLE_UNPACK = "the bundle's objects could not be unpacked, or failed the object check"
     BUNDLE_FSCK = "the bundle's objects failed the object check"
@@ -383,6 +392,12 @@ class ReleaseTagFloodError(RefusedError):
     """More release tags name the commit than the limit, so none is believed unseen."""
 
     reason = "too-many-release-tags"
+
+
+class SpoolFullError(RefusedError):
+    """The spool holds as many uploads, or as many bytes, as it may; nothing was written."""
+
+    reason = "spool-full"
 
 
 class UnsignedError(RefusedError):
@@ -536,6 +551,8 @@ class Receiving:
     descriptor: int = 0
     max_bytes: int = MAX_BUNDLE_BYTES
     deadline_seconds: float = BUNDLE_DEADLINE_SECONDS
+    max_spool_files: int = MAX_SPOOL_FILES
+    max_spool_bytes: int = MAX_SPOOL_BYTES
 
 
 def utc_now() -> datetime:
@@ -1663,6 +1680,14 @@ class Workspace:
         """
         for stale in self.quarantine.iterdir():
             shutil.rmtree(stale, ignore_errors=True)
+        self.sweep_spool(oldest)
+
+    def sweep_spool(self, oldest: float) -> None:
+        """Remove spool files older than ``oldest`` seconds (safe without the lock).
+
+        A young file may be an upload under way, so it is left. This runs before the spool's
+        bound is checked, so uploads that a killed run left cannot fill the spool for good.
+        """
         cutoff = time.time() - oldest
         for upload in self.spool.iterdir():
             with contextlib.suppress(FileNotFoundError):
@@ -1978,31 +2003,62 @@ def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
     Raises:
         BadBundleError: More than the byte limit arrives, the deadline passes before the end of
             the stream, or the descriptor cannot be read.
+        SpoolFullError: The spool holds as many files as it may, or this upload would take it
+            past its byte bound.
     """
     deadline = time.monotonic() + receiving.deadline_seconds
     descriptor, name = tempfile.mkstemp(dir=spool_dir, prefix="in-", suffix=".bundle")
     path = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as sink:
-            _copy_bounded(receiving, deadline, sink)
+            # Counted after the file exists, so two uploads that arrive together each see the
+            # other and the bound holds; the worst case is that both are refused.
+            _require_file_room(spool_dir, receiving.max_spool_files)
+            _copy_bounded(receiving, deadline, sink, spool_dir, path)
     except BaseException:
         path.unlink(missing_ok=True)
         raise
     return path
 
 
-def _copy_bounded(receiving: Receiving, deadline: float, sink: BinaryIO) -> None:
-    """Copy the descriptor to the sink until its end, within the byte limit and the deadline.
+def _require_file_room(spool_dir: Path, most: int) -> None:
+    """Refuse when the spool, counting the new file, holds more than ``most`` files.
+
+    Raises:
+        SpoolFullError: There are too many.
+    """
+    if len(list(spool_dir.iterdir())) > most:
+        raise SpoolFullError(Why.SPOOL_FULL_FILES)
+
+
+def _others_bytes(spool_dir: Path, own: Path) -> int:
+    """Return the bytes held by the spool files other than ``own``."""
+    held = 0
+    for entry in spool_dir.iterdir():
+        if entry != own:
+            with contextlib.suppress(FileNotFoundError):
+                held += entry.lstat().st_size
+    return held
+
+
+def _copy_bounded(
+    receiving: Receiving, deadline: float, sink: BinaryIO, spool_dir: Path, own: Path
+) -> None:
+    """Copy the descriptor to the sink until its end, within the limits and the deadline.
 
     Raises:
         BadBundleError: More than the limit arrives, or the deadline passes.
+        SpoolFullError: With the other uploads, this one would pass the spool's byte bound.
     """
     total = 0
     while chunk := _read_before(receiving.descriptor, deadline):
         total += len(chunk)
         if total > receiving.max_bytes:
             raise BadBundleError(Why.BUNDLE_OVERSIZE)
+        if total + _others_bytes(spool_dir, own) > receiving.max_spool_bytes:
+            raise SpoolFullError(Why.SPOOL_FULL_BYTES)
         sink.write(chunk)
+        sink.flush()
 
 
 def _read_before(descriptor: int, deadline: float) -> bytes:
@@ -2150,6 +2206,7 @@ class Trigger:
         ):
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
         self._workspace.prepare_bundle()
+        self._workspace.sweep_spool(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
         spool = spool_stream(self._workspace.spool, self._receiving)
         try:
             with single_flight(self._workspace.lock):
