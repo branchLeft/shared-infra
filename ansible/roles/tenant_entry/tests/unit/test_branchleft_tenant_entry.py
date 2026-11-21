@@ -1367,6 +1367,30 @@ class StackTests(EntryTestCase):
         self.assertEqual(self.host.stack()[2], "failed: bind-address\n")
         self.assert_nothing_written()
 
+    def test_the_line_the_role_writes_is_a_line_the_program_reads(self) -> None:
+        # The role's own `content:` line, as YAML reads it and with the variable filled, is the
+        # file's text. A single-quoted scalar keeps a backslash and an n where a newline belongs,
+        # and the program refuses that file: so this feeds the real line to the real reader.
+        tasks: list[dict[str, object]] = YAML(typ="safe").load(
+            (ROLE / "tasks" / "_program.yml").read_text(encoding="utf-8")
+        )
+        writers = [
+            task
+            for task in tasks
+            if isinstance(task.get("ansible.builtin.copy"), dict)
+            and "tenant_entry_bind_address_file" in str(task["ansible.builtin.copy"])
+        ]
+        self.assertEqual(len(writers), 1)
+        copy = writers[0]["ansible.builtin.copy"]
+        self.assertIsInstance(copy, dict)
+        content = str(copy["content"]) if isinstance(copy, dict) else ""
+        self.assertEqual(content.count("{{ tenant_entry_bind_address }}"), 1)
+        text = content.replace("{{ tenant_entry_bind_address }}", BIND)
+        self.assertEqual(text, BIND + "\n")
+        (self.host.entry / entry.BIND_ADDRESS_FILE).write_text(text, encoding="ascii")
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        self.assertIn(f'"{BIND}:40000:2368"', self.compose.read_text())
+
     def test_a_private_address_in_each_private_range_is_accepted(self) -> None:
         address = self.host.entry / entry.BIND_ADDRESS_FILE
         for text in ("10.0.0.1", "172.16.5.9", "172.31.255.255", "192.168.1.1"):

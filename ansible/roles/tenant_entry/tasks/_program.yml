@@ -31,7 +31,7 @@
 
 - name: Keep the app host's private address for the stack verb
   ansible.builtin.copy:
-    content: '{{ tenant_entry_bind_address }}\n'
+    content: "{{ tenant_entry_bind_address }}\n"
     dest: '{{ tenant_entry_bind_address_file }}'
     owner: root
     group: root
