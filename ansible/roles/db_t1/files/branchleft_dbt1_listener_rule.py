@@ -1,28 +1,9 @@
 #!/usr/bin/python3 -I
 """Admits one source to db-t1's database port and drops every other source, in INPUT.
 
-The database listens on the host's private address with host networking, so a connection
-to it reaches the host's INPUT chain, not DOCKER-USER. The cloud firewall does not filter
-the private network. This program owns one iptables chain, BRANCHLEFT-DBT1-IN, holding two
-rules in this order, and one jump to that chain from INPUT:
-
-1. TCP to the database port from the one allowed source: ACCEPT.
-2. TCP to the database port from any other source: DROP.
-
-Nothing else is touched: no other chain, no policy, no other port (SSH included). A packet
-for another port matches neither rule and falls through the chain back to INPUT.
-
-The chain is loaded in one atomic `iptables-restore --noflush`, so a reassert at a reload
-never leaves the chain empty for a moment. The jump is inserted as the first rule of INPUT
-when it is absent. A jump that is present is left where it is if only fail2ban's own jumps
-(`-j f2b-*`) stand above it, and is a refusal anywhere else, because a rule under an earlier
-rule that accepts the port is not a rule.
-
-Run by the role's unit at every boot, before Docker starts, and on a reload. Idempotent.
-`--check` changes nothing: it prints what a run would change and exits 3 when anything
-differs, 0 when everything is in place. Every command runs from an argument list under a
-timeout, and a probe that gives no answer stops the program rather than guess. The design
-and what stays open are in the role README, "The listener rule".
+Owns one iptables chain and one jump to it from INPUT; touches nothing else. Run by the
+role's unit at every boot, before Docker, and on a reload. `--check` changes nothing.
+The design and its limits are in the role README, "The listener rule".
 """
 
 from __future__ import annotations
@@ -33,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import NoReturn
 
@@ -43,11 +25,31 @@ COMMAND_TIMEOUT_SECONDS = 30
 # How long iptables waits for the xtables lock another program (fail2ban, the NAT unit) holds.
 LOCK_WAIT_SECONDS = "10"
 CHECK_DIFFERS_STATUS = 3
+# A boot that meets a transient failure (the xtables lock held past its wait, a restore that
+# fails once) tries again before it gives up, because a failed unit means no Docker and nothing
+# starts Docker again. The wait before attempt n+1 is n times the retry delay.
+ATTEMPTS = 5
+DEFAULT_RETRY_DELAY_SECONDS = 2
+MAX_RETRY_DELAY_SECONDS = 30
 MIN_PORT = 1024
 MAX_PORT = 65535
 # fail2ban inserts its own jump at the top of INPUT whenever it starts; the jump to this
 # program's chain may sit below those and nothing else.
 FAIL2BAN_JUMP = re.compile(r"^-A INPUT .*-j f2b-[A-Za-z0-9_-]+$")
+
+
+class Transient(Exception):  # noqa: N818 -- a signal to retry, not an error name
+    """A command failed or gave no answer, which a later attempt may not.
+
+    A refusal (a misplaced jump, a missing tool, a bad argument) is never one: it stops the
+    program at once through `die`.
+    """
+
+    def __init__(self, status: int, *lines: str) -> None:
+        """Keep the exit status to stop with and the lines to say."""
+        super().__init__("; ".join(lines))
+        self.status = status
+        self.lines = lines
 
 
 def die(*lines: str, status: int = 1) -> NoReturn:
@@ -120,6 +122,7 @@ def restore_text(source: str, port: str) -> str:
         f"-F {CHAIN}",
         f"-A {CHAIN} -s {source} -p tcp --dport {port} -j ACCEPT",
         f"-A {CHAIN} -p tcp --dport {port} -j DROP",
+        # standards-allow-next-line DB-1 COMMIT ends an iptables-restore transaction and is not SQL
         "COMMIT",
     ]
     return "\n".join(lines) + "\n"
@@ -158,18 +161,23 @@ def passthrough(result: subprocess.CompletedProcess[str]) -> None:
 
 
 def read_live() -> Live:
-    """Read the filter table once, or refuse when no answer comes."""
+    """Read the filter table once.
+
+    Raises:
+        Transient: the command did not run to completion or exited non-zero.
+    """
     argv = ["iptables", "-w", LOCK_WAIT_SECONDS, "-t", "filter", "-S"]
     result = run(argv)
     if result is None:
-        die(
+        raise Transient(
+            1,
             f"{PREFIX}: could not read the filter table: {' '.join(argv)} did not run to "
             "completion",
             f"{PREFIX}: refusing rather than guess",
         )
     if result.returncode != 0:
         passthrough(result)
-        die(f"{PREFIX}: {' '.join(argv)} exited {result.returncode}")
+        raise Transient(1, f"{PREFIX}: {' '.join(argv)} exited {result.returncode}")
     lines = result.stdout.splitlines()
     return Live(
         chain_declared=f"-N {CHAIN}" in lines,
@@ -230,57 +238,98 @@ def differences(live: Live, source: str, port: str) -> list[str]:
 
 
 def load_chain(source: str, port: str) -> None:
-    """Make the chain exactly the two rules, in one transaction."""
+    """Make the chain exactly the two rules, in one transaction.
+
+    Raises:
+        Transient: the restore did not run to completion or exited non-zero.
+    """
     argv = ["iptables-restore", "--noflush", "-w", LOCK_WAIT_SECONDS]
     loaded = run(argv, restore_text(source, port))
     if loaded is None:
-        die(f"{PREFIX}: could not load {CHAIN}: {' '.join(argv)} did not run to completion")
+        raise Transient(
+            1, f"{PREFIX}: could not load {CHAIN}: {' '.join(argv)} did not run to completion"
+        )
     passthrough(loaded)
     if loaded.returncode != 0:
-        die(f"{PREFIX}: {' '.join(argv)} exited {loaded.returncode}", status=loaded.returncode)
+        raise Transient(loaded.returncode, f"{PREFIX}: {' '.join(argv)} exited {loaded.returncode}")
 
 
 def insert_jump() -> None:
-    """Insert the jump as the first rule of INPUT."""
+    """Insert the jump as the first rule of INPUT.
+
+    Raises:
+        Transient: the insert did not run to completion or exited non-zero.
+    """
     argv = ["iptables", "-w", LOCK_WAIT_SECONDS, "-t", "filter", "-I", PARENT, "1", "-j", CHAIN]
     inserted = run(argv)
     if inserted is None:
-        die(f"{PREFIX}: could not insert into {PARENT}: {' '.join(argv)} did not run to completion")
+        raise Transient(
+            1,
+            f"{PREFIX}: could not insert into {PARENT}: {' '.join(argv)} did not run to completion",
+        )
     passthrough(inserted)
     if inserted.returncode != 0:
-        die(
-            f"{PREFIX}: iptables -I {PARENT} exited {inserted.returncode}",
-            status=inserted.returncode,
+        raise Transient(
+            inserted.returncode, f"{PREFIX}: iptables -I {PARENT} exited {inserted.returncode}"
         )
 
 
-def ensure(source: str, port: str, *, check_only: bool) -> int:
+def apply_once(source: str, port: str) -> None:
+    """Make the chain and the jump what they should be, once.
+
+    Raises:
+        Transient: a command failed in a way a later attempt may not.
+    """
+    live = read_live()
+    if not chain_is_right(live, source, port):
+        load_chain(source, port)
+    if jump_place(live) is None:
+        insert_jump()
+    left = differences(read_live(), source, port)
+    if left:
+        die(
+            f"{PREFIX}: the table still differs after the load:",
+            *(f"{PREFIX}: {line}" for line in left),
+        )
+
+
+def ensure(source: str, port: str, *, check_only: bool, retry_delay: int) -> int:
     """Make the chain and the jump what they should be, or only say what would change."""
     for tool in ("iptables", "iptables-restore"):
         if shutil.which(tool) is None:
             die(f"{PREFIX}: {tool} is not installed: apply the host_baseline role first")
-    live = read_live()
-    found = differences(live, source, port)
     if check_only:
+        try:
+            found = differences(read_live(), source, port)
+        except Transient as failure:
+            die(*failure.lines, status=failure.status)
         for line in found:
             print(f"{PREFIX}: {line}")
         if not found:
             print(f"{PREFIX}: {CHAIN} and its jump in {PARENT} are as wanted")
         return CHECK_DIFFERS_STATUS if found else 0
 
-    if not chain_is_right(live, source, port):
-        load_chain(source, port)
-    if jump_place(live) is None:
-        insert_jump()
-    after = read_live()
-    left = differences(after, source, port)
-    if left:
-        die(
-            f"{PREFIX}: the table still differs after the load:",
-            *(f"{PREFIX}: {line}" for line in left),
-        )
-    print(f"{PREFIX}: {CHAIN} holds the two rules and {PARENT} jumps to it")
-    return 0
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            apply_once(source, port)
+        except Transient as failure:
+            if attempt == ATTEMPTS:
+                die(
+                    *failure.lines,
+                    f"{PREFIX}: gave up after {ATTEMPTS} attempts",
+                    status=failure.status,
+                )
+            wait = attempt * retry_delay
+            print(
+                f"{PREFIX}: attempt {attempt} of {ATTEMPTS} failed ({failure}); "
+                f"trying again in {wait}s",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+        else:
+            print(f"{PREFIX}: {CHAIN} holds the two rules and {PARENT} jumps to it")
+            return 0
+    return 1  # unreachable: the last attempt returns or dies
 
 
 def main() -> None:
@@ -293,10 +342,22 @@ def main() -> None:
         action="store_true",
         help="change nothing; print the difference and exit 3 if there is one",
     )
+    parser.add_argument(
+        "--retry-delay",
+        default=str(DEFAULT_RETRY_DELAY_SECONDS),
+        help="seconds before the second attempt; attempt n waits n times this",
+    )
     arguments = parser.parse_args()
     source = single_address(arguments.allow_source, "--allow-source")
     port = unprivileged_port(arguments.port, "--port")
-    sys.exit(ensure(source, port, check_only=arguments.check))
+    delay = arguments.retry_delay
+    if not delay.isascii() or not delay.isdigit() or int(delay) > MAX_RETRY_DELAY_SECONDS:
+        die(
+            f"{PREFIX}: --retry-delay is {delay!r}, not a whole number from 0 to "
+            f"{MAX_RETRY_DELAY_SECONDS}",
+            status=2,
+        )
+    sys.exit(ensure(source, port, check_only=arguments.check, retry_delay=int(delay)))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@
 # ExecStop: stopping it leaves the rule in place, because a rule left behind is the safe side
 # of a stop.
 #
+# The program tries again a few times on a transient failure (the xtables lock held, a restore
+# that fails once), because a failed unit means no Docker and nothing starts Docker again.
+#
 # ExecReload runs the same program. The role reloads rather than restarts it when something
 # changed: a restart of this unit would restart Docker, and with it the database.
 [Unit]
@@ -18,6 +21,8 @@ Before={{ db_t1_rule_docker_unit_name }}
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Bounds the program's own retries (five attempts, each under the xtables lock wait).
+TimeoutStartSec=300
 ExecStart={{ db_t1_rule_program_dest }} --allow-source {{ db_t1_client_address }} --port {{ db_t1_port }}
 ExecReload={{ db_t1_rule_program_dest }} --allow-source {{ db_t1_client_address }} --port {{ db_t1_port }}
 

@@ -5,6 +5,7 @@ task file. The fakes answer `-S`, `-I` and a restore transaction as the real too
 address prints with its /32 and a TCP port match prints `-m tcp`), refuse any restore line
 they do not know, and log every call, so a test can say what was done and what was not. Their
 switches are environment variables (FAKE_LIST_EXIT, FAKE_INSERT_EXIT, FAKE_RESTORE_EXIT,
+FAKE_RESTORE_FAIL_FIRST, FAKE_LIST_FAIL_FIRST,
 FAKE_RESTORE_NOOP). Nothing here touches a real firewall.
 """
 
@@ -40,6 +41,19 @@ def save(state):
         json.dump(state, handle)
 
 
+def calls(wanted_tool, wanted_action):
+    # How many calls of this tool (with this action among its arguments) the log holds, this one
+    # included.
+    count = 0
+    with open(log_path, encoding="utf-8") as handle:
+        for line in handle:
+            entry = json.loads(line)
+            same_action = not wanted_action or wanted_action in entry["args"]
+            if entry["tool"] == wanted_tool and same_action:
+                count += 1
+    return count
+
+
 def canonical(words):
     text = []
     previous = ""
@@ -57,6 +71,11 @@ def canonical(words):
 state = load()
 chain_name = "BRANCHLEFT-DBT1-IN"
 if tool == "iptables":
+    if os.environ.get("FAKE_LIST_FAIL_FIRST") and calls("iptables", "-S") <= int(
+        os.environ["FAKE_LIST_FAIL_FIRST"]
+    ):
+        sys.stderr.write("iptables: Another app is currently holding the xtables lock.\\n")
+        sys.exit(4)
     if os.environ.get("FAKE_LIST_EXIT"):
         sys.stderr.write("iptables: Permission denied\\n")
         sys.exit(int(os.environ["FAKE_LIST_EXIT"]))
@@ -82,10 +101,16 @@ if tool == "iptables":
         sys.exit(0)
 elif tool == "iptables-restore":
     assert args == ["--noflush", "-w", "10"], args
+    if os.environ.get("FAKE_RESTORE_FAIL_FIRST") and calls("iptables-restore", "") <= int(
+        os.environ["FAKE_RESTORE_FAIL_FIRST"]
+    ):
+        sys.stderr.write("iptables-restore: Another app is currently holding the xtables lock.\\n")
+        sys.exit(4)
     if os.environ.get("FAKE_RESTORE_EXIT"):
         sys.stderr.write("iptables-restore: line 5 failed\\n")
         sys.exit(int(os.environ["FAKE_RESTORE_EXIT"]))
     lines = stdin.splitlines()
+    # standards-allow-next-line DB-1 COMMIT ends an iptables-restore transaction and is not SQL
     assert lines and lines[0] == "*filter" and lines[-1] == "COMMIT", lines
     new = state["chain"]
     for line in lines[1:-1]:

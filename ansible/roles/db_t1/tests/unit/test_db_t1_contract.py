@@ -775,6 +775,9 @@ class ListenerRuleContract(unittest.TestCase):
         self.assertIn(f"\nExecReload={command}\n", unit)
         self.assertIn("\nType=oneshot\n", unit)
         self.assertIn("\nRemainAfterExit=yes\n", unit)
+        # The program retries five times; the unit bounds the whole run.
+        self.assertIn("\nTimeoutStartSec=300\n", unit)
+        self.assertEqual(program.ATTEMPTS, 5)
         self.assertIn("\nWantedBy=multi-user.target\n", unit)
         # Stopping the unit must leave the rule in place.
         self.assertNotRegex(unit, r"(?m)^ExecStop")

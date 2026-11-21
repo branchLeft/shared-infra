@@ -147,7 +147,8 @@ db_t1_exporter_image: ghcr.io/branchleft/mysqld-exporter@sha256:25d73600fb442f5f
 # Loopback, never the private address or 0.0.0.0. Nothing on the tenants network reads it
 # directly: db1's replica tunnel forwards its own port 9105 to this one (the `-L` of
 # hetzner/provision/branchleft-db-tunnel.service, scraped by hetzner/monitoring/render.ts as
-# REPLICA_TUNNEL_METRICS_PORT), and the database itself listens on loopback only.
+# REPLICA_TUNNEL_METRICS_PORT). The database port is the only one the host firewall rule covers,
+# and the database binds the private address, so the exporter's port stays off it.
 db_t1_exporter_listen_address: 127.0.0.1
 db_t1_exporter_metrics_port: 9104
 

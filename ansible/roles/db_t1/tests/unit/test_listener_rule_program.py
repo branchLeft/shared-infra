@@ -65,6 +65,7 @@ class Apply(unittest.TestCase):
         self.assertEqual(text, program.restore_text(SOURCE, PORT))
         lines = text.splitlines()
         self.assertEqual(lines[0], "*filter")
+        # standards-allow-next-line DB-1 COMMIT ends an iptables-restore transaction and is not SQL
         self.assertEqual(lines[-1], "COMMIT")
         for line in lines[1:-1]:
             self.assertIn(CHAIN, line)
@@ -216,7 +217,7 @@ class Refusals(unittest.TestCase):
 
     def test_a_filter_table_that_cannot_be_read_is_refused(self) -> None:
         run = Run(self)
-        self.refused(run, run.run(FAKE_LIST_EXIT="4"), "exited 4")
+        self.refused(run, run.run("--retry-delay", "0", FAKE_LIST_EXIT="4"), "exited 4")
 
     def test_a_missing_iptables_is_refused_and_names_the_role_that_installs_it(self) -> None:
         run = Run(self, tools=("iptables-restore",))
@@ -229,14 +230,14 @@ class Refusals(unittest.TestCase):
 
     def test_a_failed_restore_stops_before_the_jump_and_keeps_its_status(self) -> None:
         run = Run(self)
-        done = run.run(FAKE_RESTORE_EXIT="2")
+        done = run.run("--retry-delay", "0", FAKE_RESTORE_EXIT="2")
         self.assertEqual(done.returncode, 2)
         self.assertEqual(run.table(), {"input": [], "chain": None})
-        self.assertEqual([c["tool"] for c in run.writes()], ["iptables-restore"])
+        self.assertEqual({c["tool"] for c in run.writes()}, {"iptables-restore"})
 
     def test_a_failed_insert_is_refused(self) -> None:
         run = Run(self)
-        done = run.run(FAKE_INSERT_EXIT="4")
+        done = run.run("--retry-delay", "0", FAKE_INSERT_EXIT="4")
         self.assertEqual(done.returncode, 4)
         self.assertIn("exited 4", done.stderr)
 
@@ -245,6 +246,88 @@ class Refusals(unittest.TestCase):
         done = run.run(FAKE_RESTORE_NOOP="1")
         self.assertEqual(done.returncode, 1)
         self.assertIn("still differs", done.stderr)
+
+
+def restores(run: Run) -> int:
+    """How many restores the program asked for."""
+    return len([c for c in run.calls() if c["tool"] == "iptables-restore"])
+
+
+def listings(run: Run) -> int:
+    """How many times the program read the filter table."""
+    return len([c for c in run.calls() if c["tool"] == "iptables" and "-S" in str(c["args"])])
+
+
+class Retries(unittest.TestCase):
+    """A boot that meets a transient failure tries again, a bounded number of times."""
+
+    def test_the_attempts_are_five(self) -> None:
+        self.assertEqual(program.ATTEMPTS, 5)
+
+    def test_a_restore_that_fails_twice_and_then_works_ends_with_the_rule_loaded(self) -> None:
+        run = Run(self)
+        run.put(input_rules=[F2B], chain=None)
+        done = run.run("--retry-delay", "1", FAKE_RESTORE_FAIL_FIRST="2")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(restores(run), 3)
+        self.assertEqual(run.table(), {"input": [JUMP, F2B], "chain": [ACCEPT, DROP]})
+        self.assertIn("attempt 1 of 5 failed", done.stderr)
+        self.assertIn("trying again in 1s", done.stderr)
+        self.assertIn("trying again in 2s", done.stderr)
+
+    def test_a_table_read_that_fails_once_and_then_works_ends_with_the_rule_loaded(self) -> None:
+        run = Run(self)
+        done = run.run("--retry-delay", "0", FAKE_LIST_FAIL_FIRST="1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(run.table()["chain"], [ACCEPT, DROP])
+
+    def test_a_restore_that_never_works_is_tried_five_times_and_then_stops_with_its_status(
+        self,
+    ) -> None:
+        run = Run(self)
+        done = run.run("--retry-delay", "0", FAKE_RESTORE_EXIT="2")
+        self.assertEqual(done.returncode, 2)
+        self.assertEqual(restores(run), 5)
+        self.assertIn("gave up after 5 attempts", done.stderr)
+        self.assertEqual(run.table(), {"input": [], "chain": None})
+
+    def test_a_restore_that_fails_four_times_still_works_on_the_fifth(self) -> None:
+        run = Run(self)
+        done = run.run("--retry-delay", "0", FAKE_RESTORE_FAIL_FIRST="4")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(restores(run), 5)
+
+    def test_a_restore_that_fails_five_times_is_given_up_on(self) -> None:
+        run = Run(self)
+        done = run.run("--retry-delay", "0", FAKE_RESTORE_FAIL_FIRST="5")
+        self.assertEqual(done.returncode, 4)
+        self.assertEqual(restores(run), 5)
+
+    def test_a_refusal_is_never_retried(self) -> None:
+        run = Run(self)
+        run.put(input_rules=[SSH, JUMP], chain=[ACCEPT, DROP])
+        done = run.run("--retry-delay", "0")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(listings(run), 1)
+
+    def test_a_load_that_did_not_take_effect_is_not_retried(self) -> None:
+        run = Run(self)
+        done = run.run("--retry-delay", "0", FAKE_RESTORE_NOOP="1")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(restores(run), 1)
+
+    def test_check_mode_does_not_retry(self) -> None:
+        run = Run(self)
+        done = run.run("--check", "--retry-delay", "0", FAKE_LIST_EXIT="4")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(listings(run), 1)
+
+    def test_a_second_run_after_a_recovered_one_changes_nothing(self) -> None:
+        run = Run(self)
+        self.assertEqual(run.run("--retry-delay", "0", FAKE_RESTORE_FAIL_FIRST="1").returncode, 0)
+        before = restores(run)
+        self.assertEqual(run.run().returncode, 0)
+        self.assertEqual(restores(run), before)
 
 
 class Arguments(unittest.TestCase):
@@ -266,6 +349,16 @@ class Arguments(unittest.TestCase):
         for value in ("22", "1023", "65536", "0", "-1", "33x", "", "3306 ", "０３３０６"):
             with self.subTest(value):
                 self.bad(port=value)
+
+    def test_a_retry_delay_that_is_not_a_whole_number_of_seconds_up_to_thirty_is_refused(
+        self,
+    ) -> None:
+        for value in ("31", "-1", "1.5", "x", "", "٣"):
+            with self.subTest(value):
+                run = Run(self)
+                done = run.run("--retry-delay", value)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertEqual(run.calls(), [])
 
     def test_a_missing_option_is_refused(self) -> None:
         done = subprocess.run(  # noqa: S603 -- the interpreter running the tests and the role's own file
@@ -302,6 +395,7 @@ class Forms(unittest.TestCase):
                 f"-F {CHAIN}",
                 f"-A {CHAIN} -s {SOURCE} -p tcp --dport {PORT} -j ACCEPT",
                 f"-A {CHAIN} -p tcp --dport {PORT} -j DROP",
+                # standards-allow-next-line DB-1 COMMIT ends an iptables-restore transaction, no SQL
                 "COMMIT",
             ],
         )

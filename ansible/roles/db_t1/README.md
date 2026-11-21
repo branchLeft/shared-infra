@@ -192,6 +192,12 @@ How the program behaves:
   under nothing else; a jump under any other rule is a refusal, not a repair, because a rule
   under an earlier accept is not a rule. Two copies of the jump are a refusal.
 - It reads the table again after the load and fails if it differs from what is wanted.
+- At boot it tries again, up to five attempts with a wait that grows (2, 4, 6 and 8 seconds,
+  `--retry-delay`), when a command fails or gives no answer: the xtables lock held longer than
+  its 10-second wait, or a restore that fails once. A failed unit means no Docker, and nothing
+  starts Docker again, so a transient failure is worth five tries. A refusal (a misplaced jump,
+  a missing tool, a load that did not take effect) is never retried, and neither is `--check`.
+  The unit's `TimeoutStartSec=300` bounds the whole run.
 - `--check` changes nothing, prints each difference (`+` to add, `-` to remove) and exits 3
   when there is one, 0 when not. Any other status is a refusal. The role runs it in a plan
   (`check_mode: false`, read only), so the plan shows whether the loaded rule would change and
@@ -358,6 +364,9 @@ register (branchLeft/shared-infra#944, an owner merge), so that change lands fir
   by this role; a port another role opens is that role's to guard.
 - Docker requires the rule unit, so a failed rule unit means no Docker on db-t1. That is the
   point: a host with no Docker also runs no database.
+- mysqld binds a specific address. If the private interface is not up when Docker starts,
+  mysqld fails to bind and its container restarts until the address is there; nothing is
+  exposed meanwhile, and the stack's unit waits for `network-online.target`.
 - fail2ban's jump may sit above ours. A rule another program puts above ours and that
   accepts the database port makes the program refuse at the next run; it never moves it.
 - Not proven by a reboot: that the rule unit runs before Docker on a cold boot. The unit text
