@@ -75,8 +75,9 @@ starts answering while still labelled `false`: the same arrangement every host a
 
 Two facts shape them. The tenants project has its own network, and a network does not span projects,
 so these addresses are the tenants network's, which reuses the estate's range (ruling 5a of 2 Nov
-2026). The Prometheus on edge1 cannot reach them, so each scrape fails until a path across the two
-projects exists, and no host is flipped before a query for it returns `1` (`RUNBOOK-monitoring.md`,
+2026). The Prometheus on edge1 cannot reach them directly, so it reads each through the restricted
+tunnel to edge-t (see [Tunnelled tenant node targets](#tunnelled-tenant-node-targets)) and each
+scrape fails until that tunnel is applied, and no host is flipped before a query for it returns `1` (`RUNBOOK-monitoring.md`,
 15f). And the disk and memory rules (`HostDiskSpaceLow`, `HostMemoryPressure`) select on neither
 `host` nor `expected_up`, which is what makes them evaluate for these hosts the moment their series
 arrive, flipped or not. `render.test.ts` holds both statements: the rendered rules carry no such
@@ -533,3 +534,23 @@ against hand-typed series: `alert_rule_test` never reads the rendered scrape
 config, and the mismatch reads at the API as `inactive`, identical to healthy.
 The test in `render.test.ts` reads both sides of the join from the two render
 functions themselves, not a retyped copy of either.
+
+## Tunnelled tenant node targets
+
+`tenantTunnel.ts` lists the tenant hosts whose node_exporter `edge1` reads
+through an SSH tunnel to `edge-t`, rather than directly on the tenants
+network. Each tunnel is a fixed local port on `edge1`'s private address
+(`TENANT_TUNNEL_TARGETS`: `db-t1` 19100, `app-t1` 19101, `edge-t` 19102).
+They are listed in the `node` job as targets with `expectedUp: false`, and
+one `relabel_configs` rule per tunnel sets `instance` back to the tenant's
+own `address:9100`, so an alert sees the same series a direct scrape would.
+
+The tunnel rows must agree with the direct rows. `hostsScrapedDirectly`
+drops any direct row whose name is tunnelled, so no host is scraped twice,
+and it throws `TunnelRowMismatchError` when that direct row's address or
+`expectedUp` differs from the tunnel row. A host is flipped by editing both
+rows; the render refuses one without the other.
+
+The local ports must stay clear of every `*_PORT` constant here, every port
+in `stack/compose.yml`, and the sweego receiver ports in
+`ansible/owner_vars/edge1.yml`; `tenantTunnel.test.ts` checks each one.

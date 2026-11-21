@@ -1166,9 +1166,10 @@ same rule as every host above. Three things are true of them that are not true o
 
 **The tenants network is not the estate's network.** A network does not span hcloud projects and the
 tenants project reuses the estate's address range, so `10.20.1.200`, `.201` and `.210` mean nothing
-to the Prometheus on edge1: its scrape of them fails, quietly, until a path across the two projects
-exists. That path is a separate decision (branchLeft/workspace#1810 follow-up), and no flip below is
-made before it is in place and a query for the host returns `1`. Until then the disk, memory and
+to the Prometheus on edge1, which reads them through a restricted SSH tunnel to edge-t instead
+(branchLeft/workspace#3922, `ansible/roles/tenant_scrape_tunnel`, `hetzner/monitoring/tenantTunnel.ts`):
+its scrape fails, quietly, until that tunnel is applied, and no flip below is made before it is in
+place and a query for the host returns `1`. Until then the disk, memory and
 host-down alerts are proven by promtool only (`alert_rules_test.yml` and `alert_rules_memory_test.yml`,
 grep the host's address): the rules do not select on `host` or `expected_up`, so they evaluate for a
 tenant host the moment its series arrive, and `HostOrServiceDown` waits for the flip.

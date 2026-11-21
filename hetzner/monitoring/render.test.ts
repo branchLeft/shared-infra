@@ -1140,14 +1140,15 @@ describe('the tenant hosts', () => {
     .map((file) => readFileSync(join(__dirname, file), 'utf8'))
     .join('\n');
 
-  it("scrapes each one's node_exporter on its tenants-network address, expected down until it is enrolled", () => {
+  it("reads each one's node_exporter through edge1's tunnel, relabelled to its tenants-network address, expected down until it is enrolled", () => {
     for (const { name, address } of tenantHosts) {
       const host = MONITORED_NODE_HOSTS.find((candidate) => candidate.name === name);
       expect(host?.address, `${name} address`).toBe(address);
       expect(host?.expectedUp, `${name} expectedUp`).toBe(false);
-      expect(promConfig).toContain(
-        `targets: ['${address}:${NODE_EXPORTER_PORT}']\n        labels: {host: ${name}, expected_up: 'false'}`
-      );
+      // edge1 cannot reach the tenants network, so the tunnel's local port stands in for a direct row.
+      expect(promConfig).not.toContain(`targets: ['${address}:${NODE_EXPORTER_PORT}']`);
+      expect(promConfig).toContain(`labels: {host: ${name}, expected_up: 'false'}`);
+      expect(promConfig).toContain(`replacement: '${address}:${NODE_EXPORTER_PORT}'`);
     }
   });
 

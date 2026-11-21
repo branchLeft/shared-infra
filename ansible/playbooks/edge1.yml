@@ -19,6 +19,9 @@
 # (sweego_receiver) is last of all, for the same reason: it waits until the owner has placed
 # its two secret files and refuses a half-finished placement, and that refusal must not hold the
 # roles before it back.
+# The tenant scrape tunnel (tenant_scrape_tunnel) follows the node exporter: edge1's half of the
+# restricted SSH tunnel that Prometheus reads the tenant node exporters through. It only reports
+# until the owner's data commit fills its three values, so it can sit with the monitoring roles.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -57,6 +60,7 @@
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/edge_stack # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
+    - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
     - role: ../roles/exporters_and_collectors # noqa: role-name[path]
     - role: ../roles/ntfy_pager # noqa: role-name[path]
     - role: ../roles/monitoring_stack # noqa: role-name[path]
