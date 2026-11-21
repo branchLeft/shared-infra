@@ -302,6 +302,16 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py), a textfile gauge on ops1",
   control_plane_backup_last_failure_timestamp_seconds:
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py mark-failed), a textfile gauge on ops1",
+  // The binary-log pull's textfile gauges, written on ops1 by the program the binlog_pull Ansible
+  // role installs (ansible/roles/binlog_pull/files): the success time and the counts the gap rule
+  // reads. The program lives outside this directory, so a unit test in the role pins these names to
+  // the expressions in alerts.yml.
+  binlog_pull_last_success_timestamp_seconds:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_gap_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_unshipped_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
   // The scanning storage adapter's textfile export, written by each tenant's
   // Ghost process on its app host. Names and label values are the contract in
   // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the
