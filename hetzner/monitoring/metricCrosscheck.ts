@@ -238,6 +238,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   probe_success: 'blackbox_exporter',
   probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
+  // The caddy-crowdsec-bouncer module inside the edge's Caddy (v0.15.0,
+  // internal/metrics); present only while the Caddyfile sets
+  // `enable_caddy_metrics`, which render.test.ts in hetzner/edge asserts.
+  crowdsec_appsec_lapi_requests_failures_total:
+    "the caddy-crowdsec-bouncer module in edge1's Caddy (the caddy scrape job)",
   // Its name, labels and that it leaves out simulated decisions are asserted
   // against a running CrowdSec by hetzner/edge/test_crowdsec_replay.py.
   cs_active_decisions: "CrowdSec's Local API, on edge1 (the crowdsec scrape job)",

@@ -561,6 +561,23 @@ describe('the rendered alert rules', () => {
     expect(block).not.toContain('severity: page');
   });
 
+  it('alerts when the edge lets requests through because its AppSec checker is down, reading the bouncer failure counter -- see alert_rules_test.yml for the promtool proof it fires above the rate and stays silent on a quiet five minutes', () => {
+    expect(rendered).toContain('alert: AppSecFailingOpen');
+    const block = rendered
+      .split('      - alert: AppSecFailingOpen')[1]
+      .split('\n      - alert: ')[0];
+    // The rate and its hold are the whole rule: dropping the `for:` pages on a
+    // CrowdSec restart, and a wider threshold misses a checker that is down.
+    expect(block).toContain(
+      'expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5\n        for: 10m'
+    );
+    // Owner-routed warning: the off-host mailbox, never the pager. The edge
+    // is serving and its other protections still hold.
+    expect(block).toContain('severity: warning');
+    expect(block).toContain('owner_action: "true"');
+    expect(block).not.toContain('severity: page');
+  });
+
   it('alerts on Alertmanager failing to deliver an email notification -- see alert_rules_test.yml for the promtool proof it is scoped to the email integration', () => {
     expect(rendered).toContain('alert: AlertEmailDeliveryFailing');
     expect(rendered).toContain(
@@ -940,6 +957,7 @@ describe('the owner_action="true" label', () => {
       .filter((rule) => /\n\s+owner_action: "true"(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
+      'AppSecFailingOpen',
       'HostMemoryPressure',
       'HostCPUSaturated',
       'HostDiskSpaceLow',

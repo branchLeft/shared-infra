@@ -672,6 +672,23 @@ zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFaili
 is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
 that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
 
+`AppSecFailingOpen` says the edge is serving requests the AppSec checker did not
+inspect (`appsec_fail_open`, `RUNBOOK-edge.md` section 10b). It reads
+`crowdsec_appsec_lapi_requests_failures_total` from the `caddy` job: the Caddy
+bouncer counts every AppSec call that errored or timed out, and serves the
+counter once the rendered Caddyfile sets `enable_caddy_metrics`. CrowdSec's own
+metrics cannot carry this signal -- a stopped CrowdSec has no metrics port, so
+`up{job="crowdsec"}` says the process is gone but not how much traffic went
+through uninspected -- and a log-derived counter would need a log shipper this
+stack does not have. The rule is `increase(...[5m]) > 5` held `for: 10m`, so it
+fires about 15 minutes after the checker stopped and stays silent for a restart
+or a stall under five minutes. It routes as `owner_action` (warning to the
+off-host mailbox), not as a page: the edge is serving and the ban list and
+throttle still hold. It does not count a checker that answers 401 or 500 (also
+fail-open, not a transport failure). Not yet proven in the lab with CrowdSec
+stopped on a running edge: `alert_rules_test.yml` proves the rule, the lab run
+proves the counter moves.
+
 `RateLimitDeclinesSustained` fires only when one key has kept being declined for
 30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
 last more than 20 minutes). An internet scanner that trips the throttle is the
@@ -1223,6 +1240,30 @@ the reaper, in the change that flips its flag; a rule carrying
 dormant entry reaches no phone. Nothing here is applied to the host: this
 section's change is to the committed register, and the rendered Alertmanager
 config is unchanged until the entry is switched on.
+
+## Responding to the AppSec fail-open alert
+
+`AppSecFailingOpen` fires when the edge serves requests without WAF inspection.
+Caddy waits one second for the CrowdSec AppSec checker, then lets the request
+through (`appsec_timeout 1s`, `appsec_fail_open`; `RUNBOOK-edge.md` section 10b).
+Nothing is down for visitors, so it is a warning routed to the owner's mailbox.
+
+**The signal.** `increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5`,
+held for 10 minutes. The counter is Caddy's, not CrowdSec's: CrowdSec cannot report
+its own absence (stopped, its metrics port is gone), and a log-derived counter would
+need a log shipper the stack does not have.
+
+**Limits.** Only transport failures count (refused connection, timeout). A checker
+answering 401 or 500 also fails open and is not counted; the first request shows
+that misconfiguration. An absent series never fires.
+
+**Timing.** The expression stays true for 5 minutes after the last failure, so the
+alert fires only for an outage of 5 minutes or more: about 15 minutes after a
+stopped checker. A CrowdSec restart or a deploy stays silent.
+
+**Response.** On edge1, `docker ps` shows whether the crowdsec container is running,
+and `docker logs --since 15m crowdsec` says why it is not answering. Bringing it back
+and reading its log is the owner's action.
 
 ## 17. Karma, the incident view
 

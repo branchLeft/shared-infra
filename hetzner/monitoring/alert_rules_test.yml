@@ -683,6 +683,129 @@ tests:
           - labels: 'ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
             value: 1
 
+  # AppSecFailingOpen: the bouncer's failure counter in edge1's Caddy (the
+  # `caddy` scrape job, 10.20.1.10:9091); the series below carry its labels.
+  # The expression is increase(...[5m]) > 5 held for 10m. It stays true for
+  # the 5m window after the last failure, so it holds for an outage's length
+  # plus 5m, and the 10m `for:` fires only for an outage of 5m or more.
+  #
+  # Control: a quiet five minutes (and a quiet hour) does not fire. The
+  # counter at zero, and the counter flat at a high value left by an earlier
+  # outage, both read as no increase.
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '4000+0x120'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+
+  # CrowdSec stopped: after a quiet five minutes every request fails its
+  # AppSec call (60 more failures every 30s step). The expression turns true
+  # at about 5m30; the alert is still pending at 12m (the `for:` has not run
+  # out), so it must not fire early, and is firing at 17m with the owner_action
+  # label that routes it to the off-host mailbox.
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0x10 60+60x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: AppSecFailingOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              job: caddy
+              instance: 10.20.1.10:9091
+              host: edge1
+              expected_up: 'true'
+            exp_annotations:
+              summary: 'The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes.'
+              description: >-
+                Caddy asked the CrowdSec AppSec checker to inspect a request, got no answer inside one second, and served the request anyway (appsec_fail_open). This is designed behaviour, so nothing is down for visitors, but every site on edge1 is running without WAF inspection while it lasts. On edge1, `docker ps` shows whether the crowdsec container is running and `docker logs --since 15m` on it says why it is not answering; RUNBOOK-edge.md section 10b describes the fail-open behaviour. The alert clears 5 minutes after the last failure, once the 5-minute window holds none. The counter is crowdsec_appsec_lapi_requests_failures_total on the caddy scrape job; it counts refused connections and timeouts, not a checker that answers 401 or 500.
+
+  # At or below the rate: 0.4 failures a step is 4 in a 5-minute window, a
+  # slow verdict now and then under load, not an outage. Silent for the hour.
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0+0.4x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+
+  # A CrowdSec restart: one minute of failed calls, then recovery. The
+  # expression reads true for the minute plus the 5m window, about 5m30 here,
+  # well inside the 10m `for:`, so it never fires, pending included.
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0x10 60+60x1 120x100'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+
+  # A four-minute stall, the longest outage the `for:` is meant to ride out:
+  # true for about 9m, which is under 10m, so it stays silent.
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0x10 60+60x8 540x100'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: AppSecFailingOpen
+        exp_alerts: []
+
+  # Recovery: a ten-minute outage, then the checker answers again. Firing
+  # while the 5m window still sees the failures (17m, five minutes after the
+  # alert began) and clear again once the window holds none (30m).
+  - interval: 30s
+    input_series:
+      - series: 'crowdsec_appsec_lapi_requests_failures_total{job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+        values: '0x10 60+60x20 1260x100'
+    promql_expr_test:
+      - expr: ALERTS{alertname="AppSecFailingOpen", alertstate="firing"}
+        eval_time: 17m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AppSecFailingOpen", alertstate="firing", severity="warning", owner_action="true", job="caddy", instance="10.20.1.10:9091", host="edge1", expected_up="true"}'
+            value: 1
+      - expr: ALERTS{alertname="AppSecFailingOpen", alertstate="firing"}
+        eval_time: 30m
+        exp_samples: []
+
   # AlertEmailDeliveryFailing: a climbing failure count on the email
   # integration fires -- this is the metric that would have caught the
   # six-day mx1 outage, since it measures delivery, not process liveness.

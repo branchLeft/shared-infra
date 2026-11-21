@@ -574,6 +574,42 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
     '            what each one reads.',
     '',
+    // The edge lets a request through uninspected when its AppSec checker is
+    // slow or down (posture.md, RUNBOOK-edge.md section 10b). The signal is
+    // Caddy's own counter, `crowdsec_appsec_lapi_requests_failures_total`,
+    // which the bouncer keeps and the rendered Caddyfile exposes through
+    // `enable_caddy_metrics`. Why this signal, its limits, and how the
+    // threshold and `for:` were chosen are in RUNBOOK-monitoring.md, section
+    // "Responding to the AppSec fail-open alert".
+    //
+    // More than 5 failures in a 5-minute window, held for 10 minutes, so a
+    // short restart stays silent. owner_action routes it to the off-host
+    // mailbox, not a page: the edge keeps serving and the IP ban list and
+    // throttle still hold.
+    '      - alert: AppSecFailingOpen',
+    '        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5',
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes."',
+    '          description: >-',
+    '            Caddy asked the CrowdSec AppSec checker to inspect a request,',
+    '            got no answer inside one second, and served the request',
+    '            anyway (appsec_fail_open). This is designed behaviour, so',
+    '            nothing is down for visitors, but every site on edge1 is',
+    '            running without WAF inspection while it lasts. On edge1,',
+    '            `docker ps` shows whether the crowdsec container is running',
+    '            and `docker logs --since 15m` on it says why it is not',
+    '            answering; RUNBOOK-edge.md section 10b describes the',
+    '            fail-open behaviour. The alert clears 5 minutes after the',
+    '            last failure,',
+    '            once the 5-minute window holds none. The counter is',
+    '            crowdsec_appsec_lapi_requests_failures_total on the caddy',
+    '            scrape job; it counts refused connections and timeouts, not',
+    '            a checker that answers 401 or 500.',
+    '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
     '        for: 24h',

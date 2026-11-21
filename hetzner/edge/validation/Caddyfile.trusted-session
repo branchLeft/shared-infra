@@ -15,6 +15,7 @@
 		appsec_max_body_bytes 65536
 		appsec_timeout 1s
 		appsec_fail_open
+		enable_caddy_metrics
 	}
 }
 
