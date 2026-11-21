@@ -71,7 +71,13 @@ because the unit files fix the paths they run.
 - `molecule/default` runs the role in a systemd container (ANS-15). The programs are
   fetched over the network from raw.githubusercontent.com at the pinned commit, so
   the container needs that network. The verify play checks each program against its
-  pinned digest, and each unit byte for byte against the role's own copy.
+  pinned digest, and each unit byte for byte against the role's own copy. The verify
+  play reads no clock: each timer must be loaded, enabled, active, with `Result=success`,
+  and trigger its own service. `prepare.yml` installs a placeholder for the shared
+  Compose unit template, because without a unit of that name systemd cannot queue the
+  binlog-ship service when its timer first elapses (five minutes after boot) and the
+  timer fails with `Result=resources`, which made a run longer than five minutes fail
+  verify and report a change at idempotence.
 - `molecule/refusals` converges the same host, then runs three cases on
   `provision_tenant_db.py`, the program `db1_grants` runs. A: a wrong pinned digest
   (passed as an `include_role` parameter, which beats `vars/main.yml`) is refused by

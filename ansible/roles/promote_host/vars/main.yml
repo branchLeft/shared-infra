@@ -1,0 +1,62 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a mode the
+# applier depends on must not be moved by a play variable (ansible/README.md, variable
+# precedence). Every path below is also a default of hetzner/provision/branchleft_promote.py, and
+# tests/unit/test_promote_host.py holds the two to each other, so the program and the role cannot
+# drift apart. The applier runs as root; no account is made, because every file it trusts must be
+# root's.
+
+# The parents the role asserts and never makes or changes. /etc/branchleft is made by
+# host_inputs, and /var/lib/branchleft by the break-glass grant and the deploy verifier, which
+# run before this role on app1.
+promote_host_parents:
+  - /etc/branchleft
+  - /var/lib/branchleft
+
+# The program is read from hetzner/provision/ of the checkout the playbook runs from, the one home
+# of it. The role holds no copy of it (a copy would be a second home that could drift).
+promote_host_programs_dir: '{{ role_path }}/../../../hetzner/provision'
+promote_host_program_source: branchleft_promote.py
+promote_host_program_path: /usr/local/sbin/branchleft-promote
+promote_host_program_mode: '0755'
+
+promote_host_config_dir: /etc/branchleft/promote
+promote_host_allowed_signers_path: /etc/branchleft/promote/allowed_signers
+promote_host_slots_path: /etc/branchleft/promote/slots.json
+promote_host_env_path: /etc/branchleft/promote/promote.env
+promote_host_state_dir: /var/lib/branchleft/promote
+
+# The wrapper the applier hands each move to. Installed by deploy_tooling, which runs before this
+# role on app1; this role only names it, for the unit's start condition.
+promote_host_wrapper_path: /usr/local/sbin/branchleft-deploy
+# The tool the applier checks a ledger's signature with. Required on the host once the role is
+# given its inputs.
+promote_host_signature_tool: /usr/bin/ssh-keygen
+
+# The signer's name and the namespace of its signatures. The program holds the same two values;
+# the unit test holds these equal to them.
+promote_host_signer_principal: ring-controller
+promote_host_ledger_namespace: branchleft-promotion-ledger
+
+# The slot map: which stack a ledger's opaque slot number means on this host. The ledger names no
+# stack, so this file is what turns a number into a stack. The website is a public stack name, so
+# its row is a constant; a tenant's stack name is private and is not in this role. 30999 is the top
+# of the program's range (30000 to 30999), so a tenant slot allocated upward from 30000 never meets
+# it. The ledger's writer uses the same number for the website.
+promote_host_slots:
+  - slot: 30999
+    stack: website
+
+promote_host_unit_dir: /etc/systemd/system
+promote_host_service_unit: branchleft-promote.service
+promote_host_timer_unit: branchleft-promote.timer
+promote_host_units:
+  - '{{ promote_host_service_unit }}'
+  - '{{ promote_host_timer_unit }}'
+
+# The shapes the inputs must have when set. They end in \Z, not $, so a trailing line break does
+# not pass. The URL admits no user name, password, query or fragment and no character that is not
+# one plain word in the environment file. The key is exactly one ed25519 public key line (the
+# type, then 68 base64 characters that begin with the key type's own encoding), with no comment.
+promote_host_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'
+promote_host_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA[A-Za-z0-9+/]{44}\Z'

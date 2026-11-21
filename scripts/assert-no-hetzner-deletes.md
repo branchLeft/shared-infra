@@ -8,8 +8,7 @@ One script serves all four Hetzner stacks (`branchleft-mail`,
 `branchleft-hetzner-network`, `branchleft-hetzner-estate`,
 `branchleft-hetzner-dns`) because they share one provider and one failure
 mode. The GCP edge stack had its own equivalent guard,
-`assert-no-edge-deletes.py`, removed with that program in the GCP wind-down
-(branchLeft/workspace#1000).
+`assert-no-edge-deletes.py`, removed with that program in the GCP wind-down.
 
 ## Usage
 
