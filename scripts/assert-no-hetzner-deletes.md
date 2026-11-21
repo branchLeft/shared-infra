@@ -4,9 +4,9 @@ Fails if a `pulumi preview --json` plan would destroy a Hetzner resource.
 
 It runs as a preflight inside a CI deploy job, against the same stack state
 `pulumi up` is about to act on, seconds earlier and with the same credentials.
-One script serves all four Hetzner stacks (`branchleft-mail`,
+One script serves all five Hetzner stacks (`branchleft-mail`,
 `branchleft-hetzner-network`, `branchleft-hetzner-estate`,
-`branchleft-hetzner-dns`) because they share one provider and one failure
+`branchleft-hetzner-dns`, `branchleft-hetzner-tenants`) because they share one provider and one failure
 mode. The GCP edge stack had its own equivalent guard,
 `assert-no-edge-deletes.py`, removed with that program in the GCP wind-down
 (branchLeft/workspace#1000).

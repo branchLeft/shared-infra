@@ -179,7 +179,7 @@
       "state_backend": "hetzner",
       "expected_secrets_provider": "passphrase",
       "terminal_state": "never-kms",
-      "note": "Born on the passphrase provider, never KMS-wrapped. Not yet created: the first apply is a hand-gated operation with an operator-held salt and the tenants project's token, and needs the marker firewall and the owner SSH key registered in that project first. The committed config file holds non-secret configuration only and reads `absent`, which never-kms accepts on its own, same as the network stack.",
+      "note": "Born on the passphrase provider, never KMS-wrapped. Created by hand-gated applies (hetzner/tenants/RUNBOOK-adopt-console-servers.md); CI plans it on merge (hetzner-tenants-plan) and applies it from `production` (hetzner-tenants-apply), after the estate apply, with the salt read from the stack's own state at run time. The committed config file holds non-secret configuration only and reads `absent`, which never-kms accepts on its own, same as the network stack.",
       "attestation": null
     },
     {

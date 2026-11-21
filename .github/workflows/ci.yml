@@ -533,7 +533,7 @@ jobs:
         uses: branchLeft/github-workflows/.github/actions/check-apply-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
         with:
           workflow: .github/workflows/ci.yml
-          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply
+          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply hetzner-tenants-plan:hetzner-tenants-apply
           verdict-step: noop
           summary-step: Write the plan to the job summary
           plan-file: preview-plan.json
@@ -595,6 +595,7 @@ jobs:
       hetzner_network: ${{ steps.filter.outputs.hetzner_network }}
       hetzner_estate: ${{ steps.filter.outputs.hetzner_estate }}
       hetzner_dns: ${{ steps.filter.outputs.hetzner_dns }}
+      hetzner_tenants: ${{ steps.filter.outputs.hetzner_tenants }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -664,6 +665,32 @@ jobs:
               - 'hetzner/pnpm-lock.yaml'
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
+            # The tenants program (tenants.ts, project dir hetzner/tenants/)
+            # imports hetzner-host, egress.ts and projectGuard.ts, and reads
+            # edge1PublicIpv4 from the estate stack through a StackReference.
+            # That read is not an import, so the estate's own inputs are listed
+            # as well: an estate change that moves edge1's address must
+            # re-plan the tenants stack, whose edge-t SSH allowlist holds it.
+            # The tenants runbooks are not inputs: a docs-only edit parks no
+            # apply. Pinned against the real import graph by
+            # scripts/test_ci_apply_environments.py (TenantsFilterTests).
+            hetzner_tenants:
+              - 'hetzner/tenants.ts'
+              - 'hetzner/tenants/Pulumi.yaml'
+              - 'hetzner/tenants/Pulumi.production.yaml'
+              - 'hetzner/egress.ts'
+              - 'hetzner/projectGuard.ts'
+              - 'hetzner/projects.ts'
+              - 'hetzner/estate.ts'
+              - 'hetzner/estate/Pulumi.yaml'
+              - 'hetzner/estate/Pulumi.production.yaml'
+              - 'hetzner/package.json'
+              - 'hetzner/pnpm-lock.yaml'
+              - 'hetzner/.nvmrc'
+              - 'hetzner/tsconfig.json'
+              - 'hetzner-host/**'
               - 'scripts/assert-no-hetzner-deletes.py'
               - '.github/workflows/ci.yml'
 
@@ -740,6 +767,7 @@ jobs:
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
           PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+          PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -748,7 +776,8 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}" \
+                --tenants "${PLANS_TENANTS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1060,6 +1089,7 @@ jobs:
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
           PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+          PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1068,7 +1098,8 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}" \
+                --tenants "${PLANS_TENANTS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1475,6 +1506,7 @@ jobs:
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
           PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+          PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1483,7 +1515,8 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}" \
+                --tenants "${PLANS_TENANTS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1871,6 +1904,7 @@ jobs:
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
           PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+          PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1879,7 +1913,8 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}" \
+                --tenants "${PLANS_TENANTS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -2105,6 +2140,340 @@ jobs:
         run: |
           {
             echo '## Hetzner dns deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-tenants-plan:
+    # The tenants stack (`branchleft-hetzner-tenants`, hetzner/tenants/): the
+    # tenants project's network, edge-t, db-t1 and app-t1, applied from CI like
+    # every other stack here: a plan on a merge to main that touches its
+    # inputs, then an apply paused in `production` for the owner's approval. Unlike the network and estate applies it is never routed
+    # to the free environment: the owner reads every tenants plan.
+    name: Plan (hetzner tenants, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Serialised behind the estate apply, and so behind the network's: the
+    # tenants program resolves a StackReference to the estate stack's current
+    # outputs (edge1PublicIpv4, edge-t's one SSH source), so a plan taken before
+    # the estate applied would show the approver a state the same merge is about
+    # to change. All four jobs are listed, for the reason the estate plan gives:
+    # `failure()` inspects direct needs only, and a failed network plan leaves
+    # both estate jobs skipped, which would otherwise read as success here.
+    needs:
+      [
+        changes,
+        hetzner-typecheck,
+        hetzner-host-typecheck,
+        hetzner-provision-checks,
+        scripts-tests,
+        pulumi-inventory-audit,
+        hetzner-network-plan,
+        hetzner-network-apply,
+        hetzner-estate-plan,
+        hetzner-estate-apply,
+      ]
+    # See hetzner-estate-plan: `!failure() && !cancelled()` because a tenants-only
+    # change leaves the four jobs above skipped, which the default gate reads as
+    # a failure.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.hetzner_tenants == 'true' &&
+      !failure() && !cancelled()
+
+    # See mail-plan: the apply job is skipped only when this is the string 'false'.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
+    # See mail-plan: `actions: write` is only for the cancel step.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
+    defaults:
+      run:
+        working-directory: hetzner/tenants
+
+    # The credential scope: the tenants project's own Hetzner token (Read &
+    # Write on `branchLeft tenants` and nothing else), this stack's own
+    # passphrase (its salt is read from the state), and the state bucket's
+    # Object Storage key, which is
+    # the estate stack's too (one backend, pinned in hetzner/tenants/Pulumi.yaml).
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # See hetzner-estate-plan: hygiene, not a gate.
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+          PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}" \
+                --tenants "${PLANS_TENANTS}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # The tenants project shares hetzner/'s node_modules by design, as the
+      # estate project does: its program file sits in the package root.
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          exit "$fail"
+
+      # The salt is not a secret of ours: it is read from the stack's own state
+      # at run time (`stack export` needs no passphrase and prints no secret),
+      # so a rewrite of the state's secrets provider needs no secret change.
+      - name: Restore the stack's encryption salt
+        run: |
+          set -euo pipefail
+          salt=$(pulumi stack export --stack production | jq -r '.deployment.secrets_providers.state.salt // empty')
+          case "$salt" in
+            v1:*) ;;
+            *) echo "::error::the tenants stack's state holds no encryption salt starting with 'v1:'" ; exit 1;;
+          esac
+          echo "::add-mask::${salt}"
+          printf '\nencryptionsalt: %s\n' "$salt" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        id: preview
+        run: pulumi preview --stack production --json > preview.json
+
+      # See mail-plan: a second preview saves the update plan, best effort.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
+      - name: Refuse a plan that destroys the tenants estate
+        id: deletes
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # See mail-plan: fails closed, and writes the summary's first line.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: hetzner/tenants
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner tenants plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-tenants-apply:
+    name: Apply (hetzner tenants, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [hetzner-tenants-plan]
+    # See mail-apply: a no-op plan skips this job before its environment is asked.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.hetzner-tenants-plan.outputs.has_changes != 'false'
+
+    # Always `production`, a literal: this apply is never routed to the free
+    # environment (the reviewer App does not answer a tenants plan on its own),
+    # so the owner approves each one. The network and estate applies share
+    # this environment, and an approval releases every job waiting in it for a
+    # run; this job needs the estate apply, so it is never waiting beside them.
+    environment: production
+
+    concurrency:
+      group: pulumi-hetzner-tenants-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: hetzner/tenants
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # The environment must pause this job: a required-reviewer rule, or an
+      # enabled custom deployment protection rule of the reviewer App
+      # (integration id 5090756), either of which holds the job until
+      # something answers. The custom rule is not listed in the environment
+      # object's `protection_rules`; it has its own endpoint, read below. Any
+      # failure to read it counts as no rule, so this stays fail-closed.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/environments/production"
+          reviewers=$(gh api "${api}" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          custom=0
+          if out=$(gh api "${api}/deployment_protection_rules" \
+            --jq '[.custom_deployment_protection_rules[]? | select(.enabled == true and .app.id == 5090756)] | length' 2>/dev/null); then
+            custom="${out}"
+          fi
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac
+          if [ "${reviewers}" -eq 0 ] && [ "${custom}" -eq 0 ]; then
+            echo "::error::the production environment has neither a required-reviewer rule nor an enabled custom deployment protection rule of the reviewer App -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_TENANTS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          exit "$fail"
+
+      # See hetzner-tenants-plan: the salt comes from the stack's state.
+      - name: Restore the stack's encryption salt
+        run: |
+          set -euo pipefail
+          salt=$(pulumi stack export --stack production | jq -r '.deployment.secrets_providers.state.salt // empty')
+          case "$salt" in
+            v1:*) ;;
+            *) echo "::error::the tenants stack's state holds no encryption salt starting with 'v1:'" ; exit 1;;
+          esac
+          echo "::add-mask::${salt}"
+          printf '\nencryptionsalt: %s\n' "$salt" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the tenants estate
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner tenants deploy'
             echo
             echo "Commit: \`${COMMIT_SHA}\`"
             echo
