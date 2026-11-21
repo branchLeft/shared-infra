@@ -1,0 +1,564 @@
+---
+# The values come from the scenario's inventory variables (molecule.yml), the same values the
+# role was converged with. Everything below is read from the host, not from the role.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    edge_firewall_verify_private_address: 10.20.1.5
+    edge_firewall_verify_newline: "\n"
+    # The only drops that may come before the control-port accept: the invalid-packet drop.
+    edge_firewall_verify_drops_allowed_before_control_port:
+      - ct state invalid drop
+  tasks:
+    - name: Read the interface the default route leaves through
+      ansible.builtin.include_tasks: tasks/read_uplink.yml
+
+    # ---------------------------------------------------------------------------------------
+    # Forwarding: persisted in the drop-in, set on the (stand-in) running kernel.
+    # ---------------------------------------------------------------------------------------
+    - name: Read the sysctl drop-in's owner, group and mode
+      ansible.builtin.stat:
+        path: /etc/sysctl.d/99-branchleft-nat.conf
+      register: edge_firewall_verify_dropin_stat
+
+    - name: Read the persisted sysctl drop-in
+      ansible.builtin.command:
+        argv: [cat, /etc/sysctl.d/99-branchleft-nat.conf]
+      register: edge_firewall_verify_dropin
+      changed_when: false
+
+    - name: Read the running forwarding value
+      ansible.builtin.command:
+        argv: [sysctl, -n, net.ipv4.ip_forward]
+      register: edge_firewall_verify_forwarding
+      changed_when: false
+
+    - name: Assert forwarding is persisted by the role and on in the running kernel
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_dropin_stat.stat.exists
+          - edge_firewall_verify_dropin_stat.stat.pw_name == 'root'
+          - edge_firewall_verify_dropin_stat.stat.gr_name == 'root'
+          - edge_firewall_verify_dropin_stat.stat.mode == '0644'
+          - "'net.ipv4.ip_forward=1' in edge_firewall_verify_dropin.stdout_lines"
+          - edge_firewall_verify_forwarding.stdout | trim == '1'
+        quiet: true
+        fail_msg: >-
+          Forwarding is not persisted in /etc/sysctl.d/99-branchleft-nat.conf as root:root 0644 with the
+          line net.ipv4.ip_forward=1, or does not read 1 on the running kernel ({{ edge_firewall_verify_forwarding.stdout }}).
+
+    # ---------------------------------------------------------------------------------------
+    # nftables.service is masked, and /etc/nftables.conf is not the role's.
+    # ---------------------------------------------------------------------------------------
+    - name: Read nftables.service as systemd sees it, and the mask file
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [systemctl, is-enabled, nftables.service]
+        - [readlink, /etc/systemd/system/nftables.service]
+      register: edge_firewall_verify_mask
+      changed_when: false
+      failed_when: false
+
+    - name: Assert nftables.service is masked
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_mask.results[0].stdout | trim == 'masked'
+          - edge_firewall_verify_mask.results[1].stdout | trim == '/dev/null'
+        quiet: true
+        fail_msg: nftables.service is not masked, so a start, stop or restart of it flushes the whole ruleset.
+
+    - name: Read the boot rules file of the distribution, which the role must not have written
+      ansible.builtin.command:
+        argv: [grep, -c, branchleft, /etc/nftables.conf]
+      register: edge_firewall_verify_distribution_conf
+      changed_when: false
+      failed_when: false
+
+    - name: Assert /etc/nftables.conf was left alone
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_distribution_conf.stdout | trim == '0'
+        quiet: true
+        fail_msg: /etc/nftables.conf names branchleft, so the role wrote the distribution's boot file.
+
+    # ---------------------------------------------------------------------------------------
+    # The role's own files, unit and tables.
+    # ---------------------------------------------------------------------------------------
+    - name: Read the role's files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /etc/branchleft-firewall
+        - /etc/branchleft-firewall/active.nft
+        - /etc/branchleft-firewall/active.list
+      register: edge_firewall_verify_files
+
+    - name: Assert the rules directory and files have the owner and mode the role gives them
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == ('0700' if item.item == '/etc/branchleft-firewall' else '0600')
+        quiet: true
+        fail_msg: '{{ item.item }} is missing or has the wrong owner or mode.'
+      loop: '{{ edge_firewall_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the boot unit and what systemd links for it
+      ansible.builtin.systemd_service:
+        name: branchleft-firewall.service
+      register: edge_firewall_verify_unit
+
+    - name: Read the link the host's start-up follows to the boot unit, and the unit file
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/systemd/system/sysinit.target.wants/branchleft-firewall.service
+        - /etc/systemd/system/branchleft-firewall.service
+      register: edge_firewall_verify_unit_files
+
+    - name: Read the unit file
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/branchleft-firewall.service
+      register: edge_firewall_verify_unit_text
+
+    - name: Assert the boot unit is enabled, linked, and flushes nothing when stopped
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_unit.status.UnitFileState == 'enabled'
+          - edge_firewall_verify_unit_files.results[0].stat.exists
+          - edge_firewall_verify_unit_files.results[1].stat.exists
+          - "'ExecStart=/usr/sbin/nft -f /etc/branchleft-firewall/active.nft' in unit_lines"
+          - "'ExecReload=/usr/sbin/nft -f /etc/branchleft-firewall/active.nft' in unit_lines"
+          - "'DefaultDependencies=no' in unit_lines"
+          - "'Before=network-pre.target' in unit_lines"
+          - unit_lines | select('match', '^ExecStop') | list | length == 0
+          - "'flush ruleset' not in (edge_firewall_verify_unit_text.content | b64decode | regex_replace('(?m)^#.*$', ''))"
+        quiet: true
+        fail_msg: >-
+          The boot unit is not enabled and linked, does not load the active file, or can flush the
+          ruleset (it has an ExecStop, or names flush ruleset outside a comment).
+      vars:
+        unit_lines: '{{ (edge_firewall_verify_unit_text.content | b64decode).splitlines() }}'
+
+    - name: Read the loaded tables the role owns, with the listing the role recorded
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [/usr/sbin/nft, -s, list, table, inet, branchleft_edge]
+        - [/usr/sbin/nft, -s, list, table, ip, branchleft_edge_nat]
+        - [cat, /etc/branchleft-firewall/active.list]
+      register: edge_firewall_verify_tables
+      changed_when: false
+
+    - name: Assert the loaded tables are the recorded set
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((edge_firewall_verify_tables.results[0].stdout ~ edge_firewall_verify_newline ~ edge_firewall_verify_tables.results[1].stdout)
+            == edge_firewall_verify_tables.results[2].stdout)
+        quiet: true
+        fail_msg: The loaded tables differ from the listing recorded for the active set.
+
+    # ---------------------------------------------------------------------------------------
+    # The input chain, by content.
+    # ---------------------------------------------------------------------------------------
+    - name: Work out the rules of the input chain, in order
+      ansible.builtin.set_fact:
+        edge_firewall_verify_input: >-
+          {{
+            edge_firewall_verify_tables.results[0].stdout.splitlines()
+            | map('trim')
+            | reject('equalto', '')
+            | list
+          }}
+
+    - name: Assert the input chain is enforce mode, in the order the plan gives
+      ansible.builtin.assert:
+        that:
+          - "'type filter hook input priority filter; policy drop;' in edge_firewall_verify_input"
+          - edge_firewall_verify_input.index('ct state invalid drop') < edge_firewall_verify_input.index('ct state established,related accept')
+          - >-
+            edge_firewall_verify_input.index('ct state established,related accept')
+            < edge_firewall_verify_input.index('iif "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept')
+          - >-
+            edge_firewall_verify_input.index('iif "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept')
+            < edge_firewall_verify_input.index('tcp dport 22 accept')
+          - '''iif "lo" ip6 saddr ::1 ip6 daddr ::1 accept'' in edge_firewall_verify_input'
+          - "'udp sport 67 udp dport 68 accept' in edge_firewall_verify_input"
+          - "'udp sport 547 udp dport 546 accept' in edge_firewall_verify_input"
+          - edge_firewall_verify_icmp | length == 1
+          - edge_firewall_verify_icmp[0] | regex_replace(edge_firewall_verify_set_pattern, '\\1') | split(', ') | sort == edge_firewall_verify_icmp_types | sort
+          - edge_firewall_verify_icmpv6 | length == 1
+          - >-
+            edge_firewall_verify_icmpv6[0] | regex_replace(edge_firewall_verify_set_pattern, '\\1') | split(', ') | sort
+            == edge_firewall_verify_icmpv6_types | sort
+          - "'tcp dport { 80, 443 } accept' in edge_firewall_verify_input"
+          - '''iifname "br-*" tcp dport { 2586, 3000, 6060, 9091 } accept'' in edge_firewall_verify_input'
+          - '''iifname "docker0" tcp dport { 2586, 3000, 6060, 9091 } accept'' in edge_firewall_verify_input'
+          - '''iif "lo" tcp dport { 2586, 3000, 6060, 9091 } accept'' in edge_firewall_verify_input'
+          - edge_firewall_verify_log_rules | length == 4
+          - (edge_firewall_verify_log_rules | last).startswith('counter')
+          - edge_firewall_verify_input.index('tcp dport 22 accept') < edge_firewall_verify_input.index(edge_firewall_verify_log_rules[0])
+        quiet: true
+        fail_msg: >-
+          The loaded input chain is not the plan's: the policy, the order of the first rules, a
+          rule the plan lists, or the log rules are missing. Chain: {{ edge_firewall_verify_input }}
+      vars:
+        # nft lists a set in its own order, so the sets are compared as sets.
+        edge_firewall_verify_set_pattern: '^icmp(?:v6)? type \{ (.*) \} accept$'
+        edge_firewall_verify_icmp_types:
+          [echo-request, echo-reply, destination-unreachable, time-exceeded, parameter-problem]
+        edge_firewall_verify_icmpv6_types:
+          - destination-unreachable
+          - packet-too-big
+          - time-exceeded
+          - parameter-problem
+          - echo-request
+          - echo-reply
+          - nd-router-advert
+          - nd-neighbor-solicit
+          - nd-neighbor-advert
+          - mld-listener-query
+        edge_firewall_verify_icmp: "{{ edge_firewall_verify_input | select('match', '^icmp type ') | list }}"
+        edge_firewall_verify_icmpv6: "{{ edge_firewall_verify_input | select('match', '^icmpv6 type ') | list }}"
+        edge_firewall_verify_log_pattern: 'log prefix "branchleft-fw would-drop: "( return)?$'
+        edge_firewall_verify_log_rules: "{{ edge_firewall_verify_input | select('search', edge_firewall_verify_log_pattern) | list }}"
+
+    # The control-port rule is read as a rule: it has no source or interface restriction (a rule
+    # that read `ip saddr ... tcp dport 22 accept` would not equal this line), and the only drops
+    # before it are the ones allowed.
+    - name: Assert the control-port accept has no restriction and nothing but the allowed drops comes before it
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_input | select('equalto', 'tcp dport 22 accept') | list | length == 1
+          - edge_firewall_verify_input | select('search', 'dport 22') | list == ['tcp dport 22 accept']
+          - >-
+            edge_firewall_verify_before_control | select('search', '(^|\\s)(drop|reject)$') | list
+            | difference(edge_firewall_verify_drops_allowed_before_control_port) | length == 0
+        quiet: true
+        fail_msg: >-
+          The tcp/22 accept carries a restriction, is repeated, or an unconditional drop or reject comes
+          before it. Chain: {{ edge_firewall_verify_input }}
+      vars:
+        edge_firewall_verify_before_control: "{{ edge_firewall_verify_input[: edge_firewall_verify_input.index('tcp dport 22 accept')] }}"
+
+    - name: Assert neither table has a forward or output chain, so Docker keeps the forwarding policy
+      ansible.builtin.assert:
+        that:
+          - "'hook forward' not in edge_firewall_verify_tables.results[0].stdout"
+          - "'hook output' not in edge_firewall_verify_tables.results[0].stdout"
+          - "'hook forward' not in edge_firewall_verify_tables.results[1].stdout"
+          - "'hook output' not in edge_firewall_verify_tables.results[1].stdout"
+          - "'flush' not in edge_firewall_verify_tables.results[2].stdout"
+        quiet: true
+        fail_msg: A table of the role has a forward or output chain, or a flush.
+
+    # ---------------------------------------------------------------------------------------
+    # The NAT table, by content, against the uplink read from the host independently.
+    # ---------------------------------------------------------------------------------------
+    - name: Assert one masquerade, scoped to the estate subnet and the real uplink
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_masquerade | length == 1
+          - edge_firewall_verify_masquerade[0] == 'ip saddr 10.20.1.0/24 oifname "' ~ edge_firewall_scenario_uplink_dev ~ '" masquerade'
+          - edge_firewall_verify_tables.results[1].stdout | regex_findall('masquerade') | length == 1
+        quiet: true
+        fail_msg: >-
+          The NAT table does not masquerade the estate subnet out of {{ edge_firewall_scenario_uplink_dev }} exactly once.
+          Table: {{ edge_firewall_verify_tables.results[1].stdout }}
+      vars:
+        edge_firewall_verify_masquerade: >-
+          {{ edge_firewall_verify_tables.results[1].stdout.splitlines() | map('trim')
+          | select('search', 'masquerade$') | list }}
+
+    # ---------------------------------------------------------------------------------------
+    # Docker's stand-in rules, and the legacy rule.
+    # ---------------------------------------------------------------------------------------
+    - name: Read the rules Docker's stand-in must hold, as recorded by the converge play
+      ansible.builtin.slurp:
+        src: /run/edge-firewall-docker-expected.json
+      register: edge_firewall_verify_docker_expected
+
+    - name: Read Docker's stand-in rules now
+      ansible.builtin.include_tasks: tasks/docker_snapshot.yml
+
+    - name: Read whether the legacy masquerade rule is still in iptables
+      ansible.builtin.command:
+        argv:
+          [
+            iptables,
+            -t,
+            nat,
+            -C,
+            POSTROUTING,
+            -s,
+            10.20.1.0/24,
+            -o,
+            '{{ edge_firewall_scenario_uplink_dev }}',
+            -j,
+            MASQUERADE,
+          ]
+      register: edge_firewall_verify_legacy
+      changed_when: false
+      failed_when: false
+
+    - name: Assert Docker's stand-in rules are intact and the legacy masquerade rule is gone
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_docker_now == (edge_firewall_verify_docker_expected.content | b64decode | from_json)
+          - edge_firewall_verify_legacy.rc != 0
+          - edge_firewall_docker_now | select('search', 'DOCKER-USER -s 192.0.2.0/24 -j ACCEPT') | list | length == 1
+          - edge_firewall_docker_now | select('search', '--to-destination 172.17.0.2:8443') | list | length == 1
+          - edge_firewall_docker_now | select('match', '^:FORWARD DROP') | list | length == 1
+        quiet: true
+        fail_msg: >-
+          Docker's stand-in rules differ from what they were before the role ran, or the legacy
+          masquerade rule is still there.
+
+    # ---------------------------------------------------------------------------------------
+    # The runbook's gateway check, run as written against the kernel's own text.
+    # ---------------------------------------------------------------------------------------
+    - name: Read the grep patterns of the runbook's gateway check, on the machine that runs the test
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python }}'
+          - '{{ playbook_dir }}/files/runbook_patterns.py'
+          - '{{ playbook_dir }}/../../../../../hetzner/RUNBOOK-provision-host.md'
+      delegate_to: localhost
+      register: edge_firewall_verify_runbook_patterns
+      changed_when: false
+
+    - name: Run each pattern of the check against the loaded NAT table, as the runbook does
+      ansible.builtin.command:
+        argv: [grep, -E, --, '{{ item }}']
+        stdin: '{{ edge_firewall_verify_tables.results[1].stdout }}'
+      loop: '{{ (edge_firewall_verify_runbook_patterns.stdout | from_json).nat_table }}'
+      changed_when: false
+
+    # ---------------------------------------------------------------------------------------
+    # The flows kept open, and the one shut, in enforce mode. Each connection is to the host's
+    # own private address, which enters the input chain on the loopback interface with a
+    # non-loopback source: it passes only through the rule that names its port.
+    # ---------------------------------------------------------------------------------------
+    - name: Connect to every port the plan keeps open
+      ansible.builtin.wait_for:
+        host: '{{ edge_firewall_verify_private_address }}'
+        port: '{{ item.port }}'
+        state: started
+        timeout: 5
+      loop:
+        - { port: 22, flow: SSH from CI and from the owner }
+        - { port: 80, flow: public HTTP, the ACME challenge }
+        - { port: 443, flow: public HTTPS }
+        - { port: 2586, flow: the pager behind Caddy }
+        - { port: 3000, flow: Grafana }
+        - { port: 6060, flow: CrowdSec metrics }
+        - { port: 9091, flow: Caddy metrics }
+      loop_control:
+        label: '{{ item.port }}: {{ item.flow }}'
+
+    - name: Connect to a port nothing allows, on loopback (the 127.0.0.0/8 rule) and on the private address
+      ansible.builtin.wait_for:
+        host: '{{ item }}'
+        port: 9999
+        state: started
+        timeout: 3
+      register: edge_firewall_verify_nine
+      failed_when: false
+      loop:
+        - 127.0.0.1
+        - '{{ edge_firewall_verify_private_address }}'
+
+    - name: Assert loopback is open by address and the same port on the private address is shut
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_nine.results[0] is not failed
+          - edge_firewall_verify_nine.results[0].elapsed < 3
+          - edge_firewall_verify_nine.results[1].msg is defined
+          - "'Timeout' in edge_firewall_verify_nine.results[1].msg"
+        quiet: true
+        fail_msg: >-
+          In enforce mode a connection to 127.0.0.1:9999 must work (the loopback rule) and one to
+          {{ edge_firewall_verify_private_address }}:9999 must be dropped. Loopback: {{ edge_firewall_verify_nine.results[0] }}.
+          Private: {{ edge_firewall_verify_nine.results[1] }}.
+
+    - name: Connect to the edge probe on loopback
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8080
+        state: started
+        timeout: 5
+
+    - name: Ping the host's own private address
+      ansible.builtin.command:
+        argv: [ping, -c, '1', -W, '3', '{{ edge_firewall_verify_private_address }}']
+      changed_when: false
+
+    # ---------------------------------------------------------------------------------------
+    # Docker's rules survive everything that touches nftables: the boot unit restarting, a
+    # restart of nftables.service (refused: it is masked), a reinstall of the package.
+    # ---------------------------------------------------------------------------------------
+    - name: Restart the boot unit
+      ansible.builtin.systemd_service:
+        name: branchleft-firewall.service
+        state: restarted
+
+    - name: Try to restart nftables.service, which flushes the whole ruleset when it is allowed to run
+      ansible.builtin.command:
+        argv: [systemctl, restart, nftables.service]
+      register: edge_firewall_verify_restart_nftables
+      changed_when: false
+      failed_when: false
+
+    - name: Try to start nftables.service
+      ansible.builtin.command:
+        argv: [systemctl, start, nftables.service]
+      register: edge_firewall_verify_start_nftables
+      changed_when: false
+      failed_when: false
+
+    - name: Reinstall the nftables package, as an upgrade does
+      ansible.builtin.command:
+        argv: [apt-get, install, --reinstall, --yes, nftables]
+      changed_when: true
+
+    - name: Read Docker's stand-in rules after all of that
+      ansible.builtin.include_tasks: tasks/docker_snapshot.yml
+
+    - name: Read the role's tables after all of that
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [/usr/sbin/nft, -s, list, table, inet, branchleft_edge]
+        - [/usr/sbin/nft, -s, list, table, ip, branchleft_edge_nat]
+      register: edge_firewall_verify_tables_after
+      changed_when: false
+
+    - name: Assert Docker's chains survived and nftables.service stayed refused
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_restart_nftables.rc != 0
+          - edge_firewall_verify_start_nftables.rc != 0
+          - "'masked' in edge_firewall_verify_restart_nftables.stderr"
+          - edge_firewall_docker_now == (edge_firewall_verify_docker_expected.content | b64decode | from_json)
+          - >-
+            ((edge_firewall_verify_tables_after.results[0].stdout ~ edge_firewall_verify_newline ~ edge_firewall_verify_tables_after.results[1].stdout)
+            == edge_firewall_verify_tables.results[2].stdout)
+        quiet: true
+        fail_msg: >-
+          Docker's stand-in rules or the role's tables changed under a restart of the boot unit, a
+          restart of nftables.service or a reinstall of the package, or nftables.service ran.
+          Restart: {{ edge_firewall_verify_restart_nftables.stderr }}
+
+    # A restart of the host cannot be made from inside the container. The unit is the thing a
+    # start runs. So the role's own tables (and only those) are deleted, as a restart leaves
+    # them, the unit is started, and the loaded tables must be the recorded set again.
+    - name: Delete the role's own tables, as a restart of the host leaves them
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [/usr/sbin/nft, delete, table, inet, branchleft_edge]
+        - [/usr/sbin/nft, delete, table, ip, branchleft_edge_nat]
+      changed_when: true
+
+    - name: Start the boot unit, which loads the active file
+      ansible.builtin.systemd_service:
+        name: branchleft-firewall.service
+        state: restarted
+
+    - name: Read the loaded tables after the unit ran
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [/usr/sbin/nft, -s, list, table, inet, branchleft_edge]
+        - [/usr/sbin/nft, -s, list, table, ip, branchleft_edge_nat]
+      register: edge_firewall_verify_booted
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the boot unit restores the recorded set and Docker's rules are still intact
+      ansible.builtin.assert:
+        that:
+          - (edge_firewall_verify_booted.results | map(attribute='rc') | list) == [0, 0]
+          - >-
+            ((edge_firewall_verify_booted.results[0].stdout ~ edge_firewall_verify_newline ~ edge_firewall_verify_booted.results[1].stdout)
+            == edge_firewall_verify_tables.results[2].stdout)
+        quiet: true
+        fail_msg: The boot unit did not restore the recorded set from the active file.
+
+    # ---------------------------------------------------------------------------------------
+    # Drift. One of the role's tables is deleted, as a foreign tool might. The role must see it,
+    # say so in check mode without loading, and then repair it.
+    # ---------------------------------------------------------------------------------------
+    - name: Delete the role's NAT table
+      ansible.builtin.command:
+        argv: [/usr/sbin/nft, delete, table, ip, branchleft_edge_nat]
+      changed_when: true
+
+    - name: Run the role in check mode against the damaged kernel
+      ansible.builtin.include_role:
+        name: branchleft.edge_firewall
+        apply:
+          check_mode: true
+
+    - name: Keep what the check-mode run reported
+      ansible.builtin.set_fact:
+        edge_firewall_verify_planned: '{{ edge_firewall_drift }}'
+        edge_firewall_verify_planned_reload: '{{ edge_firewall_reloaded }}'
+
+    - name: Read the tables after the check-mode run
+      ansible.builtin.command:
+        argv: [/usr/sbin/nft, list, tables]
+      register: edge_firewall_verify_after_plan
+      changed_when: false
+
+    - name: Assert check mode reported the missing table and loaded nothing
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_verify_planned | length > 0
+          - not (edge_firewall_verify_planned_reload | bool)
+          - "'branchleft_edge_nat' not in edge_firewall_verify_after_plan.stdout"
+        quiet: true
+        fail_msg: The check-mode run did not report that a table is gone, or it loaded it.
+
+    - name: Run the role for real against the damaged kernel
+      ansible.builtin.include_role:
+        name: branchleft.edge_firewall
+
+    - name: Read the loaded tables after the repair
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [/usr/sbin/nft, -s, list, table, inet, branchleft_edge]
+        - [/usr/sbin/nft, -s, list, table, ip, branchleft_edge_nat]
+      register: edge_firewall_verify_repaired
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the role reloaded what it found missing
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_reloaded | bool
+          - >-
+            ((edge_firewall_verify_repaired.results[0].stdout ~ edge_firewall_verify_newline ~ edge_firewall_verify_repaired.results[1].stdout)
+            == edge_firewall_verify_tables.results[2].stdout)
+        quiet: true
+        fail_msg: The role did not reload the table after it was deleted.
+
+    - name: Run the role again on the repaired kernel
+      ansible.builtin.include_role:
+        name: branchleft.edge_firewall
+
+    - name: Assert a repaired host reports nothing to do
+      ansible.builtin.assert:
+        that:
+          - edge_firewall_drift | length == 0
+          - not (edge_firewall_reloaded | bool)
+        quiet: true
+        fail_msg: The role still reports drift after it repaired the kernel.
