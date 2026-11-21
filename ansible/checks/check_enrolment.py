@@ -206,14 +206,17 @@ EXPECTED_ROLES = [
 # network's egress. A network does not span hcloud projects, so the switch is on one host per
 # network: edge1 for the estate's network and edget (edge-t) for the tenants network, and no
 # other host. R2 allows no `vars` on a role entry, so these rows are their one home.
-HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
+HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
     "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
-    "edget": {"egress_nat_gateway_enabled": True},
+    "edget": {"egress_nat_gateway_enabled": True, "host_baseline_journal_retention_days": 30},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
     "ops1": {"deploy_tooling_host_class": "internal"},
     "db1": {"deploy_tooling_host_class": "internal"},
-    "dbt1": {"deploy_tooling_host_class": "internal"},
-    "appt1": {"deploy_tooling_host_class": "internal"},
+    # The three tenant hosts keep their journal for 30 days, inside the 90 days the privacy
+    # notice states for server logs; test_tenant_host_monitoring.py holds the figure and
+    # the ceiling.
+    "dbt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
+    "appt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
     # mx1's jail has no ignoreip line (the opt-out of host_baseline). The pin is here, and the
     # playbook must carry the same value (R2 holds it exactly).
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},

@@ -316,6 +316,9 @@ CROWDSEC_FILES_INSIDE = {
     "scenarios/ghost-admin-login-bruteforce.yaml": (
         "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml"
     ),
+    "scenarios/http-admin-interface-probing.yaml": (
+        "/etc/crowdsec/scenarios/branchleft/http-admin-interface-probing.yaml"
+    ),
     "remediation/profiles.yaml": "/etc/crowdsec-remediation/profiles.yaml",
     "remediation/simulation.yaml": "/etc/crowdsec-remediation/simulation.yaml",
 }

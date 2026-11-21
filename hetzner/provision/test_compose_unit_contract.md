@@ -148,7 +148,7 @@ No `ExecStop`, so a restart's stop transition executes nothing.
 
 ## MonitoringForceRecreateTests
 
-`branchLeft/workspace#666`: a bind-mounted config change is invisible to
+A bind-mounted config change is invisible to
 Compose's own per-service hash, so the template's selective ExecStart
 (relied on by `edge`, per branchLeft/shared-infra#171) silently does not
 redeploy a rules or scrape-config edit to `monitoring`. `monitoring` has

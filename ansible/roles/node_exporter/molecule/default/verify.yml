@@ -17,6 +17,7 @@
         - /etc/default/node-exporter
         - /etc/systemd/system/node_exporter.service
         - /var/lib/branchleft/backup-worker-exporter
+        - /var/lib/branchleft/support-access-exporter
       register: node_exporter_verify_installed
 
     - name: Read the unit in the repository, on the machine that runs the test
@@ -34,6 +35,9 @@
           - node_exporter_verify_installed.results[0].stat.mode == '0755'
           - node_exporter_verify_installed.results[2].stat.checksum == node_exporter_verify_source.stat.checksum
           - node_exporter_verify_installed.results[2].stat.mode == '0644'
+          - node_exporter_verify_installed.results[4].stat.isdir
+          - node_exporter_verify_installed.results[4].stat.pw_name == 'root'
+          - node_exporter_verify_installed.results[4].stat.mode == '0755'
         quiet: true
         fail_msg: The binary or the unit is missing, not owned as the role owns it, or differs from its source in the repository.
 
@@ -49,6 +53,7 @@
             (node_exporter_verify_env.content | b64decode | trim)
             == 'NODE_EXPORTER_LISTEN_ADDRESS=' ~ (ansible_all_ipv4_addresses | select('match', '^172[.]') | first)
           - "'--collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter' in lookup('ansible.builtin.file', verify_node_unit_src)"
+          - "'--collector.textfile.directory=/var/lib/branchleft/support-access-exporter' in lookup('ansible.builtin.file', verify_node_unit_src)"
         quiet: true
         fail_msg: The exporter is not bound to the container's own address, or its unit does not name the textfile directory.
 

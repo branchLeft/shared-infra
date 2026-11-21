@@ -12,12 +12,13 @@ import {
   metricsBlock,
   probeBlock,
   protectionChain,
+  renderAdminProbingScenario,
   renderAppsecAcquisition,
   renderBlock,
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
-  renderGhostAdminPostoverflow,
   renderGhostBruteForceScenario,
+  renderHubAdminProbingPostoverflow,
   renderProfiles,
   renderSimulation,
   type Block,
@@ -119,9 +120,21 @@ export function renderTenantGhostAdminAppsecConfig(): string {
   return tenantBanner(renderGhostAdminAppsecConfig(EVERY_HOST));
 }
 
-/** The admin API post-overflow whitelist, with no hostname list, for the same reason. */
-export function renderTenantGhostAdminPostoverflow(): string {
-  return tenantBanner(renderGhostAdminPostoverflow(EVERY_HOST));
+/**
+ * The post-overflow that silences the hub's admin-interface probing scenario, as the
+ * estate's, which names no hostname: ours below is the one that bans.
+ */
+export function renderTenantHubAdminProbingPostoverflow(): string {
+  return tenantBanner(renderHubAdminProbingPostoverflow());
+}
+
+/**
+ * The admin-interface probing scenario, with no hostname list: every site this edge
+ * serves is a tenant's Ghost, so a 403 or 404 on the Ghost admin API prefix is never
+ * counted, on any name (`render.md`, "Host scope of the Ghost files").
+ */
+export function renderTenantAdminProbingScenario(): string {
+  return tenantBanner(renderAdminProbingScenario(EVERY_HOST));
 }
 
 /** The admin brute-force scenario, with no hostname list, for the same reason. */
@@ -155,8 +168,9 @@ export function renderTenantStack(
     ['crowdsec/appsec-configs/ghost-admin-previews.yaml', renderTenantGhostAdminAppsecConfig()],
     [
       'crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml',
-      renderTenantGhostAdminPostoverflow(),
+      renderTenantHubAdminProbingPostoverflow(),
     ],
+    ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/scenarios/ghost-admin-login-bruteforce.yaml', renderTenantGhostBruteForceScenario()],
     ['crowdsec/remediation/profiles.yaml', renderTenantProfiles()],
     ['crowdsec/remediation/simulation.yaml', renderTenantSimulation()],

@@ -12,7 +12,15 @@ import {
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
   DB_DUMP_STALE_SECONDS,
+  ALERTMANAGER_PORT,
+  BLACKBOX_EXPORTER_PORT,
+  CADDY_METRICS_PORT,
+  CADVISOR_PORT,
+  CROWDSEC_METRICS_PORT,
   MONITORED_MYSQLD_HOST,
+  MYSQLD_EXPORTER_PORT,
+  PROMETHEUS_PORT,
+  WEBSITE_METRICS_PORT,
   MONITORED_NODE_HOSTS,
   MONITORED_REPLICA_HOST,
   NODE_EXPORTER_PORT,
@@ -28,7 +36,7 @@ import {
   renderAlertRulesWithDeadline,
   renderPrometheusConfig,
 } from './render';
-import { HOST_IPS } from '@branchleft/hetzner-host';
+import { EDGE_RULES, HOST_IPS, INTERNAL_RULES, TENANTS_HOST_IPS } from '@branchleft/hetzner-host';
 
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
@@ -92,7 +100,15 @@ describe("the pager's own liveness", () => {
 
 describe('the rendered Prometheus config', () => {
   it('names every estate host membership, address-plan-derived rather than typed twice', () => {
-    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual(['edge1', 'app1', 'db1', 'ops1']);
+    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual([
+      'edge1',
+      'app1',
+      'db1',
+      'ops1',
+      'db-t1',
+      'app-t1',
+      'edge-t',
+    ]);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.address).toBe('10.20.1.10');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.address).toBe('10.20.1.100');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.address).toBe('10.20.1.20');
@@ -1107,5 +1123,114 @@ describe('the committed stack directory', () => {
     await expect(renderAlertmanagerTemplate()).toMatchFileSnapshot(
       './stack/alertmanager/alertmanager.yml.tmpl'
     );
+  });
+});
+
+describe('the tenant hosts', () => {
+  const tenantHosts = [
+    { name: 'db-t1', address: TENANTS_HOST_IPS.dbT1 },
+    { name: 'app-t1', address: TENANTS_HOST_IPS.appT1 },
+    { name: 'edge-t', address: TENANTS_HOST_IPS.edgeT },
+  ];
+  const promConfig = renderPrometheusConfig(sites);
+  const rules = renderAlertRules();
+  // The memory cases are their own file (a 24h `for` needs a coarser evaluation
+  // interval), so a host's cases are read across both.
+  const promtoolCases = ['alert_rules_test.yml', 'alert_rules_memory_test.yml']
+    .map((file) => readFileSync(join(__dirname, file), 'utf8'))
+    .join('\n');
+
+  it("scrapes each one's node_exporter on its tenants-network address, expected down until it is enrolled", () => {
+    for (const { name, address } of tenantHosts) {
+      const host = MONITORED_NODE_HOSTS.find((candidate) => candidate.name === name);
+      expect(host?.address, `${name} address`).toBe(address);
+      expect(host?.expectedUp, `${name} expectedUp`).toBe(false);
+      expect(promConfig).toContain(
+        `targets: ['${address}:${NODE_EXPORTER_PORT}']\n        labels: {host: ${name}, expected_up: 'false'}`
+      );
+    }
+  });
+
+  it('never lists a tenant host as expected up while no scrape path reaches the tenants network', () => {
+    // The flip is a reviewed change made when a host is enrolled and read back
+    // answering live (RUNBOOK-monitoring.md); this holds it from moving alone.
+    expect(
+      MONITORED_NODE_HOSTS.filter((host) => tenantHosts.some((t) => t.name === host.name)).map(
+        (host) => host.expectedUp
+      )
+    ).toEqual([false, false, false]);
+  });
+
+  it('evaluates the disk and memory rules for every host, because neither rule selects on a host or on expected_up', () => {
+    for (const alert of ['HostDiskSpaceLow', 'HostMemoryPressure']) {
+      const start = rules.indexOf(`- alert: ${alert}`);
+      expect(start, alert).toBeGreaterThan(-1);
+      const rule = rules.slice(start, rules.indexOf('labels:', start));
+      expect(rule, `${alert} expr`).not.toMatch(/host\s*=|expected_up|job\s*=|instance\s*=/);
+    }
+  });
+
+  it("holds a promtool case for each host's disk, memory and host-down alert", () => {
+    for (const { name, address } of tenantHosts) {
+      const instance = `instance="${address}:${NODE_EXPORTER_PORT}", host="${name}"`;
+      for (const metric of [
+        'node_filesystem_avail_bytes',
+        'node_filesystem_size_bytes',
+        'node_memory_MemAvailable_bytes',
+        'node_memory_MemTotal_bytes',
+        'up',
+      ]) {
+        expect(promtoolCases, `${name} ${metric}`).toContain(`${metric}{job="node", ${instance}`);
+      }
+      expect(
+        new RegExp(`alertname="HostDiskSpaceLow"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} disk alert`
+      ).toBe(true);
+      expect(
+        new RegExp(`alertname="HostMemoryPressure"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} memory alert`
+      ).toBe(true);
+      expect(
+        new RegExp(`alertname="HostOrServiceDown"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} host-down alert`
+      ).toBe(true);
+    }
+  });
+
+  it('opens no metrics port in any firewall rule the hosts can be given', () => {
+    const metricsPorts = [
+      NODE_EXPORTER_PORT,
+      MYSQLD_EXPORTER_PORT,
+      REPLICA_TUNNEL_METRICS_PORT,
+      CADVISOR_PORT,
+      BLACKBOX_EXPORTER_PORT,
+      ALERTMANAGER_PORT,
+      PROMETHEUS_PORT,
+      CADDY_METRICS_PORT,
+      CROWDSEC_METRICS_PORT,
+      WEBSITE_METRICS_PORT,
+    ];
+    // A rule's port is one number or a range ('9100-9200'); both are read.
+    const covers = (rulePort: string, port: number): boolean => {
+      const [low, high = low] = rulePort.split('-').map(Number);
+      return port >= low! && port <= high!;
+    };
+    for (const [name, ruleSet] of [
+      ['EDGE_RULES', EDGE_RULES],
+      ['INTERNAL_RULES', INTERNAL_RULES],
+    ] as const) {
+      const opened = ruleSet
+        .filter((rule) => rule.port !== undefined)
+        .flatMap((rule) =>
+          metricsPorts.filter((port) => covers(String(rule.port), port)).map((port) => `${port}`)
+        );
+      expect(opened, name).toEqual([]);
+    }
   });
 });
