@@ -838,7 +838,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1191,7 +1191,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1603,7 +1603,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1958,7 +1958,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
