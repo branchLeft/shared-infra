@@ -86,6 +86,17 @@ argument_specs:
           the one file the load grant names, and the broker's image temporary
           directory setting.
         default: /var/lib/branchleft-broker/image-tmp
+      broker_deploy_owner_due_diligence_email:
+        type: str
+        no_log: true
+        description: >-
+          The owner's address, which the broker adds to every demo as a reader and
+          which the broker refuses to start without (OWNER_DUE_DILIGENCE_EMAIL in the
+          broker's environment file). It is an input the owner places on the host, never
+          a value in this repository. Empty until it is placed; while a release is
+          carried, an empty value, or one that is not a plain address, refuses the run
+          before anything is written. The value is never printed.
+        default: ''
       broker_deploy_sudoers_path:
         type: path
         description: Where the sudoers grant is installed, a file under /etc/sudoers.d.

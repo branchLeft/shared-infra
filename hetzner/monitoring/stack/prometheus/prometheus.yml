@@ -160,3 +160,11 @@ scrape_configs:
     relabel_configs:
       - target_label: instance
         replacement: 'mx1.branchleft.co.uk:443'
+
+  - job_name: release_watcher
+    scrape_interval: 2m
+    scheme: https
+    metrics_path: /branchLeft/ghost-platform/state/release-watcher/release-watcher.prom
+    static_configs:
+      - targets: ['raw.githubusercontent.com:443']
+        labels: {host: github}

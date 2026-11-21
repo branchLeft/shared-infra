@@ -98,3 +98,11 @@ overrides:
   tenant_scrape_tunnel_target_host_key:
     type: str
     value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+  # The tenant database entry point's two inputs: a throwaway public key (no comment, as the
+  # role requires) and a documentation address.
+  db_t1_tenant_entry_controller_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10
+  db_t1_tenant_entry_controller_address:
+    type: str
+    value: 192.0.2.20
