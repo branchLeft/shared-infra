@@ -2,6 +2,8 @@
 - name: Verify
   hosts: all
   gather_facts: false
+  vars_files:
+    - vars/stack.yml
   vars:
     verify_entry_type: "{{ scenario_entry_public.split(' ')[0] }}"
     verify_entry_body: "{{ scenario_entry_public.split(' ')[1] }}"
@@ -251,6 +253,11 @@
           - tenant_entry_verify_register_after.files | map(attribute='path') | map('basename') | sort | list == ['.lock', 'example-tenant.json']
         quiet: true
 
+    # A fresh tenant through claim (above), secrets, stack and enable, with status after each,
+    # and every way the stack verb must refuse. See tasks/lifecycle.yml.
+    - name: Run a fresh tenant through the set-up and refuse every stack that must be refused
+      ansible.builtin.include_tasks: tasks/lifecycle.yml
+
     - name: Refuse an empty key, which is never read as remove every key
       ansible.builtin.include_tasks: tasks/refused.yml
       vars:
@@ -424,4 +431,5 @@
         that:
           - verify_key_bodies | select('in', tenant_entry_verify_log) | list | length == 0
           - "'EXAMPLEHASH' not in tenant_entry_verify_log"
+          - tenant_entry_stack_secrets_values.values() | select('in', tenant_entry_verify_log) | list | length == 0
         quiet: true

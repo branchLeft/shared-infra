@@ -18,15 +18,18 @@ it:
   argument) and its authorised keys, which are exactly one line: the controller's key, restricted,
   limited to the declared source addresses, and forced to the program;
 - the register directory of the tenants the program has claimed;
-- the tenant secrets program, fetched from ghost-platform at one pinned commit.
+- the tenant secrets program, fetched from ghost-platform at one pinned commit;
+- the judge of a tenant's compose text, a byte-identical copy of `tenant_compose`'s module, which
+  the program loads from a root-owned file.
 
 It does not run the program. A request is made over SSH by the controller, never by Ansible.
 
 It does not install the programs the entry point calls. The volume program and its name register
-come from `tenant_onboarding`, the slot program from `deploy_slot_keys`, and the compose file and
-the deploy wrapper from `tenant_compose` and `deploy_tooling`. This role reads that they are there
-and fails closed, naming the program, when one is not. It never writes a compose file, because every
-line of that file is an isolation control that the renderer owns and `tenant_compose` judges.
+come from `tenant_onboarding`, the slot program from `deploy_slot_keys`, and the deploy wrapper from
+`deploy_tooling`. This role reads that they are there and fails closed, naming the program, when one
+is not. It writes a compose file only through the `stack` verb, which gives the text to the same
+judge `tenant_compose` runs and writes it only if every rule passes, because every line of that file
+is an isolation control that the renderer owns.
 
 It does not mint, store or print a key or a secret. The controller's public key is the role's one
 input. The role adds itself to no playbook (see "Owner steps").
@@ -43,6 +46,7 @@ hyphens, 26 characters at most); the volume program stays the authority on reser
 | `status`  | none                                       | Reports how far one slug has got. A slug this entry point never claimed reports only that.                                                                                                                                                                          | nothing                 |
 | `claim`   | none                                       | Takes the lowest free uid in 30000 to 30999 and the first free block of four ports from 40000, writes the slug's marker, and asks the volume program to make the volumes and claim the uid. Prints the uid and the three ports (colour a, colour b, health router). | the slug exists nowhere |
 | `secrets` | `template`, `values`                       | Writes the template to a closed temporary file and passes the values on the secrets program's stdin. The program writes the tenant's secrets file.                                                                                                                  | `claim`                 |
+| `stack`   | `compose_text`, `image_env_text`           | Judges the rendered compose text with the judge `tenant_compose` runs and, only if it passes, writes `compose.yml` and the first image pin. Never over a file, never outside the slot.                                                                              | `secrets` file in place |
 | `enable`  | none                                       | Enables the tenant's compose unit, never starts it: the unit has no image pin until its first deploy.                                                                                                                                                               | `secrets` file in place |
 | `key`     | `public_key`                               | Grants the slug's deploy slot to one ed25519 public key through the slot program, once. A slot that exists is never replaced.                                                                                                                                       | `enable`                |
 | `owner`   | `colour`, `name`, `site_url`, `site_title` | Finds the running colour's container and runs the platform's own owner script, so the Ghost owner exists before the hostname is served.                                                                                                                             | `enable`                |
@@ -51,9 +55,26 @@ The order is enforced by the program, not by the caller: a later verb on a slug 
 the earlier step is refused by name (`secrets-first`, `enable-first`). The secrets file is in place
 before the service is named, because the reverse aborts the whole stack.
 
+The `stack` verb gives the rendered compose text, the tenant's own uid, the volume program's claims,
+the tenant's secrets file and the first image pin to the judge, and only if the judge passes every
+rule and the pin is the one tenant image does it write `compose.yml` in the slug's stack directory
+and the first `SLUG.image.env`. It refuses by name: `not-claimed-here` and `secrets-first` before it reads its
+payload, `payload-keys`, `payload-too-large` and `field-compose_text` or `field-image_env_text` for a
+payload that is not exactly the two strings, `path-outside-slot` for a stack directory that is a
+link, not a directory or not root's, `stack-exists` for a file that is already there, `judge-refused`
+when the judge refuses the stack, `image-not-tenant` for a first pin that is not
+`ghcr.io/branchleft/ghost-tenant` by digest (the one image the deploy wrapper verifies),
+`claim-mismatch`, and `judge-unsafe` for a judge file that is not root's or is writable by another
+user. A judge that is missing, or has no PyYAML, is `failed: judge-missing` or
+`failed: judge-yaml-missing`. A `judge-refused` is the one refusal that carries more than its word:
+the rules the judge says were broken follow it, one line, cut to 1000 characters. The judge names
+rules, services and key names and never a value, and the program withholds the whole line if it
+repeats a secret value anyway.
+
 Exit codes: 0 done, 1 refused (stderr `refused: WORD`), 2 usage, 3 another request is running,
 4 a step failed (stderr `failed: STEP`, then the step's own message, cut to 1000 characters).
-A refusal is a fixed word and never repeats the request. Every request leaves one syslog line with
+A refusal is a fixed word and never repeats the request (`judge-refused` adds the judge's rules,
+above). Every request leaves one syslog line with
 the verb, the slug and the result, and never a payload.
 
 ### Why a tenant set up by hand is never touched
@@ -64,6 +85,9 @@ Every later verb requires that marker. A tenant made by hand has none, so no ver
 files, however well-formed the request.
 
 ### Where each secret goes
+
+The `stack` verb reads the tenant's secrets file only to give it to the judge, which checks that the
+stack asks for no secret the file lacks; the text is never written, printed or logged.
 
 Values reach the secrets program on its stdin and the template reaches it as a file in the register
 directory, which is deleted after the call. Neither is an argument or an environment variable. A
@@ -101,6 +125,8 @@ in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them
 - `/etc/branchleft/tenant-entry`: the register directory (`root:root`, `0700`).
 - `/root/platform-provision/render_tenant_secrets.py`: the secrets program, the pinned bytes
   (`root:root`, `0755`).
+- `/usr/local/lib/branchleft-tenant-entry/tenant_compose_check.py`: the judge, a copy of
+  `tenant_compose`'s module (`root:root`, `0644`, in a `root:root` `0755` directory).
 - The account `tenant-entry`: a system account with a home, a real shell and a locked password. An
   password or shell that a person changed on it is put back by the next apply.
 - `/etc/sudoers.d/tenant-entry` (`root:root`, `0440`), checked by `visudo -csf` before it replaces
@@ -115,7 +141,9 @@ restrict,from="ADDRESSES",command="sudo /usr/local/sbin/branchleft-tenant-entry 
 
 A request on a running host changes more, through the programs it calls: volumes, the uid claim, the
 secrets file, the unit's enable link and the deploy slot. Those are the programs' changes and are
-described in their own documents.
+described in their own documents. The `stack` verb writes two files itself, as root: the stack
+directory `/opt/branchleft/SLUG` (`0755`) with `compose.yml` in it (`0644`), and
+`/etc/branchleft/SLUG.image.env` (`0600`), the names and modes `tenant_compose` uses.
 
 ## How to test it
 
@@ -133,8 +161,10 @@ The harness runs lint, the container scenario and the rest:
 ```
 
 The scenario fetches the secrets program from the network at its pinned commit. It stands in a
-small volume program that keeps the claims it is given, applies the role, applies it again (no
-change), and then runs the real program as root through sudo as the entry account.
+small volume program that keeps the claims it is given and a placeholder template unit, applies the
+role, applies it again (no change), and then runs the real program, the real judge and the real
+secrets program as root through sudo as the entry account, taking a fresh tenant through claim,
+secrets, stack and enable with `status` after each.
 
 ## How it is delivered
 
@@ -194,19 +224,44 @@ has a case that goes red when the guard is removed:
 - A value never reaches a program's argument list, the output or the log, and a program message that
   repeats one is withheld.
 - A register directory or marker that is loose, a link or unreadable stops every verb.
+- `stack` writes nothing for a stack the judge refuses (a privileged service, the Docker socket,
+  another tenant's verdict volume, a wildcard port, a secret nobody supplies, a uid another tenant
+  holds, text that is not YAML), for a first pin that is not the tenant image, for a slug that was
+  never claimed here or whose secrets step is not done, and over no file that exists, a dangling
+  link included. A file that appears between the check and the write is not replaced and the first
+  file is taken back. A stack directory that is a link or not a directory is refused, and the
+  directory it pointed at stays empty. A judge that is not root's, is a link or is writable by
+  another user is not loaded, and a judge message that repeats a secret is withheld.
+- The judge file is a byte-identical copy of `tenant_compose`'s, and the stack paths, modes and
+  tenant image pattern are those `tenant_compose` uses.
 
 The container scenario then runs the real program through sudo as the entry account: another mode,
 an extra or doubled argument and another program are refused by sudo, hostile requests are refused
 by word with nothing written, the account cannot read the register, a claim takes the first uid and
-ports and writes a closed marker, and the later verbs refuse in order.
+ports and writes a closed marker, and the later verbs refuse in order. It then runs a fresh tenant
+through secrets, stack and enable, reads the two files `stack` wrote (owner, mode, content, nothing
+else beside them) and `status` after each step, and shows the verb refusing by name: a stack the
+judge refuses, a first pin that is not the tenant image, a payload with a key it does not take, a
+tenant never claimed, the same stack a second time (the files unchanged), and a slot whose
+directory leads outside it (the directory outside left empty).
 
 ## Named limits
 
 - **The container is not the app host.** The scenario stands in the volume program and has no
-  systemd, no Docker and no slot program. The unit tests cover those calls with fakes. The first
-  live request is the evidence for the rest.
-- **The program does not write the compose file.** Delivery of that file stays with `tenant_compose`.
-  A controller that needs the file delivered per tenant needs that route first.
+  running systemd, no Docker and no slot program. The unit tests cover those calls with fakes. The
+  first live request is the evidence for the rest.
+- **The first image pin is written here, without the deploy wrapper's attestation check.** `stack`
+  accepts only `ghcr.io/branchleft/ghost-tenant` by digest, but it does not verify that the digest
+  was attested. The unit `enable` names loads that pin, so a host that restarts before the first
+  deploy would start that digest. The first deploy through `branchleft-deploy` still verifies the
+  attestation of the image it is asked for before it replaces the pin, and, because a pin already
+  exists, `tenant_compose` does not run its own first deploy for a tenant this verb stacked.
+- **`tenant_compose` and `stack` are two routes to the same files.** A tenant that is both stacked
+  here and named in `tenant_compose_stacks` has its compose file replaced by that role's text on its
+  next run; keep a tenant on one route.
+- **The judge needs PyYAML on `/usr/bin/python3`.** The role refuses a host that lacks it (task
+  `Refuse a host whose python3 has no PyYAML`), and the verb fails `judge-yaml-missing` if it is
+  removed later.
 - **The `owner` verb is untested against a live Ghost.** It calls the platform's owner script with
   checked arguments. The script's own tests are in ghost-platform.
 - **A port assigned by hand inside the reserved range is not seen.** The program knows only the

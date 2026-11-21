@@ -12,6 +12,13 @@ tenant_entry_serve_flag: --from-ssh
 # The register of tenants this entry point has claimed: root-owned, mode 0700.
 tenant_entry_register_dir: /etc/branchleft/tenant-entry
 
+# The tenant compose judge, a byte-identical copy of tenant_compose's library/tenant_compose_check.py
+# (held equal by a test), and the python3 the program's first line names, which must be able to
+# import PyYAML. The program loads the judge from this path and refuses one that is not root's.
+tenant_entry_judge_dir: /usr/local/lib/branchleft-tenant-entry
+tenant_entry_judge: '{{ tenant_entry_judge_dir }}/tenant_compose_check.py'
+tenant_entry_python: /usr/bin/python3
+
 # Exactly two lines: the one that keeps the request text through sudo, and one grant of one
 # argument list. sudo matches a command with arguments exactly, so no other argument passes.
 tenant_entry_sudoers_lines:

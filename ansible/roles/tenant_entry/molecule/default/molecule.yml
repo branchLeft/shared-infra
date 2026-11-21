@@ -56,6 +56,12 @@ provisioner:
         scenario_secrets_program: /root/platform-provision/render_tenant_secrets.py
         # Written out here, not read from the role, so a changed pin fails the comparison.
         scenario_secrets_sha256: 1d67b290515ba642aa507b7bbe1ef6e489b845c9feb09419c6fd489233d8580f
+        scenario_opt_dir: /opt/branchleft
+        scenario_etc_dir: /etc/branchleft
+        # A directory outside every slot, which the scenario links a stack directory to.
+        scenario_outside_dir: /var/tmp/outside-the-slot
+        # The fresh tenant's stack, its secrets and its pins are in vars/stack.yml: Molecule
+        # reads a dollar sign in this file as one of its own placeholders.
         scenario_key_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-keys"
         scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
         scenario_entry_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/entry.pub') }}"
