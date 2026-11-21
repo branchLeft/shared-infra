@@ -272,7 +272,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_edge1_edget_ops1_db1_and_app1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_edget_ops1_db1_app1_appt1_and_dbt1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -325,6 +325,11 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_user",
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
+                ],
+                "appt1": ["tenant_entry_key", "tenant_entry_from"],
+                "dbt1": [
+                    "db_t1_tenant_entry_controller_key",
+                    "db_t1_tenant_entry_controller_address",
                 ],
             },
         )
@@ -393,12 +398,16 @@ class Mutations(unittest.TestCase):
             "nextcloud_stack",
             "backup_worker",
             "backup_restore",
+            "tenant_onboarding",
+            "tenant_entry",
+            "db_t1",
+            "db_t1_tenant_entry",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "edget", "ops1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1", "appt1", "dbt1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )

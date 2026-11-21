@@ -1728,5 +1728,65 @@ class ProductionContextTests(unittest.TestCase):
         self.assertIs(tool.run_volume_program, ctx.list_claims)
 
 
+APPT1_KEY = "SENT-tenant-entry-key"
+DBT1_KEY = "SENT-tenant-db-entry-key"
+
+
+class TenantEntryInputTests(unittest.TestCase):
+    """appt1 and dbt1 are seeded the way app1 is: one command per host, each input typed hidden."""
+
+    def test_appt1_is_filled_from_two_typed_answers_and_the_addresses_are_a_list(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 10.20.0.0/24"])
+        self.assertEqual(0, rig.run("--host", "appt1"))
+        self.assertEqual(
+            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7", "10.20.0.0/24"]},
+            rig.document(),
+        )
+        self.assertEqual(2, len(rig.prompts))
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(APPT1_KEY, rig.stdout)
+        self.assertNotIn("203.0.113.7", rig.stdout)
+
+    def test_dbt1_is_filled_from_its_key_and_its_one_address(self) -> None:
+        rig = Rig(self, answers=[DBT1_KEY, "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(
+            {
+                "db_t1_tenant_entry_controller_key": DBT1_KEY,
+                "db_t1_tenant_entry_controller_address": "203.0.113.8",
+            },
+            rig.document(),
+        )
+        self.assertNotIn(DBT1_KEY, rig.stdout)
+
+    def test_a_token_that_is_not_an_address_or_range_writes_nothing_and_is_not_echoed(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 not-an-address"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertNotIn("not-an-address", rig.everything)
+
+    def test_an_empty_address_line_writes_nothing(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, ""])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_range_wider_than_slash_24_is_refused(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "10.0.0.0/16"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_set_changes_the_address_list_and_keeps_the_key(self) -> None:
+        rig = Rig(self, answers=["198.51.100.4"])
+        rig.put(
+            tool.DEST_NAME,
+            json.dumps({"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7"]}),
+        )
+        self.assertEqual(0, rig.run("--host", "appt1", "--set", "tenant_entry_from"))
+        self.assertEqual(
+            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["198.51.100.4"]},
+            rig.document(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

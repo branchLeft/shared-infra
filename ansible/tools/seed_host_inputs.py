@@ -50,9 +50,13 @@ SLOTS: Final = "slots"
 # Typed only: a value that exists nowhere on the host, such as the CI jump account's name, which is
 # held out of the repository. It is asked for hidden and written like any typed input.
 TYPED: Final = "typed"
+# Typed only, as a list of IPv4 addresses or /24 to /32 ranges on one line, separated by spaces:
+# the source addresses a tenant entry point accepts. The role refuses any other shape, so the tool
+# does too.
+ADDRESSES: Final = "addresses"
 SLOT_ADOPT: Final = "adopt"
 
-type Value = str | Sequence[Mapping[str, str | int | bool]]
+type Value = str | Sequence[str] | Sequence[Mapping[str, str | int | bool]]
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,8 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_password",
         "deploy_slot_keys_slots",
     ),
+    "appt1": ("tenant_entry_key", "tenant_entry_from"),
+    "dbt1": ("db_t1_tenant_entry_controller_key", "db_t1_tenant_entry_controller_address"),
 }
 
 # Inputs the tool can read live although no host's row holds them yet. The tenant stacks are for
@@ -203,11 +209,15 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
+    "tenant_entry_key": (Source(TYPED, ""),),
+    "tenant_entry_from": (Source(ADDRESSES, ""),),
+    "db_t1_tenant_entry_controller_key": (Source(TYPED, ""),),
+    "db_t1_tenant_entry_controller_address": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
 MESSAGES: Final[dict[str, str]] = {
-    "unknown-host": "this tool seeds edge1, edget, ops1 or app1 only",
+    "unknown-host": "this tool seeds edge1, edget, ops1, app1, appt1 or dbt1 only",
     "not-root": "must run as root",
     "directory": "a directory above the file is not a real directory owned by root and closed",
     "exists": "the inputs file appeared meanwhile and was not overwritten",
@@ -630,6 +640,28 @@ def ask_slots(ctx: Context, key: str) -> Value | None:
         slots.append(slot)
 
 
+ADDRESS_OCTET: Final = r"(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+SOURCE_ADDRESS: Final = re.compile(rf"{ADDRESS_OCTET}(\.{ADDRESS_OCTET}){{3}}(/(2[4-9]|3[0-2]))?")
+
+
+def ask_addresses(ctx: Context, key: str) -> list[str] | None:
+    """One line of source addresses, separated by spaces. Any token that is not an IPv4 address or
+    a /24 to /32 range refuses the whole line, and the token is never printed."""
+    try:
+        line = ctx.ask_secret(f"{key}: source addresses, separated by spaces: ")
+    except (EOFError, OSError):
+        return None
+    tokens = line.split()
+    if not tokens or not all(SOURCE_ADDRESS.fullmatch(token) for token in tokens):
+        ctx.flush_input()
+        print(
+            "that is not a list of IPv4 addresses or /24 to /32 ranges; nothing is written.",
+            file=ctx.err,
+        )
+        return None
+    return tokens
+
+
 def ask_for(ctx: Context, key: str) -> Value | None:
     kind = SOURCES[key][0].kind
     if kind == WHOLE:
@@ -640,6 +672,8 @@ def ask_for(ctx: Context, key: str) -> Value | None:
         return None
     if kind == SLOTS:
         return ask_slots(ctx, key)
+    if kind == ADDRESSES:
+        return ask_addresses(ctx, key)
     try:
         answer = ctx.ask_secret(f"{key}: ")
     except (EOFError, OSError):
@@ -667,7 +701,7 @@ def collect(ctx: Context, host: str) -> Collected:
     pending: list[str] = []
     for key in HOSTS[host]:
         for source in SOURCES[key]:
-            if source.kind in (SLOTS, TYPED):
+            if source.kind in (SLOTS, TYPED, ADDRESSES):
                 break
             state, value = live.lookup(source)
             if state == "found" and value is not None:
@@ -887,7 +921,7 @@ class QuietParser(argparse.ArgumentParser):
 
 def parse_args(argv: Sequence[str] | None, stream: TextIO) -> argparse.Namespace:
     parser = QuietParser(stream)
-    parser.add_argument("--host", required=True, help="edge1, edget, ops1 or app1")
+    parser.add_argument("--host", required=True, help="edge1, edget, ops1, app1, appt1 or dbt1")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--replace", action="store_true", help="replace an existing file")
     mode.add_argument("--set", dest="set_key", metavar="KEY", help="change one key, asked hidden")

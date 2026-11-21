@@ -79,6 +79,12 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - deploy_slot_keys_slots
+  appt1:
+    - tenant_entry_key
+    - tenant_entry_from
+  dbt1:
+    - db_t1_tenant_entry_controller_key
+    - db_t1_tenant_entry_controller_address
 
 # The inputs of a row that the file may leave out. Each is a name from the same host's row above
 # (checks/test_host_inputs_registry.py), and each feeds a role that does nothing with it until the

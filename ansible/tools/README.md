@@ -45,7 +45,9 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, edget (edge-t), ops1 and app1. edget has one input, `ci_jump_user`, typed because it
+seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1) and dbt1 (db-t1). appt1 and dbt1 have only
+typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
+space-separated) and for dbt1 its address. edget has one input, `ci_jump_user`, typed because it
 exists nowhere on the host. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
@@ -142,8 +144,13 @@ and claim rules equal its module's.
 
 Usage, on the host as root:
 
-    python3 -I seed_host_inputs.py --host edge1|ops1|app1 [--replace]
-    python3 -I seed_host_inputs.py --host edge1|ops1|app1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1 --set KEY
+
+The one seed command per host that this change adds, run as root on that host:
+
+    python3 -I seed_host_inputs.py --host appt1
+    python3 -I seed_host_inputs.py --host dbt1
 
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
 holds it has been applied on the host; before that the file is copied there by hand from the
