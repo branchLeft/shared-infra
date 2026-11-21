@@ -1,0 +1,20 @@
+# Hand-written: loads the dashboards committed beside this directory, in
+# `../dashboard-json/`, so Grafana shows them the moment the stack is up and a
+# click in the UI can never be the only copy of one. The path is the container's
+# view of the same mount as `compose.yml`'s `./grafana/provisioning`.
+# `dashboards.test.ts` holds this path to that directory and every query in
+# the files to a series a rule or an exporter really emits.
+apiVersion: 1
+
+providers:
+  - name: branchleft
+    orgId: 1
+    folder: Estate
+    type: file
+    # Not editable in the UI and not deletable from it: the files are the one
+    # copy, and a change to one is a pull request.
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboard-json

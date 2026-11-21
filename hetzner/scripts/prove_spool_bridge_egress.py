@@ -24,6 +24,7 @@ from lib.proof_harness import (
     network_address,
     packet_count,
     remove_resources,
+    rule_position,
     run,
     wait_until,
 )
@@ -34,6 +35,8 @@ PROBE_IMAGE = "python:3.12-alpine"
 SPOOL_SUBNET = "172.29.50.0/24"
 GATEWAY = "172.29.50.1"
 POLICY = "/policy/branchleft_docker_user_policy.sh"
+DROP_RULE = "-i br-mailspool ! -o br-mailspool -j DROP"
+DUMMY_TX = "/sys/class/net/proofdummy/statistics/tx_packets"
 
 
 def prove(tally: Tally, host_name: str, outside: str, net: str) -> None:
@@ -219,14 +222,43 @@ def prove(tally: Tally, host_name: str, outside: str, net: str) -> None:
         host.run(
             f"ip6tables -I INPUT 1 -i br-mailspool -p icmpv6 --icmpv6-type {nd} -j ACCEPT"
         )
-    v6_before = host.output("ip6tables -nvxL DOCKER-USER 1 | awk '{print $1}'").strip()
+
+    # The drop is found by its text, never by its position: with the drop removed the
+    # first rule is Docker's RETURN, whose counter also moves and would pass this check.
+    def drop_counter() -> str:
+        position = rule_position(
+            host.output("ip6tables -S DOCKER-USER"), "DOCKER-USER", DROP_RULE
+        )
+        if position is None:
+            return ""
+        return host.output(
+            f"ip6tables -nvxL DOCKER-USER {position} | awk '{{print $1}}'"
+        ).strip()
+
+    def settled_tx() -> str:
+        # The dummy sends its own router and multicast-listener packets for a few
+        # seconds after it comes up; the proof reads its counter once that is quiet.
+        last = [host.output(f"cat {DUMMY_TX}").strip()]
+
+        def quiet() -> bool:
+            now = host.output(f"cat {DUMMY_TX}").strip()
+            steady = now == last[0]
+            last[0] = now
+            return steady
+
+        wait_until(quiet, limit=30, message="the dummy interface never stopped sending")
+        return last[0]
+
+    v6_before = drop_counter()
+    tx_before = settled_tx()
     host.run(
         f"docker run --rm --network drain {PROBE_IMAGE} ping -6 -c 1 -W 2 2001:db8:1::1",
         out=DEVNULL,
         err=DEVNULL,
         check=False,
     )
-    v6_after = host.output("ip6tables -nvxL DOCKER-USER 1 | awk '{print $1}'").strip()
+    v6_after = drop_counter()
+    tx_after = host.output(f"cat {DUMMY_TX}").strip()
     for nd in (135, 136):
         host.run(
             f"ip6tables -D INPUT -i br-mailspool -p icmpv6 --icmpv6-type {nd} -j ACCEPT"
@@ -235,11 +267,21 @@ def prove(tally: Tally, host_name: str, outside: str, net: str) -> None:
     after_n = packet_count(v6_after)
     if before_n is not None and after_n is not None and after_n > before_n:
         tally.passed(
-            f"a forwarded IPv6 packet from the drain bridge hit the drop ({v6_before} -> {v6_after})"
+            f"a forwarded IPv6 packet from the drain bridge hit the drop rule ({v6_before} -> {v6_after})"
         )
     else:
         tally.failed(
-            f"a forwarded IPv6 packet from the drain bridge did not hit the drop ({v6_before} -> {v6_after})"
+            f"a forwarded IPv6 packet from the drain bridge did not hit the drop rule, or the rule is missing ({v6_before!r} -> {v6_after!r})"
+        )
+    tx_before_n = packet_count(tx_before)
+    tx_after_n = packet_count(tx_after)
+    if tx_before_n is not None and tx_after_n is not None and tx_after_n == tx_before_n:
+        tally.passed(
+            f"nothing left through the dummy egress interface ({tx_before} -> {tx_after})"
+        )
+    else:
+        tally.failed(
+            f"the dummy egress interface transmitted, or its counter could not be read ({tx_before!r} -> {tx_after!r})"
         )
 
     tally.heading("after the policy")

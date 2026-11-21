@@ -67,7 +67,7 @@ entry flipped to live with no rule, which must report it.
 
 One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
 three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
-match and the failed-unsafe tenant are raised by the platform itself, and the
+match and the failed-unsafe tenant have no producer yet: the platform is planned to raise them, and nothing does today. The
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.

@@ -11,7 +11,7 @@ db1_backup_timers_unit_dir: /etc/systemd/system
 # ghost-platform at one pinned commit, the full 40-character sha, so a branch or tag
 # cannot move under the role. Each fetch is checked against the digest below. Keeping
 # one home for a program (ghost-platform) is the reuse rule; the role only names it.
-db1_backup_timers_ghost_commit: 5e52f78427cab104438057164e4baa16b329875c
+db1_backup_timers_ghost_commit: 01afa64bb98822116f6824573943304baafe2849
 db1_backup_timers_ghost_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ db1_backup_timers_ghost_commit }}'
 
 # The programs the units run, and the modules they import from the same
@@ -24,6 +24,7 @@ db1_backup_timers_provision_files:
   - dump_nightly.py
   - dump_tenant.py
   - extract_tenant_binlog.py
+  - gtid_snapshot.py
   - naming.py
   - objectstorage.py
   - provision_tenant_db.py
@@ -41,18 +42,19 @@ db1_backup_timers_recovery_files:
 # The sha256 of each program at the pinned commit, read from the git blob of the
 # file at that commit. A fetch whose bytes differ fails, and verify checks the same.
 db1_backup_timers_program_sha256:
-  bounded_snapshot.py: b0e99f26baade745ed508dee959b8bd9405aecdc84b4cf77237737bc21cacfe0
-  dump_nightly.py: fd0ce0daa21a40dae42f4e2913248f25c9fd6bd1977fad2f754ed1f83c26c88d
+  bounded_snapshot.py: a66a53701630bba56e4b886ddb26bdfb8d011a3b93d256ec31cd14c330c4aced
+  dump_nightly.py: d65b5f4135a1d07d5334ab8c6d8e92790ee90b88fe7f2bf3b55b953a4e5c0326
   dump_tenant.py: d87c3b5f11b6dd82fbeb84919cdbf486ff8b39b906faece2fdfb027cf1777bc4
-  extract_tenant_binlog.py: 63a7615f6d1f01e70a897fed41eea2b9e371779866535cd2863edac49bc7f92e
+  extract_tenant_binlog.py: 5432e12a6915c5d7ce5c5e8fc5078a3ed63aea88492a9619b39910b816e22fa8
+  gtid_snapshot.py: ee734d1f996d2cf52ccce77ef4d74a60f438a2ab029a4b3ef463a047d434c771
   naming.py: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
-  objectstorage.py: 1559ad94f6348c65fc4f3840385c70ab012ca76eb9cd98ba835360594e54589c
+  objectstorage.py: 3f47e324fe23496d82675bfffe349d0335de973857b837975d705daa48f77302
   promotion_gate.py: ee81177192b2a762ef9b0d61a630fd5676d94961ecb6773ce884f90b2404bb08
-  provision_tenant_db.py: d4115369168125ea0e72f46aa66f90a2443d6f26fda603dd8a76ec882e4d5e3e
+  provision_tenant_db.py: 425dd1ce0b0731f83baa82dfcd9c65f587338a0269f1a88481a4bb25da9369ac
   prune_backups.py: c8cab2f42f8b73a8d7040f7db7db2c083b21a109460761f836daef480d401c56
-  ship_binlogs.py: e8cce2f3efe8b2dda28d279854864435aacb13f11066112c85566a458d4f66c3
+  ship_binlogs.py: 4cd8c149cd77b7c4561445aa0d6973c2803cc1a433d7167cb5216bad816a0b41
   check_toolchain_version.py: 9b245e2a801075ef593e4527fc9fad56958a3dbe15f97c7c408ddffc2bf7388a
-  restore_drained.py: cfd6a02d990359596056dea785fc4881001c20282ba55a77cbfb0c88be97c1d0
+  restore_drained.py: 62b9c6519b75b04994df3e676883867e76f64e65e47d33c46fab88106c5fbcfa
 
 db1_backup_timers_units:
   - branchleft-db-dump.service
