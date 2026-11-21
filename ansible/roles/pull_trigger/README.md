@@ -799,20 +799,21 @@ copies the program, changes one check with a replacement that must match, and ru
 that the installed program refuses. The copy must answer the red way (the refusal is gone) and
 the installed program must still give the refusal, which is the green side.
 
-| Control                                              | Broken by                                       | Fails in                                                                           |
-| ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| P1 the request's mode word must equal the key's      | removing the comparison                         | `test_request_mode_word_must_equal_key_mode`, scenario `no-mode-compare`           |
-| P2 a host with no floor applies nothing              | removing the no-floor refusal                   | `test_a_host_with_no_floor_applies_nothing...`, scenario `no-floor-test`           |
-| P3 a commit older than the floor is refused          | removing the floor comparison                   | `test_a_commit_older_than_the_floor...`, scenario `no-floor-compare`               |
-| P4 the signature is checked on a pushed commit       | removing the signature check                    | `test_an_unsigned_commit_is_refused`, scenario `no-signature-check`                |
-| P5 the request's playbook must be the configured one | removing the comparison                         | `test_the_playbook_in_the_request...`, scenario `no-playbook-compare`              |
-| P6 the bundle's HEAD must be the requested commit    | removing the HEAD test                          | `test_a_bundle_whose_head_is_not...`, scenario `no-head-test`                      |
-| P7 the objects are checked with `fsck --strict`      | removing the explicit check                     | `test_an_object_that_fails_git_s_object_check...`, scenario `no-object-check`      |
-| P8 standard input is limited in bytes                | removing the limit                              | `test_a_bundle_over_the_byte_limit...`, scenario `no-byte-limit`                   |
-| P9 standard input is read against a deadline         | a blocking read in place of the `select` loop   | `test_a_stalled_stream_ends_at_the_deadline...`, scenario `blocking-read`          |
-| P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git        | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
-| P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                  | the push scenario's seed check                                                     |
-| P12 the receiver needs no network                    | none: the container has no network when it runs | the push scenario's control connect, which must fail                               |
+| Control                                              | Broken by                                          | Fails in                                                                           |
+| ---------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| P1 the request's mode word must equal the key's      | removing the comparison                            | `test_request_mode_word_must_equal_key_mode`, scenario `no-mode-compare`           |
+| P2 a host with no floor applies nothing              | removing the no-floor refusal                      | `test_a_host_with_no_floor_applies_nothing...`, scenario `no-floor-test`           |
+| P3 a commit older than the floor is refused          | removing the floor comparison                      | `test_a_commit_older_than_the_floor...`, scenario `no-floor-compare`               |
+| P4 the signature is checked on a pushed commit       | removing the signature check                       | `test_an_unsigned_commit_is_refused`, scenario `no-signature-check`                |
+| P5 the request's playbook must be the configured one | removing the comparison                            | `test_the_playbook_in_the_request...`, scenario `no-playbook-compare`              |
+| P6 the bundle's HEAD must be the requested commit    | removing the HEAD test                             | `test_a_bundle_whose_head_is_not...`, scenario `no-head-test`                      |
+| P7 the objects are checked with `fsck --strict`      | removing the explicit check                        | `test_an_object_that_fails_git_s_object_check...`, scenario `no-object-check`      |
+| P8 standard input is limited in bytes                | removing the limit                                 | `test_a_bundle_over_the_byte_limit...`, scenario `no-byte-limit`                   |
+| P9 standard input is read against a deadline         | a blocking read in place of the `select` loop      | `test_a_stalled_stream_ends_at_the_deadline...`, scenario `blocking-read`          |
+| P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git           | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
+| P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                     | the push scenario's seed check                                                     |
+| P12 the receiver needs no network                    | none: the container has no network when it runs    | the push scenario's control connect, which must fail                               |
+| P13 a floor seed is refused on a host that pulls     | the host check replaced by `true` in the seed copy | the push scenario's pull-host seed check                                           |
 
 The playbook-link, checkout and lock controls are those of the pull route and are shown
 by the default scenario and in "How to test it". `check` on this source changes nothing
