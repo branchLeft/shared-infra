@@ -215,10 +215,11 @@ jobs:
         # output until the job's own timeout cancelled it. Each invocation has
         # its own cap and one retry, taken only when it timed out (124 or 137
         # after the kill): a real promtool failure exits 1 and fails at once.
-        # The rules invocation healthy takes 5.4 to 6.4 min, so it gets 8 min;
+        # The rules invocation healthy takes 5.2 to 6.4 min on main, and ran
+        # past 8 min twice in merge-group run 44828584958, so it gets 10 min;
         # the deadline invocation takes about 3 s, so it gets 2 min. The step
-        # limit covers 2 x 8 min + 2 x 2 min, plus margin.
-        timeout-minutes: 22
+        # limit covers 2 x 10 min + 2 x 2 min, plus margin.
+        timeout-minutes: 26
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
@@ -242,7 +243,7 @@ jobs:
             done
             return "$rc"
           }
-          run_promtool 480 promtool-rules-test \
+          run_promtool 600 promtool-rules-test \
             -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
             -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
             --workdir /etc/prometheus-tests \
