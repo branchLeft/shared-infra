@@ -41,7 +41,7 @@ needed to change.
 | `64-provision-alerting-submission-credential.sh`                                               | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs _before_ `63` in `run-all.sh` — see "Alerting submission credential" below.                                   |
 | `65-install-local-resolver.sh`                                                                 | Installs `unbound` as a loopback-only, fully recursive resolver (no forwarders) so DNSBL queries originate from mx1's own IP. Leaves `/etc/resolv.conf` alone. See "Local recursive resolver" below.                                             |
 | `70-schedule-dnsbl-check.sh`                                                                   | Idempotently installs the hourly `/etc/cron.d/dnsbl-check` entry that runs `check_dnsbl_blocklist.py`. See "DNSBL blocklist monitoring" below.                                                                                                   |
-| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (what the cron entry above runs) — checks mx1's IP against five DNSBLs, logs findings and also forwards each run to a Healthchecks.io check. `--status` pings nothing. See "DNSBL blocklist monitoring" below. |
+| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (what the cron entry above runs) — checks mx1's IP against four DNSBLs, logs findings and also forwards each run to a Healthchecks.io check. `--status` pings nothing. See "DNSBL blocklist monitoring" below. |
 | `rotate_admin_credential.py`                                                                   | Not part of `run-all.sh` — a standalone, on-demand rotation for the admin credential. See "Rotating the admin credential" below.                                                                                                                 |
 | `list_and_clear_blocked_ips.py`                                                                | Not part of `run-all.sh` — lists (`--list-only`), and clears specific (`--ip`, repeatable) or all (`--all`) IPs Stalwart's own scan-ban has blocked. See "Scan-ban" below.                                                                       |
 | `trigger_acme_renewal.py`                                                                      | Not part of `run-all.sh` — manually triggers a certificate renewal check. See "What remains owner-gated" below; normally unnecessary, since renewal is self-scheduled.                                                                           |
@@ -941,7 +941,7 @@ does this script exiting 0.
 A listed IP silently kills deliverability for everyone sending through this
 host, and this is the check that catches it instead of waiting for a
 complaint. `check_dnsbl_blocklist.py` resolves the mail host's own address and
-queries it against five DNSBLs every hour via `/etc/cron.d/dnsbl-check`
+queries it against four DNSBLs every hour via `/etc/cron.d/dnsbl-check`
 (installed idempotently by `70-schedule-dnsbl-check.sh`, part of
 `run-all.sh`):
 
@@ -950,7 +950,6 @@ queries it against five DNSBLs every hour via `/etc/cron.d/dnsbl-check`
 | Spamhaus ZEN                    | `zen.spamhaus.org`       |
 | Barracuda Reputation Block List | `b.barracudacentral.org` |
 | SpamCop Blocking List           | `bl.spamcop.net`         |
-| SORBS                           | `dnsbl.sorbs.net`        |
 | UCEPROTECT Level 1              | `dnsbl-1.uceprotect.net` |
 
 ### Query mechanics, verified per-list rather than assumed identical
@@ -1294,7 +1293,6 @@ also collected here for convenience:
 | Spamhaus ZEN                    | <https://check.spamhaus.org/>                          |
 | Barracuda Reputation Block List | <https://www.barracudacentral.org/rbl/removal-request> |
 | SpamCop Blocking List           | <https://www.spamcop.net/bl.shtml>                     |
-| SORBS                           | <http://www.sorbs.net/lookup.shtml>                    |
 | UCEPROTECT Level 1              | <http://www.uceprotect.net/en/rblcheck.php>            |
 
 ## Secrets: what is secret, and where it lives
