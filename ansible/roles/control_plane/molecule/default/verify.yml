@@ -491,8 +491,11 @@
             msg: The role went on with the provisioning API enabled and no input files.
       rescue:
         - name: Record the message the run stopped with
+          # A looped assert fails with Ansible's aggregate text in .msg; the role's own message is in the first failed item.
           ansible.builtin.set_fact:
-            control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+            control_plane_verify_message: >-
+              {{ (ansible_failed_result.results | default([]) | selectattr('failed') | map(attribute='msg') | list | first)
+                 | default(ansible_failed_result.msg | default('')) }}
 
     - name: Assert the run stopped with its own code and named a path
       ansible.builtin.assert:
@@ -532,6 +535,17 @@
         label: '{{ item.path }}'
       no_log: true
 
+    # With no pin given, the role reads the portal container for the image unless the deploy
+    # wrapper's record holds a digest. This container has no docker, and a host that has
+    # deployed before has the record, so the record stands in for the portal read here.
+    - name: Put a digest in the deploy wrapper's record for the no-image refusal
+      ansible.builtin.copy:
+        content: "IMAGE={{ verify_recorded_image }}\n"
+        dest: /etc/branchleft/control-plane.image.env
+        owner: root
+        group: root
+        mode: '0600'
+
     - name: Enable the provisioning API with no image given
       block:
         - name: Apply the role with the provisioning API enabled and an empty image
@@ -555,6 +569,11 @@
           - "'THROWAWAY-' not in control_plane_verify_message"
         quiet: true
         fail_msg: 'The refusal was not the missing-image refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+    - name: Remove the digest put in the deploy wrapper's record for the no-image refusal
+      ansible.builtin.file:
+        path: /etc/branchleft/control-plane.image.env
+        state: absent
 
     - name: Enable the provisioning API with the files placed and the image given
       ansible.builtin.include_role:
@@ -586,7 +605,7 @@
           - "'PORTAL_PROVISIONING_URL=http://provisioning:8095' in (control_plane_verify_env_on.content | ansible.builtin.b64decode)"
           - "'THROWAWAY-' not in (control_plane_verify_env_on.content | ansible.builtin.b64decode)"
           - control_plane_verify_inputs.results[0].stat.mode == '0440'
-          - control_plane_verify_inputs.results[0].stat.gr_name == '1000' or control_plane_verify_inputs.results[0].stat.gid == 1000
+          - control_plane_verify_inputs.results[0].stat.gid == 1000
           - control_plane_verify_inputs.results[1].stat.mode == '0440'
           - control_plane_verify_inputs.results[2].stat.mode == '0644'
         quiet: true
