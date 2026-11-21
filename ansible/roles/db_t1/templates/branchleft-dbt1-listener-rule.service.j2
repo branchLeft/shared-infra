@@ -1,0 +1,25 @@
+# Reasserts the database port rule of db-t1 at every boot. The rule lives in the kernel's
+# netfilter tables and nothing else persists it: there is no iptables-persistent here, for the
+# reason branchleft-nat.service gives (a saved ruleset would also save Docker's chains and
+# restore a stale copy before dockerd owns them).
+#
+# Ordered before docker.service, and a drop-in the role writes makes docker.service require
+# this unit, so the daemon, and with it every container that restarts by itself, starts only
+# with the rule loaded, and not at all on a host where the rule failed. The unit has no
+# ExecStop: stopping it leaves the rule in place, because a rule left behind is the safe side
+# of a stop.
+#
+# ExecReload runs the same program. The role reloads rather than restarts it when something
+# changed: a restart of this unit would restart Docker, and with it the database.
+[Unit]
+Description=branchLeft db-t1 database port rule
+Before={{ db_t1_rule_docker_unit_name }}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ db_t1_rule_program_dest }} --allow-source {{ db_t1_client_address }} --port {{ db_t1_port }}
+ExecReload={{ db_t1_rule_program_dest }} --allow-source {{ db_t1_client_address }} --port {{ db_t1_port }}
+
+[Install]
+WantedBy=multi-user.target
