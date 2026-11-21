@@ -154,7 +154,13 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"],
+    "demo1": [
+        "host_inputs",
+        "broker_deploy",
+        "demo1_build",
+        "demo1_egress_spool",
+        "spool_path_account",
+    ],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
@@ -600,6 +606,7 @@ class HostRoleLists(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",

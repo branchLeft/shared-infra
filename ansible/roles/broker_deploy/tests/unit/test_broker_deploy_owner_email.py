@@ -100,7 +100,7 @@ class Static(unittest.TestCase):
 class Refusal(unittest.TestCase):
     """The refusal task run for real, with the value the test gives it."""
 
-    def run_with(self, value: str) -> tuple[int, str]:
+    def run_with(self, value: str | None) -> tuple[int, str]:
         """Run the refusal task alone in a scratch role, and return the exit code and output."""
         task = tasks_of(TASKS)[find(tasks_of(TASKS), REFUSAL_NAME)]
         with tempfile.TemporaryDirectory() as scratch_name:

@@ -332,11 +332,12 @@ class Sabotage(unittest.TestCase):
     # R2: the loader is on the lists of the hosts with a row only, so another host (demo1) cannot
     # apply it.
     def test_r10_the_loader_on_another_host_is_refused(self) -> None:
+        # demo1's playbook applies the loader; its list must name it too. Deleting the list's
+        # entry makes the applied loader unlisted, which R2 refuses.
         self._edit(
-            "playbooks/demo1.yml",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "checks/host_roles/demo1.yml",
+            "- host_inputs\n",
+            "",
         )
         self._assert_rule("R2 demo1.yml: role host_inputs is not on demo1's list")
 

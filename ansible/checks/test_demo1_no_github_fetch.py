@@ -509,6 +509,7 @@ class NoGithubFetchTest(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",

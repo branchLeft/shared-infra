@@ -326,6 +326,7 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
                 ],
+                "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
 
@@ -334,7 +335,11 @@ class RealTree(unittest.TestCase):
         # addition is a decision that shows here. Every other input is required.
         self.assertEqual(
             optional_of(ROOT / "ansible"),
-            {"edge1": ["ci_jump_user"], "edget": ["ci_jump_user"]},
+            {
+                "edge1": ["ci_jump_user"],
+                "edget": ["ci_jump_user"],
+                "demo1": ["broker_deploy_owner_due_diligence_email"],
+            },
         )
 
     def test_app1_applies_the_loader_then_the_website_role_and_the_deploy_roles(self) -> None:
@@ -393,12 +398,13 @@ class Mutations(unittest.TestCase):
             "nextcloud_stack",
             "backup_worker",
             "backup_restore",
+            "broker_deploy",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "edget", "ops1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1", "demo1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -472,9 +478,9 @@ class Mutations(unittest.TestCase):
         self._edit(
             "roles/host_inputs/vars/main.yml",
             "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  demo1:\n    - ci_jump_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n  appt1:\n    - ci_jump_user\n\n# A value",
         )
-        self._expect("optional demo1: the host has no row")
+        self._expect("optional appt1: the host has no row")
 
     def test_an_optional_name_that_a_role_requires_is_found(self) -> None:
         # An optional input absent from the file leaves the argument unset; a role that requires
