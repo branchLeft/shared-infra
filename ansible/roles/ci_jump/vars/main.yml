@@ -40,3 +40,12 @@ ci_jump_owned_accounts:
   root: root
   ci_login: ansible-ci
   tunnel_account: dbtunnel
+
+# The second account's files and marker. Its account has its own two files so that neither
+# account's write can remove the other's keys, and no path is made from either account's name.
+# The module pins the same two paths (SPOOL_KEY_FILE, SPOOL_DROPIN_FILE); test_ci_jump_pins.py
+# holds the copies equal. The key directory, the sshd service and the fixed options are the first
+# account's own constants, shared by name.
+ci_jump_spool_key_file: /etc/ssh/authorized_keys.d/branchleft-jump-spool
+ci_jump_spool_sshd_dropin: /etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf
+ci_jump_spool_reload_marker: /run/branchleft-jump-spool-reload-owed

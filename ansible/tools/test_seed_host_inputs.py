@@ -113,6 +113,7 @@ STACKS_ROUTED = mock.patch.dict(
 )
 # Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
 JUMP_KEY = "ci_jump_user"
+SPOOL_KEY = "ci_jump_spool_user"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
@@ -568,15 +569,35 @@ class FillTests(unittest.TestCase):
         self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
 
-    def test_edget_has_no_live_file_and_only_the_jump_account_is_typed(self) -> None:
-        # edge-t is a new host: nothing on it to read, so the one input of its row is typed.
-        rig = Rig(self)
+    def test_edget_has_no_live_file_and_only_the_two_jump_accounts_are_typed(self) -> None:
+        # edge-t is a new host: nothing on it to read, so the two inputs of its row are typed,
+        # the account the gated run jumps through and the second account for the spool tunnels.
+        rig = Rig(self, answers=[value_for(SPOOL_KEY)])
         self.assertEqual(0, rig.run("--host", "edget"))
-        self.assertEqual({JUMP_KEY: value_for(JUMP_KEY)}, rig.document())
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
-        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertEqual(
+            {JUMP_KEY: value_for(JUMP_KEY), SPOOL_KEY: value_for(SPOOL_KEY)}, rig.document()
+        )
+        self.assertEqual([f"{JUMP_KEY}: ", f"{SPOOL_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (2): {JUMP_KEY}, {SPOOL_KEY}", rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+        self.assertNotIn(value_for(SPOOL_KEY), rig.everything)
+
+    def test_the_second_account_is_added_to_the_file_edget_already_has(self) -> None:
+        # The path the owner takes once the spool tunnels are wanted: edget's file holds the
+        # first account's name, and one --set adds the second without touching it.
+        rig = Rig(self, answers=["typed-spool-account"])
+        rig.jump_answer = None
+        rig.put(tool.DEST_NAME, json.dumps({JUMP_KEY: "typed-jump-account"}))
+        self.assertEqual(0, rig.run("--host", "edget", "--set", SPOOL_KEY))
+        self.assertEqual(
+            {JUMP_KEY: "typed-jump-account", SPOOL_KEY: "typed-spool-account"}, rig.document()
+        )
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+        self.assertEqual([f"{SPOOL_KEY}: "], rig.prompts)
+        self.assertIn(f"set {SPOOL_KEY} ({len('typed-spool-account')} bytes)", rig.stdout)
+        self.assertNotIn("typed-spool-account", rig.everything)
+        self.assertNotIn("typed-jump-account", rig.everything)
 
     def test_the_pager_keys_are_found_in_monitoring_env_when_the_pager_file_is_absent(self) -> None:
         rig = Rig(self)

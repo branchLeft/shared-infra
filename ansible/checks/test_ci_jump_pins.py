@@ -50,6 +50,14 @@ INERT_EMPTY = ("ci_jump_own_address", "ci_jump_destinations", "ci_jump_keys")
 # The jump account's name is the owner's secret. It is the one role variable that is not in an
 # owner_vars file: it reaches the role through the host's private inputs file, set by host_inputs.
 SECRET_VARIABLE = "ci_jump_user"  # noqa: S105
+# The second account's name, likewise: a host input, in no file of the repository.
+SPOOL_SECRET_VARIABLE = "ci_jump_spool_user"  # noqa: S105
+SPOOL_PREFIX = "ci_jump_spool_"
+# The second account's variables whose default is empty or off, and the one with a default of 22.
+SPOOL_INERT_EMPTY = ("ci_jump_spool_destinations", "ci_jump_spool_keys")
+# The hosts whose owner_vars file may carry the second account's variables, and whose private
+# inputs row holds its name (check_enrolment.py holds the same list; this pin reads the real files).
+SPOOL_HOSTS = ("edget",)
 # A realistic name for the pins to render paths with: the lowercase-hyphen shape of a real one. It
 # is made up here and is not the owner's.
 SAMPLE_NAME = "gate-hopper"
@@ -78,7 +86,14 @@ def _load_module(root: Path) -> types.ModuleType:
         raise ImportError(message)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    # No bytecode is written: a sabotage that keeps the file's size, put back within the same
+    # second, would otherwise leave a cache the next load trusts (it checks only mtime and size).
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -112,16 +127,24 @@ def _source(root: Path, name: str) -> str:
     return (root / ROLE / "templates" / name).read_text(encoding="utf-8")
 
 
-def _render(root: Path, name: str, destinations: list[str], user: str = SAMPLE_NAME) -> str:
-    """Render one of the role's templates the way Ansible does, with its role variables."""
+def _render(
+    root: Path, name: str, destinations: list[str], user: str = SAMPLE_NAME, port: int = 22
+) -> str:
+    """Render one of the role's templates the way Ansible does, with its role variables. The same
+    values are given to both accounts' variables, so each template reads only its own."""
     mine = _variables(root / ROLE / "vars" / "main.yml")
+    keys = [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}]
     return (
         _environment()
         .from_string(_source(root, name))
         .render(
-            ci_jump_keys=[{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}],
+            ci_jump_keys=keys,
             ci_jump_user=user,
             ci_jump_destinations=destinations,
+            ci_jump_spool_keys=keys,
+            ci_jump_spool_user=user,
+            ci_jump_spool_destinations=destinations,
+            ci_jump_spool_port=port,
             **{key: value for key, value in mine.items() if isinstance(value, str | int)},
         )
     )
@@ -211,6 +234,30 @@ def problems(root: Path) -> list[str]:
         != f"{mine.get('ci_jump_sshd_config_dir')}/40-branchleft-jump.conf"
     ):
         found.append("ci_jump_sshd_dropin is not the 40- file of ci_jump_sshd_config_dir")
+    # The second account's two paths are copies of the module's, are not the first account's, and
+    # sit in the first account's directories.
+    for variable, constant in (
+        ("ci_jump_spool_key_file", "SPOOL_KEY_FILE"),
+        ("ci_jump_spool_sshd_dropin", "SPOOL_DROPIN_FILE"),
+    ):
+        if mine.get(variable) != getattr(module, constant):
+            found.append(f"{variable} differs from the module's {constant}")
+    if mine.get("ci_jump_spool_key_file") in (mine.get("ci_jump_key_file"), module.KEY_FILE):
+        found.append("the second account's key file is the first account's")
+    if mine.get("ci_jump_spool_sshd_dropin") in (
+        mine.get("ci_jump_sshd_dropin"),
+        module.DROPIN_FILE,
+    ):
+        found.append("the second account's drop-in is the first account's")
+    if (
+        mine.get("ci_jump_spool_sshd_dropin")
+        != f"{mine.get('ci_jump_sshd_config_dir')}/41-branchleft-jump-spool.conf"
+    ):
+        found.append("ci_jump_spool_sshd_dropin is not the 41- file of ci_jump_sshd_config_dir")
+    if mine.get("ci_jump_spool_key_file") != f"{mine.get('ci_jump_key_dir')}/branchleft-jump-spool":
+        found.append("ci_jump_spool_key_file is not in ci_jump_key_dir")
+    if mine.get("ci_jump_spool_reload_marker") == mine.get("ci_jump_reload_marker"):
+        found.append("the second account shares the first account's reload marker")
     found.extend(_path_findings(mine, module))
 
     # Remote forwarding: the module must require sshd to say local for the account, and the
@@ -257,6 +304,9 @@ def _path_findings(mine: dict[str, object], module: types.ModuleType) -> list[st
         "ci_jump_sshd_dropin",
         "ci_jump_sshd_config_dir",
         "ci_jump_reload_marker",
+        "ci_jump_spool_key_file",
+        "ci_jump_spool_sshd_dropin",
+        "ci_jump_spool_reload_marker",
     )
     for variable in managed:
         text = mine.get(variable)
@@ -264,7 +314,7 @@ def _path_findings(mine: dict[str, object], module: types.ModuleType) -> list[st
             found.append(f"{variable} is made from the account's name")
         elif "{{" in text:
             found.append(f"{variable} is templated; a managed path is a literal")
-    for constant in ("KEY_DIR", "KEY_FILE", "DROPIN_FILE"):
+    for constant in ("KEY_DIR", "KEY_FILE", "DROPIN_FILE", "SPOOL_KEY_FILE", "SPOOL_DROPIN_FILE"):
         if SAMPLE_NAME in getattr(module, constant) or "{" in getattr(module, constant):
             found.append(f"the module's {constant} is made from the account's name")
     legacy = (
@@ -343,6 +393,75 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
         in_keys, permit = [], []
     if in_keys != permit or in_keys != [f"{item}:22" for item in destinations]:
         found.append("the key lines and the Match block do not carry the same destinations")
+    found.extend(_spool_template_findings(root, module))
+    return found
+
+
+def _spool_template_findings(root: Path, module: types.ModuleType) -> list[str]:
+    """The second account's templates and the module's spool profile agree, are made from the
+    second account's own variables alone, and carry its port in both files."""
+    found: list[str] = []
+    destinations = ["10.20.1.201", "10.20.1.202"]
+    for port in (22, 2200):
+        profile = module.make_profile("spool", port)
+        wanted = module.wanted_lines(destinations, [(KEY_TYPE, SAMPLE_BODY)], profile)
+        try:
+            written = [
+                line.strip()
+                for line in _render(
+                    root, "authorized_keys_spool.j2", destinations, port=port
+                ).splitlines()
+                if line.strip()
+            ]
+            dropin = _render(root, "sshd-drop-in-spool.conf.j2", destinations, port=port)
+        except jinja2.TemplateError:
+            written, dropin = [], ""
+        if written != wanted:
+            found.append(
+                "templates/authorized_keys_spool.j2 writes other lines than the module expects"
+            )
+        if dropin != module.wanted_dropin(SAMPLE_NAME, destinations, profile):
+            found.append(
+                "templates/sshd-drop-in-spool.conf.j2 writes other text than the module expects"
+            )
+    try:
+        key_vars = _template_variables(root, "authorized_keys_spool.j2")
+        dropin_vars = _template_variables(root, "sshd-drop-in-spool.conf.j2")
+    except jinja2.TemplateError:
+        key_vars, dropin_vars = set(), set()
+    for label, names in (
+        ("authorized_keys_spool.j2", key_vars),
+        ("sshd-drop-in-spool.conf.j2", dropin_vars),
+    ):
+        listed = {name for name in names if "destination" in name}
+        if listed != {"ci_jump_spool_destinations"}:
+            found.append(
+                f"templates/{label} must read its destinations from ci_jump_spool_destinations only"
+            )
+        if "ci_jump_port" in names or "ci_jump_keys" in names or "ci_jump_user" in names:
+            found.append(f"templates/{label} reads a variable of the first account")
+        if "ci_jump_spool_port" not in names:
+            found.append(f"templates/{label} must read its port from ci_jump_spool_port")
+    if dropin_vars - {
+        "ci_jump_spool_user",
+        "ci_jump_spool_destinations",
+        "ci_jump_spool_port",
+        "ci_jump_spool_key_file",
+        "ci_jump_forced_command",
+    }:
+        found.append("templates/sshd-drop-in-spool.conf.j2 reads a variable the pins do not know")
+    if key_vars - {
+        "ci_jump_spool_keys",
+        "ci_jump_spool_destinations",
+        "ci_jump_spool_port",
+        "ci_jump_fixed_options",
+        "ci_jump_forced_command",
+    }:
+        found.append("templates/authorized_keys_spool.j2 reads a variable the pins do not know")
+    # The second account's drop-in names the second account's key file, never the first's.
+    text = _source(root, "sshd-drop-in-spool.conf.j2")
+    if "ci_jump_key_file" in text or "ci_jump_user" in text:
+        found.append("templates/sshd-drop-in-spool.conf.j2 names the first account's file or name")
     return found
 
 
@@ -385,26 +504,33 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
     found: list[str] = []
     spec = yaml.safe_load((role / "meta" / "argument_specs.yml").read_text(encoding="utf-8"))
     options = set(spec["argument_specs"]["main"]["options"])
-    if spec["argument_specs"]["main"]["options"].get(SECRET_VARIABLE, {}).get("no_log") is not True:
-        found.append(f"the argument spec must hide {SECRET_VARIABLE} with no_log: true")
+    secrets = {SECRET_VARIABLE, SPOOL_SECRET_VARIABLE}
     defaults = _variables(role / "defaults" / "main.yml")
-    if options - {SECRET_VARIABLE} != set(defaults):
+    if options - secrets != set(defaults):
         found.append("the argument spec and the defaults name different variables")
-    secret = spec["argument_specs"]["main"]["options"].get(SECRET_VARIABLE, {})
-    if "default" in secret or SECRET_VARIABLE in defaults:
-        found.append(f"{SECRET_VARIABLE} must have no default (a private input)")
-    if secret.get("required") is True:
-        # The file may leave the name out until the owner seeds it (host_inputs_optional_by_host),
-        # so a required argument would stop the plan that delivers the seeding tool.
-        # The role refuses by itself when the flag is on and the name is absent (_guards.yml).
-        found.append(f"{SECRET_VARIABLE} must not be a required argument (it is optional input)")
+    # Each account's name: hidden, no default, optional input (host_inputs_optional_by_host).
+    for variable in sorted(secrets):
+        secret = spec["argument_specs"]["main"]["options"].get(variable, {})
+        if secret.get("no_log") is not True:
+            found.append(f"the argument spec must hide {variable} with no_log: true")
+        if "default" in secret or variable in defaults:
+            found.append(f"{variable} must have no default (a private input)")
+        if secret.get("required") is True:
+            # The file may leave the name out until the owner seeds it, so a required argument
+            # would stop the plan that delivers the seeding tool. The role refuses by itself when
+            # the flag is on and the name is absent (_guards.yml, _guards_spool.yml).
+            found.append(f"{variable} must not be a required argument (it is optional input)")
     if defaults.get("ci_jump_manage_keys") is not False:
         found.append("ci_jump_manage_keys must default to false")
+    if defaults.get("ci_jump_spool_manage_keys") is not False:
+        found.append("ci_jump_spool_manage_keys must default to false")
+    if defaults.get("ci_jump_spool_port") != 22:
+        found.append("ci_jump_spool_port must default to 22")
     # The role ships inert: no default carries an address, a destination or a key. This is the
     # pin on the role itself; a host that enables the role is judged by its own file below.
     found.extend(
         f"{name} must default to empty (the role must ship inert)"
-        for name in INERT_EMPTY
+        for name in (*INERT_EMPTY, *SPOOL_INERT_EMPTY)
         if defaults.get(name) not in ("", [])
     )
     carrying = {
@@ -412,22 +538,23 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
         for host, values in _owner_files(root).items()
         if any(name.startswith(ROLE_PREFIX) for name in values)
     }
+    spool_names = {name for name in options if name.startswith(SPOOL_PREFIX)} - secrets
+    first_names = options - secrets - spool_names
     for host, values in carrying.items():
         in_file = {name for name in values if name.startswith(ROLE_PREFIX)}
-        if SECRET_VARIABLE in in_file:
+        for variable in sorted(secrets & in_file):
             found.append(
-                f"owner_vars/{host}.yml carries {SECRET_VARIABLE}: the account's name stays out of"
+                f"owner_vars/{host}.yml carries {variable}: the account's name stays out of"
                 " the repository and comes from the host's private inputs file"
             )
-        if in_file - {SECRET_VARIABLE} != options - {SECRET_VARIABLE}:
+        if in_file - spool_names - secrets != first_names:
             found.append(f"owner_vars/{host}.yml names other ci_jump variables than the spec")
+        found.extend(_spool_owner_findings(host, values, in_file & spool_names, spool_names))
         if values.get("ci_jump_manage_keys") is True:
             # The owner has turned the role on for this host: the values it brings must be
             # complete, because the role refuses a missing address, destination or key.
             found.extend(_enabled_findings(host, values))
-        elif any(
-            values.get(name) != value for name, value in defaults.items() if name != SECRET_VARIABLE
-        ):
+        elif any(values.get(name) != defaults[name] for name in first_names):
             found.append(
                 f"owner_vars/{host}.yml does not ship the role's defaults"
                 " (a host that does not enable the role must ship it inert)"
@@ -445,16 +572,93 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
                     f"{host} lists ci_jump but owner_vars/{host}.yml carries no ci_jump variable"
                 )
             row = rows.get(host) if isinstance(rows, dict) else None
-            if not isinstance(row, list) or SECRET_VARIABLE not in row:
-                found.append(
-                    f"{host} lists ci_jump but its host_inputs row lacks {SECRET_VARIABLE}"
-                )
             options_of_host = optional.get(host) if isinstance(optional, dict) else None
-            if not isinstance(options_of_host, list) or SECRET_VARIABLE not in options_of_host:
-                found.append(
-                    f"{host} lists ci_jump but {SECRET_VARIABLE} is not optional in its"
-                    " host_inputs row: the plan that delivers the seeding tool would stop"
-                )
+            # The second account's name is a host input of the hosts that carry that account, and
+            # of no other host's row.
+            for variable in (SECRET_VARIABLE, SPOOL_SECRET_VARIABLE):
+                wanted_here = variable == SECRET_VARIABLE or host in SPOOL_HOSTS
+                listed = isinstance(row, list) and variable in row
+                if wanted_here and not listed:
+                    found.append(f"{host} lists ci_jump but its host_inputs row lacks {variable}")
+                if not wanted_here and listed:
+                    found.append(
+                        f"{host} has {variable} in its host_inputs row but no second account"
+                    )
+                if wanted_here and not (
+                    isinstance(options_of_host, list) and variable in options_of_host
+                ):
+                    found.append(
+                        f"{host} lists ci_jump but {variable} is not optional in its"
+                        " host_inputs row: the plan that delivers the seeding tool would stop"
+                    )
+    return found
+
+
+def _spool_owner_findings(
+    host: str, values: dict[str, object], in_file: set[str], spool_names: set[str]
+) -> list[str]:
+    """The second account's variables in a host's owner file: only a host that carries the account
+    may hold them, all of them or none, inert unless the file turns the account on, and complete
+    when it does."""
+    found: list[str] = []
+    if not in_file:
+        return found
+    if host not in SPOOL_HOSTS:
+        return [
+            f"owner_vars/{host}.yml carries the second account's variables but has no such account"
+        ]
+    if in_file != spool_names:
+        found.append(f"owner_vars/{host}.yml names other second-account variables than the spec")
+    if values.get("ci_jump_spool_manage_keys") is True:
+        found.extend(_spool_enabled_findings(host, values))
+    elif (
+        values.get("ci_jump_spool_manage_keys") is not False
+        or values.get("ci_jump_spool_destinations") != []
+        or values.get("ci_jump_spool_keys") != []
+        or values.get("ci_jump_spool_port") != 22
+    ):
+        found.append(
+            f"owner_vars/{host}.yml does not ship the second account's defaults"
+            " (a host that does not enable it must ship it inert)"
+        )
+    return found
+
+
+def _spool_enabled_findings(host: str, values: dict[str, object]) -> list[str]:
+    """A file that turns the second account on brings an address of the jump host (the first
+    account's variable), destinations, a port and keys, none missing or of the wrong shape."""
+    found: list[str] = []
+    address = values.get("ci_jump_own_address")
+    if not isinstance(address, str) or not address:
+        found.append(
+            f"owner_vars/{host}.yml enables the second account without ci_jump_own_address"
+        )
+    destinations = values.get("ci_jump_spool_destinations")
+    if (
+        not isinstance(destinations, list)
+        or not destinations
+        or not all(isinstance(item, str) and item for item in destinations)
+    ):
+        found.append(
+            f"owner_vars/{host}.yml enables the second account without a list of"
+            " ci_jump_spool_destinations"
+        )
+    elif isinstance(address, str) and address in destinations:
+        found.append(f"owner_vars/{host}.yml puts the jump host's own address on the spool list")
+    port = values.get("ci_jump_spool_port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        found.append(
+            f"owner_vars/{host}.yml enables the second account without a ci_jump_spool_port"
+        )
+    keys = values.get("ci_jump_spool_keys")
+    if (
+        not isinstance(keys, list)
+        or not keys
+        or not all(isinstance(item, dict) and set(item) == {"key"} for item in keys)
+    ):
+        found.append(
+            f"owner_vars/{host}.yml enables the second account without a list of ci_jump_spool_keys"
+        )
     return found
 
 
@@ -521,7 +725,7 @@ def _walk(tasks: object) -> list[dict[str, object]]:
 
 
 def _asks_only_whether_set(task: dict[str, object]) -> bool:
-    """Is this a task that asks whether the account's name is set and handles nothing of it?
+    """Is this a task that asks whether an account's name is set and handles nothing of it?
 
     The name may be absent from the host's file (it is the one optional input), so the role asks
     whether it is set and says so. Such a task is an assert or a debug whose only mention of the
@@ -547,16 +751,19 @@ def _asks_only_whether_set(task: dict[str, object]) -> bool:
         return False
     tests = arguments.get("that", [])
     tests = tests if isinstance(tests, list) else [tests]
-    if module == "ansible.builtin.assert" and tests != ["ci_jump_user is defined"]:
+    variable = next(
+        (name for name in (SECRET_VARIABLE, SPOOL_SECRET_VARIABLE) if name in json.dumps(task)), ""
+    )
+    if module == "ansible.builtin.assert" and tests != [f"{variable} is defined"]:
         return False
-    if module == "ansible.builtin.debug" and task.get("when") != "ci_jump_user is not defined":
+    if module == "ansible.builtin.debug" and task.get("when") != f"{variable} is not defined":
         return False
     others = {
         key: value
         for key, value in arguments.items()
         if key not in ("msg", "fail_msg", "that", "quiet")
     }
-    return "ci_jump_user" not in json.dumps(others) and "ci_jump_user" not in json.dumps(rest)
+    return variable not in json.dumps(others) and variable not in json.dumps(rest)
 
 
 def _task_findings(role: Path) -> list[str]:
@@ -569,13 +776,27 @@ def _task_findings(role: Path) -> list[str]:
         if "ansible.builtin.import_tasks" in task
     ]
     names = [name for name, _ in imports]
-    if names != ["_report.yml", "_guards.yml", "_write.yml"]:
-        found.append("tasks/main.yml must import _report, _guards and _write, in that order")
+    # The second account is judged ahead of both writes, so a refusal of it leaves both accounts
+    # as they were, and written after the first, so the first account's steps run as they did.
+    if names != [
+        "_report.yml",
+        "_guards.yml",
+        "_guards_spool.yml",
+        "_write.yml",
+        "_write_spool.yml",
+    ]:
+        found.append(
+            "tasks/main.yml must import _report, _guards, _guards_spool, _write and _write_spool,"
+            " in that order"
+        )
     else:
         for name, condition in imports[1:]:
-            if "ci_jump_manage_keys" not in condition:
-                found.append(f"tasks/main.yml: {name} is not behind ci_jump_manage_keys")
-        if "ci_jump_manage_keys" in imports[0][1]:
+            flag = "ci_jump_spool_manage_keys" if "spool" in name else "ci_jump_manage_keys"
+            if f"{flag} | bool" not in condition:
+                found.append(f"tasks/main.yml: {name} is not behind {flag}")
+            if "spool" in name and "(ci_jump_manage_keys" in condition:
+                found.append(f"tasks/main.yml: {name} must not wait on the first account's flag")
+        if "manage_keys" in imports[0][1]:
             found.append("tasks/main.yml: the report must run whatever the flag is")
 
     # The name is optional input (host_inputs_optional_by_host), so the role must refuse by itself
@@ -588,6 +809,17 @@ def _task_findings(role: Path) -> list[str]:
         and "ci_jump[user-missing]" in str(_args(first, "ansible.builtin.assert").get("fail_msg"))
     ):
         found.append("tasks/_guards.yml: must open by refusing a flag that is on with no name set")
+    spool_guard_tasks = _tasks(role, "_guards_spool.yml")
+    spool_first = spool_guard_tasks[0] if spool_guard_tasks else {}
+    if not (
+        _args(spool_first, "ansible.builtin.assert").get("that")
+        == ["ci_jump_spool_user is defined"]
+        and "ci_jump[spool-user-missing]"
+        in str(_args(spool_first, "ansible.builtin.assert").get("fail_msg"))
+    ):
+        found.append(
+            "tasks/_guards_spool.yml: must open by refusing a flag that is on with no name set"
+        )
     notices = [
         task
         for task in main_tasks
@@ -610,7 +842,10 @@ def _task_findings(role: Path) -> list[str]:
             for task in _walk(_tasks_all(path))
             if "block" not in task
             and not _asks_only_whether_set(task)
-            and ("ci_jump_user" in json.dumps(task) or "ci_jump_legacy" in json.dumps(task))
+            and any(
+                name in json.dumps(task)
+                for name in ("ci_jump_user", "ci_jump_spool_user", "ci_jump_legacy")
+            )
         ]
         found.extend(
             f"tasks/{path.name}: a task that handles the account's name must set no_log: true"
@@ -632,28 +867,60 @@ def _task_findings(role: Path) -> list[str]:
             and task.get("diff") is not False
         )
 
-    write = _walk(_tasks_all(role / "tasks" / "_write.yml"))
+    found.extend(
+        _write_findings(
+            role, "_write.yml", ["authorized_keys.j2", "sshd-drop-in.conf.j2"], "_readback.yml"
+        )
+    )
+    found.extend(
+        _write_findings(
+            role,
+            "_write_spool.yml",
+            ["authorized_keys_spool.j2", "sshd-drop-in-spool.conf.j2"],
+            "_readback_spool.yml",
+        )
+    )
+
+    for filename in ("_guards.yml", "_readback.yml", "_guards_spool.yml", "_readback_spool.yml"):
+        calls = [t for t in _tasks(role, filename) if "ci_jump_authorized_keys" in t]
+        if len(calls) != 1 or not hidden(calls[0]):
+            found.append(f"tasks/{filename}: the module call must set no_log: true and diff: false")
+    reports = [t for t in _tasks(role, "_report.yml") if "ci_jump_authorized_keys" in t]
+    if len(reports) != 1 or reports[0].get("changed_when") is not False:
+        found.append("tasks/_report.yml: the report must set changed_when: false")
+    return found
+
+
+def _write_findings(role: Path, filename: str, sources: list[str], readback: str) -> list[str]:
+    """The pins on one write step: its two templates, their owner and mode, hiding, the whole
+    sshd check, the reload, the rescue and the read-back inside the rolled-back block, skipped in
+    check mode. The first account's step and the second account's step are held to the same."""
+    found: list[str] = []
+
+    def hidden(task: dict[str, object]) -> bool:
+        return task.get("no_log") is True and task.get("diff") is False
+
+    write = _walk(_tasks_all(role / "tasks" / filename))
     templates = [t for t in write if "ansible.builtin.template" in t]
-    if sorted(str(_args(t, "ansible.builtin.template").get("src")) for t in templates) != [
-        "authorized_keys.j2",
-        "sshd-drop-in.conf.j2",
-    ]:
+    if sorted(str(_args(t, "ansible.builtin.template").get("src")) for t in templates) != sources:
         found.append(
-            "tasks/_write.yml: expected the key file and the drop-in, each from its template"
+            f"tasks/{filename}: expected the key file and the drop-in, each from its template"
         )
     for task in templates:
         arguments = _args(task, "ansible.builtin.template")
         if not hidden(task):
-            found.append("tasks/_write.yml: a template write must set no_log: true and diff: false")
+            found.append(
+                f"tasks/{filename}: a template write must set no_log: true and diff: false"
+            )
         if not (
             arguments.get("owner") == "root"
             and arguments.get("group") == "root"
             and arguments.get("mode") == "0644"
         ):
-            found.append("tasks/_write.yml: the managed files must be root:root at 0644")
+            found.append(f"tasks/{filename}: the managed files must be root:root at 0644")
     if any("ansible.posix.authorized_key" in t for t in write):
         found.append(
-            "tasks/_write.yml: the key file must be written as root, never with authorized_key"
+            f"tasks/{filename}: the key file must be written as root, never with authorized_key"
         )
     commands = [
         str(_args(t, "ansible.builtin.command").get("argv"))
@@ -661,30 +928,24 @@ def _task_findings(role: Path) -> list[str]:
         if "ansible.builtin.command" in t
     ]
     if not any("sshd" in command and "-t" in command for command in commands):
-        found.append("tasks/_write.yml: the whole sshd configuration must be checked with sshd -t")
+        found.append(f"tasks/{filename}: the whole sshd configuration must be checked with sshd -t")
     if not any("ansible.builtin.systemd_service" in t for t in write):
-        found.append("tasks/_write.yml: sshd must be reloaded after the write")
+        found.append(f"tasks/{filename}: sshd must be reloaded after the write")
     block = next((t for t in write if "block" in t), None)
     if block is None or "rescue" not in block:
         found.append(
-            "tasks/_write.yml: the write must have a rescue that puts the previous files back"
+            f"tasks/{filename}: the write must have a rescue that puts the previous files back"
         )
-    elif not any("_readback.yml" in str(t) for t in _walk(block["block"])):
-        found.append("tasks/_write.yml: the read-back must be inside the block that is rolled back")
+    elif not any(readback in str(t) for t in _walk(block["block"])):
+        found.append(
+            f"tasks/{filename}: the read-back must be inside the block that is rolled back"
+        )
     elif not all(
         "ansible_check_mode" in str(t.get("when", ""))
         for t in _walk(block["block"])
-        if "_readback.yml" in str(t)
+        if readback in str(t)
     ):
-        found.append("tasks/_write.yml: the read-back must be skipped in check mode")
-
-    for filename in ("_guards.yml", "_readback.yml"):
-        calls = [t for t in _tasks(role, filename) if "ci_jump_authorized_keys" in t]
-        if len(calls) != 1 or not hidden(calls[0]):
-            found.append(f"tasks/{filename}: the module call must set no_log: true and diff: false")
-    reports = [t for t in _tasks(role, "_report.yml") if "ci_jump_authorized_keys" in t]
-    if len(reports) != 1 or reports[0].get("changed_when") is not False:
-        found.append("tasks/_report.yml: the report must set changed_when: false")
+        found.append(f"tasks/{filename}: the read-back must be skipped in check mode")
     return found
 
 
@@ -712,7 +973,7 @@ class RealTree(unittest.TestCase):
         self.assertEqual(module.safe_line(raw), module.WITHHELD_LINE)
 
 
-class Sabotage(unittest.TestCase):
+class _SabotageBase(unittest.TestCase):
     """Break one file of a copy of the tree, require the named finding, put the file back and
     require none, so a pin that is always red cannot pass for one that is switched on."""
 
@@ -740,6 +1001,21 @@ class Sabotage(unittest.TestCase):
         self.assertTrue(any(expected in finding for finding in red), f"{expected!r} not in {red}")
         path.write_text(original, encoding="utf-8")
         self.assertEqual(problems(self.root), [])
+
+    def _findings_with_owner_file(self, host: str, values: dict[str, object]) -> list[str]:
+        """The findings with one host's owner file replaced, then the file put back and green."""
+        path = self.root / OWNER_VARS / f"{host}.yml"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(yaml.safe_dump(values), encoding="utf-8")
+        red = problems(self.root)
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(problems(self.root), [])
+        return red
+
+
+class Sabotage(_SabotageBase):
+    """Break one file of a copy of the tree, require the named finding, put the file back and
+    require none, so a pin that is always red cannot pass for one that is switched on."""
 
     def test_a_drifted_port_is_red(self) -> None:
         self._red_then_green(
@@ -826,16 +1102,6 @@ class Sabotage(unittest.TestCase):
             "ci_jump_destinations": ["10.0.0.7", "db-t1"],
             "ci_jump_keys": [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}],
         }
-
-    def _findings_with_owner_file(self, host: str, values: dict[str, object]) -> list[str]:
-        """The findings with one host's owner file replaced, then the file put back and green."""
-        path = self.root / OWNER_VARS / f"{host}.yml"
-        original = path.read_text(encoding="utf-8")
-        path.write_text(yaml.safe_dump(values), encoding="utf-8")
-        red = problems(self.root)
-        path.write_text(original, encoding="utf-8")
-        self.assertEqual(problems(self.root), [])
-        return red
 
     def test_a_host_the_owner_has_enabled_is_accepted(self) -> None:
         """The positive case: a complete enabled file passes every other pin of this file."""
@@ -1148,7 +1414,7 @@ class Sabotage(unittest.TestCase):
     def test_a_jump_host_whose_private_inputs_lack_the_account_is_red(self) -> None:
         self._red_then_green(
             HOMES[3],
-            "    - ci_jump_user\n  ops1:",
+            "    - ci_jump_user\n    - ci_jump_spool_user\n  ops1:",
             "  ops1:",
             "its host_inputs row lacks ci_jump_user",
         )
@@ -1211,6 +1477,378 @@ class Sabotage(unittest.TestCase):
             "        description: >-\n          The jump account,",
             "must hide ci_jump_user",
         )
+
+
+class SpoolSabotage(_SabotageBase):
+    """The second account's pins, each shown red on a sabotaged copy and green again."""
+
+    def test_a_spool_template_that_drops_the_port_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/templates/authorized_keys_spool.j2",
+            ':{{ ci_jump_spool_port }}"',
+            '"',
+            "templates/authorized_keys_spool.j2 writes other lines",
+        )
+
+    def test_a_spool_drop_in_that_reads_the_first_accounts_list_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/templates/sshd-drop-in-spool.conf.j2",
+            "ci_jump_spool_destinations",
+            "ci_jump_destinations",
+            "must read its destinations from ci_jump_spool_destinations only",
+            every=True,
+        )
+
+    def test_a_spool_key_template_that_reads_the_first_accounts_list_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/templates/authorized_keys_spool.j2",
+            "ci_jump_spool_destinations",
+            "ci_jump_destinations",
+            "must read its destinations from ci_jump_spool_destinations only",
+            every=True,
+        )
+
+    def test_a_spool_drop_in_that_names_the_first_accounts_key_file_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/templates/sshd-drop-in-spool.conf.j2",
+            "AuthorizedKeysFile {{ ci_jump_spool_key_file }}",
+            "AuthorizedKeysFile {{ ci_jump_key_file }}",
+            "names the first account's file or name",
+        )
+
+    def test_a_spool_drop_in_that_allows_remote_forwarding_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/templates/sshd-drop-in-spool.conf.j2",
+            "AllowTcpForwarding local",
+            "AllowTcpForwarding yes",
+            "templates/sshd-drop-in-spool.conf.j2 writes other text",
+        )
+
+    def test_a_spool_key_file_that_is_the_first_accounts_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/vars/main.yml",
+            "ci_jump_spool_key_file: /etc/ssh/authorized_keys.d/branchleft-jump-spool",
+            "ci_jump_spool_key_file: /etc/ssh/authorized_keys.d/branchleft-jump",
+            "the second account's key file is the first account's",
+        )
+
+    def test_a_spool_drop_in_that_is_the_first_accounts_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/vars/main.yml",
+            "/etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf",
+            "/etc/ssh/sshd_config.d/40-branchleft-jump.conf",
+            "the second account's drop-in is the first account's",
+        )
+
+    def test_a_shared_reload_marker_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/vars/main.yml",
+            "ci_jump_spool_reload_marker: /run/branchleft-jump-spool-reload-owed",
+            "ci_jump_spool_reload_marker: /run/branchleft-jump-reload-owed",
+            "shares the first account's reload marker",
+        )
+
+    def test_a_moved_spool_key_file_in_the_module_is_red(self) -> None:
+        self._red_then_green(
+            MODULE,
+            'SPOOL_KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump-spool"',
+            'SPOOL_KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump-other"',
+            "ci_jump_spool_key_file differs from the module's SPOOL_KEY_FILE",
+        )
+
+    def test_a_spool_path_made_from_the_account_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/vars/main.yml",
+            "ci_jump_spool_reload_marker: /run/branchleft-jump-spool-reload-owed",
+            "ci_jump_spool_reload_marker: /run/{{ ci_jump_user }}-reload-owed",
+            "ci_jump_spool_reload_marker is made from the account's name",
+        )
+
+    def test_a_default_that_switches_the_second_account_on_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_spool_manage_keys: false",
+            "ci_jump_spool_manage_keys: true",
+            "ci_jump_spool_manage_keys must default to false",
+        )
+
+    def test_a_spool_default_that_carries_a_destination_or_a_key_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_spool_destinations: []",
+            "ci_jump_spool_destinations: ['10.20.1.201']",
+            "ci_jump_spool_destinations must default to empty",
+        )
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_spool_keys: []",
+            "ci_jump_spool_keys: [{key: a}]",
+            "ci_jump_spool_keys must default to empty",
+        )
+
+    def test_a_moved_spool_port_default_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_spool_port: 22",
+            "ci_jump_spool_port: 2222",
+            "ci_jump_spool_port must default to 22",
+        )
+
+    def test_a_default_given_to_the_second_accounts_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_spool_port: 22",
+            "ci_jump_spool_port: 22\nci_jump_spool_user: spool-hopper",
+            "ci_jump_spool_user must have no default",
+        )
+
+    def test_the_second_accounts_name_left_visible_in_the_spec_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/meta/argument_specs.yml",
+            "      ci_jump_spool_user:\n        type: str\n        no_log: true\n",
+            "      ci_jump_spool_user:\n        type: str\n",
+            "must hide ci_jump_spool_user",
+        )
+
+    def test_the_second_accounts_name_made_a_required_argument_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/meta/argument_specs.yml",
+            "      ci_jump_spool_user:\n        type: str\n        no_log: true\n",
+            (
+                "      ci_jump_spool_user:\n"
+                "        type: str\n"
+                "        no_log: true\n"
+                "        required: true\n"
+            ),
+            "ci_jump_spool_user must not be a required argument",
+        )
+
+    def test_a_host_whose_private_inputs_lack_the_second_account_is_red(self) -> None:
+        self._red_then_green(
+            HOMES[3],
+            "    - ci_jump_user\n    - ci_jump_spool_user\n  ops1:",
+            "    - ci_jump_user\n  ops1:",
+            "its host_inputs row lacks ci_jump_spool_user",
+        )
+
+    def test_a_host_whose_second_account_name_is_required_by_the_loader_is_red(self) -> None:
+        self._red_then_green(
+            HOMES[3],
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n\n# A value",
+            "ci_jump_spool_user is not optional in its host_inputs row",
+        )
+
+    def test_the_second_accounts_name_in_another_hosts_row_is_red(self) -> None:
+        self._red_then_green(
+            HOMES[3],
+            "    - ntfy_pager_machine_password_hash\n    - ci_jump_user\n  edget:",
+            (
+                "    - ntfy_pager_machine_password_hash\n"
+                "    - ci_jump_user\n"
+                "    - ci_jump_spool_user\n"
+                "  edget:"
+            ),
+            "edge1 has ci_jump_spool_user in its host_inputs row but no second account",
+        )
+
+    def _spool_enabled(self) -> dict[str, object]:
+        """The values of edget as the owner runs it, both accounts on, complete."""
+        return {
+            "ci_jump_manage_keys": True,
+            "ci_jump_own_address": "10.20.1.210",
+            "ci_jump_destinations": ["10.20.1.210", "10.20.1.200"],
+            "ci_jump_keys": [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}],
+            "ci_jump_spool_manage_keys": True,
+            "ci_jump_spool_destinations": ["10.20.1.201"],
+            "ci_jump_spool_port": 22,
+            "ci_jump_spool_keys": [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}],
+        }
+
+    def test_a_host_that_turns_the_second_account_on_is_accepted(self) -> None:
+        self.assertEqual(self._findings_with_owner_file("edget", self._spool_enabled()), [])
+
+    def test_a_host_that_ships_the_second_account_inert_is_accepted(self) -> None:
+        values = self._spool_enabled() | {
+            "ci_jump_spool_manage_keys": False,
+            "ci_jump_spool_destinations": [],
+            "ci_jump_spool_keys": [],
+        }
+        self.assertEqual(self._findings_with_owner_file("edget", values), [])
+
+    def test_a_host_that_enables_the_second_account_with_partial_values_is_red(self) -> None:
+        for name, value, expected in (
+            ("ci_jump_own_address", "", "without ci_jump_own_address"),
+            ("ci_jump_spool_destinations", [], "without a list of ci_jump_spool_destinations"),
+            ("ci_jump_spool_destinations", ["10.20.1.201", 22], "ci_jump_spool_destinations"),
+            ("ci_jump_spool_destinations", ["10.20.1.210"], "own address on the spool list"),
+            ("ci_jump_spool_port", True, "without a ci_jump_spool_port"),
+            ("ci_jump_spool_port", 0, "without a ci_jump_spool_port"),
+            ("ci_jump_spool_port", "22", "without a ci_jump_spool_port"),
+            ("ci_jump_spool_keys", [], "without a list of ci_jump_spool_keys"),
+            ("ci_jump_spool_keys", [{"key": "k", "to": ["x"]}], "ci_jump_spool_keys"),
+        ):
+            with self.subTest(name=name, value=value):
+                red = self._findings_with_owner_file("edget", self._spool_enabled() | {name: value})
+                self.assertTrue(any(expected in finding for finding in red), red)
+
+    def test_a_host_that_holds_spool_values_under_a_flag_that_is_off_is_red(self) -> None:
+        for flag in (False, "true", 1):
+            with self.subTest(flag=flag):
+                red = self._findings_with_owner_file(
+                    "edget", self._spool_enabled() | {"ci_jump_spool_manage_keys": flag}
+                )
+                self.assertTrue(
+                    any("does not ship the second account's defaults" in f for f in red), red
+                )
+
+    def test_a_host_that_leaves_a_second_account_variable_out_is_red(self) -> None:
+        values = {k: v for k, v in self._spool_enabled().items() if k != "ci_jump_spool_port"}
+        red = self._findings_with_owner_file("edget", values)
+        self.assertTrue(
+            any("names other second-account variables than the spec" in f for f in red), red
+        )
+
+    def test_a_host_without_the_second_account_that_carries_its_variables_is_red(self) -> None:
+        path = self.root / OWNER_VARS / "edge1.yml"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original + "ci_jump_spool_manage_keys: false\n", encoding="utf-8")
+        red = problems(self.root)
+        self.assertTrue(any("but has no such account" in finding for finding in red), red)
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(problems(self.root), [])
+
+    def test_an_owner_file_that_publishes_the_second_accounts_name_is_red(self) -> None:
+        values = self._spool_enabled() | {SPOOL_SECRET_VARIABLE: SAMPLE_NAME}
+        red = self._findings_with_owner_file("edget", values)
+        self.assertTrue(any("carries ci_jump_spool_user" in finding for finding in red), red)
+
+    def test_no_log_off_the_second_accounts_key_write_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write_spool.yml",
+            "      register: ci_jump_spool_keys_written\n      no_log: true\n      diff: false\n",
+            "      register: ci_jump_spool_keys_written\n",
+            "tasks/_write_spool.yml: a template write must set no_log: true and diff: false",
+        )
+
+    def test_a_second_account_key_file_that_is_group_writable_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write_spool.yml",
+            (
+                "        src: authorized_keys_spool.j2\n"
+                "        dest: '{{ ci_jump_spool_key_file }}'\n"
+                "        owner: root\n"
+                "        group: root\n"
+                "        mode: '0644'"
+            ),
+            (
+                "        src: authorized_keys_spool.j2\n"
+                "        dest: '{{ ci_jump_spool_key_file }}'\n"
+                "        owner: root\n"
+                "        group: root\n"
+                "        mode: '0664'"
+            ),
+            "tasks/_write_spool.yml: the managed files must be root:root at 0644",
+        )
+
+    def test_no_whole_configuration_check_for_the_second_account_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write_spool.yml",
+            "        argv: [sshd, -t]",
+            "        argv: [true]",
+            "tasks/_write_spool.yml: the whole sshd configuration must be checked",
+            every=True,
+        )
+
+    def test_no_rollback_for_the_second_account_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write_spool.yml",
+            "  rescue:\n",
+            "  always:\n",
+            "tasks/_write_spool.yml: the write must have a rescue",
+        )
+
+    def test_a_read_back_of_the_second_account_in_check_mode_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write_spool.yml",
+            (
+                "      ansible.builtin.import_tasks: _readback_spool.yml\n"
+                "      when: not ansible_check_mode\n"
+            ),
+            "      ansible.builtin.import_tasks: _readback_spool.yml\n",
+            "tasks/_write_spool.yml: the read-back must be skipped in check mode",
+        )
+
+    def test_a_second_account_module_call_that_shows_its_result_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_guards_spool.yml",
+            "  no_log: true\n",
+            "",
+            "tasks/_guards_spool.yml: the module call must set no_log",
+        )
+        self._red_then_green(
+            f"{ROLE}/tasks/_readback_spool.yml",
+            "  no_log: true\n",
+            "",
+            "tasks/_readback_spool.yml: the module call must set no_log",
+        )
+
+    def test_a_second_account_guard_that_no_longer_refuses_a_missing_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_guards_spool.yml",
+            "      - ci_jump_spool_user is defined\n",
+            "      - true\n",
+            "tasks/_guards_spool.yml: must open by refusing",
+        )
+
+    def test_a_second_account_guard_that_is_not_behind_its_flag_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/main.yml",
+            (
+                "  ansible.builtin.import_tasks: _guards_spool.yml\n"
+                "  when: ci_jump_spool_manage_keys | bool\n"
+            ),
+            "  ansible.builtin.import_tasks: _guards_spool.yml\n",
+            "_guards_spool.yml is not behind ci_jump_spool_manage_keys",
+        )
+
+    def test_a_second_account_write_that_waits_on_the_first_accounts_flag_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/main.yml",
+            (
+                "  ansible.builtin.import_tasks: _write_spool.yml\n"
+                "  when: ci_jump_spool_manage_keys | bool\n"
+            ),
+            (
+                "  ansible.builtin.import_tasks: _write_spool.yml\n"
+                "  when: ci_jump_spool_manage_keys | bool and (ci_jump_manage_keys | bool)\n"
+            ),
+            "_write_spool.yml must not wait on the first account's flag",
+        )
+
+    def test_the_second_account_written_before_it_is_judged_is_red(self) -> None:
+        path = self.root / ROLE / "tasks" / "main.yml"
+        original = path.read_text(encoding="utf-8")
+        guards = "ansible.builtin.import_tasks: _guards_spool.yml"
+        write = "ansible.builtin.import_tasks: _write_spool.yml"
+        swapped = original.replace(guards, "@@").replace(write, guards).replace("@@", write)
+        path.write_text(swapped, encoding="utf-8")
+        red = problems(self.root)
+        self.assertTrue(any("in that order" in finding for finding in red), red)
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(problems(self.root), [])
+
+    def test_a_second_account_judged_after_the_first_is_written_is_red(self) -> None:
+        path = self.root / ROLE / "tasks" / "main.yml"
+        original = path.read_text(encoding="utf-8")
+        spool = "ansible.builtin.import_tasks: _guards_spool.yml"
+        first = "ansible.builtin.import_tasks: _write.yml"
+        swapped = original.replace(spool, "@@").replace(first, spool).replace("@@", first)
+        path.write_text(swapped, encoding="utf-8")
+        red = problems(self.root)
+        self.assertTrue(any("in that order" in finding for finding in red), red)
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(problems(self.root), [])
 
 
 if __name__ == "__main__":

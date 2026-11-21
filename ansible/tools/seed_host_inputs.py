@@ -85,7 +85,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_machine_password_hash",
         "ci_jump_user",
     ),
-    "edget": ("ci_jump_user",),
+    "edget": ("ci_jump_user", "ci_jump_spool_user"),
     "demo1": ("broker_deploy_owner_due_diligence_email",),
     "ops1": (
         "backup_worker_db_host",
@@ -204,6 +204,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
+    "ci_jump_spool_user": (Source(TYPED, ""),),
     "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 

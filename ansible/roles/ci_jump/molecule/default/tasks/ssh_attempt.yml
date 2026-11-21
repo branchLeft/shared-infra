@@ -12,6 +12,9 @@
 # tries to make. Every other target is a live listener of the same sshd, so a refusal is the key
 # line's doing and not an absent listener's.
 #
+# attempt_user, the account logged in to at the jump host (default: the first account; the spool
+# scenario names the second account).
+#
 # attempt_route: direct (the default) is every connection above, made to the jump host itself.
 # proxyjump runs the client the way the pipeline's action runs it for a host behind the jump: an
 # ssh -F configuration whose one stanza, jump_hop, holds the hop's own key and strict options
@@ -45,7 +48,7 @@
       Host jump_hop
         HostName 127.0.0.1
         Port {{ scenario_ssh_port }}
-        User {{ scenario_jump_user }}
+        User {{ attempt_user | default(scenario_jump_user) }}
         IdentityFile {{ scenario_key_dir }}/{{ attempt_key }}
         IdentitiesOnly yes
         BatchMode yes
@@ -135,7 +138,11 @@
       - -o
       - LogLevel=ERROR
     attempt_forward:
-      ['-W', '{{ attempt_target | default("") }}', '{{ scenario_jump_user }}@127.0.0.1']
+      [
+        '-W',
+        '{{ attempt_target | default("") }}',
+        '{{ attempt_user | default(scenario_jump_user) }}@127.0.0.1',
+      ]
     # ssh -R asks the jump host to listen on its own loopback and send what arrives to the
     # target; ExitOnForwardFailure turns a refusal into a failed command, and -N runs no command.
     attempt_reverse:
@@ -144,9 +151,13 @@
       - -N
       - -R
       - '127.0.0.1:{{ scenario_remote_port }}:{{ attempt_target | default("") }}'
-      - '{{ scenario_jump_user }}@127.0.0.1'
+      - '{{ attempt_user | default(scenario_jump_user) }}@127.0.0.1'
     attempt_remote:
-      ['{{ scenario_jump_user }}@127.0.0.1', '--', '{{ attempt_command | default("") }}']
+      [
+        '{{ attempt_user | default(scenario_jump_user) }}@127.0.0.1',
+        '--',
+        '{{ attempt_command | default("") }}',
+      ]
     attempt_tail: >-
       {{ attempt_reverse if attempt_expect == 'no_remote_forward'
       else (attempt_forward if attempt_target is defined else attempt_remote) }}
