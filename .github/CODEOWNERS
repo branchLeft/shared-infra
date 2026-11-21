@@ -100,6 +100,7 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/ci_step_login/                                @branchLeft/branchleft-admin
 /ansible/roles/control_plane_db/                             @branchLeft/branchleft-admin
 /ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
+/ansible/roles/db_t1_tenant_entry/                          @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/render_slot_sudoers.py @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/files/judge_caddy_config.py       @branchLeft/branchleft-admin
@@ -120,6 +121,7 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/safety_service/                               @branchLeft/branchleft-admin
 /ansible/roles/spool_path_account/                           @branchLeft/branchleft-admin
 /ansible/roles/spool_paths/                                  @branchLeft/branchleft-admin
+/ansible/roles/tenant_entry/                                @branchLeft/branchleft-admin
 /ansible/roles/tunnel_account/                               @branchLeft/branchleft-admin
 /ansible/tools/*ci_key_line*                                 @branchLeft/branchleft-admin
 /ansible/tools/*pubkey_only*                                 @branchLeft/branchleft-admin

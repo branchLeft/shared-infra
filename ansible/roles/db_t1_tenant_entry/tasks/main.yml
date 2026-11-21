@@ -1,0 +1,76 @@
+---
+# Order matters. The inputs are checked first and nothing changes on a refusal. The account,
+# the program and the sudoers rule come next, and the key goes last: the key is the only thing
+# that lets a client in, so a run that stops half way leaves no way in rather than one that
+# runs less than it should.
+#
+# The role reads no root credential and no secret. The key is a public half, hidden from logs
+# and diffs anyway (ANS-16) because it is private to the estate.
+#
+# Check mode (ANS-10): every task supports it. The one validation that does not run is the
+# sudoers syntax check, which is the copy module's `validate`; a plan therefore shows a
+# changed file where an apply may still refuse it.
+
+- name: Refuse an input that is not the shape the key line and its address need
+  ansible.builtin.include_tasks: _inputs.yml
+
+- name: Make the account the controller's key logs in as
+  ansible.builtin.user:
+    name: '{{ db_t1_tenant_entry_account }}'
+    comment: Tenant database forced command
+    system: true
+    shell: '{{ db_t1_tenant_entry_shell }}'
+    create_home: false
+    home: '{{ db_t1_tenant_entry_home }}'
+    # An unlocked entry no password can match. sshd refuses a locked account when it does not
+    # use PAM, and this account has no password to try.
+    password: '*'
+  no_log: true
+
+# Owned by root and closed to the account: a key file the account could write would let the
+# key's holder remove its own restrictions.
+- name: Make the account's home and .ssh directory, root's and not writable by it
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ db_t1_tenant_entry_home }}'
+    - '{{ db_t1_tenant_entry_ssh_directory }}'
+
+# The diff is not shown (ANS-16): the program prints a line that starts `password=`, which the
+# plan's secret scan reads as a credential and would withhold the whole plan of the host over.
+# The file holds no value. The line cannot be reworded: it is the protocol the controller reads.
+- name: Install the forced-command program, root's and executable by every account
+  ansible.builtin.copy:
+    src: '{{ db_t1_tenant_entry_program_source }}'
+    dest: '{{ db_t1_tenant_entry_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+  diff: false
+
+# Checked with `visudo -csf`: `-cf` alone passes an undefined alias. A file the check refuses
+# is never put in place.
+- name: Let the account run the program as root, and nothing else
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: '{{ db_t1_tenant_entry_sudoers_path }}'
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -csf %s
+
+# The whole file is this one line, so a key that is not declared is not left behind. Owned by
+# root with the account's group able to read it, because sshd reads it as the account.
+- name: Install the controller's key, limited to its address and the program
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: '{{ db_t1_tenant_entry_authorized_keys_path }}'
+    owner: root
+    group: '{{ db_t1_tenant_entry_account }}'
+    mode: '0640'
+  no_log: true
+  diff: false

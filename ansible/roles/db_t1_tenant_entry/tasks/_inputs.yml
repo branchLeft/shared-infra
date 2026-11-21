@@ -1,0 +1,22 @@
+---
+# The messages name the input and the rule and never print a value. The key is a public half
+# and still private to the estate, so a message carries no part of it.
+- name: Refuse a controller key that is not one ed25519 public key on one line
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_controller_key is string
+      - db_t1_tenant_entry_controller_key is match(db_t1_tenant_entry_key_pattern)
+    quiet: true
+    fail_msg: >-
+      db_t1_tenant_entry_controller_key must be one `ssh-ed25519 AAAA...` public key with no
+      comment and no option: the line is written into an authorized_keys file.
+
+- name: Refuse a controller address that is not one IPv4 address
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_controller_address is string
+      - db_t1_tenant_entry_controller_address is match(db_t1_tenant_entry_address_pattern)
+    quiet: true
+    fail_msg: >-
+      db_t1_tenant_entry_controller_address must be one IPv4 address in four decimal octets,
+      with no leading zero and no wildcard: the key is accepted from it alone.

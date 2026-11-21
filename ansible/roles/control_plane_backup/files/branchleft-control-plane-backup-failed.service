@@ -1,0 +1,23 @@
+# Started by OnFailure= of branchleft-control-plane-backup.service. Installed by the
+# control_plane_backup role. It marks the failure for the monitoring stack and does nothing
+# else: the program writes the time to the textfile directory node_exporter reads, and the rule
+# ControlPlaneBackupRunFailed in hetzner/monitoring/render.ts holds while that time is newer than
+# the last full success. A kill, the two-hour timeout or a crash before the program printed a
+# line are all a failed state, so this covers what the program cannot report itself.
+[Unit]
+Description=branchLeft control-plane backup failed: mark it for the alert rule
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py mark-failed
+# The mark is read by node_exporter, which is not root.
+UMask=0022
+TimeoutStartSec=1min
+MemoryMax=256M
+
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

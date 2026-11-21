@@ -6,6 +6,9 @@ Description=branchLeft control-plane database backup (take, prove by restore, sh
 Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
+# Any failed state (a failed check, a kill, the timeout, a failed dependency) starts the unit
+# that marks it for the alert rule, so a failed night is seen that night. Installed by the role.
+OnFailure=branchleft-control-plane-backup-failed.service
 
 [Service]
 Type=oneshot

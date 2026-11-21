@@ -47,3 +47,7 @@ broker_deploy_slot_names: ['0', '1', '2', '3', '4', '5', '6']
 broker_deploy_wrapper_path: /usr/local/sbin/branchleft-slot
 broker_deploy_image_stage_dir: /var/lib/branchleft-broker/image-tmp
 broker_deploy_sudoers_path: /etc/sudoers.d/branchleft-slot
+# The owner's address, the broker's OWNER_DUE_DILIGENCE_EMAIL. It has no real value here: it is
+# an input the owner places on the host, and the role refuses a run that carries a release
+# without one (tasks/main.yml). The empty default is never a usable address.
+broker_deploy_owner_due_diligence_email: ''
