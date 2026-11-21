@@ -72,6 +72,13 @@ names them. None of the variables is a secret.
 - `edge1`, before `exporters_and_collectors`, in `ansible/playbooks/edge1.yml`.
 - `app1`, last, in `ansible/playbooks/app1.yml`, so a disk refusal holds nothing back.
 
+- `dbt1`, `appt1` and `edget`, the tenants project's three hosts (ws#1810).
+  On `dbt1` it comes before `db_t1`, so a refusal in the database role holds monitoring back
+  from nothing; on `appt1` and `edget` it is last. The tenants network reuses the estate's
+  range, so the default subnet prefix `10.20.1.` finds the host's own address there too. The
+  tenant hosts are in `hetzner/monitoring/render.ts` as `expectedUp: false`; the flip is made
+  when each is enrolled and read back answering live.
+
 On `ops1`, the last role, a disk refusal holds nothing else back.
 
 ## Deliberate differences from the scripts
