@@ -48,6 +48,9 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 
 # The launch page and the owner's words on it, and the routing that goes public: the hostname
 # registry, the renderer, the committed Caddyfiles it makes and the test that holds them equal.
+/hetzner/edge-t/render.test.ts                               @branchLeft/branchleft-admin
+/hetzner/edge-t/render.ts                                    @branchLeft/branchleft-admin
+/hetzner/edge-t/stack/caddy/Caddyfile                        @branchLeft/branchleft-admin
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 /hetzner/edge/render.test.ts                                 @branchLeft/branchleft-admin
 /hetzner/edge/render.ts                                      @branchLeft/branchleft-admin

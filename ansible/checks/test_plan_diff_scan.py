@@ -818,5 +818,35 @@ class RealTreeCase(unittest.TestCase):
         self.assertTrue(any(s.startswith("edge_stack:") and "acquis.d/" in s for s in scanned))
 
 
+class TenantStackCase(unittest.TestCase):
+    """The tenant profile's files go to a host by the same tasks, so none may read as secret.
+
+    The walk above resolves the role's copy tasks against the estate profile's stack directory. The
+    tenant profile reads `hetzner/edge-t/stack` instead, which that walk does not reach, so each of
+    its files is read here with the same pattern and the same rule about a name held apart.
+    """
+
+    STACK = ROOT / "hetzner" / "edge-t" / "stack"
+
+    def files(self) -> list[Path]:
+        return sorted(path for path in self.STACK.rglob("*") if path.is_file())
+
+    def test_the_walk_has_files_to_read(self) -> None:
+        names = {path.relative_to(self.STACK).as_posix() for path in self.files()}
+        self.assertIn("compose.yml", names)
+        self.assertIn("crowdsec/acquis.d/caddy.yaml", names)
+
+    def test_no_file_of_the_tenant_stack_matches_the_secret_scan(self) -> None:
+        for path in self.files():
+            shown = path.relative_to(ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual([], matching_lines(text, shown), shown)
+            self.assertEqual([], held_apart_lines(text), shown)
+
+    def test_control_the_scan_finds_a_secret_in_a_tenant_file(self) -> None:
+        text = self.STACK.joinpath("compose.yml").read_text(encoding="utf-8")
+        self.assertNotEqual([], matching_lines(text + "api_key: abcdef\n", "compose.yml"))
+
+
 if __name__ == "__main__":
     unittest.main()
