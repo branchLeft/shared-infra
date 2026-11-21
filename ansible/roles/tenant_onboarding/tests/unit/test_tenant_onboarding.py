@@ -45,9 +45,40 @@ def _is_comment_line(line: str, suffix: str) -> bool:
     return stripped.startswith("#") or (suffix in (".js", ".ts") and stripped.startswith("//"))
 
 
-# The program has one installer, ROLE. tenant_compose calls it by its installed path and never
-# installs it, so it is the one other role allowed to name it. No other role or pattern may.
-CALLER_ROLES = frozenset({"tenant_compose"})
+# The program has one installer, ROLE. A caller calls it by its installed path and never
+# installs or copies it, so it may name it. tenant_compose calls it for the compose step.
+# tenant_entry calls it for the claim verb (claim takes a uid and ports and then runs the
+# volume program), and its secrets step only stats it. No other role or pattern may name it.
+# test_no_caller_role_writes_the_program holds every caller to the no-copy rule.
+CALLER_ROLES = frozenset({"tenant_compose", "tenant_entry"})
+
+# Modules that put bytes at a path. A caller that names the program in one of these would be a
+# second installer, so the guard refuses it. Molecule scenarios are excluded: a stand-in put
+# at the program's path for a test is not a production install.
+WRITE_MODULES = frozenset(
+    {
+        "ansible.builtin.copy",
+        "ansible.builtin.template",
+        "ansible.builtin.get_url",
+        "ansible.builtin.fetch",
+        "ansible.builtin.unarchive",
+        "ansible.builtin.file",
+        "ansible.builtin.lineinfile",
+        "ansible.builtin.blockinfile",
+    }
+)
+
+
+def _program_writers(role_dir: Path) -> list[str]:
+    """Production tasks and handlers of a role that write the program's name into a path."""
+    found = []
+    files = [*(role_dir / "tasks").glob("*.yml"), *(role_dir / "handlers").glob("*.yml")]
+    for path in sorted(files):
+        for task in _tasks(path):
+            module = _module(task)
+            if module in WRITE_MODULES and "provision_tenant_volume" in yaml.safe_dump(task):
+                found.append(f"{role_dir.name}/{path.parent.name}/{path.name}: {module}")
+    return found
 
 
 def _offenders(roles_dir: Path, patterns_dir: Path, role: Path) -> list[str]:
@@ -214,6 +245,38 @@ class RuleTests(unittest.TestCase):
             [],
             "a role or pattern other than tenant_compose names the tenant program",
         )
+
+    def test_no_caller_role_writes_the_program(self) -> None:
+        # A caller calls the program by its installed path. A task that copies, templates,
+        # fetches or edits a file at the program's name is a second installer.
+        for name in sorted(CALLER_ROLES):
+            with self.subTest(role=name):
+                self.assertEqual(_program_writers(ROLES_DIR / name), [])
+
+    def test_a_caller_that_copies_the_program_is_an_offender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            roles_dir, _patterns_dir, _role = _fixture_tree(Path(tmp))
+            caller = roles_dir / "tenant_entry"
+            _write(
+                caller / "tasks" / "main.yml",
+                "- name: copy it\n  ansible.builtin.copy:\n"
+                "    src: provision_tenant_volume.py\n"
+                "    dest: /root/platform-provision/provision_tenant_volume.py\n",
+            )
+            found = _program_writers(caller)
+            self.assertEqual(len(found), 1, found)
+            self.assertIn("ansible.builtin.copy", found[0])
+
+    def test_a_caller_that_only_stats_the_program_is_not_an_offender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            roles_dir, _patterns_dir, _role = _fixture_tree(Path(tmp))
+            caller = roles_dir / "tenant_entry"
+            _write(
+                caller / "tasks" / "main.yml",
+                "- name: look\n  ansible.builtin.stat:\n"
+                "    path: /root/platform-provision/provision_tenant_volume.py\n",
+            )
+            self.assertEqual(_program_writers(caller), [])
 
     def test_a_comment_naming_the_program_is_not_an_offender(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

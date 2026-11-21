@@ -1,0 +1,29 @@
+# One tick of the host applier: fetch the signed ledger, judge it, hand each move to the deploy
+# wrapper, exit. Installed by the promote_host role as a static file, never templated. The timer
+# starts it, and the timer is held off until the role is given a ledger URL and a signer.
+#
+# A plain unit with no instance name, so systemd runs at most one copy of it; the program also
+# takes its own lock. It runs as root because the wrapper does, and holds nothing private. The
+# ledger is public and the only thing the program trusts is the signer file the role placed. A refusal or
+# a failed move exits 1, so the unit shows failed and the journal says which slot and why.
+#
+# Nothing here is started by an agent, and no unit of this role starts a model or an agent
+# program.
+[Unit]
+Description=Host applier, one signed-ledger tick
+After=network-online.target docker.service
+Wants=network-online.target
+# A manual start with nothing to trust, or with no wrapper to hand a move to, does nothing.
+ConditionPathExists=/etc/branchleft/promote/allowed_signers
+ConditionPathExists=/usr/local/sbin/branchleft-deploy
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/branchleft/promote/promote.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/usr/local/sbin/branchleft-promote --ledger-url ${PROMOTE_LEDGER_URL}
+# The wrapper takes its stack lock for up to 21 minutes, so a slow move is not cut short.
+TimeoutStartSec=1500
+NoNewPrivileges=yes
+PrivateTmp=yes
+LockPersonality=yes

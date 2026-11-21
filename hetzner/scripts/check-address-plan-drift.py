@@ -218,6 +218,50 @@ def _check_literals(
     return failures
 
 
+# Any estate-shaped literal on a line: a bare address, a `/32` host, or a CIDR.
+# The optional prefix keeps a `/32` or a `/24` whole, so it is compared as the
+# value it is rather than as its base address.
+_ESTATE_LITERAL_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?\b")
+
+
+def _check_host_lines(path: pathlib.Path, plan: AddressPlan) -> list[str]:
+    """Every line of `path` that names a plan host and carries an address
+    inside NETWORK_CIDR must carry a current plan value.
+
+    This is what makes a host table gated by construction: a host named on a
+    line, with an address that the plan no longer holds for anything, is a
+    failure that names the file, the line, the stale value and the value the
+    plan has for each named host. Adding a host to the plan needs no edit here,
+    because the host names are read from the plan itself.
+
+    A line that names no host is not read. The gate models host sentences and
+    host tables, not every address a runbook mentions in prose.
+    """
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        return [f"{path}: cannot read ({exc})"]
+
+    network = ipaddress.ip_network(plan.network_cidr, strict=False)
+    known = plan.known_values()
+    hosts = {**plan.app_host_ips, **plan.host_ips}
+
+    failures = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        named = [host for host in hosts if re.search(rf"\b{re.escape(host)}\b", line)]
+        if not named:
+            continue
+        plan_values = ", ".join(f"{host} = {hosts[host]!r}" for host in named)
+        for literal in _ESTATE_LITERAL_RE.findall(line):
+            if literal in known or not _within(literal, network):
+                continue
+            failures.append(
+                f"{path}:{lineno}: {literal!r} is not any plan value, on a line that "
+                f"names {', '.join(named)}; hetzner-host/addressPlan.ts has {plan_values}"
+            )
+    return failures
+
+
 def check(root: pathlib.Path) -> list[str]:
     try:
         plan = read_address_plan(root / "hetzner-host" / "addressPlan.ts")
@@ -225,6 +269,8 @@ def check(root: pathlib.Path) -> list[str]:
         return [str(exc)]
 
     failures: list[str] = []
+    failures += _check_host_lines(root / "hetzner" / "README.md", plan)
+    failures += _check_host_lines(root / "hetzner" / "RUNBOOK-edge.md", plan)
     failures += _check_literals(
         root / "ansible" / "roles" / "egress_nat" / "files" / "branchleft_nat.py",
         _CIDR_RE,

@@ -20,6 +20,7 @@ import {
   STATUS_TEST_TARGET_COMPONENT,
   TEST_TARGET_SERVICE,
 } from './render';
+import { loadPostmortems } from './postmortems';
 
 /**
  * `stack/` is what the `status_page` role copies onto ops1, so the committed
@@ -168,6 +169,8 @@ describe('the role binds the private address edge1 proxies to', () => {
   });
 });
 
+const REPO_ROOT = path.resolve(__dirname, '../..');
+
 describe('committed output', () => {
   const prettierOptions = async (file: string) => ({
     ...(await prettier.resolveConfig(path.join(__dirname, file))),
@@ -175,7 +178,7 @@ describe('committed output', () => {
   });
 
   it('leaves the page config as Prettier would have it', async () => {
-    const text = renderStatusConfig(sites);
+    const text = renderStatusConfig(sites, loadPostmortems(REPO_ROOT));
     expect(await prettier.format(text, await prettierOptions('stack/config.yaml'))).toBe(text);
   });
 
@@ -185,7 +188,9 @@ describe('committed output', () => {
   });
 
   it('keeps stack/config.yaml equal to the renderer output', async () => {
-    await expect(renderStatusConfig(sites)).toMatchFileSnapshot('./stack/config.yaml');
+    await expect(renderStatusConfig(sites, loadPostmortems(REPO_ROOT))).toMatchFileSnapshot(
+      './stack/config.yaml'
+    );
   });
 
   it('keeps stack/target.yaml equal to the renderer output', async () => {

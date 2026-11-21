@@ -238,8 +238,9 @@ cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
 stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
 `ghcr.io/branchleft/portal-apps`, `ghcr.io/branchleft/percona-server`, the
 database image of `db-t1`, signed by the Percona image workflow, and
-`ghcr.io/branchleft/website`, signed by `branchLeft/website`'s `ci.yml`). Exempt images skip the verifier; adding
-an entry is a reviewed diff, and the way to remove one is to register the image
+`ghcr.io/branchleft/mysqld-exporter`, the `db` stack's exporter sidecar, signed by
+`mysqld-exporter-image.yml`, and `ghcr.io/branchleft/website`, signed by `branchLeft/website`'s `ci.yml`).
+Exempt images skip the verifier; adding an entry is a reviewed diff, and the way to remove one is to register the image
 in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
 names it. This holds for every image a stack's Compose files name, not only the pin
 (`verify_compose_images`, below).
@@ -339,16 +340,15 @@ a service, because a volume of that type runs an image no `image:` key names.
 The `${IMAGE}` wiring text check on `compose.yml` itself (`resolves_image_from_env`)
 is unchanged and still runs first.
 
-**Sidecars and the exemption list.** Four third-party sidecars run beside a pin in
-the committed stacks, and each is named for its own stack in `UNATTESTED_STACK_IMAGES`
-because no workflow here signs it: `docker.io/crowdsecurity/crowdsec` (edge),
-`docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane), and
-`prom/mysqld-exporter` (db). The db entry is temporary: ghost-platform's
-`mysqld-exporter-image.yml` builds the same exporter and signs it as
-`ghcr.io/branchleft/mysqld-exporter`, and once that image is published, registered
-in `ATTESTED_IMAGES` and named by the db role, the entry is deleted. The tests render
-every committed stack and prove it verifies with the shipped lists, and that a sidecar
-not named for its stack is refused.
+**Sidecars and the exemption list.** Four sidecars run beside a pin in the committed
+stacks. Three are third-party, and each is named for its own stack in
+`UNATTESTED_STACK_IMAGES` because no workflow here signs it:
+`docker.io/crowdsecurity/crowdsec` (edge), and `docker.io/library/postgres` and
+`ghcr.io/zitadel/zitadel` (control-plane). The fourth, the `db` stack's exporter, is
+`ghcr.io/branchleft/mysqld-exporter`: it is in `ATTESTED_IMAGES`, signed by
+ghost-platform's `mysqld-exporter-image.yml`, and verified like any registered
+sidecar. The tests render every committed stack and prove it verifies with the shipped
+lists, and that a sidecar not named for its stack is refused.
 
 **Registry port.** A port is a spelling only on a registry host, a dotted name or
 `localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another

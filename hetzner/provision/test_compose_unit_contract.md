@@ -148,7 +148,7 @@ No `ExecStop`, so a restart's stop transition executes nothing.
 
 ## MonitoringForceRecreateTests
 
-`branchLeft/workspace#666`: a bind-mounted config change is invisible to
+A bind-mounted config change is invisible to
 Compose's own per-service hash, so the template's selective ExecStart
 (relied on by `edge`, per branchLeft/shared-infra#171) silently does not
 redeploy a rules or scrape-config edit to `monitoring`. `monitoring` has
@@ -182,14 +182,22 @@ undoes the other if it drifts.
     deploy's own two explicit starts (the new pin, then the rollback) can
     spend. Every start counts, the wrapper's included.
 
-    The limit must also be able to trip: `(StartLimitBurst - 1) * RestartSec`
-    has to be under `StartLimitIntervalSec`. The burst-th start comes
-    `burst - 1` pauses after the first, so with a burst of 1000, or a pause
-    longer than the interval allows for, the starts never pile up inside one
-    interval and the retry never stops, while every directive above still
-    passes on its own. The unit's own 5, 30 seconds and 900 seconds give 120
-    seconds against 900. The relation is only checked when all three values
-    are present and the interval is finite; each of those has its own fault.
+    The limit must also be able to trip: `(StartLimitBurst - 1) * (TimeoutStartSec +
+    RestartSec)` has to be under `StartLimitIntervalSec`. The burst-th start comes
+    `burst - 1` pauses after the first, and a start that hangs runs to its
+    timeout before it fails, so each pause is preceded by a whole timeout. With a
+    burst of 1000, or a timeout and pause longer than the interval allows for, the
+    starts never pile up inside one interval and the retry never stops, while
+    every directive above still passes on its own. That was the unit's own state
+    until the window was lengthened: 5, 30 seconds and 900 seconds look like 120
+    seconds against 900 for a start that fails at once, but a hung start is 4 x
+    630 = 2520 seconds against 900, and the unit retried about every ten minutes
+    for ever. The unit's own 5, 600 + 30 seconds and 3600 seconds give 2520
+    seconds against 3600. `TimeoutStartSec=` of `0` or `infinity` is refused too:
+    a hung start then never fails, so it is never retried or counted. The relation
+    is only checked when all four values are present and finite; each of those has
+    its own fault. It assumes one timeout per start; a hang in the pull and
+    another in the health wait is two, which the alerts see and this does not.
 
     An instance drop-in that sets any of the four directives replaces the
     template's value for that one stack, so none may. The scan covers every

@@ -14,6 +14,9 @@
     - '{{ playbook_dir }}/../../../broker_deploy/defaults/main.yml'
   vars:
     broker_deploy_templates: '{{ playbook_dir }}/../../../broker_deploy/templates'
+    # A placeholder, never the owner's address: the broker_deploy default is empty, and the
+    # env template needs a plain address to render. example.invalid is reserved and not routable.
+    broker_deploy_owner_due_diligence_email: owner@example.invalid
   tasks:
     - name: Install sudo, which holds visudo
       ansible.builtin.apt:

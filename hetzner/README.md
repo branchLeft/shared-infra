@@ -60,8 +60,7 @@ project buys is billable-resource and server-cap containment, the same as
 dns and demo-dns. Object Storage's own default is that an S3 key reaches
 _every bucket in its project_, so the real reason the backup bucket wants its
 own project is to keep every other project's S3 key from reaching it — a
-different boundary, proven by a different credential, owed by [ISSUE
-branchLeft/workspace#1203](https://github.com/branchLeft/workspace/issues/1203),
+different boundary, proven by a different credential, owed by the separate bucket-provisioning story,
 which provisions the bucket. Nothing here provisions it or proves that.
 
 For dns, demo-dns and backup alike, a Read & Write Cloud API token can still
@@ -451,32 +450,60 @@ does not prove: with no `ExecStop` at all, `docker ps` is what actually
 tells the two states apart, whether or not that restart succeeded.
 
 A failed start is retried before the unit stays `failed`. The template carries
-`Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=900` and
-`StartLimitBurst=5`: the first start and four retries, 30 seconds apart. A start
-that failed because `containerd` or the Docker daemon was briefly away -- the
-failure is `failed to create task for container: Unavailable: error reading
-from server: EOF` -- is therefore tried again for about two minutes, plus the
-time each attempt takes, before the unit gives up. Without it such a unit
-stayed `failed` until someone looked. The rollback signal does not change:
-`systemctl restart` returns when the start job fails, with the failed start's
-non-zero exit code, before the retry timer fires, so `branchleft-deploy` still
-sees a failure and rolls back. The Molecule case `case_compose_retry.yml` of the
-`deploy_tooling` role records that exit code, and the retry counts, on real
-systemd. The retry follows a failed _start_ only: a stack that started and
-later lost a container is not touched, because its unit is still active.
+`Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=3600` and
+`StartLimitBurst=5`: the first start and four retries, 30 seconds apart when a
+start fails at once. A start that failed because `containerd` or the Docker
+daemon was briefly away -- the failure is `failed to create task for container:
+Unavailable: error reading from server: EOF` -- is therefore tried again for
+about two minutes, plus the time each attempt takes, before the unit gives up.
+Without it such a unit stayed `failed` until someone looked. The rollback signal
+does not change: `systemctl restart` returns when the start job fails, with the
+failed start's non-zero exit code, before the retry timer fires, so
+`branchleft-deploy` still sees a failure and rolls back. The Molecule case
+`case_compose_retry.yml` of the `deploy_tooling` role records that exit code, and
+the retry counts, on real systemd. The retry follows a failed _start_ only: a
+stack that started and later lost a container is not touched, because its unit is
+still active.
 
 Every start counts against the limit, `branchleft-deploy`'s explicit ones
 included, and the limit is what makes the retry stop. A stack that has spent
 it is `failed` with result `start-limit-hit`, is listed by `systemctl --failed`,
 and refuses the next `systemctl restart` with `Start request repeated too
-quickly` until 15 minutes have passed. Do not wait: run `systemctl reset-failed
+quickly` until the hour has passed. Do not wait: run `systemctl reset-failed
 branchleft-compose@<stack>`, then `systemctl restart branchleft-compose@<stack>`
 (or re-run the deploy job). The same limit refuses a sixth start of one stack
-inside 15 minutes, so a run of deploys to one stack that fast needs the same
-`reset-failed`. A start that fails slowly -- a pull that hangs until the 600
-second `TimeoutStartSec` -- spaces the starts out so that five never fall inside
-15 minutes, and that unit keeps retrying about every ten minutes instead of
-stopping. The new unit applies to a host when the `deploy_tooling` role next runs
+inside an hour, so a run of deploys to one stack that fast needs the same
+`reset-failed`.
+
+The window is an hour because a start can fail slowly. A pull or a health wait
+that hangs runs to the 600 second `TimeoutStartSec` before it fails, and the
+retry follows 30 seconds later, so the starts of a hung stack are 630 seconds
+apart. Five of them are 4 x 630 = 2520 seconds from the first to the fifth, which
+the old 900 second window never held: such a unit retried about every ten minutes
+with no end and no alert. Inside an hour the fifth
+start is 2520 seconds in, so the limit trips, the unit ends `failed` with
+`start-limit-hit`, and `ComposeUnitRestartLoop` and `ComposeUnitFailed` (below)
+tell the owner by email. `StartLimitBurst` cannot go above six with these
+timings: the seventh start of a hung stack is 3780 seconds in, past the window.
+`test_compose_unit_contract.py` holds `(burst - 1) x (TimeoutStartSec +
+RestartSec) < StartLimitIntervalSec`, so a change to any of the three that stops
+the limit tripping fails CI. A hang in the pull and then another in the health
+wait is two timeouts in one start; the relation does not cover that case, and the
+alerts below are what sees it.
+
+`ComposeUnitRestartLoop` (two automatic restarts of one compose unit inside an
+hour) and `ComposeUnitFailed` (a compose unit `failed` for ten minutes, which is
+what `start-limit-hit` is) are warnings, so they go to email and never page. They
+read `node_systemd_unit_state` and `node_systemd_service_restart_total` from the
+node exporter's systemd collector, which `node-exporter.service` limits to
+`branchleft-compose@*` units. That covers app1, db1 and ops1, whose exporters are
+the native one; edge1's exporter is the Compose container, which has no systemd
+bus, so an edge1 stack in the loop is not seen by these alerts. A rollback
+restart after `start-limit-hit` is refused as repeated too quickly until
+`systemctl reset-failed` runs; having the deploy wrapper run it is a separate change
+to `branchleft_deploy.py`, which is owner-held.
+
+The new unit applies to a host when the `deploy_tooling` role next runs
 there; until then the host keeps the unit it has.
 
 A restart with no previous pin to roll back to -- a first deploy, always --

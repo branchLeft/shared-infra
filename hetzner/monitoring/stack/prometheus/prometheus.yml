@@ -48,6 +48,12 @@ scrape_configs:
         labels: {host: db1, expected_up: 'true'}
       - targets: ['10.20.1.50:9100']
         labels: {host: ops1, expected_up: 'true'}
+      - targets: ['10.20.1.200:9100']
+        labels: {host: db-t1, expected_up: 'false'}
+      - targets: ['10.20.1.201:9100']
+        labels: {host: app-t1, expected_up: 'false'}
+      - targets: ['10.20.1.210:9100']
+        labels: {host: edge-t, expected_up: 'false'}
 
   - job_name: mysqld
     static_configs:
@@ -141,3 +147,11 @@ scrape_configs:
     relabel_configs:
       - target_label: instance
         replacement: 'mx1.branchleft.co.uk:443'
+
+  - job_name: release_watcher
+    scrape_interval: 2m
+    scheme: https
+    metrics_path: /branchLeft/ghost-platform/state/release-watcher/release-watcher.prom
+    static_configs:
+      - targets: ['raw.githubusercontent.com:443']
+        labels: {host: github}

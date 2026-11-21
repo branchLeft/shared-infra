@@ -4,8 +4,8 @@
 # the decision has two parts that are both read from the host: the file on the host
 # against the file in the repository (drift, which a hand edit or a torn file
 # shows), and the stamp against the fingerprint of what the repository holds now.
-# This role works out the hashes, the fingerprints and the drift; the _stamp_*.yml files
-# read the stamps and say what is to be adopted, what is due and what is marked
+# This role works out the hashes, the fingerprints and the drift; the restart_stamp module
+# reads the stamps and says what is to be adopted, what is due and what is marked
 # (README, "The stamp steps").
 
 - name: Hash every file of the stack in the repository
@@ -38,11 +38,16 @@
   register: edge_stack_host_acquis
 
 # A stamp that is there and cannot be read fails the run here, before anything is
-# placed; only a stamp that is not there is `absent` (_stamp_read.yml).
+# placed; only a stamp that is not there is `absent`. The stamps are read, decided on, adopted
+# and recorded by the shared restart_stamp module (README, "The stamp steps"). The stamp is a
+# hash of files that may hold a key, so each task that calls it is no_log.
 - name: Read the three stamps
-  ansible.builtin.include_tasks: _stamp_read.yml
-  vars:
-    edge_stack_stamp_classes: "{{ edge_stack_stamp_files | dict2items(key_name='name', value_name='file') }}"
+  restart_stamp:
+    state: read
+    absent: '{{ edge_stack_stamp_absent }}'
+    classes: "{{ edge_stack_stamp_files | dict2items(key_name='name', value_name='file') }}"
+  register: edge_stack_stamp_read
+  no_log: true
 
 # Read-only; a unit that is not enabled is a host awaiting the owner's first start.
 - name: Read the edge unit
@@ -97,25 +102,32 @@
 # due, but its mark is still written when its file drifts, so the placed file never
 # makes a host with no stamp look hand-delivered (README, "Adoption").
 - name: Decide what to adopt, what is due and what to mark pending
-  ansible.builtin.include_tasks: _stamp_decide.yml
-  vars:
-    edge_stack_stamp_classes:
+  restart_stamp:
+    state: decide
+    absent: '{{ edge_stack_stamp_absent }}'
+    classes:
       - name: caddy
-        stamp: '{{ edge_stack_stamp_found.caddy }}'
+        stamp: '{{ edge_stack_stamp_read.stamps.caddy }}'
         fingerprint: '{{ edge_stack_fp_caddy }}'
         drift: '{{ edge_stack_caddy_drift }}'
         adoptable: true
       - name: compose
-        stamp: '{{ edge_stack_stamp_found.compose }}'
+        stamp: '{{ edge_stack_stamp_read.stamps.compose }}'
         fingerprint: '{{ edge_stack_fp_compose }}'
         drift: '{{ edge_stack_compose_drift }}'
         adoptable: true
         gate: '{{ edge_stack_unit_enabled }}'
       - name: crowdsec
-        stamp: '{{ edge_stack_stamp_found.crowdsec }}'
+        stamp: '{{ edge_stack_stamp_read.stamps.crowdsec }}'
         fingerprint: '{{ edge_stack_fp_crowdsec }}'
         drift: '{{ edge_stack_crowdsec_drift }}'
         adoptable: true
+  register: edge_stack_stamp_decide
+  no_log: true
+
+- name: Keep the decisions by class name
+  ansible.builtin.set_fact:
+    edge_stack_stamp_decisions: '{{ edge_stack_stamp_decide.decisions }}'
 
 - name: Keep what is due under the names this role uses
   ansible.builtin.set_fact:

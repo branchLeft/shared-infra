@@ -85,6 +85,7 @@ ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/percona-server": f"{ATTESTED_REPO}/.github/workflows/percona-image.yml",
     # The website image, built and attested by branchLeft/website's own CI workflow.
     "ghcr.io/branchleft/website": "branchLeft/website/.github/workflows/ci.yml",
+    "ghcr.io/branchleft/mysqld-exporter": f"{ATTESTED_REPO}/.github/workflows/mysqld-exporter-image.yml",
 }
 
 # The reviewed exemption list: for each stack, the image names it may deploy with
@@ -98,10 +99,7 @@ UNATTESTED_STACK_IMAGES: dict[str, frozenset[str]] = {
     "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
     # The CrowdSec sidecar beside the edge image: third-party, and nothing here builds it.
     "edge": frozenset({"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}),
-    # prom/mysqld-exporter is TEMPORARY. ghost-platform's mysqld-exporter-image.yml builds and
-    # attests the same exporter as ghcr.io/branchleft/mysqld-exporter; once that image is published,
-    # registered in ATTESTED_IMAGES and named by the db role, delete the entry.
-    "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+    "db": frozenset({"mysql"}),
     # The control-plane stack's database and identity provider are third-party sidecars beside its
     # registered portal-apps image. No workflow here signs either.
     "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
