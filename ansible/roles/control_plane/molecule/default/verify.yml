@@ -458,6 +458,185 @@
       ansible.builtin.include_role:
         name: branchleft.control_plane
 
+    # The provisioning API. Off, the role writes the interpolation file that keeps it at scale 0.
+    # On, it refuses before it writes anything unless the owner's three files are there and the
+    # image was given, then writes the file that turns it on and sets the files' attributes.
+    - name: Read the interpolation file of a run that did not enable the provisioning API
+      ansible.builtin.slurp:
+        src: '{{ verify_project_dir }}/.env'
+      register: control_plane_verify_env_off
+
+    - name: Assert the interpolation file keeps the provisioning API at scale 0 and names no address
+      ansible.builtin.assert:
+        that:
+          - "'PROVISIONING_SCALE=0' in (control_plane_verify_env_off.content | ansible.builtin.b64decode)"
+          - "'PROVISIONING_URL' not in (control_plane_verify_env_off.content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: The interpolation file of a host that has not enabled the provisioning API does not keep it off.
+
+    - name: Remove a stack file, so that a run which got as far as the delivery would put it back
+      ansible.builtin.file:
+        path: '{{ verify_project_dir }}/compose.yml'
+        state: absent
+
+    - name: Enable the provisioning API where the owner's files are not there
+      block:
+        - name: Apply the role with the provisioning API enabled
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_provisioning_enabled: true
+        - name: Fail if the role went on
+          ansible.builtin.fail:
+            msg: The role went on with the provisioning API enabled and no input files.
+      rescue:
+        - name: Record the message the run stopped with
+          # A looped assert fails with Ansible's aggregate text in .msg; the role's own message is in the first failed item.
+          ansible.builtin.set_fact:
+            control_plane_verify_message: >-
+              {{ (ansible_failed_result.results | default([]) | selectattr('failed') | map(attribute='msg') | list | first)
+                 | default(ansible_failed_result.msg | default('')) }}
+
+    - name: Assert the run stopped with its own code and named a path
+      ansible.builtin.assert:
+        that:
+          - "control_plane_verify_message.startswith('control_plane[provisioning-input-missing]: ')"
+          - "'/etc/branchleft/control-plane/provisioning/' in control_plane_verify_message"
+        quiet: true
+        fail_msg: 'The refusal was not the missing-input refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+    - name: Look at the stack file the refused run must not have written
+      ansible.builtin.stat:
+        path: '{{ verify_project_dir }}/compose.yml'
+      register: control_plane_verify_refused_provisioning
+
+    - name: Assert the refused run wrote nothing
+      ansible.builtin.assert:
+        that:
+          - not control_plane_verify_refused_provisioning.stat.exists
+        quiet: true
+        fail_msg: A run refused for want of the provisioning API's files still wrote a stack file.
+
+    - name: Place the three files the owner places, as root alone and with throwaway content
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - path: /etc/branchleft/control-plane/provisioning/tenant/credentials
+          content: "11111111-1111-4111-8111-111111111111=THROWAWAY-TENANT-{{ scenario_secret }}\n"
+        - path: /etc/branchleft/control-plane/provisioning/owner/credential
+          content: "THROWAWAY-OWNER-{{ scenario_secret }}\n"
+        - path: /etc/branchleft/control-plane/provisioning/demos/demos.json
+          content: '{"demos": []}'
+      loop_control:
+        label: '{{ item.path }}'
+      no_log: true
+
+    # With no pin given, the role reads the portal container for the image unless the deploy
+    # wrapper's record holds a digest. This container has no docker, and a host that has
+    # deployed before has the record, so the record stands in for the portal read here.
+    - name: Put a digest in the deploy wrapper's record for the no-image refusal
+      ansible.builtin.copy:
+        content: "IMAGE={{ verify_recorded_image }}\n"
+        dest: /etc/branchleft/control-plane.image.env
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Enable the provisioning API with no image given
+      block:
+        - name: Apply the role with the provisioning API enabled and an empty image
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_provisioning_enabled: true
+            control_plane_app_image: ''
+        - name: Fail if the role went on
+          ansible.builtin.fail:
+            msg: The role went on with the provisioning API enabled and no image.
+      rescue:
+        - name: Record the message the run stopped with
+          ansible.builtin.set_fact:
+            control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+    - name: Assert the run stopped with its own code
+      ansible.builtin.assert:
+        that:
+          - "control_plane_verify_message.startswith('control_plane[provisioning-image-missing]: ')"
+          - "'THROWAWAY-' not in control_plane_verify_message"
+        quiet: true
+        fail_msg: 'The refusal was not the missing-image refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+    - name: Remove the digest put in the deploy wrapper's record for the no-image refusal
+      ansible.builtin.file:
+        path: /etc/branchleft/control-plane.image.env
+        state: absent
+
+    - name: Enable the provisioning API with the files placed and the image given
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_provisioning_enabled: true
+
+    - name: Read the interpolation file and look at the three files after the enabled run
+      ansible.builtin.slurp:
+        src: '{{ verify_project_dir }}/.env'
+      register: control_plane_verify_env_on
+
+    - name: Look at the three files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft/control-plane/provisioning/tenant/credentials
+        - /etc/branchleft/control-plane/provisioning/owner/credential
+        - /etc/branchleft/control-plane/provisioning/demos/demos.json
+      register: control_plane_verify_inputs
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the enabled run turned the API on and set the files' owner, group and mode
+      ansible.builtin.assert:
+        that:
+          - "'PROVISIONING_SCALE=1' in (control_plane_verify_env_on.content | ansible.builtin.b64decode)"
+          - "'PORTAL_PROVISIONING_URL=http://provisioning:8095' in (control_plane_verify_env_on.content | ansible.builtin.b64decode)"
+          - "'THROWAWAY-' not in (control_plane_verify_env_on.content | ansible.builtin.b64decode)"
+          - control_plane_verify_inputs.results[0].stat.mode == '0440'
+          - control_plane_verify_inputs.results[0].stat.gid == 1000
+          - control_plane_verify_inputs.results[1].stat.mode == '0440'
+          - control_plane_verify_inputs.results[2].stat.mode == '0644'
+        quiet: true
+        fail_msg: The enabled run did not turn the provisioning API on or did not set the input files' attributes.
+
+    - name: Switch the provisioning API off again
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+
+    - name: Read the interpolation file of the run that switched it off
+      ansible.builtin.slurp:
+        src: '{{ verify_project_dir }}/.env'
+      register: control_plane_verify_env_back
+
+    - name: Assert it is back at scale 0 and the owner's files were left as placed
+      ansible.builtin.assert:
+        that:
+          - "'PROVISIONING_SCALE=0' in (control_plane_verify_env_back.content | ansible.builtin.b64decode)"
+          - "'PROVISIONING_URL' not in (control_plane_verify_env_back.content | ansible.builtin.b64decode)"
+        quiet: true
+        fail_msg: Switching the provisioning API off did not put the interpolation file back.
+
+    - name: Remove the three files, which the other cases do not use
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /etc/branchleft/control-plane/provisioning/tenant/credentials
+        - /etc/branchleft/control-plane/provisioning/owner/credential
+        - /etc/branchleft/control-plane/provisioning/demos/demos.json
+
     # The image. The instance has no Docker, so a stand-in for the docker command answers
     # the two reads the role makes (the portal container's id, then the image it was
     # created from) from files and records every call it gets. It is removed at the end.
