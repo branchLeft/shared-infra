@@ -2,6 +2,29 @@
 # What every step checks before it runs a program: the directory the programs run from,
 # and the three root credential files they read and write. The role never reads one.
 
+# The list of files below is a constant of the role, but an extra variable outranks it, so a
+# request that passed an empty list (or one with the administrator file not required) would
+# skip every check of the three files. The list is therefore itself checked: it must be the
+# three files of the role's constants, in order, with only the administrator file required.
+- name: Refuse a credential file list that is not the role's own three
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_credential_files is sequence
+      - mail_reconcilers_credential_files is not string
+      - mail_reconcilers_credential_files | length == 3
+      - >-
+        (mail_reconcilers_credential_files | map(attribute='path') | list)
+        == [mail_reconcilers_admin_credentials, mail_reconcilers_service_credentials,
+        mail_reconcilers_mailbox_credentials]
+      - >-
+        (mail_reconcilers_credential_files | selectattr('required') | map(attribute='path') | list)
+        == [mail_reconcilers_admin_credentials]
+    quiet: true
+    fail_msg: >-
+      REFUSED: mail_reconcilers_credential_files is not the role's own list of the administrator,
+      service and mailbox credential files, with only the administrator file required. It is not
+      set on a request. No program ran.
+
 - name: Look at the install directory
   ansible.builtin.stat:
     path: '{{ mail_reconcilers_install_dir }}'

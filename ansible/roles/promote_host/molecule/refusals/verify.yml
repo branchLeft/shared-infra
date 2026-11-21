@@ -1,0 +1,68 @@
+---
+# The refusal cases of the role, one for each guard. Each is one bad state or bad input on the host
+# the role has already delivered, and the role must stop with its own message, leave what it found
+# as it found it, and name no input value. A case has: name; expect, the exact message the role must
+# stop with (absent for a control that must be accepted); commands and restore, argv lists that
+# make the bad state and put the host back; url and key, the inputs, each empty unless the case
+# sets it; forbidden, texts the message must not hold.
+#
+# The first case is a control: the same role on the host as delivered must accept. Without it, a
+# role that refused everything would pass every case.
+- name: Run every case
+  hosts: all
+  gather_facts: false
+  vars:
+    promote_host_refusals_cases:
+      - name: control, the host as delivered
+      - name: a ledger URL with plain http
+        url: http://ledger.example.test/current.json
+        key: '{{ scenario_key }}'
+        expect: promote_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+        forbidden:
+          - ledger.example.test
+      - name: a ledger URL that carries a user name and a password
+        url: https://user:pass@ledger.example.test/current.json
+        key: '{{ scenario_key }}'
+        expect: promote_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+        forbidden:
+          - user:pass
+      - name: a ledger URL with a query
+        url: https://ledger.example.test/current.json?x=1
+        key: '{{ scenario_key }}'
+        expect: promote_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+      - name: a signer key of another type
+        url: '{{ scenario_url }}'
+        key: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ
+        expect: promote_host_signer_key must be empty or one OpenSSH ed25519 public key line with no comment.
+        forbidden:
+          - AAAAB3NzaC1yc2E
+      - name: a signer key with a comment
+        url: '{{ scenario_url }}'
+        key: '{{ scenario_key }} someone@example.test'
+        expect: promote_host_signer_key must be empty or one OpenSSH ed25519 public key line with no comment.
+        forbidden:
+          - someone@example.test
+      - name: a ledger URL with no signer key
+        url: '{{ scenario_url }}'
+        expect: promote_host_signer_key is empty while promote_host_ledger_url is set.
+      - name: a signer key with no ledger URL
+        key: '{{ scenario_key }}'
+        expect: promote_host_ledger_url is empty while promote_host_signer_key is set.
+      - name: a parent directory that others can write
+        commands:
+          - [chmod, '0777', /etc/branchleft]
+        restore:
+          - [chmod, '0755', /etc/branchleft]
+        expect: "A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it."
+      - name: both inputs on a host with no signature tool
+        url: '{{ scenario_url }}'
+        key: '{{ scenario_key }}'
+        expect: The signature tool (ssh-keygen) is missing from the host or is not an executable file. Install the OpenSSH client first.
+  tasks:
+    - name: Run each case
+      ansible.builtin.include_tasks: tasks/case.yml
+      vars:
+        promote_host_refusals_case: '{{ item }}'
+      loop: '{{ promote_host_refusals_cases }}'
+      loop_control:
+        label: '{{ item.name }}'

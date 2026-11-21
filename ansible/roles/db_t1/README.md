@@ -31,8 +31,8 @@ It does not:
   program's. The root file is the owner's.
 - create a database, an account, a grant, a backup, a replica or a firewall rule. Those
   are other roles and other steps.
-- open any port. The server listens on loopback only and the compose file publishes
-  nothing (see "What it changes on a host").
+- open any port. The server and its metrics exporter listen on loopback only and the
+  compose file publishes nothing (see "What it changes on a host").
 - register the image with the deploy program. The register is by image name, in
   `hetzner/provision/branchleft_deploy.py`: the deploy program verifies the attestation
   of a registered name against its workflow, and pins a name that is not registered
@@ -72,7 +72,8 @@ and this value in one pull request, so a reviewer reads both together.
   directory `/opt/branchleft/dbt1` with `conf.d` and `run`, and the socket directory
   `run/mysqld`, owned by the numeric user the image runs as (`1001`) so mysqld can create
   its socket there.
-- `/opt/branchleft/dbt1/compose.yml` and `conf.d/branchleft.cnf` (root, `0644`).
+- `/opt/branchleft/dbt1/compose.yml` and `conf.d/branchleft.cnf` (root, `0644`). The compose
+  file holds two services: the database and its MySQL metrics exporter.
 - The unit `branchleft-compose@dbt1.service`, enabled.
 - With an image, once: the pin `/etc/branchleft/dbt1.image.env` (written by the deploy
   program, root, `0600`), the container, and the Docker volume `dbt1_mysql-data` that
@@ -101,6 +102,24 @@ Decisions a reviewer should know the reasons for:
   and reads back the settings above. A configuration file that was not read fails it, and
   a failed health check rolls the deploy back or refuses it. The root value reaches the
   client through the container's environment, never through the compose file.
+- **The metrics exporter (ws#1810).** A second service, the same attested
+  `ghcr.io/branchleft/mysqld-exporter` image db1 runs, pinned by digest in `vars/main.yml`
+  (`db_t1_exporter_image`). It uses the host network and listens on `127.0.0.1:9104`, never on
+  the private address and never on a published port, because the database listens on loopback
+  only and nothing on the tenants network has a reason to read it directly: db1's replica
+  tunnel forwards its own port 9105 to this one, and Prometheus on edge1 reads it there
+  (`hetzner/monitoring/render.ts`, the `db_t1_replica` job). It reads the database over the
+  socket as the MySQL account `exporter`, with a credentials file the owner places (see "Owner
+  steps for the exporter"). The file is mounted by name with `create_host_path: false`, so a
+  missing file fails the start loudly instead of Docker creating a directory in its place. The
+  exporter starts only once the database is healthy, and its own health check is `mysql_up 1`,
+  not an HTTP 200, as on db1.
+- **A bounded log.** Both services use Docker's `json-file` driver with three files of 10 MB
+  each (`db_t1_log_max_size`, `db_t1_log_max_file`): at most 30 MB of container log per
+  service, rotated, whatever the age. Docker's default is one file that grows without bound.
+  The host's own journal is bounded by `host_baseline` (30 days; see that role's README). This
+  host's stated local log retention is therefore: system journal 30 days, container logs 30 MB
+  per container.
 - **Where the data lives.** A named Docker volume on the root disk, as on the other
   database host. A separate block volume would be spend, which is the owner's.
 - **Root file and secrets.** The role takes no secret as input. The owner places
@@ -178,14 +197,43 @@ change that introduced the role.
    `defaults/main.yml`, and the test that holds them.
 2. Do not turn a refusal into a warning to make a run pass. The refusals are the only
    thing between an apply and a running tenant database.
-3. Never add a `ports` key, a second service, a literal image, or a bind address other
-   than loopback without adding the host firewall in the same change.
+3. Never add a `ports` key, another service beyond the database and its exporter, another
+   literal image, or a bind address other than loopback without adding the host firewall in
+   the same change. The exporter is the one literal image; its name must be in the deploy
+   program's register (`ATTESTED_IMAGES`), or the first deploy refuses the whole stack.
 4. The image the organisation derives must keep the contract this role relies on: mysqld
    runs as user `1001`, the option directory is `/etc/my.cnf.d`, and the entrypoint honours
    `MYSQL_ROOT_HOST`, `MYSQL_ROOT_PASSWORD` and `PERCONA_TELEMETRY_DISABLE`. If it does not,
    the health check fails loudly on the first start.
 5. A task that reads the root file keeps `no_log` and `diff: false`, and keeps checking the
    shape without printing a line. The file's value is never printed, copied or compared.
+
+## Owner steps for the exporter
+
+Before the first deploy (the stack refuses to start without the file), on db-t1, as the owner.
+Both steps read the password from the shell, never from a file or an argument, and it must be
+at least 20 characters of letters, digits and `._~-` (the exporter's parser reads any other
+character as syntax). Record it in the owner's password manager; nothing else reads it.
+
+1. Place the credentials file. It is owned by uid 65534, the user the exporter image runs as,
+   mode `0400`:
+
+   ```text
+   read -rs EXPORTER_PW; export EXPORTER_PW
+   printf '[client]\nuser = exporter\npassword = %s\nsocket = /var/run/mysqld/mysqld.sock\n' "$EXPORTER_PW" | sudo install -o 65534 -g 65534 -m 0400 /dev/stdin /etc/branchleft/dbt1-exporter.my.cnf
+   ```
+
+2. After the database is up, create the account the file names (`exporter`, socket-only, three
+   connections at most, the least the exporter needs). Good looks like `mysql_up 1` from
+   `curl -s http://127.0.0.1:9104/metrics | grep -x 'mysql_up 1'` on db-t1:
+
+   ```text
+   printf "CREATE USER 'exporter'@'localhost' IDENTIFIED BY '%s' WITH MAX_USER_CONNECTIONS 3;\nGRANT PROCESS, REPLICATION CLIENT ON *.* TO 'exporter'@'localhost';\nGRANT SELECT ON performance_schema.* TO 'exporter'@'localhost';\n" "$EXPORTER_PW" | sudo docker exec -i dbt1-mysql-1 sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot'
+   unset EXPORTER_PW
+   ```
+
+The deploy program refuses the stack while `ghcr.io/branchleft/mysqld-exporter` is not in its
+register (branchLeft/shared-infra#944, an owner merge), so that change lands first.
 
 ## Named limits
 
@@ -206,7 +254,14 @@ change that introduced the role.
   image, and not on a running server.
 - A change to the compose file or the configuration reaches the running database only at a
   restart, which the owner chooses.
-- Backup, monitoring, replication and tenant provisioning are not here.
+- The role does not check the exporter's credentials file (its owner, its mode or its shape)
+  and does not create the exporter's account. A missing file fails the first start, loudly. A
+  file with the wrong content starts the exporter and reports `mysql_up 0`, which the exporter's
+  health check and the `ReplicaStatusMissing` alert both see.
+- The exporter reaches Prometheus only through db1's replica tunnel, which is for the
+  migration. When the tunnel is torn down, the path to this host's database metrics is a
+  separate change (ws#1810 follow-up).
+- Backup, replication and tenant provisioning are not here.
 
 ## Clauses this role exercises
 

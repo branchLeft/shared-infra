@@ -1,0 +1,20 @@
+---
+# Root's, so the account that runs the program through sudo cannot replace it.
+- name: Install the tenant entry program
+  ansible.builtin.copy:
+    src: branchleft_tenant_entry.py
+    dest: '{{ tenant_entry_program }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+# The program refuses a register directory that is not a real directory, root's, mode 0700.
+# It holds the marker of each tenant the entry point claimed, so only a claimed tenant can be
+# set up further.
+- name: Make the register directory of claimed tenants
+  ansible.builtin.file:
+    path: '{{ tenant_entry_register_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'

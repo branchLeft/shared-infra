@@ -1,0 +1,8 @@
+[Unit]
+Description=branchLeft prune Docker images no container uses and older than a week
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker image prune --all --force --filter until=168h

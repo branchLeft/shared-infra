@@ -1,0 +1,6 @@
+# Written by the host_baseline role of branchLeft/shared-infra. A change made on the host is
+# overwritten by the next run. The journal keeps an entry for at most {{ host_baseline_journal_retention_days }} days and
+# never grows past {{ host_baseline_journal_max_use }}; whichever comes first deletes the oldest.
+[Journal]
+MaxRetentionSec={{ host_baseline_journal_retention_days }}day
+SystemMaxUse={{ host_baseline_journal_max_use }}
