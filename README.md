@@ -73,10 +73,10 @@ The tenants stack (`hetzner/tenants/`, `hetzner-tenants-plan` and
 `hetzner-tenants-apply`) is planned after the estate, whose outputs it reads, and
 its apply always waits in `production`: it is never routed to `production-free`,
 so the owner reads every tenants plan. Its credential scope is the tenants
-project's own token and this stack's own passphrase and salt, three repository
-secrets (`HCLOUD_TOKEN_TENANTS`, `PULUMI_PASSPHRASE_HETZNER_TENANTS`,
-`PULUMI_SALT_HETZNER_TENANTS`) that no other job reads, plus the state bucket's
-Object Storage key it shares with the estate.
+project's own token and this stack's own passphrase, two repository
+secrets (`HCLOUD_TOKEN_TENANTS`, `PULUMI_PASSPHRASE_HETZNER_TENANTS`)
+that no other job reads (the stack's salt is read from its state at run
+time), plus the state bucket's Object Storage key it shares with the estate.
 
 ```bash
 pnpm install --frozen-lockfile

@@ -75,8 +75,9 @@ estate pair, and why:
   is not run for it.
 - Its credential scope is written down in the plan and apply jobs' `env:`: the
   tenants project's own Hetzner token (`HCLOUD_TOKEN_TENANTS`, Read and Write on
-  that project alone), this stack's passphrase and salt
-  (`PULUMI_PASSPHRASE_HETZNER_TENANTS`, `PULUMI_SALT_HETZNER_TENANTS`), and the
+  that project alone), this stack's passphrase
+  (`PULUMI_PASSPHRASE_HETZNER_TENANTS`; its salt is read from the stack's state
+  at run time by the "Restore the stack's encryption salt" step), and the
   state bucket's Object Storage key, which it shares with the estate (one
   backend, pinned in `hetzner/tenants/Pulumi.yaml`). Only these two jobs name the
   tenants secrets (pinned by `scripts/test_ci_apply_environments.py`,

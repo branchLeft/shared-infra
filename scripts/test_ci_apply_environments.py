@@ -59,8 +59,13 @@ TENANTS_PLAN = "hetzner-tenants-plan"
 TENANTS_SECRETS = (
     "HCLOUD_TOKEN_TENANTS",
     "PULUMI_PASSPHRASE_HETZNER_TENANTS",
-    "PULUMI_SALT_HETZNER_TENANTS",
 )
+# The stack's encryption salt is read from its own state at run time (the
+# state's secrets provider is rewrapped under a new passphrase, which mints a
+# new salt), so no job may name a repository secret for it.
+TENANTS_SALT_SECRET = "PULUMI_SALT_HETZNER_TENANTS"
+SALT_STEP = "Restore the stack's encryption salt"
+SALT_FROM_STATE = "pulumi stack export --stack production"
 # The plan jobs that read their credentials from an environment of their own:
 # main-only, no reviewer (issue #2195 for mail; the DNS plan mirrors it).
 PLAN_ENVIRONMENTS = {"mail-plan": "mail-plan", DNS_PLAN: "dns-plan"}
@@ -1989,6 +1994,7 @@ def tenants_violations(text: str) -> list[str]:
     expected = [
         GATE_NAME,
         "Verify the deploy secrets are present",
+        SALT_STEP,
         "Preview the plan",
         TENANTS_DELETE_GUARD_APPLY,
         "Apply",
@@ -1999,7 +2005,7 @@ def tenants_violations(text: str) -> list[str]:
         positions = [names.index(n) for n in expected]
         if names[0] != GATE_NAME:
             found.append(f"{TENANTS_APPLY}: the environment gate must be the first step")
-        if positions != sorted(positions) or positions[3] + 1 != positions[4]:
+        if positions != sorted(positions) or positions[4] + 1 != positions[5]:
             found.append(f"{TENANTS_APPLY}: guard steps are out of order or something sits before Apply")
         guard = step(apply, TENANTS_DELETE_GUARD_APPLY)
         if re.search(r"^        if:", guard, re.M) or "continue-on-error" in guard:
@@ -2016,6 +2022,7 @@ def tenants_violations(text: str) -> list[str]:
             found.append(f"{TENANTS_APPLY}: Apply is not `pulumi up --stack production --yes`")
     plan_names = [n for n, _ in step_blocks(plan)]
     plan_order = [
+        SALT_STEP,
         "Preview the plan",
         TENANTS_DELETE_GUARD_PLAN,
         "Decide whether the plan changes anything",
@@ -2038,10 +2045,24 @@ def tenants_violations(text: str) -> list[str]:
             found.append(f"{name}: does not read {secret}")
         for secret in sorted(read - TENANTS_ALLOWED_SECRETS):
             found.append(f"{name}: reads {secret}, outside the tenants credential scope")
+        # The salt is read from the state, never from a repository secret: not
+        # as `secrets.X`, not as an env name, not in a comment.
+        if TENANTS_SALT_SECRET in block:
+            found.append(f"{name}: references {TENANTS_SALT_SECRET}; the salt is read from the state")
+        if SALT_STEP not in [n for n, _ in step_blocks(block)]:
+            found.append(f"{name}: the step {SALT_STEP!r} is missing")
+        else:
+            body = run_script(step(block, SALT_STEP))
+            if SALT_FROM_STATE not in body:
+                found.append(f"{name}: the salt step does not read the state ({SALT_FROM_STATE})")
+            if ">> Pulumi.production.yaml" not in body:
+                found.append(f"{name}: the salt step does not write the salt into Pulumi.production.yaml")
+            if "::add-mask::" not in body:
+                found.append(f"{name}: the salt step does not mask the salt")
     for job in all_jobs(text):
         if job in (TENANTS_PLAN, TENANTS_APPLY):
             continue
-        for secret in TENANTS_SECRETS:
+        for secret in (*TENANTS_SECRETS, TENANTS_SALT_SECRET):
             if secret in job_block(text, job):
                 found.append(f"{job}: names the tenants secret {secret}")
 
@@ -2302,6 +2323,28 @@ class TenantsSabotageTests(unittest.TestCase):
                 "    environment: production\n    # routed by spend-gate\n",
             ),
             "(20) the tenants filter stops listing egress.ts": mutated_changes,
+            "(21) the tenants plan reads the salt from a repository secret": self.mutate(
+                text,
+                TENANTS_PLAN,
+                "      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}\n",
+                "      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}\n"
+                f"      SALT: ${{{{ secrets.{TENANTS_SALT_SECRET} }}}}\n",
+            ),
+            "(22) the tenants apply names the salt secret in a comment": self.mutate(
+                text,
+                TENANTS_APPLY,
+                f"      - name: {SALT_STEP}\n",
+                f"      # was {TENANTS_SALT_SECRET}\n      - name: {SALT_STEP}\n",
+            ),
+            "(23) the tenants plan no longer restores the salt": self.mutate(
+                text, TENANTS_PLAN, step(job_block(text, TENANTS_PLAN), SALT_STEP), ""
+            ),
+            "(24) the tenants apply no longer restores the salt": self.mutate(
+                text, TENANTS_APPLY, step(job_block(text, TENANTS_APPLY), SALT_STEP), ""
+            ),
+            "(25) the tenants plan restores the salt from nowhere": self.mutate(
+                text, TENANTS_PLAN, SALT_FROM_STATE, "printf ''"
+            ),
         }
 
     def test_the_real_workflow_is_clean_and_every_sabotage_is_flagged(self):

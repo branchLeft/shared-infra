@@ -15,9 +15,9 @@ server. The adoption applies below are still the owner's hand applies, which
 `CLAUDE.md` allows for first-time provisioning and gated migrations, because each
 stage is checked between applies. Once an adoption change is merged, the plan CI
 shows for it is the same plan; approve its apply there instead of running
-`pulumi up` again, or reject it if the hand apply already ran. The Hetzner token,
-passphrase and salt CI reads are the repository secrets `HCLOUD_TOKEN_TENANTS`,
-`PULUMI_PASSPHRASE_HETZNER_TENANTS` and `PULUMI_SALT_HETZNER_TENANTS`.
+`pulumi up` again, or reject it if the hand apply already ran. The Hetzner token
+and passphrase CI reads are the repository secrets `HCLOUD_TOKEN_TENANTS` and
+`PULUMI_PASSPHRASE_HETZNER_TENANTS`; CI reads the salt from the stack's state.
 
 ## What the servers look like when this starts
 

@@ -2204,11 +2204,11 @@ jobs:
 
     # The credential scope: the tenants project's own Hetzner token (Read &
     # Write on `branchLeft tenants` and nothing else), this stack's own
-    # passphrase and salt, and the state bucket's Object Storage key, which is
+    # passphrase (its salt is read from the state), and the state bucket's
+    # Object Storage key, which is
     # the estate stack's too (one backend, pinned in hetzner/tenants/Pulumi.yaml).
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
-      PULUMI_SALT_HETZNER_TENANTS: ${{ secrets.PULUMI_SALT_HETZNER_TENANTS }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
@@ -2282,15 +2282,21 @@ jobs:
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_TENANTS is empty or unset" ; fail=1; }
           [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
           [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
-          case "$PULUMI_SALT_HETZNER_TENANTS" in
-            v1:*) ;;
-            *) echo "::error::PULUMI_SALT_HETZNER_TENANTS is empty or does not start with 'v1:'" ; fail=1;;
-          esac
           exit "$fail"
 
+      # The salt is not a secret of ours: it is read from the stack's own state
+      # at run time (`stack export` needs no passphrase and prints no secret),
+      # so a rewrite of the state's secrets provider needs no secret change.
       - name: Restore the stack's encryption salt
         run: |
-          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_TENANTS" >> Pulumi.production.yaml
+          set -euo pipefail
+          salt=$(pulumi stack export --stack production | jq -r '.deployment.secrets_providers.state.salt // empty')
+          case "$salt" in
+            v1:*) ;;
+            *) echo "::error::the tenants stack's state holds no encryption salt starting with 'v1:'" ; exit 1;;
+          esac
+          echo "::add-mask::${salt}"
+          printf '\nencryptionsalt: %s\n' "$salt" >> Pulumi.production.yaml
 
       - name: Preview the plan
         id: preview
@@ -2366,7 +2372,6 @@ jobs:
 
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_TENANTS }}
-      PULUMI_SALT_HETZNER_TENANTS: ${{ secrets.PULUMI_SALT_HETZNER_TENANTS }}
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}
       AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
@@ -2431,15 +2436,19 @@ jobs:
           [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_TENANTS is empty or unset" ; fail=1; }
           [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
           [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
-          case "$PULUMI_SALT_HETZNER_TENANTS" in
-            v1:*) ;;
-            *) echo "::error::PULUMI_SALT_HETZNER_TENANTS is empty or does not start with 'v1:'" ; fail=1;;
-          esac
           exit "$fail"
 
+      # See hetzner-tenants-plan: the salt comes from the stack's state.
       - name: Restore the stack's encryption salt
         run: |
-          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_TENANTS" >> Pulumi.production.yaml
+          set -euo pipefail
+          salt=$(pulumi stack export --stack production | jq -r '.deployment.secrets_providers.state.salt // empty')
+          case "$salt" in
+            v1:*) ;;
+            *) echo "::error::the tenants stack's state holds no encryption salt starting with 'v1:'" ; exit 1;;
+          esac
+          echo "::add-mask::${salt}"
+          printf '\nencryptionsalt: %s\n' "$salt" >> Pulumi.production.yaml
 
       - name: Preview the plan
         run: pulumi preview --stack production --json > preview.json
