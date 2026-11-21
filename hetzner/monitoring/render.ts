@@ -113,6 +113,14 @@ export const DB_DUMP_ABSENT_FOR = '30h';
 /** The binlog timer fires every 15m and the unit stops at 10m: 25m is healthy; 1h is three runs in a row failed or missed. */
 export const DB_BINLOG_STALE_SECONDS = 3600;
 export const DB_BINLOG_ABSENT_FOR = '1h';
+/**
+ * The control-plane backup (ansible/roles/control_plane_backup) runs nightly at 02:40 UTC with up to 5m of
+ * random delay, and its unit is stopped at 2h, so two healthy successes are at most 26h05m apart. 36h
+ * (1.5 x the cadence, as for TenantBackupAgeHigh) leaves 9h55m of margin. Backup copy 1 expires an object
+ * 10 days after it is put, so a night missed at 36h still leaves about 8.5 days to put a copy back.
+ */
+const OPS1_SERIES = 'host="ops1"';
+export const CONTROL_PLANE_BACKUP_STALE_SECONDS = 129600;
 
 /**
  * The scanner series reach Prometheus through a host's node_exporter textfile
@@ -198,6 +206,19 @@ export const STALWART_METRICS_PORT = 443;
 export const STALWART_METRICS_PATH = '/metrics/prometheus';
 export const STALWART_METRICS_USERNAME = 'prometheus';
 export const STALWART_METRICS_PASSWORD_FILE = '/etc/prometheus/mx1-metrics-password';
+
+/**
+ * The release watcher's poll-age gauge. The watcher is a scheduled GitHub
+ * Actions run in branchLeft/ghost-platform (no host of ours runs it), and it
+ * commits `release-watcher.prom` to that repository's `state/release-watcher`
+ * branch. The repository is public, so Prometheus scrapes the file straight
+ * from the raw-content host: nothing is pushed, no token is held, and a
+ * watcher that stops running leaves the file's timestamp where it was. See
+ * render.md#the-release-watcher-scrape-path.
+ */
+export const RELEASE_WATCHER_HOST = 'raw.githubusercontent.com';
+export const RELEASE_WATCHER_METRICS_PATH =
+  '/branchLeft/ghost-platform/state/release-watcher/release-watcher.prom';
 
 /**
  * One static_configs group per probe module: a job's `params:` block can
@@ -381,6 +402,20 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    relabel_configs:',
     '      - target_label: instance',
     `        replacement: '${MX1_HOSTNAME}:${STALWART_METRICS_PORT}'`,
+    '',
+    '  - job_name: release_watcher',
+    // The raw host caches a file for five minutes, so scraping more often
+    // than that reads the same bytes; every two minutes keeps a sample inside
+    // Prometheus's five-minute lookback, which a slower interval would not.
+    '    scrape_interval: 2m',
+    '    scheme: https',
+    `    metrics_path: ${RELEASE_WATCHER_METRICS_PATH}`,
+    '    static_configs:',
+    `      - targets: ['${RELEASE_WATCHER_HOST}:443']`,
+    // No expected_up label, on purpose: an outage of GitHub's raw host is not
+    // ours to page for. TargetDownUnmarked reads it at 24 hours instead, and
+    // ReleaseWatcherStale's absent() branch is the signal that matters.
+    '        labels: {host: github}',
   ].join('\n')}\n`;
 }
 
@@ -553,13 +588,13 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // decides the vCPU count, and the rule covers every node_exporter host.
     // Busy and steal are one alert: either one sustained is the same ceiling.
     '      - alert: HostCPUSaturated',
-    '        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
+    '        expr: (1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance, host) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
     '        for: 30m',
     '        labels:',
     '          severity: warning',
     '          owner_action: "true"',
     '        annotations:',
-    '          summary: "{{ $labels.instance }} has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
+    '          summary: "{{ $labels.host }} ({{ $labels.instance }}) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
     '          description: "Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores."',
     '',
     '      - alert: HostDiskSpaceLow',
@@ -889,6 +924,110 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            script delivered after this rule writes its first status within',
     '            one 15 minute timer period. If db1 itself is down,',
     '            HostOrServiceDown pages first.',
+    '',
+    // The control plane's own database backup, from the two textfile gauges the program writes on
+    // ops1 (ansible/roles/control_plane_backup): its per-stage success times, and the time the nightly
+    // unit last failed, written by the unit its OnFailure= starts. Warnings, same route as the group.
+    // Neither uses absent(): the role's timer is off until the owner's apply turns it on, and a rule
+    // that fired for a backup nobody has switched on would be noise. See render.md#the-backup-rule-group.
+    '      - alert: ControlPlaneBackupStale',
+    '        expr: >-',
+    `          time() - control_plane_backup_last_success_timestamp_seconds{${OPS1_SERIES}} > ${CONTROL_PLANE_BACKUP_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The control-plane backup has not completed its {{ $labels.stage }} step for over 36 hours."',
+    '          description: >-',
+    '            control_plane_backup_last_success_timestamp_seconds is written',
+    '            on ops1 by the control-plane backup program after each stage',
+    '            succeeds: verified_on_host once the copy has been restored into a',
+    '            throwaway server and counted equal to live, and shipped_offsite',
+    '            once the sealed copy has been put to backup copy 1. The timer fires',
+    '            at 02:40 UTC with up to 5 minutes of random delay and the unit is',
+    '            stopped at 2 hours, so two healthy successes are at most 26h05m',
+    '            apart. 129600s (36h) leaves 9h55m of margin and fires on the first',
+    '            missed night. Backup copy 1 expires an object 10 days after it is',
+    '            put, so nothing is lost yet and about 8.5 days remain to run the',
+    '            backup by hand before copy 1 holds no control-plane backup. On',
+    '            ops1, read journalctl -u branchleft-control-plane-backup.service;',
+    '            a stopped timer shows in systemctl list-timers. Warning, never',
+    '            page. Nothing fires before the first success is written, so a',
+    '            timer that has never run is not seen by this rule.',
+    '',
+    // Written once per failure and flat otherwise, so no for:, as for DbNightlyDumpFailed. The
+    // mark counts only while it is strictly newer than the last full success (shipped_offsite), so
+    // the next night's success clears it, and a failure after a success (the prune that follows the
+    // ship) is not hidden by it. With no success series at all the mark still fires.
+    '      - alert: ControlPlaneBackupRunFailed',
+    '        expr: >-',
+    `          control_plane_backup_last_failure_timestamp_seconds{${OPS1_SERIES}}`,
+    '          unless on(instance)',
+    `          (control_plane_backup_last_success_timestamp_seconds{${OPS1_SERIES}, stage="shipped_offsite"} > on(instance) control_plane_backup_last_failure_timestamp_seconds{${OPS1_SERIES}})`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The control-plane backup on {{ $labels.instance }} failed and no later run has shipped a copy."',
+    '          description: >-',
+    '            branchleft-control-plane-backup.service entered a failed state: a',
+    '            check that did not pass, a missing precondition, a kill, the',
+    '            two-hour timeout or a crash. systemd then started',
+    '            branchleft-control-plane-backup-failed.service, which wrote the',
+    '            time to control_plane_backup_failed.prom in the textfile',
+    '            directory. This rule holds while that time is newer than the last',
+    '            shipped_offsite success, so the next run that ships a copy clears',
+    '            it, and a failure that comes after a ship (the prune that follows',
+    '            it) is not hidden by an earlier success. It fires the night it',
+    '            happens, about 36 hours before ControlPlaneBackupStale could.',
+    '            On ops1, read journalctl -u branchleft-control-plane-backup.service',
+    '            for the reason; a run by hand with systemctl start clears it once',
+    '            it ships. The previous proven copies are still on the host.',
+    // The compose template's own units (hetzner/provision/branchleft-compose@.service), read from the
+    // node exporter's systemd collector, which node-exporter.service limits to those instances and
+    // switches the restart counter on for. Both are warnings, so email and never a page, and both are
+    // scoped to expected_up="true" as the scanner group is. edge1's exporter is the Compose container
+    // and has no systemd bus, so these see app1, db1 and ops1 only. See render.md#the-compose-unit-rule-group.
+    '  - name: compose-units',
+    '    rules:',
+    '      - alert: ComposeUnitRestartLoop',
+    '        expr: >-',
+    '          increase(node_systemd_service_restart_total{expected_up="true", name=~"branchleft-compose@.+[.]service"}[1h]) >= 2',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.name }} on {{ $labels.host }} has been restarted by systemd twice or more in the last hour."',
+    '          description: >-',
+    '            node_systemd_service_restart_total counts the automatic restarts of a',
+    '            unit (the NRestarts that systemd shows). The compose template retries a',
+    '            failed start after 30 seconds, and a stack that hangs until the 600',
+    '            second start timeout fails about every ten minutes, so two restarts in',
+    '            an hour is that loop, seen from its third start on, well before the start',
+    '            limit stops it after five starts (StartLimitBurst=5 inside',
+    '            StartLimitIntervalSec=3600). One retry is not a loop: a start that raced',
+    '            a containerd restart and succeeded on its retry counts one and stays',
+    '            silent. The counter goes back to zero when the unit is stopped or',
+    '            reset-failed, and increase() reads that as a reset. On the host, read',
+    '            journalctl -u {{ $labels.name }} for the reason the start fails or hangs.',
+    '            Warning, never page: the unit is not the stack running, and a live stack',
+    '            keeps serving while a restart of it is retried.',
+    '',
+    '      - alert: ComposeUnitFailed',
+    '        expr: >-',
+    '          node_systemd_unit_state{expected_up="true", name=~"branchleft-compose@.+[.]service", state="failed"} == 1',
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.name }} on {{ $labels.host }} has been failed for 10 minutes."',
+    '          description: >-',
+    '            A compose unit is failed when the start limit has stopped its retries',
+    '            (result start-limit-hit, five starts inside the hour) or when a start',
+    '            failed after the retries ran out. systemd keeps it failed until someone',
+    '            acts: on the host, read journalctl -u {{ $labels.name }}, then',
+    '            systemctl reset-failed {{ $labels.name }} and systemctl restart',
+    '            {{ $labels.name }} (or re-run the deploy job). A deploy rollback',
+    '            restart is refused as repeated too quickly until the reset-failed.',
+    '            The ten minutes keep a deploy that is mid-rollback from alerting.',
+    '            Warning, never page.',
     // The scanning storage adapter's own metrics, written by each tenant's
     // Ghost process as a node_exporter textfile. Every rule is scoped to
     // expected_up="true" on the node target, so nothing fires for a host
@@ -1367,6 +1506,39 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            sized to absorb a normal one, not a link pasted a week late. This',
     '            is the only alert in this group that fires BEFORE an outage rather',
     '            than after one; treat it as a chore, not an incident.',
+    '',
+    // A GitHub Actions schedule, not a host of ours: see
+    // render.md#the-release-watcher-scrape-path. Warning, which Alertmanager
+    // routes to the on-host mailbox: a stalled version watcher is an alert,
+    // never a page, and its fix is a repository change the agents make.
+    '  - name: release-watcher',
+    '    rules:',
+    '      - alert: ReleaseWatcherStale',
+    '        expr: >-',
+    '          (time() - ghost_release_watcher_last_success_timestamp_seconds > 86400)',
+    '          or absent(ghost_release_watcher_last_success_timestamp_seconds)',
+    '        for: 30m',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The Ghost release watcher has not polled the registry successfully in over 24 hours."',
+    '          description: >-',
+    '            The watcher runs every six hours as a scheduled GitHub Actions',
+    '            workflow in branchLeft/ghost-platform and commits the time of its',
+    '            last successful poll to release-watcher.prom on the',
+    '            state/release-watcher branch, which the release_watcher scrape job',
+    '            reads. 86400s (24h) is four missed ticks, wide enough that one',
+    '            late or skipped scheduled run does not alert. The `or absent(...)`',
+    '            half covers the file being unreadable or the gauge vanishing, which',
+    '            the time() subtraction alone cannot see (subtracting from an absent',
+    '            series yields no series at all); `for: 30m` keeps a single failed',
+    '            scrape of the raw-content host from firing it. A run that fails',
+    '            leaves the timestamp where it was, so a watcher that errors on',
+    '            every run and one that is switched off look the same here. Read',
+    '            the latest run of release-watcher-run.yml in ghost-platform. A',
+    '            repository with no activity for 60 days has its schedules disabled',
+    '            by GitHub, which is the other silent stop this alert exists for.',
+    '            See render.md#the-release-watcher-scrape-path.',
   ].join('\n')}\n`;
 }
 

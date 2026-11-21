@@ -15,3 +15,5 @@ control_plane_backup_env_file: /etc/branchleft/state-copy.env
 control_plane_backup_unit_dir: /etc/systemd/system
 control_plane_backup_service_unit: branchleft-control-plane-backup.service
 control_plane_backup_timer_unit: branchleft-control-plane-backup.timer
+# Started by the service's OnFailure=: it writes the failure time the alert rule reads.
+control_plane_backup_failed_unit: branchleft-control-plane-backup-failed.service

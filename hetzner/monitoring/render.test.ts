@@ -7,6 +7,7 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  CONTROL_PLANE_BACKUP_STALE_SECONDS,
   DB_BINLOG_ABSENT_FOR,
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
@@ -19,6 +20,8 @@ import {
   REPLICA_TUNNEL_JOB,
   replicaDeadlineEpoch,
   REPLICA_TUNNEL_METRICS_PORT,
+  RELEASE_WATCHER_HOST,
+  RELEASE_WATCHER_METRICS_PATH,
   renderAlertmanagerEmailTemplate,
   renderAlertmanagerTemplate,
   renderAlertRules,
@@ -223,10 +226,17 @@ describe('the rendered Prometheus config', () => {
   // rather than skipped inline inside the assertion loop below. An inline
   // skip reads as "this job doesn't need checking" and survives unnoticed
   // when a new job is added; a named list is something a reviewer has to
-  // look at and defend. Empty today -- every scrape job this estate runs,
-  // blackbox_http included, carries the label, so a job missing it is
-  // exactly the defect this test exists to catch.
-  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = [];
+  // look at and defend. Every other scrape job this estate runs carries the
+  // label, so a job missing it is exactly the defect this test exists to
+  // catch.
+  //
+  // release_watcher is the one entry: it reads a file on GitHub's raw-content
+  // host, not a host of ours. `true` would page the owner critical for five
+  // minutes of someone else's outage, and `false` would raise
+  // ExpectedDownTargetAnswering the moment it answered. Unmarked, the generic
+  // TargetDownUnmarked warning reads it at 24 hours, and ReleaseWatcherStale
+  // is the signal that matters.
+  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = ['release_watcher'];
 
   it('gives every scrape job an expected_up label, so HostOrServiceDown can see it, unless the job is named in the exemption list above', () => {
     const rendered = renderPrometheusConfig(sites);
@@ -287,6 +297,33 @@ describe('the rendered Prometheus config', () => {
     const rendered = renderPrometheusConfig(sites);
     const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
     expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
+  });
+
+  describe('the release watcher gauge, read from the state branch of a public repository', () => {
+    const section = (rendered: string) =>
+      rendered.slice(
+        rendered.indexOf('  - job_name: release_watcher'),
+        rendered.indexOf('\n\n', rendered.indexOf('  - job_name: release_watcher'))
+      );
+
+    it('scrapes the raw file over HTTPS from the state/release-watcher branch, holding no credential', () => {
+      const job = section(renderPrometheusConfig(sites));
+      expect(job).toContain('scheme: https');
+      expect(job).toContain(`metrics_path: ${RELEASE_WATCHER_METRICS_PATH}`);
+      expect(job).toContain(`targets: ['${RELEASE_WATCHER_HOST}:443']`);
+      expect(RELEASE_WATCHER_METRICS_PATH).toBe(
+        '/branchLeft/ghost-platform/state/release-watcher/release-watcher.prom'
+      );
+      expect(job).not.toMatch(/basic_auth|authorization|password|token/i);
+    });
+
+    it('scrapes every two minutes, inside the five-minute lookback and no faster than the host caches', () => {
+      expect(section(renderPrometheusConfig(sites))).toContain('scrape_interval: 2m');
+    });
+
+    it('carries no expected_up label, so a raw-host outage never pages', () => {
+      expect(section(renderPrometheusConfig(sites))).not.toContain('expected_up');
+    });
   });
 
   describe('the mx1 Stalwart exporter, which is what the liveness probe cannot see', () => {
@@ -551,6 +588,21 @@ describe('the rendered alert rules', () => {
     expect(block).toContain('{{ if eq $labels.scope "family" }}');
   });
 
+  it('alerts when the release watcher has not polled for 24 hours, or its gauge is absent, as a warning that never pages -- see alert_rules_test.yml for the promtool proof', () => {
+    const start = rendered.indexOf('- alert: ReleaseWatcherStale');
+    expect(start).toBeGreaterThan(-1);
+    const end = rendered.indexOf('- alert:', start + 1);
+    const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain(
+      'time() - ghost_release_watcher_last_success_timestamp_seconds > 86400'
+    );
+    expect(block).toContain('or absent(ghost_release_watcher_last_success_timestamp_seconds)');
+    expect(block).toContain('for: 30m');
+    expect(block).toContain('severity: warning');
+    expect(block).not.toContain('notify: on-host');
+    expect(block).not.toContain('severity: critical');
+  });
+
   // The five rules that read db1's own dump and binlog shipping. promtool
   // proves their behaviour in alert_rules_test.yml; these pin the rendered
   // shape, so a threshold or a selector cannot move without a failing test.
@@ -628,6 +680,39 @@ describe('the rendered alert rules', () => {
     expect(block).not.toContain('for:');
     // One healthy gap is the 15m period plus the 10m unit timeout.
     expect(DB_BINLOG_STALE_SECONDS).toBeGreaterThan(25 * 60);
+  });
+
+  it("watches the control plane's own backup from ops1 as two warnings that never page", () => {
+    for (const name of ['ControlPlaneBackupStale', 'ControlPlaneBackupRunFailed']) {
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('{host="ops1"');
+      expect(block).not.toContain('for:');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+      expect(block).not.toContain('absent(');
+    }
+  });
+
+  it('alerts when the control-plane backup is over 36 hours old, well inside the 10 days copy 1 keeps it', () => {
+    const block = ruleBlock('ControlPlaneBackupStale');
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBe(129600);
+    expect(block).toContain(
+      'time() - control_plane_backup_last_success_timestamp_seconds{host="ops1"} > 129600'
+    );
+    // The longest healthy gap is 26h05m (02:40 timer, 5m random delay, 2h unit timeout); the bound
+    // must clear it, and must fire long before backup copy 1 expires its last object at 10 days.
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBeGreaterThan(26 * 3600 + 5 * 60);
+    expect(CONTROL_PLANE_BACKUP_STALE_SECONDS).toBeLessThan(5 * 24 * 3600);
+  });
+
+  it('clears the failure only when a copy was shipped after it, never on a restore alone', () => {
+    const block = ruleBlock('ControlPlaneBackupRunFailed');
+    expect(block).toContain('control_plane_backup_last_failure_timestamp_seconds{host="ops1"}');
+    expect(block).toContain('unless on(instance)');
+    expect(block).toContain(
+      'control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance)'
+    );
   });
 
   it('keeps the existing worker-copy alert untouched beside them', () => {

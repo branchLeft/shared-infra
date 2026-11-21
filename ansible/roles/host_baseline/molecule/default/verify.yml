@@ -38,6 +38,28 @@
         content: >
           deb [arch={{ host_baseline_verify_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]
           https://download.docker.com/linux/debian trixie stable
+      - path: /etc/systemd/system/branchleft-docker-image-prune.service
+        content: |
+          [Unit]
+          Description=branchLeft prune Docker images no container uses and older than a week
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/docker image prune --all --force --filter until=168h
+      - path: /etc/systemd/system/branchleft-docker-image-prune.timer
+        content: |
+          [Unit]
+          Description=Daily trigger for branchleft-docker-image-prune.service
+
+          [Timer]
+          OnCalendar=daily
+          RandomizedDelaySec=1800
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
   tasks:
     - name: Read the role's constants
       ansible.builtin.include_vars:
@@ -234,3 +256,52 @@
 
     - name: Assert the host holds what the baseline requires, after the refusals
       ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # A failed reload of sshd stops the role before the sshd settings are read. The drop-in
+    # is made out of date so the role rewrites it and queues the reload; the reload is made to
+    # fail by its flag. The role must stop at the reload, and the stand-in must not have been
+    # asked for the settings after it: the call log holds the same lines before and after.
+    - name: Read the sshd call log before the failed reload
+      ansible.builtin.slurp:
+        src: /var/lib/host_baseline_test/sshd-dumps
+      register: host_baseline_verify_dumps_before
+
+    - name: Make the drop-in out of date and make the next sshd reload fail
+      ansible.builtin.copy:
+        content: "PasswordAuthentication yes\n"
+        dest: /etc/ssh/sshd_config.d/01-branchleft-hardening.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make the next reload of sshd fail
+      ansible.builtin.file:
+        path: /var/lib/host_baseline_test/fail-ssh
+        state: touch
+        mode: '0644'
+
+    - name: Refuse to read the sshd settings when the reload of sshd fails
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Reload sshd
+
+    - name: Read the sshd call log after the failed reload
+      ansible.builtin.slurp:
+        src: /var/lib/host_baseline_test/sshd-dumps
+      register: host_baseline_verify_dumps_after
+
+    - name: Assert the settings were not read after the failed reload
+      ansible.builtin.assert:
+        that:
+          - host_baseline_verify_dumps_after.content == host_baseline_verify_dumps_before.content
+        quiet: true
+        fail_msg: The role read the sshd settings after its reload of sshd failed.
+
+    - name: Let the next reload of sshd succeed again
+      ansible.builtin.file:
+        path: /var/lib/host_baseline_test/fail-ssh
+        state: absent
+
+    - name: Apply the role to put the drop-in right again
+      ansible.builtin.include_role:
+        name: branchleft.host_baseline

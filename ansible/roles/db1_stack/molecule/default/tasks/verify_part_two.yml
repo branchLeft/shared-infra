@@ -52,8 +52,8 @@
 - name: Assert the exporter image is the pinned digest
   ansible.builtin.assert:
     that:
-      - "db1_stack_verify_compose is search('(?m)^    image: prom/mysqld-exporter:v0.21.0@sha256:'
-        ~ 'afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318[ ]*$')"
+      - "db1_stack_verify_compose is search('(?m)^    image: ghcr.io/branchleft/mysqld-exporter@sha256:'
+        ~ '25d73600fb442f5f50fa772a9201d0a5a5bdc90d82dbbb6c75e83c1656329290[ ]*$')"
     fail_msg: The exporter image in the compose file is not the pinned digest.
     quiet: true
 
