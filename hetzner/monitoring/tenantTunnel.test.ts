@@ -6,7 +6,12 @@ import { describe, expect, it } from 'vitest';
 
 import { sites } from '../../sites';
 import * as renderModule from './render';
-import { MONITORED_NODE_HOSTS, NODE_EXPORTER_PORT, renderPrometheusConfig } from './render';
+import {
+  MONITORED_NODE_HOSTS,
+  NODE_EXPORTER_PORT,
+  renderPrometheusConfig,
+  type MonitoredHost,
+} from './render';
 import {
   hostsScrapedDirectly,
   TENANT_TUNNEL_BIND_ADDRESS,
@@ -67,17 +72,27 @@ describe('the tunnelled node targets in the rendered config', () => {
 });
 
 describe('hostsScrapedDirectly', () => {
-  const [dbT1Row, appT1Row, edgeTRow] = TENANT_TUNNEL_TARGETS.map((tunnel) => ({
-    name: tunnel.name,
-    address: tunnel.address,
-    expectedUp: tunnel.expectedUp,
-  }));
-  const tenantRows = [dbT1Row, appT1Row, edgeTRow];
+  // MONITORED_NODE_HOSTS carries a row for each tenant host (the registry of what is monitored);
+  // the tunnel stands in for those rows in the rendered scrape, so the rows must agree with it.
+  const tunnelled = new Set(TENANT_TUNNEL_TARGETS.map((tunnel) => tunnel.name));
+  const withRow = (name: string, change: Partial<MonitoredHost>): MonitoredHost[] =>
+    MONITORED_NODE_HOSTS.map((host) => (host.name === name ? { ...host, ...change } : host));
+
+  it('holds a registry row for every tunnelled host, agreeing with its tunnel', () => {
+    for (const tunnel of TENANT_TUNNEL_TARGETS) {
+      const row = MONITORED_NODE_HOSTS.find((host) => host.name === tunnel.name);
+      expect(row?.address, `${tunnel.name} address`).toBe(tunnel.address);
+      expect(row?.expectedUp, `${tunnel.name} expectedUp`).toBe(tunnel.expectedUp);
+    }
+  });
 
   it('renders each tenant host exactly once, as the tunnel, when the direct rows are present', () => {
-    const hosts = [...MONITORED_NODE_HOSTS, ...tenantRows];
-    const direct = hostsScrapedDirectly(hosts, TENANT_TUNNEL_TARGETS).map((host) => host.name);
-    expect(direct).toEqual(MONITORED_NODE_HOSTS.map((host) => host.name));
+    const direct = hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(
+      (host) => host.name
+    );
+    expect(direct).toEqual(
+      MONITORED_NODE_HOSTS.map((host) => host.name).filter((name) => !tunnelled.has(name))
+    );
     for (const tunnel of TENANT_TUNNEL_TARGETS) {
       expect(direct).not.toContain(tunnel.name);
     }
@@ -88,21 +103,21 @@ describe('hostsScrapedDirectly', () => {
   });
 
   it('throws a named error when a direct row address differs from its tunnel', () => {
-    const hosts = [...MONITORED_NODE_HOSTS, { ...dbT1Row, address: '192.0.2.1' }];
+    const hosts = withRow('db-t1', { address: '192.0.2.1' });
     expect(() => hostsScrapedDirectly(hosts, TENANT_TUNNEL_TARGETS)).toThrow(
       TunnelRowMismatchError
     );
   });
 
   it('throws a named error when a direct row expectedUp differs from its tunnel', () => {
-    const hosts = [...MONITORED_NODE_HOSTS, { ...edgeTRow, expectedUp: true }];
+    const hosts = withRow('edge-t', { expectedUp: true });
     expect(() => hostsScrapedDirectly(hosts, TENANT_TUNNEL_TARGETS)).toThrow(
       TunnelRowMismatchError
     );
   });
 
   it('names the host in the mismatch message', () => {
-    const hosts = [...MONITORED_NODE_HOSTS, { ...appT1Row, expectedUp: true }];
+    const hosts = withRow('app-t1', { expectedUp: true });
     expect(() => hostsScrapedDirectly(hosts, TENANT_TUNNEL_TARGETS)).toThrow(/app-t1/);
   });
 });

@@ -24,9 +24,10 @@ record a cutover has to hunt for. Every hostname below is derived.
 ## MonitoredHost / MONITORED_NODE_HOSTS
 
 The estate hosts this stack watches, and whether each node_exporter target
-is expected to answer today. Every entry is `true`, so all four node targets
-(edge1, app1, db1 and ops1) contribute to the `HostOrServiceDown` alert
-`renderAlertRules` emits below. `app1` flipped with the `node_exporter` role
+is expected to answer today. The first four entries are `true`, so those node
+targets (edge1, app1, db1 and ops1) contribute to the `HostOrServiceDown` alert
+`renderAlertRules` emits below. The tenant hosts after them are `false`; see
+[the tenant hosts' node targets](#the-tenant-hosts-node-targets). `app1` flipped with the `node_exporter` role
 joining its playbook (ws#885): the flag takes effect when the rendered config
 reaches edge1, so the gated apply that installs the exporter on app1 comes first.
 
@@ -63,6 +64,34 @@ yet, and `app2`/`app3` are scale-out rungs with no host behind them either.
 Listing a reserved address as a scrape target is not a mistake this file
 can catch on its own -- it would just be a target nobody set up, scraped
 forever. The membership below is reviewed, not derived, for that reason.
+
+## The tenant hosts' node targets
+
+`db-t1`, `app-t1` and `edge-t` (the tenants project, branchLeft/workspace#1810) are the last three
+entries of `MONITORED_NODE_HOSTS`, each `expectedUp: false`, at the addresses in `TENANTS_HOST_IPS`
+(`10.20.1.200`, `.201`, `.210`). The label is what keeps `HostOrServiceDown` and `ServiceFlapping`
+silent for a host that has never answered, and `ExpectedDownTargetAnswering` is the tripwire if one
+starts answering while still labelled `false`: the same arrangement every host above went through.
+
+Two facts shape them. The tenants project has its own network, and a network does not span projects,
+so these addresses are the tenants network's, which reuses the estate's range (ruling 5a of 2 Nov
+2026). The Prometheus on edge1 cannot reach them directly, so it reads each through the restricted
+tunnel to edge-t (see [Tunnelled tenant node targets](#tunnelled-tenant-node-targets)) and each
+scrape fails until that tunnel is applied, and no host is flipped before a query for it returns `1` (`RUNBOOK-monitoring.md`,
+15f). And the disk and memory rules (`HostDiskSpaceLow`, `HostMemoryPressure`) select on neither
+`host` nor `expected_up`, which is what makes them evaluate for these hosts the moment their series
+arrive, flipped or not. `render.test.ts` holds both statements: the rendered rules carry no such
+selector, and every tenant host's address appears in a promtool case for the disk, memory and
+host-down alerts (`alert_rules_test.yml`, and `alert_rules_memory_test.yml` for the 24-hour memory
+rule, a separate file because its evaluation interval is coarser). `tenants.metricsPorts.test.ts`
+holds that no firewall of the tenants program opens an exporter's port.
+
+The tenant edge's outside reachability probe is not here: it is route-specific and belongs to
+branchLeft/shared-infra#947 (branchLeft/workspace#1640).
+
+The `db_t1_replica` job reads db-t1's MySQL exporter, which listens on `127.0.0.1:9104` there, through
+db1's replica tunnel; it has its own host label and is unchanged. The `node` job's `db-t1` row is the
+host's own node_exporter and is a different series.
 
 ## mx1's two watch paths
 

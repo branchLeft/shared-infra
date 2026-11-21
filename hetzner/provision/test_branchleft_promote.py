@@ -7,6 +7,8 @@ wrapper is never run here: its calls are recorded, and test_branchleft_promote_
 wrapper_contract.py drives the real wrapper.
 """
 
+from __future__ import annotations
+
 import contextlib
 import io
 import json

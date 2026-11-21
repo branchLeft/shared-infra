@@ -95,8 +95,8 @@ argument_specs:
           broker's environment file). It is an input the owner places on the host, never
           a value in this repository. Empty until it is placed; while a release is
           carried, an empty value, or one that is not a plain address, refuses the run
-          before anything is written. The value is never printed.
-        default: ''
+          before anything is written. The value is never printed. It is not required and has
+          no default: the host inputs loader sets it, and an absent value is refused here.
       broker_deploy_sudoers_path:
         type: path
         description: Where the sudoers grant is installed, a file under /etc/sudoers.d.

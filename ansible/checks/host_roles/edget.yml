@@ -10,3 +10,4 @@
 - egress_nat
 - ci_jump
 - tenant_scrape_tunnel
+- node_exporter
