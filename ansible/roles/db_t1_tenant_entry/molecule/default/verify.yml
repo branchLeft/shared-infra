@@ -1,0 +1,449 @@
+---
+# The phases, in this order. Each starts from the state the last one left, so the order is part
+# of the test. The play ends with the host put back as the converge left it, which is what the
+# check-mode run that follows verify needs to find.
+#
+#   1  the converged host: owners, modes, the exact key line and rule, the account's inability
+#      to write its own key file or run anything but the one program
+#   2  the controller's key makes one tenant, and prints its three lines once
+#   3  the same name again, and a name that exists before the role: refused, nothing changes
+#   4  everything a client can ask for in place of the one command: a shell, a second command
+#      in every shape, a name with a quote, a bad name, nothing at all
+#   5  the requests a restricted key refuses: a pty, port forwards, sftp, scp
+#   6  a key that is not the controller's, and the controller's key from another address
+#   7  the password reached the container on standard input and is in no log and no argument
+#   8  the host put back
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the paths are the ones the role installs to.
+  vars_files:
+    - ../../vars/main.yml
+  vars:
+    verify_program: /usr/local/sbin/branchleft-tenant-db-entry
+    # Everything a client can ask for in place of the one command. Each makes the program
+    # refuse it as a command that is not `create-tenant-db NAME`. A marker file is what the
+    # hostile ones try to make: none may. Written with double quotes where the text holds a
+    # character YAML reads specially.
+    verify_hostile:
+      - '/bin/sh'
+      - 'id'
+      - 'sudo -n /bin/true'
+      - '{{ verify_program }}'
+      - 'sudo -n {{ verify_program }}'
+      - '; touch /tmp/EXAMPLE_MARKER'
+      - '$(touch /tmp/EXAMPLE_MARKER)'
+      - '`touch /tmp/EXAMPLE_MARKER`'
+      - '&& touch /tmp/EXAMPLE_MARKER'
+      - 'create-tenant-db blog; touch /tmp/EXAMPLE_MARKER'
+      - 'create-tenant-db blog && touch /tmp/EXAMPLE_MARKER'
+      - 'create-tenant-db blog | touch /tmp/EXAMPLE_MARKER'
+      - 'create-tenant-db blog > /tmp/EXAMPLE_MARKER'
+      - "create-tenant-db blog\ntouch /tmp/EXAMPLE_MARKER"
+      - 'create-tenant-db $(touch /tmp/EXAMPLE_MARKER)'
+      - 'create-tenant-db `touch /tmp/EXAMPLE_MARKER`'
+      - 'create-tenant-db blog extra'
+      - 'create-tenant-db blog ; id'
+      - 'drop-tenant-db {{ scenario_existing_tenant }}'
+      - 'create-tenant-db'
+      - 'create-tenant-db '
+      - 'CREATE-TENANT-DB blog'
+    # A name with a quote, or a character the tenant alphabet does not have, which would reach
+    # a statement if it were ever interpolated unchecked.
+    verify_quoted:
+      - "create-tenant-db blog'"
+      - 'create-tenant-db blog"'
+      - "create-tenant-db x' OR '1'='1"
+      - "create-tenant-db x'; DROP DATABASE ghost_{{ scenario_existing_tenant }}; --"
+      - 'create-tenant-db x`'
+      - 'create-tenant-db x\'
+      - 'create-tenant-db x%'
+      - 'create-tenant-db x_y'
+      - 'create-tenant-db ../x'
+      - 'create-tenant-db Blog'
+    # Names the tenant rule refuses without any special character.
+    verify_bad_names:
+      - 'create-tenant-db 1blog'
+      - 'create-tenant-db -blog'
+      - 'create-tenant-db blog-'
+      - 'create-tenant-db {{ "a" * 27 }}'
+  tasks:
+    # ----- 1 -----
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ db_t1_tenant_entry_program_path }}'
+        - '{{ db_t1_tenant_entry_sudoers_path }}'
+        - '{{ db_t1_tenant_entry_authorized_keys_path }}'
+        - '{{ db_t1_tenant_entry_home }}'
+        - '{{ db_t1_tenant_entry_ssh_directory }}'
+      register: db_t1_tenant_entry_scenario_files
+
+    - name: Assert each file is root's, at its mode, and not the account's
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.0.stat.pw_name == 'root'
+          - item.0.stat.mode == item.1
+        quiet: true
+        fail_msg: '{{ item.0.item }} is not as the role makes it.'
+      loop: "{{ db_t1_tenant_entry_scenario_files.results | zip(['0755', '0440', '0640', '0755', '0755']) | list }}"
+      loop_control:
+        label: '{{ item.0.item }}'
+
+    - name: Read the account's entry
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ db_t1_tenant_entry_account }}'
+
+    - name: Assert the account has a shell for the forced command and a home it does not own
+      ansible.builtin.assert:
+        that:
+          - getent_passwd[db_t1_tenant_entry_account][4] == db_t1_tenant_entry_home
+          - getent_passwd[db_t1_tenant_entry_account][5] == db_t1_tenant_entry_shell
+        quiet: true
+
+    - name: Read the key file and the sudoers file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ db_t1_tenant_entry_authorized_keys_path }}'
+        - '{{ db_t1_tenant_entry_sudoers_path }}'
+      register: db_t1_tenant_entry_scenario_text
+      no_log: true
+
+    - name: Read the controller's public key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/controller.pub'
+      register: db_t1_tenant_entry_scenario_public
+      no_log: true
+
+    # The key file is one line: the options, then the key without its comment. The key's own
+    # comment is a placeholder and is not part of it, so the key is compared by its two fields.
+    - name: Assert the key file is the one restricted line and nothing else
+      ansible.builtin.assert:
+        that:
+          - (db_t1_tenant_entry_scenario_text.results[0].content | b64decode).splitlines() | length == 1
+          - >-
+            (db_t1_tenant_entry_scenario_text.results[0].content | b64decode)
+            == 'restrict,from="' + scenario_controller_address + '",command="/usr/bin/sudo -n '
+            + verify_program + '" '
+            + (db_t1_tenant_entry_scenario_public.content | b64decode).split(' ')[0] + ' '
+            + (db_t1_tenant_entry_scenario_public.content | b64decode).split(' ')[1] + '\n'
+        quiet: true
+        fail_msg: 'The key file is not the one restricted line.'
+
+    - name: Assert the sudoers file is the one rule
+      ansible.builtin.assert:
+        that:
+          - >-
+            (db_t1_tenant_entry_scenario_text.results[1].content | b64decode).splitlines()
+            | reject('match', '^#') | reject('equalto', '') | list
+            == ['Defaults:tenantdb env_keep += "SSH_ORIGINAL_COMMAND"',
+            'tenantdb ALL=(root) NOPASSWD: ' + verify_program + ' ""']
+        quiet: true
+        fail_msg: 'The sudoers file is not the one rule.'
+
+    # The account cannot loosen what holds it: it cannot write its key file or the directories
+    # above it, and sudo runs for it nothing but the program with no argument.
+    - name: Try to change the key file as the account
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - '{{ db_t1_tenant_entry_account }}'
+          - --
+          - /bin/sh
+          - -c
+          - >-
+            echo EXAMPLE >> {{ db_t1_tenant_entry_authorized_keys_path }};
+            mkdir {{ db_t1_tenant_entry_home }}/EXAMPLE;
+            rm -f {{ db_t1_tenant_entry_authorized_keys_path }}
+      register: db_t1_tenant_entry_scenario_write
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Look at the key file after the attempt
+      ansible.builtin.slurp:
+        src: '{{ db_t1_tenant_entry_authorized_keys_path }}'
+      register: db_t1_tenant_entry_scenario_after_write
+      no_log: true
+
+    - name: Assert the account could not write, remove or add beside its key file
+      ansible.builtin.assert:
+        that:
+          - db_t1_tenant_entry_scenario_after_write.content == db_t1_tenant_entry_scenario_text.results[0].content
+          - "'EXAMPLE' not in (db_t1_tenant_entry_scenario_after_write.content | b64decode)"
+        quiet: true
+        fail_msg: 'The account changed its own key file.'
+
+    - name: Ask sudo, as the account, to run things it must not
+      ansible.builtin.command:
+        argv: '{{ ["runuser", "-u", db_t1_tenant_entry_account, "--", "sudo", "-n"] + item }}'
+      loop:
+        - [/bin/true]
+        - [/bin/sh, -c, id]
+        - ['{{ verify_program }}', --extra]
+        - ['{{ verify_program }}', 'create-tenant-db x']
+        - [/usr/sbin/visudo, -c]
+      register: db_t1_tenant_entry_scenario_sudo
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Assert sudo refused every one
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'uid=0' not in item.stdout"
+        quiet: true
+        fail_msg: 'sudo ran {{ item.item }} for the account.'
+      loop: '{{ db_t1_tenant_entry_scenario_sudo.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    # ----- 2 -----
+    # The password is in this result and no other task's. no_log keeps it out of Ansible's
+    # own log, and phase 7 reads the logs for it.
+    - name: Ask for the first tenant with the controller's key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: 'create-tenant-db {{ scenario_fresh_tenant }}'
+        attempt_expect: created
+        attempt_hide: true
+
+    - name: Keep the password the client was given
+      ansible.builtin.set_fact:
+        db_t1_tenant_entry_scenario_password: '{{ db_t1_tenant_entry_scenario_attempt.stdout_lines[2] | regex_replace("^password=", "") }}'
+      no_log: true
+
+    - name: Look at what the stand-in database holds
+      ansible.builtin.slurp:
+        src: '{{ scenario_record_dir }}/db.json'
+      register: db_t1_tenant_entry_scenario_db
+
+    - name: Assert the tenant's database and account exist beside the one that was there
+      ansible.builtin.assert:
+        that:
+          - (db_t1_tenant_entry_scenario_db.content | b64decode | from_json).databases | sort == ['ghost_existing', 'ghost_my_blog']
+          - (db_t1_tenant_entry_scenario_db.content | b64decode | from_json).users | sort == ['ghost_existing', 'ghost_my_blog']
+        quiet: true
+
+    # ----- 3 -----
+    - name: Ask for the same tenant again
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: 'create-tenant-db {{ scenario_fresh_tenant }}'
+        attempt_expect: refused
+        attempt_status: 3
+        attempt_reason: exists
+
+    - name: Ask for the tenant that was on the host before the role
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: 'create-tenant-db {{ scenario_existing_tenant }}'
+        attempt_expect: refused
+        attempt_status: 3
+        attempt_reason: exists
+
+    # ----- 4 -----
+    - name: Ask for commands the key must not run
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: '{{ verify_case }}'
+        attempt_expect: refused
+        attempt_status: 2
+        attempt_reason: bad-command
+      loop: '{{ verify_hostile }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case[:48] }}'
+
+    - name: Ask for names with a quote or a character outside the alphabet
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: '{{ verify_case }}'
+        attempt_expect: refused
+        attempt_status: 2
+        attempt_reason: bad-command
+      loop: '{{ verify_quoted }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case[:48] }}'
+
+    - name: Ask for names the tenant rule refuses
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: '{{ verify_case }}'
+        attempt_expect: refused
+        attempt_status: 2
+        attempt_reason: bad-name
+      loop: '{{ verify_bad_names }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case[:48] }}'
+
+    - name: Ask for no command at all
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_expect: refused
+        attempt_status: 2
+        attempt_reason: no-command
+
+    # ----- 5 -----
+    # The forced command runs whatever the client asked for in place of it, so a refused
+    # request is the program's refusal, and the channel the client asked for is refused by sshd.
+    - name: Ask for a pty, which a restricted key refuses
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: /bin/sh
+        attempt_options: ['-tt']
+        # ssh ends with 255 when the pty is refused, whether or not the command ran, so the
+        # case asks only that nothing was made and nothing came back.
+        attempt_expect: blocked
+        attempt_stderr_contains: PTY allocation request failed
+
+    # The target is the scenario's own sshd, which is listening: a key that was allowed to
+    # forward would be served its banner, and sshd would log no refusal.
+    - name: Ask for a port forward to a listening port, which a restricted key refuses
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_options: ['-W', '127.0.0.1:{{ scenario_ssh_port }}']
+        attempt_expect: blocked
+        attempt_sshd_log_contains: 'refused local port forward'
+
+    - name: Ask for the sftp subsystem, which runs the forced command and not sftp
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: sftp
+        attempt_options: ['-s']
+        attempt_expect: blocked
+
+    - name: Ask for what scp sends to a host
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: scp -t /tmp/EXAMPLE_SCP_TARGET
+        attempt_expect: refused
+        attempt_status: 2
+        attempt_reason: bad-command
+
+    - name: Look for the file scp tried to put on the host
+      ansible.builtin.stat:
+        path: /tmp/EXAMPLE_SCP_TARGET
+      register: db_t1_tenant_entry_scenario_scp_target
+
+    - name: Assert scp copied nothing
+      ansible.builtin.assert:
+        that:
+          - not db_t1_tenant_entry_scenario_scp_target.stat.exists
+        quiet: true
+
+    # ----- 6 -----
+    - name: Connect with a key the host does not list
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: other
+        attempt_command: 'create-tenant-db {{ scenario_fresh_tenant }}-two'
+        attempt_expect: denied
+
+    # The same key, accepted from the one address, is turned away when the host lists another.
+    # The role is applied again with that address; the case after it puts the first one back.
+    - name: Apply the role with an address the client does not connect from
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_address: '{{ scenario_other_address }}'
+
+    - name: Connect with the controller's key from the wrong address
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: 'create-tenant-db {{ scenario_fresh_tenant }}-two'
+        attempt_expect: denied
+
+    - name: Apply the role again with the controller's address
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_address: '{{ scenario_controller_address }}'
+
+    - name: Connect with the controller's key from the right address and make a second tenant
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: controller
+        attempt_command: 'create-tenant-db {{ scenario_fresh_tenant }}-two'
+        attempt_expect: created
+        attempt_hide: true
+
+    # ----- 7 -----
+    - name: Read what the stand-in was called with and sent, and what sshd logged
+      ansible.builtin.slurp:
+        src: '{{ scenario_record_dir }}/{{ item }}'
+      loop:
+        - argv.log
+        - sql.log
+        - sshd.log
+      register: db_t1_tenant_entry_scenario_records
+      no_log: true
+
+    - name: Read the log of every Ansible run of this scenario
+      ansible.builtin.set_fact:
+        db_t1_tenant_entry_scenario_ansible_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the password was sent to the container on standard input and nowhere else
+      ansible.builtin.assert:
+        that:
+          - db_t1_tenant_entry_scenario_password in (db_t1_tenant_entry_scenario_records.results[1].content | b64decode)
+          - db_t1_tenant_entry_scenario_password not in (db_t1_tenant_entry_scenario_records.results[0].content | b64decode)
+          - db_t1_tenant_entry_scenario_password not in (db_t1_tenant_entry_scenario_records.results[2].content | b64decode)
+          - db_t1_tenant_entry_scenario_password not in db_t1_tenant_entry_scenario_ansible_log
+        quiet: true
+        fail_msg: 'The password was somewhere it must not be, or never reached the container.'
+
+    - name: Assert the log scan can find something (the canary the converge printed is in the log)
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in db_t1_tenant_entry_scenario_ansible_log"
+        quiet: true
+
+    - name: Assert the controller's key is in no Ansible log line
+      ansible.builtin.assert:
+        that:
+          - (db_t1_tenant_entry_scenario_public.content | b64decode).split(' ')[1] not in db_t1_tenant_entry_scenario_ansible_log
+        quiet: true
+        fail_msg: 'The key is in the Ansible log: a task that handles it lacks no_log.'
+
+    - name: Assert the container was never given the root value
+      ansible.builtin.assert:
+        that:
+          - "'MYSQL_ROOT_PASSWORD' not in (db_t1_tenant_entry_scenario_records.results[1].content | b64decode)"
+        quiet: true
+
+    # ----- 8 -----
+    - name: Read what the stand-in database holds at the end
+      ansible.builtin.slurp:
+        src: '{{ scenario_record_dir }}/db.json'
+      register: db_t1_tenant_entry_scenario_db_end
+
+    - name: Assert exactly the two tenants this run made are beside the one that was there
+      ansible.builtin.assert:
+        that:
+          - (db_t1_tenant_entry_scenario_db_end.content | b64decode | from_json).users | sort == ['ghost_existing', 'ghost_my_blog', 'ghost_my_blog_two']
+          - (db_t1_tenant_entry_scenario_db_end.content | b64decode | from_json).databases | sort == ['ghost_existing', 'ghost_my_blog', 'ghost_my_blog_two']
+        quiet: true
+        fail_msg: 'A request that was refused changed the database.'

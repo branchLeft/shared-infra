@@ -64,6 +64,7 @@ class RunbookVerifyTargetsTests(unittest.TestCase):
                     "blackbox_mail",
                     "blackbox_object_storage",
                     "stalwart",
+                    "release_watcher",
                 ]
             ),
             "prometheus.yml's job_name list changed shape -- update the "

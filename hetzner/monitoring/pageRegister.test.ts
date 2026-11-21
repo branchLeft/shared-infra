@@ -19,8 +19,8 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly seven entries -- six Alertmanager and the drain worker outside it', () => {
-    expect(PAGE_REGISTER).toHaveLength(7);
+  it('has exactly eight entries -- seven Alertmanager and the drain worker outside it', () => {
+    expect(PAGE_REGISTER).toHaveLength(8);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
@@ -29,10 +29,11 @@ describe('PAGE_REGISTER', () => {
       'edge-ban',
       'drain-worker-stopped',
       'stopped-demo-reaper',
+      'abuse-report',
     ]);
   });
 
-  it('routes six entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
+  it('routes seven entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -42,6 +43,7 @@ describe('PAGE_REGISTER', () => {
       'readers-cannot-read',
       'edge-ban',
       'stopped-demo-reaper',
+      'abuse-report',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
   });
@@ -51,9 +53,70 @@ describe('PAGE_REGISTER', () => {
     expect(drainWorker?.alertName).toBeNull();
   });
 
-  it('marks exactly appeal-latency-breach and stopped-demo-reaper dormant', () => {
+  it('marks exactly appeal-latency-breach, stopped-demo-reaper and abuse-report dormant', () => {
     const dormant = PAGE_REGISTER.filter((entry) => entry.dormant).map((entry) => entry.id);
-    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper']);
+    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper', 'abuse-report']);
+  });
+});
+
+/**
+ * The abuse-report entry is registered before its mx1 arrival producer lands,
+ * so it is dormant: it must not page, must not appear in the route, and must
+ * carry a ruleExemption so that flipping it live is not refused for lacking a
+ * Prometheus rule. The page names only that a report arrived, so the entry is
+ * not tenant-scoped.
+ */
+describe('the abuse-report entry', () => {
+  const abuse = PAGE_REGISTER.find((entry) => entry.id === 'abuse-report');
+
+  it('is registered through Alertmanager, not tenant-scoped, dormant, with a named exemption', () => {
+    expect(abuse).toBeDefined();
+    expect(abuse?.alertName).toBe('AbuseReportReceived');
+    expect(abuse?.deliveryPath).toBe('alertmanager');
+    expect(abuse?.tenantScoped).toBe(false);
+    expect(abuse?.dormant).toBe(true);
+    expect((abuse?.ruleExemption ?? '').trim()).not.toBe('');
+  });
+
+  it('is left out of the alertnames the page route matches', () => {
+    expect(pageAlertNames(PAGE_REGISTER)).not.toContain('AbuseReportReceived');
+  });
+
+  it('does not appear in the rendered page route or the rendered Alertmanager config', () => {
+    expect(renderPageRoute(PAGE_REGISTER)).not.toContain('AbuseReportReceived');
+    expect(renderAlertmanagerTemplate()).not.toContain('AbuseReportReceived');
+  });
+
+  it('would page if switched on, and needs no Prometheus rule because its exemption names the producer', () => {
+    const live = PAGE_REGISTER.map((entry) =>
+      entry.id === 'abuse-report' ? { ...entry, dormant: false } : entry
+    );
+    expect(pageAlertNames(live)).toContain('AbuseReportReceived');
+    expect(renderPageRoute(live)).toContain('AbuseReportReceived');
+    expect(renderAlertmanagerTemplate(live)).toContain('AbuseReportReceived');
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', live)).not.toContain(
+      'AbuseReportReceived'
+    );
+  });
+
+  it('refuses a severity: page rule under its alertname while it is dormant', () => {
+    const rules = [
+      'groups:',
+      '  - name: g',
+      '    rules:',
+      '      - alert: AbuseReportReceived',
+      '        expr: vector(1)',
+      '        labels:',
+      '          severity: page',
+      '',
+    ].join('\n');
+    expect(findUnregisteredPageSeverityAlerts(rules, PAGE_REGISTER)).toEqual([
+      'AbuseReportReceived',
+    ]);
+  });
+
+  it('carries no work-item reference in its shipped text', () => {
+    expect(`${abuse?.name} ${abuse?.reason}`).not.toMatch(/#\d|workspace/i);
   });
 });
 
@@ -220,8 +283,9 @@ describe('renderPageReceiverBlock', () => {
     expect(block).not.toMatch(/tk_[a-z0-9]{29}/);
   });
 
-  it('does not send a resolved notice -- a page that clears itself is not a second page', () => {
-    expect(renderPageReceiverBlock()).toContain('send_resolved: false');
+  it('sends the resolved notice to the phone, so a cleared page reads as cleared', () => {
+    expect(renderPageReceiverBlock()).toContain('send_resolved: true');
+    expect(renderPageReceiverBlock()).not.toContain('send_resolved: false');
   });
 
   it('is no longer the placeholder receiver', () => {
@@ -512,11 +576,16 @@ describe('findLiveEntriesWithoutPageRule', () => {
     expect(findLiveEntriesWithoutPageRule(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
   });
 
-  it('gives each of the three live Alertmanager entries a named exemption today, since no rule raises them', () => {
+  it('gives each of the three live Alertmanager entries, and the dormant abuse report, a named exemption', () => {
     const exempt = PAGE_REGISTER.filter((entry) => entry.ruleExemption !== undefined).map(
       (entry) => entry.alertName
     );
-    expect(exempt).toEqual(['TierTwoSafetyMatch', 'TenantFailedUnsafe', 'ReadersCannotRead']);
+    expect(exempt).toEqual([
+      'TierTwoSafetyMatch',
+      'TenantFailedUnsafe',
+      'ReadersCannotRead',
+      'AbuseReportReceived',
+    ]);
     for (const entry of PAGE_REGISTER) {
       expect(entry.ruleExemption ?? 'none').not.toMatch(/#\d|workspace/i);
     }
