@@ -1,0 +1,274 @@
+---
+# Installs the broker tunnel account once ops1's key is placed. The sshd configuration
+# is checked as a whole before it is reloaded, and a failed check or read-back puts
+# the previous files back and fails the run. Under --check nothing changes.
+
+# The input's directory is the owner's: root-only, so nobody else can swap the key.
+- name: Look at the broker tunnel's inputs directory
+  ansible.builtin.stat:
+    path: '{{ demo1_build_tunnel_inputs_dir }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: demo1_build_tunnel_inputs_dir_stat
+  check_mode: false
+
+- name: Refuse an inputs directory that is not root's own
+  ansible.builtin.assert:
+    that:
+      - demo1_build_tunnel_inputs_dir_stat.stat.isdir | default(false)
+      - not (demo1_build_tunnel_inputs_dir_stat.stat.islnk | default(true))
+      - demo1_build_tunnel_inputs_dir_stat.stat.uid == 0
+      - demo1_build_tunnel_inputs_dir_stat.stat.gid == 0
+      - demo1_build_tunnel_inputs_dir_stat.stat.mode == '0700'
+    quiet: true
+    fail_msg: '{{ demo1_build_tunnel_inputs_dir }} must be a directory, not a link, root:root, mode 0700.'
+
+- name: Refuse a key input that is not a root-only regular file
+  ansible.builtin.assert:
+    that:
+      - demo1_build_tunnel_input_stat.stat.isreg | default(false)
+      - not (demo1_build_tunnel_input_stat.stat.islnk | default(true))
+      - demo1_build_tunnel_input_stat.stat.uid == 0
+      - demo1_build_tunnel_input_stat.stat.gid == 0
+      - demo1_build_tunnel_input_stat.stat.mode in ['0600', '0400']
+    quiet: true
+    fail_msg: '{{ demo1_build_tunnel_key_input }} must be a regular file, not a link, root:root, mode 0600 or 0400.'
+
+- name: Read ops1's tunnel public key
+  ansible.builtin.slurp:
+    src: '{{ demo1_build_tunnel_key_input }}'
+  register: demo1_build_tunnel_key_slurp
+
+- name: Hold ops1's tunnel public key
+  ansible.builtin.set_fact:
+    demo1_build_tunnel_ops1_key: '{{ demo1_build_tunnel_key_slurp.content | b64decode | trim }}'
+
+# A second line would be a second key with no options at all, so the pattern ends
+# at \Z and allows one line only.
+- name: Refuse a key that is not one ed25519 line with no options
+  ansible.builtin.assert:
+    that:
+      - demo1_build_tunnel_ops1_key is match(demo1_build_tunnel_ed25519_pattern)
+    quiet: true
+    fail_msg: >-
+      {{ demo1_build_tunnel_key_input }} must hold one line, 'ssh-ed25519 <base64>' with an
+      optional comment and nothing in front.
+
+- name: Look up the broker tunnel account
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ demo1_build_tunnel_user }}']
+  register: demo1_build_tunnel_passwd
+  changed_when: false
+  failed_when: demo1_build_tunnel_passwd.rc not in [0, 2]
+  check_mode: false
+
+# A shell the role did not give is never changed silently.
+- name: Refuse an existing broker tunnel account that has a login shell
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_build_tunnel_passwd.rc == 2
+        or (demo1_build_tunnel_passwd.stdout.split(':') | last) == demo1_build_tunnel_nologin
+    quiet: true
+    fail_msg: >-
+      The account {{ demo1_build_tunnel_user }} already exists with a login shell. The role
+      does not change an existing account's shell; fix the account by hand first.
+
+- name: Create the broker tunnel account with no login shell and a locked password
+  ansible.builtin.user:
+    name: '{{ demo1_build_tunnel_user }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: '{{ demo1_build_tunnel_nologin }}'
+    password_lock: true
+
+- name: Read the broker tunnel account's shell back
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ demo1_build_tunnel_user }}']
+  register: demo1_build_tunnel_passwd_after
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Assert the broker tunnel account has no login shell
+  ansible.builtin.assert:
+    that:
+      - (demo1_build_tunnel_passwd_after.stdout.split(':') | last) == demo1_build_tunnel_nologin
+    quiet: true
+    fail_msg: The broker tunnel account does not have the no-login shell.
+  when: not ansible_check_mode
+
+- name: Create the directory of the broker tunnel's authorized key
+  ansible.builtin.file:
+    path: '{{ demo1_build_tunnel_authorized_keys_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The OpenSSH package ships this directory. A host without it has no sshd to
+# configure, and the role stops rather than make a directory sshd does not read.
+- name: Look at the directory of the sshd drop-ins
+  ansible.builtin.stat:
+    path: '{{ demo1_build_tunnel_sshd_config_dir }}'
+  register: demo1_build_tunnel_dropin_dir_stat
+  check_mode: false
+
+- name: Refuse a host without the sshd drop-in directory
+  ansible.builtin.assert:
+    that:
+      - demo1_build_tunnel_dropin_dir_stat.stat.exists
+      - demo1_build_tunnel_dropin_dir_stat.stat.isdir
+    quiet: true
+    fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+
+- name: Look for the current broker tunnel drop-in and authorized key
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ demo1_build_tunnel_sshd_dropin }}'
+    - '{{ demo1_build_tunnel_authorized_keys }}'
+  register: demo1_build_tunnel_before
+  check_mode: false
+
+# Kept in memory, not on disk: a rollback writes these back byte for byte.
+- name: Keep the current broker tunnel drop-in and authorized key for a rollback
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ demo1_build_tunnel_before.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: item.stat.exists
+  register: demo1_build_tunnel_prev
+
+- name: Write the broker tunnel's drop-in and authorized key, then check and reload sshd
+  block:
+    - name: Write the authorized key for ops1, with the grant's options
+      ansible.builtin.template:
+        src: broker-tunnel-authorized_keys.j2
+        dest: '{{ demo1_build_tunnel_authorized_keys }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: demo1_build_tunnel_keys
+
+    - name: Write the sshd drop-in for the broker tunnel account
+      ansible.builtin.template:
+        src: broker-tunnel-sshd.conf.j2
+        dest: '{{ demo1_build_tunnel_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: demo1_build_tunnel_dropin
+
+    # Checked as a whole, because sshd -t on one drop-in cannot see the main
+    # configuration. Not run in check mode: nothing was written there.
+    - name: Check the whole sshd configuration before it is reloaded
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Reload sshd when the broker tunnel's files changed
+      ansible.builtin.systemd_service:
+        name: '{{ demo1_build_tunnel_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode and (demo1_build_tunnel_keys.changed or demo1_build_tunnel_dropin.changed)
+
+    # The settings sshd applies to the account, read back from sshd -T. No module
+    # reports sshd's effective settings, so this is the command module, argv form,
+    # read only, never reported as changed; the assert is the narrow comparison
+    # ANS-9 allows in place of a module.
+    - name: Read the effective sshd settings for the broker tunnel account
+      ansible.builtin.command:
+        argv:
+          - sshd
+          - -T
+          - -C
+          - 'user={{ demo1_build_tunnel_user }},host=localhost,addr={{ demo1_build_tunnel_check_addr }}'
+      register: demo1_build_tunnel_effective
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Assert sshd applies the settings the role wrote
+      ansible.builtin.assert:
+        that:
+          - >-
+            (demo1_build_tunnel_effective.stdout_lines | select('match', '^' ~ item.key ~ ' ') | list | first | default(''))
+            == (item.key ~ ' ' ~ item.value)
+        quiet: true
+        fail_msg: 'The effective sshd setting {{ item.key }} for the broker tunnel account is not the one the role wrote.'
+      loop: '{{ demo1_build_tunnel_expected_effective | dict2items }}'
+      loop_control:
+        label: '{{ item.key }}'
+      when: not ansible_check_mode
+
+    # Read back from the file on disk, not from the template's input: one line, the
+    # grant's options, ops1's key.
+    - name: Read the broker tunnel's authorized key back
+      ansible.builtin.slurp:
+        src: '{{ demo1_build_tunnel_authorized_keys }}'
+      register: demo1_build_tunnel_keys_on_disk
+      when: not ansible_check_mode
+
+    - name: Assert the authorized key on disk is the grant and nothing more
+      ansible.builtin.assert:
+        that:
+          - >-
+            (demo1_build_tunnel_keys_on_disk.content | b64decode)
+            == demo1_build_tunnel_key_options ~ ' ' ~ demo1_build_tunnel_ops1_key ~ '\n'
+        quiet: true
+        fail_msg: The broker tunnel's authorized key on disk is not the grant's one line.
+      when: not ansible_check_mode
+
+  rescue:
+    - name: Put back the broker tunnel drop-in that was there before
+      ansible.builtin.copy:
+        content: '{{ demo1_build_tunnel_prev.results[0].content | b64decode }}'
+        dest: '{{ demo1_build_tunnel_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: demo1_build_tunnel_before.results[0].stat.exists
+
+    - name: Remove the broker tunnel drop-in when there was none before
+      ansible.builtin.file:
+        path: '{{ demo1_build_tunnel_sshd_dropin }}'
+        state: absent
+      when: not demo1_build_tunnel_before.results[0].stat.exists
+
+    - name: Put back the broker tunnel authorized key that was there before
+      ansible.builtin.copy:
+        content: '{{ demo1_build_tunnel_prev.results[1].content | b64decode }}'
+        dest: '{{ demo1_build_tunnel_authorized_keys }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: demo1_build_tunnel_before.results[1].stat.exists
+
+    - name: Remove the broker tunnel authorized key when there was none before
+      ansible.builtin.file:
+        path: '{{ demo1_build_tunnel_authorized_keys }}'
+        state: absent
+      when: not demo1_build_tunnel_before.results[1].stat.exists
+
+    # A reload that fails here must not hide the cause below: the running sshd
+    # keeps its old settings.
+    - name: Reload sshd with the previous broker tunnel files back
+      ansible.builtin.systemd_service:
+        name: '{{ demo1_build_tunnel_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode
+      failed_when: false
+
+    - name: Fail with the cause, after the previous broker tunnel files are back
+      ansible.builtin.fail:
+        msg: >-
+          The broker tunnel's sshd configuration did not pass its check or read-back.
+          The previous drop-in and authorized key are back in place.

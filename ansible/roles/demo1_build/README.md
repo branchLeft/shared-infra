@@ -119,6 +119,47 @@ What the role does, in the order of `tasks/main.yml`:
     the pinned file, `root:root`, mode `0755`, not a link, and every directory
     above it is root-owned and not writable by anyone else.
 
+Between steps 6 and 7 it also **makes the broker tunnel account**
+(`_broker_tunnel.yml`), once the owner has placed ops1's key; see "The broker tunnel".
+
+### The broker tunnel
+
+ops1's control plane reaches the broker on `127.0.0.1:8090` through an SSH tunnel that
+ops1 dials (the owner's ruling `control=a`, 28 Sep 2026; port 22 is open to edge1's
+address only, and ops1 leaves through edge1's NAT). This role makes demo1's half; ops1's
+`ssh -L` unit is the `broker_tunnel_client` role. The grant is stated once, in
+ghost-platform's `demo-host/provision/render_broker_tunnel.py`, which proves it against a
+real sshd (`demo-host-broker-tunnel-ci.yml` there). The role's two templates render that
+program's output byte for byte: `molecule/broker_tunnel/files/golden` holds it for the
+scenario's test key, and `tests/unit/test_broker_tunnel_templates.py` and the scenario's
+`verify` both compare with it.
+
+- The input is ops1's public key, one `ssh-ed25519 <base64> [comment]` line in
+  `/etc/branchleft/broker-tunnel/ops1_public_key`, `root:root` `0600` or `0400`, in a
+  `root:root` `0700` directory. The owner places it. Absent, nothing is installed and the
+  run says "Broker tunnel NOT installed", a stated skip (ANS-10).
+- The account `brokertunnel`: a system account, shell `/usr/sbin/nologin`, home
+  `/nonexistent`, password locked. An existing account with a login shell is refused,
+  never changed.
+- `/etc/ssh/branchleft-broker-tunnel/authorized_keys` (`root:root` `0644`), one line:
+  `restrict,port-forwarding,permitopen="127.0.0.1:8090" <ops1's key>`.
+- `/etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf` (`root:root` `0644`): a
+  `Match User brokertunnel` block that sets every restriction again
+  (`AllowTcpForwarding local`, `PermitOpen 127.0.0.1:8090`, `PermitListen none`,
+  `ForceCommand /usr/sbin/nologin`, no tty, agent, X11, tunnel or user rc), ended by
+  `Match all`.
+- Then `sshd -t` on the whole configuration, a reload of `ssh` when either file changed,
+  and a read-back of `sshd -T -C user=brokertunnel,...` against each of the thirteen
+  settings in `demo1_build_tunnel_expected_effective`, and of the key file against the
+  grant's one line. A failure puts the previous files back (or removes new ones),
+  reloads, and fails the run naming the cause.
+
+The read-back asks sshd about a documentation address (`192.0.2.1`), because the role does
+not know edge1's: a `Match Address` block for edge1's address alone, ahead of the drop-in,
+would not be seen. The scenario's sshd is a stand-in (`molecule/broker_tunnel/files/sshd-stub`,
+copied from the `tunnel_account` role's); real sshd is proven by the ghost-platform proof
+and by the live run.
+
 ### What each Phase A step becomes
 
 | Runbook step                                              | Becomes                                                                                                                                                                  | Where                                 |
@@ -511,6 +552,11 @@ upstream's text, and root runs them.
   it read, one `*.<base>` site. There is no per-slot file. The role never writes or
   reads back those inputs' values, never reads the DNS token, and never writes the
   live edge.
+
+- With ops1's key placed: the `brokertunnel` account, `/etc/ssh/branchleft-broker-tunnel/`
+  (`root:root` `0755`) and its `authorized_keys`, and
+  `/etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf`; `ssh` is reloaded when either
+  file changed (see "The broker tunnel").
 
 ### Drain flags
 

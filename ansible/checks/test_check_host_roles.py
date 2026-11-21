@@ -88,9 +88,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
-# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's broker_deploy (first: demo1_build
-# reads what it leaves behind), two build roles and spool_path_account. ops1 and db1 also apply
+# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host,
+# then broker_tunnel_client last of all (inert until the owner seeds it), and demo1's
+# broker_deploy (first: demo1_build reads what it leaves behind), two build roles and
+# spool_path_account. ops1 and db1 also apply
 # deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
@@ -129,6 +130,7 @@ APPLIED_ON_MAIN = {
         "mail_collector",
         "spool_paths",
         "ring_controller_host",
+        "broker_tunnel_client",
     ],
     "app1": [
         "host_inputs",
@@ -522,9 +524,10 @@ class HostRoleLists(unittest.TestCase):
                 "mail_collector",
                 "spool_paths",
                 "ring_controller_host",
+                "broker_tunnel_client",
             ],
         )
-        self.assertEqual(names[-1], "ring_controller_host")
+        self.assertEqual(names[-1], "broker_tunnel_client")
         # The step account follows the baseline directly, so no later role's failure holds back
         # the route a step is sent over.
         self.assertEqual(names.index("ci_step_login"), names.index("host_baseline") + 1)
