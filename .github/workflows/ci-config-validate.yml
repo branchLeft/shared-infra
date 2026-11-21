@@ -358,6 +358,12 @@ jobs:
           route ntfy-page alertname=TierTwoSafetyMatch severity=page tenant=acme
           route ntfy-page alertname=TenantFailedUnsafe severity=page tenant=acme
           route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
+          # The edge ban carries no tenant label, only the scenario that
+          # decided. Two bans by different scenarios are two alerts and both
+          # reach the phone; their pace is pinned in pageRegister.test.ts,
+          # since amtool prints receivers and not intervals.
+          route ntfy-page alertname=EdgeBanIssued severity=page reason=scenario-one
+          route ntfy-page alertname=EdgeBanIssued severity=page reason=scenario-two
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
           # The abuse-report entry is dormant until its mx1 producer lands:
@@ -402,6 +408,24 @@ jobs:
           # Anonymous read of the topic is refused by the server itself.
           anon=$(docker exec "$cid" sh -c 'wget -S -q -O /dev/null http://127.0.0.1:80/branchleft-pages/json?poll=1 2>&1 | head -1')
           grep -q '403' <<<"$anon"
+          # Publish to the pinned server with the exact URL the rendered
+          # Alertmanager config posts to, a firing and a resolved notice, and
+          # read the answer: a click or action value the server refuses is a
+          # 400 here and not a page that never arrives. The first is
+          # `wget` exiting non-zero; the second is the title and the button.
+          page_url=$(grep -o "http://ntfy:80/branchleft-pages[^']*" hetzner/monitoring/stack/alertmanager/alertmanager.yml | sed 's|http://ntfy:80|http://127.0.0.1:80|')
+          [ -n "$page_url" ]
+          for status in firing resolved; do
+            payload='{"version":"4","groupKey":"ci","status":"'$status'","receiver":"ntfy-page","groupLabels":{},"commonLabels":{"alertname":"EdgeBanIssued","severity":"page"},"commonAnnotations":{},"externalURL":"http://alertmanager:9093","alerts":[{"status":"'$status'","labels":{"alertname":"EdgeBanIssued","severity":"page","reason":"ci-probe"},"annotations":{"summary":"CI publish probe."},"startsAt":"2026-01-01T00:00:00Z","endsAt":"0001-01-01T00:00:00Z","generatorURL":"http://prometheus:9090/graph","fingerprint":"ci"}]}'
+            published=$(docker exec "$cid" wget -q -O - \
+              --header 'Authorization: Bearer tk_vvvvvvvvvvvvvvvvvvvvvvvvvvvvv' \
+              --header 'Content-Type: application/json' \
+              --post-data "$payload" "$page_url")
+            echo "$published"
+            grep -q '"click":"https://status.branchleft.co.uk"' <<<"$published"
+            grep -q '"action":"view"' <<<"$published"
+          done
+          grep -qi '"title":"[^"]*resolved' <<<"$published"
 
       # Starts the stack's own Alertmanager and Karma from compose.yml, posts one
       # alert to Alertmanager, and reads it back out of Karma's own API, so a
