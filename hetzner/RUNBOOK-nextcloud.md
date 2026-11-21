@@ -1,7 +1,6 @@
 # Runbook — the nextcloud1 stack
 
-Deploying plain Nextcloud (official images, no AIO) onto `ops1`. Closes
-branchLeft/workspace#1083's remaining "deploy plain Nextcloud" step.
+Deploying plain Nextcloud (official images, no AIO) onto `ops1`. Closes the remaining "deploy plain Nextcloud" step of the Nextcloud issue.
 
 **The stack is `nextcloud1`; the host is `ops1`.** The host was created as
 `nextcloud1` and renamed once it began to carry more than Nextcloud. The
