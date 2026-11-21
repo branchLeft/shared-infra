@@ -103,7 +103,8 @@ describe('resolvePrivateAddress', () => {
   });
 
   // 18081 is the Sweego receiver's drain port: ops1 alone reaches it, so no edge route may name it.
-  it.each([80, 443, 3000, 9090, 9093, 2587, 25860, 18079, 18081])(
+  // 8084 is Karma's loopback port: it has no login, so no edge route may ever reach it.
+  it.each([80, 443, 3000, 9090, 9093, 8084, 2587, 25860, 18079, 18081])(
     'refuses edge1 on port %s: only the pager port and the receiver webhook port are published for the edge',
     (port) => {
       expect(() => resolvePrivateAddress('edge1', port)).toThrow(

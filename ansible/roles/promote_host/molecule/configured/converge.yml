@@ -1,0 +1,18 @@
+---
+# The role with both inputs set. The signer's public key is read from the instance, so the role is
+# given a key that exists and the verify play can sign with its other half.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the signer's public key
+      ansible.builtin.slurp:
+        src: '{{ scenario_signer_public }}'
+      register: promote_host_converge_public
+
+    - name: Apply the role with a ledger URL and the signer's key
+      ansible.builtin.include_role:
+        name: branchleft.promote_host
+      vars:
+        promote_host_ledger_url: '{{ scenario_ledger_url }}'
+        promote_host_signer_key: "{{ (promote_host_converge_public.content | b64decode).split()[:2] | join(' ') }}"

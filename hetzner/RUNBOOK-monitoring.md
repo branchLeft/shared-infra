@@ -104,12 +104,12 @@ container's cgroup by construction.
 - `edge`: Caddy `256m` (~2.5x the 100 MB worst case), CrowdSec `1024m`
   (~1.9x the combined 550 MB agent+AppSec+CRS worst case, headroom for
   rule-set growth during a real attack) -- 1280 MB committed.
-- `monitoring`: `768+128+384+64+64+256 = 1664 MB` committed (Prometheus,
-  Alertmanager, Grafana, node_exporter, blackbox_exporter, cAdvisor in that
-  order).
+- `monitoring`: `768+128+128+64+384+64+64+256 = 1856 MB` committed (Prometheus,
+  Alertmanager, ntfy, Karma, Grafana, node_exporter, blackbox_exporter, cAdvisor
+  in that order).
 
-1280 + 1664 = 2944 MB of 4096 MB committed across every container ceiling,
-leaving 1152 MB (28%) for OS/Docker/sshd overhead and burst above any single
+1280 + 1856 = 3136 MB of 4096 MB committed across every container ceiling,
+leaving 960 MB (23%) for OS/Docker/sshd overhead and burst above any single
 container's own limit -- comfortably above the 300-400 MB doc 14 estimates
 needs there. The systemd drop-ins' `MemoryMax` (`1536M` edge, `2048M`
 monitoring) are set above each stack's own container-limit total for the
@@ -564,9 +564,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=monitoring'
 ```
 
-Expect seven containers, each reading `Up (healthy)`: `prometheus`,
-`alertmanager`, `ntfy`, `grafana`, `node-exporter`, `blackbox-exporter`,
-`cadvisor`.
+Expect eight containers, each reading `Up (healthy)`: `prometheus`,
+`alertmanager`, `ntfy`, `karma`, `grafana`, `node-exporter`,
+`blackbox-exporter`, `cadvisor`.
 
 Every one of them has a health check, so the health state is part of the
 answer. `Up (health: starting)` is normal for up to about a minute after a
@@ -1223,6 +1223,45 @@ the reaper, in the change that flips its flag; a rule carrying
 dormant entry reaches no phone. Nothing here is applied to the host: this
 section's change is to the committed register, and the rendered Alertmanager
 config is unchanged until the entry is switched on.
+
+## 17. Karma, the incident view
+
+Karma shows every alert Alertmanager holds, with the silences on them, grouped
+in one page: what is open, since when, and who has silenced it. It reads
+`http://alertmanager:9093` and keeps nothing of its own. It is read-only
+(`ALERTMANAGER_READONLY`), so creating or expiring a silence stays in
+Alertmanager's own page (`http://127.0.0.1:9093/` over the tunnel in step 8).
+
+Karma has no login. That is why it is published on `127.0.0.1:8084` of `edge1`
+and nowhere else: not on the private address Grafana uses, which every host on
+the private network can reach, and not in `sites.ts` or the Caddyfile.
+`hetzner/monitoring/test_karma_compose.py` fails the build if either changes.
+
+To open it, tunnel to `edge1`'s loopback and browse to the local end:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -L 8084:127.0.0.1:8084 root@"$EDGE1_IPV4" -N &
+open http://127.0.0.1:8084/
+```
+
+Close the tunnel when done (`kill %1` in the same shell). To check it is not
+reachable any other way, run this from the workstation without the tunnel:
+
+```bash
+curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://"$EDGE1_IPV4":8084/
+```
+
+Expect a connection failure or timeout, never an HTTP response.
+
+An empty page with a red banner naming an Alertmanager means Karma cannot read
+`alertmanager:9093`: read `docker logs monitoring-karma-1` on `edge1` for the
+error. The container's health probe is `karma --check-config`, which proves the
+configuration parses and not that the server answers; the live read is what
+CI proves on every change, by posting an alert and reading it back through
+Karma (`ci-config-validate.yml`, "Start Karma against Alertmanager").
+
+Karma arrives on the host through the gated Ansible apply that delivers
+`compose.yml`; nothing here is a hand step.
 
 ## Responding to the mail-delivery alerts
 
