@@ -1,0 +1,27 @@
+---
+# The cases are shared out between scenarios (verify.yml). A scenario that leaves its verify
+# step out would run none of its cases and pass, so verify.yml includes this file first: each
+# scenario that holds cases has a molecule.yml and a verify.yml beside this scenario's and does
+# not leave the verify step out. The files are read on the controller.
+- name: Assert each scenario has a molecule.yml and a verify.yml and does not leave verify out
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.fileglob', monitoring_stack_verify_scenarios_dir ~ '/' ~ item ~ '/molecule.yml', wantlist=true) | length == 1
+      - lookup('ansible.builtin.fileglob', monitoring_stack_verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
+      - >-
+        not (lookup('ansible.builtin.file', monitoring_stack_verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
+        | default('', true) | string | regex_search(monitoring_stack_verify_skip_pattern))
+    fail_msg: 'The scenario {{ item }} has no molecule/{{ item }}/molecule.yml or verify.yml, or leaves the verify step out.'
+    quiet: true
+  loop: '{{ monitoring_stack_verify_scenarios }}'
+  vars:
+    monitoring_stack_verify_scenarios:
+      - default
+      - pager
+      - restarts
+    monitoring_stack_verify_scenarios_dir: '{{ playbook_dir }}/..'
+    # The one guard every role copies (checks/test_verify_guard_copies.py holds the copies equal). It reads
+    # the file as the harness does, with str.splitlines(): a verify line may be padded, and may follow any
+    # break that splits a line besides LF (CR, VT, FF, FS, GS, RS, NEL, LS, PS), which ^ and $ cannot see.
+    # yamllint disable-line rule:line-length
+    monitoring_stack_verify_skip_pattern: '(?:\A|(?<=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*(?=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)'

@@ -5,6 +5,9 @@ apiVersion: 1
 
 datasources:
   - name: Prometheus
+    # Fixed, so the provisioned dashboards can name this datasource by uid
+    # (`dashboards.test.ts` holds every panel to it).
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090

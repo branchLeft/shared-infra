@@ -1,0 +1,235 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    restart_stamp_verify_dir: /var/tmp/restart_stamp_probe
+    restart_stamp_verify_one: "{{ 'ONE' | hash('sha256') }}"
+    restart_stamp_verify_two: "{{ 'TWO' | hash('sha256') }}"
+    restart_stamp_verify_input: "{{ 'SCENARIO_INPUT' | hash('sha256') }}"
+  tasks:
+    # 1. The role's own apply: one stamp, root only, the fingerprint and a newline.
+    - name: Look at the stamp the role wrote
+      ansible.builtin.stat:
+        path: /var/lib/restart_stamp_example/example.applied
+      register: restart_stamp_verify_role_stat
+
+    - name: Read the stamp the role wrote
+      ansible.builtin.slurp:
+        src: /var/lib/restart_stamp_example/example.applied
+      register: restart_stamp_verify_role_content
+
+    - name: Assert the stamp is the scenario's fingerprint and a newline, root:root 0600
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_role_stat.stat.isreg
+          - restart_stamp_verify_role_stat.stat.pw_name == 'root'
+          - restart_stamp_verify_role_stat.stat.gr_name == 'root'
+          - restart_stamp_verify_role_stat.stat.mode == '0600'
+          - (restart_stamp_verify_role_content.content | b64decode) == restart_stamp_verify_input ~ '\n'
+        quiet: true
+        fail_msg: The stamp is not the scenario's sha256 and a newline in a root:root 0600 file.
+
+    # 2. The module on a probe directory, one behaviour at a time. Each result is read from its
+    # own register, and every task that handles a fingerprint is no_log.
+    - name: Start from an empty probe directory
+      ansible.builtin.file:
+        path: '{{ restart_stamp_verify_dir }}'
+        state: '{{ item }}'
+        mode: '0755'
+      loop: [absent, directory]
+
+    - name: Read a stamp that is not there
+      restart_stamp:
+        state: read
+        absent: none
+        classes:
+          - { name: unit, file: '{{ restart_stamp_verify_dir }}/unit.applied' }
+      register: restart_stamp_verify_read_absent
+      no_log: true
+
+    - name: Assert it reads as the caller's absent word and changes nothing
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_read_absent.stamps.unit == 'none'
+          - not restart_stamp_verify_read_absent.changed
+        quiet: true
+
+    - name: Adopt in check mode
+      restart_stamp:
+        state: adopt
+        classes:
+          - name: unit
+            file: '{{ restart_stamp_verify_dir }}/unit.applied'
+            fingerprint: '{{ restart_stamp_verify_one }}'
+            adopt: true
+      check_mode: true
+      register: restart_stamp_verify_adopt_check
+      no_log: true
+
+    - name: Record in check mode
+      restart_stamp:
+        state: record
+        classes:
+          - name: unit
+            file: '{{ restart_stamp_verify_dir }}/unit.applied'
+            fingerprint: '{{ restart_stamp_verify_one }}'
+            read_back: true
+      check_mode: true
+      register: restart_stamp_verify_record_check
+      no_log: true
+
+    - name: Look for the stamp after the two check-mode runs
+      ansible.builtin.stat:
+        path: '{{ restart_stamp_verify_dir }}/unit.applied'
+      register: restart_stamp_verify_after_check
+
+    - name: Assert adopt reported its change, record reported none, and nothing was written
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_adopt_check.changed
+          - restart_stamp_verify_adopt_check.written == ['unit']
+          - not restart_stamp_verify_record_check.changed
+          - restart_stamp_verify_record_check.written == []
+          - not restart_stamp_verify_after_check.stat.exists
+        quiet: true
+        fail_msg: A check-mode run wrote a stamp, or adopt did not show its change, or record showed one.
+
+    - name: Adopt for real
+      restart_stamp:
+        state: adopt
+        classes:
+          - name: unit
+            file: '{{ restart_stamp_verify_dir }}/unit.applied'
+            fingerprint: '{{ restart_stamp_verify_one }}'
+            adopt: true
+      register: restart_stamp_verify_adopt
+      no_log: true
+
+    - name: Adopt again
+      restart_stamp:
+        state: adopt
+        classes:
+          - name: unit
+            file: '{{ restart_stamp_verify_dir }}/unit.applied'
+            fingerprint: '{{ restart_stamp_verify_one }}'
+            adopt: true
+      register: restart_stamp_verify_adopt_again
+      no_log: true
+
+    - name: Read the adopted stamp
+      restart_stamp:
+        state: read
+        classes:
+          - { name: unit, file: '{{ restart_stamp_verify_dir }}/unit.applied' }
+      register: restart_stamp_verify_read_adopted
+      no_log: true
+
+    - name: Assert adopt wrote once, changed nothing the second time, and the stamp reads back
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_adopt.changed
+          - not restart_stamp_verify_adopt_again.changed
+          - restart_stamp_verify_read_adopted.stamps.unit == restart_stamp_verify_one
+        quiet: true
+
+    - name: Decide with the stamp equal to the fingerprint
+      restart_stamp:
+        state: decide
+        classes:
+          - name: same
+            stamp: '{{ restart_stamp_verify_one }}'
+            fingerprint: '{{ restart_stamp_verify_one }}'
+          - name: moved
+            stamp: '{{ restart_stamp_verify_one }}'
+            fingerprint: '{{ restart_stamp_verify_two }}'
+          - name: new
+            stamp: absent
+            fingerprint: '{{ restart_stamp_verify_two }}'
+            adoptable: true
+          - name: closed
+            stamp: pending
+            fingerprint: '{{ restart_stamp_verify_two }}'
+            gate: false
+      register: restart_stamp_verify_decided
+      no_log: true
+
+    - name: Assert the four decisions
+      ansible.builtin.assert:
+        that:
+          - "restart_stamp_verify_decided.decisions.same == {'adopt': false, 'due': false, 'mark': false}"
+          - "restart_stamp_verify_decided.decisions.moved == {'adopt': false, 'due': true, 'mark': true}"
+          - "restart_stamp_verify_decided.decisions.new == {'adopt': true, 'due': false, 'mark': false}"
+          - "restart_stamp_verify_decided.decisions.closed == {'adopt': false, 'due': false, 'mark': false}"
+        quiet: true
+
+    - name: Record a fingerprint that is not a sha256
+      restart_stamp:
+        state: record
+        classes:
+          - name: unit
+            file: '{{ restart_stamp_verify_dir }}/unit.applied'
+            fingerprint: pending
+            read_back: true
+      register: restart_stamp_verify_pending
+      failed_when: false
+      no_log: true
+
+    - name: Read the stamp after the refused record
+      restart_stamp:
+        state: read
+        classes:
+          - { name: unit, file: '{{ restart_stamp_verify_dir }}/unit.applied' }
+      register: restart_stamp_verify_after_refused
+      no_log: true
+
+    - name: Assert the word pending was refused and the stamp is as it was
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_pending.msg is defined
+          - "'not a sha256' in restart_stamp_verify_pending.msg"
+          - restart_stamp_verify_after_refused.stamps.unit == restart_stamp_verify_one
+        quiet: true
+
+    - name: Put a directory where a stamp is read
+      ansible.builtin.file:
+        path: '{{ restart_stamp_verify_dir }}/dir.applied'
+        state: directory
+        mode: '0755'
+
+    - name: Read the stamp that is a directory, told to fail
+      restart_stamp:
+        state: read
+        classes:
+          - { name: dir, file: '{{ restart_stamp_verify_dir }}/dir.applied' }
+      register: restart_stamp_verify_unreadable
+      failed_when: false
+      no_log: true
+
+    - name: Read the stamp that is a directory, told to treat it as absent
+      restart_stamp:
+        state: read
+        unreadable: absent
+        absent: none
+        classes:
+          - { name: dir, file: '{{ restart_stamp_verify_dir }}/dir.applied' }
+      register: restart_stamp_verify_lenient
+      no_log: true
+
+    - name: Assert an unreadable stamp stops the run or reads as absent, as told
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_unreadable.msg is defined
+          - "'cannot be read' in restart_stamp_verify_unreadable.msg"
+          - restart_stamp_verify_lenient.stamps.dir == 'none'
+        quiet: true
+
+    # 3. A write returns the names it wrote and nothing else of the stamp. The fingerprint never
+    # comes back from a write (the unit test proves it on the module's own result; the task's
+    # `invocation` echo of its arguments is Ansible's, and is hidden by no_log).
+    - name: Assert a write names the class and returns no stamp content
+      ansible.builtin.assert:
+        that:
+          - restart_stamp_verify_adopt.written == ['unit']
+          - restart_stamp_verify_adopt.stamps is not defined
+        quiet: true

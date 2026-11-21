@@ -1,0 +1,27 @@
+---
+argument_specs:
+  main:
+    short_description: Install the host applier of the signed-image deploy route, off until its ledger URL and signer are set
+    description: >-
+      Installs the host applier (branchleft-promote), its trusted-signer file, its slot map,
+      an environment file of public values, a service unit and a timer. The applier reads a
+      ledger over public HTTPS, checks its signature against the one key the role placed, and
+      hands each move to the deploy wrapper, which verifies the image's attestation before it
+      pins or restarts anything. Both inputs are public data and neither is a secret. With
+      either one empty the units are installed and the timer is held disabled and stopped.
+    author: branchLeft
+    options:
+      promote_host_ledger_url:
+        type: str
+        default: ''
+        description: >-
+          The https URL of the signed promotion ledger, with no credential, query or fragment, or
+          empty. The signature is fetched from the same URL with .sig added. When set, the signer
+          key must be set too.
+      promote_host_signer_key:
+        type: str
+        default: ''
+        description: >-
+          The one public key the applier trusts to sign the ledger, as one OpenSSH ed25519 public
+          key line (the type and the key, no comment), or empty. When set, the ledger URL must be
+          set too.

@@ -701,8 +701,10 @@
             quiet: true
             fail_msg: A given pin was not used as given, or the role called docker although nothing needed it.
 
-        # No pin, and the deploy wrapper's record holds a digest: that digest is used, ahead
-        # of the running container, and docker is not called.
+        # No pin, and the deploy wrapper's record holds a digest that differs from the one the
+        # running portal container was created from (a failed upgrade that left the pin, a
+        # hand edit): the run stops, names both images, and writes nothing. A stack file is
+        # removed first, as in the refusals above, so its absence afterwards shows that.
         - name: Put a digest in the deploy wrapper's record
           ansible.builtin.copy:
             content: "IMAGE={{ verify_recorded_image }}\n"
@@ -711,24 +713,139 @@
             group: root
             mode: '0600'
 
-        - name: Apply the role with no image given and a record
+        - name: Remove a stack file, to see whether a refused run writes
+          ansible.builtin.file:
+            path: '{{ verify_project_dir }}/compose.yml'
+            state: absent
+
+        - name: Run the role with no image, where the record and the running image differ
+          block:
+            - name: Apply the role with no image given and a record that differs
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_app_image: ''
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on although the record and the running image differ.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the run stopped with its own code and named both images
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[image-drift]: ')"
+              - verify_recorded_image in control_plane_verify_message
+              - verify_running_image in control_plane_verify_message
+              - "'THROWAWAY-' not in control_plane_verify_message"
+            quiet: true
+            fail_msg: 'The refusal was not the drift refusal naming both images: {{ control_plane_verify_message | truncate(300) }}'
+
+        - name: Look at the stack file the refused run must not have written
+          ansible.builtin.stat:
+            path: '{{ verify_project_dir }}/compose.yml'
+          register: control_plane_verify_refused_drift
+
+        - name: Assert the refused run wrote nothing
+          ansible.builtin.assert:
+            that:
+              - not control_plane_verify_refused_drift.stat.exists
+            quiet: true
+            fail_msg: A run that was refused for drift still wrote a file.
+
+        # The same two images with a pin given: the pin is the owner's choice of image, so the
+        # run goes on with it and the record is not read.
+        - name: Apply the role with a pin given, where the record and the running image differ
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+
+        - name: Assert the pin given was used as given, and the stack file is back
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == control_plane_app_image
+            quiet: true
+            fail_msg: A pin given was not used where the record and the running image differ.
+
+        # A record that holds two IMAGE lines is refused whatever they say: the role takes the
+        # first and systemd the last. Both are the running image here, so only the count refuses.
+        - name: Put two IMAGE lines in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE={{ verify_running_image }}\nIMAGE={{ verify_running_image }}\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Run the role with no image, where the record holds two IMAGE lines
+          block:
+            - name: Apply the role with no image given and two IMAGE lines
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_app_image: ''
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on with two IMAGE lines in the record.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the run stopped with its own code and named the file
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[image-record-duplicate]: ')"
+              - "'/etc/branchleft/control-plane.image.env' in control_plane_verify_message"
+            quiet: true
+            fail_msg: 'The refusal was not the duplicate-line refusal: {{ control_plane_verify_message | truncate(300) }}'
+
+        # A pin given does not read the record, so two lines there do not stop it.
+        - name: Apply the role with a pin given, where the record holds two IMAGE lines
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+
+        # No pin, and the record holds a digest that is the running one: that digest is used,
+        # and the stand-in is asked the two reads and nothing else.
+        - name: Put the running image in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE={{ verify_running_image }}\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Empty the stand-in's call log
+          ansible.builtin.copy:
+            content: ''
+            dest: /var/lib/docker-stub/calls
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role with no image given and a record that agrees
           ansible.builtin.include_role:
             name: branchleft.control_plane
           vars:
             control_plane_app_image: ''
 
-        - name: Read what the stand-in was asked after the run with a record
+        - name: Read what the stand-in was asked after the run with a record that agrees
           ansible.builtin.slurp:
             src: /var/lib/docker-stub/calls
           register: control_plane_verify_calls_record
 
-        - name: Assert the recorded digest was used and docker was not called
+        - name: Assert the recorded digest was used and docker was asked only for the two reads
           ansible.builtin.assert:
             that:
-              - control_plane_effective_image == verify_recorded_image
-              - (control_plane_verify_calls_record.content | ansible.builtin.b64decode) == ''
+              - control_plane_effective_image == verify_running_image
+              - verify_calls | ansible.builtin.regex_findall('(?m)^(?!ps |inspect ).+') | length == 0
+              - "'ps ' in verify_calls"
+              - "'inspect ' in verify_calls"
             quiet: true
-            fail_msg: The role did not take the digest in the wrapper's record, or it called docker although the record held one.
+            fail_msg: The role did not take the digest in the wrapper's record, or it asked docker for more than the two reads.
+          vars:
+            verify_calls: '{{ control_plane_verify_calls_record.content | ansible.builtin.b64decode }}'
 
         # A record that is not a digest is not used: the running container decides.
         - name: Put a tag in the deploy wrapper's record

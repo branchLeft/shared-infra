@@ -95,6 +95,24 @@
       {{ (control_plane_record.content | default('') | ansible.builtin.b64decode).splitlines()
       | select('match', '^IMAGE=') | map('regex_replace', '^IMAGE=', '') | map('trim')
       | select('match', control_plane_image_pattern) | first | default('') }}
+    control_plane_record_image_lines: >-
+      {{ (control_plane_record.content | default('') | ansible.builtin.b64decode).splitlines()
+      | select('match', '^IMAGE=') | list | length }}
+
+# systemd reads the record as an environment file, where the last IMAGE= line wins, and the
+# line above takes the first digest. With two lines they would name two images, so the run
+# stops and names the file. Where a pin is given the record is not read (above), and the
+# deploy wrapper rewrites the file whole, so there is nothing to refuse.
+- name: Refuse a record with more than one IMAGE line
+  ansible.builtin.assert:
+    that:
+      - control_plane_record_image_lines | int <= 1
+    quiet: true
+    fail_msg: >-
+      control_plane[image-record-duplicate]: {{ control_plane_image_record }} holds
+      {{ control_plane_record_image_lines }} IMAGE= lines. The role takes the first and systemd the
+      last, so they can name two images. Nothing was written. Leave one line, or give
+      control_plane_app_image to deploy a pin the wrapper then records.
 
 - name: Look for the portal container of the stack
   ansible.builtin.command:
@@ -138,6 +156,34 @@
       {{ control_plane_app_image if (control_plane_image_given | ansible.builtin.bool)
       else (control_plane_recorded_image if (control_plane_recorded_image | length > 0)
       else ((control_plane_portal_image.stdout | default('')) | trim)) }}
+
+# With no pin, the record is what a restart of the unit would run, and the running portal
+# container is what runs now. When both are digests and differ (a failed upgrade that left the
+# pin in place, a hand edit), a run that took the record would silently move the portal and the
+# console to it. So the run stops and names both images, which are names and digests only.
+# Only the digests are compared: the same bytes under another name are no drift. A pin given
+# is the owner's choice of image and skips the check, as does a running image that is not a
+# digest (the next task refuses a tag where it would be used).
+- name: Take the image the portal container runs
+  ansible.builtin.set_fact:
+    control_plane_running_image: "{{ (control_plane_portal_image.stdout | default('')) | trim }}"
+
+- name: Refuse a record whose digest differs from the digest the portal container runs
+  ansible.builtin.assert:
+    that:
+      - >-
+        (control_plane_image_given | ansible.builtin.bool)
+        or (control_plane_recorded_image | length) == 0
+        or not (control_plane_running_image is ansible.builtin.match(control_plane_image_pattern))
+        or (control_plane_recorded_image | ansible.builtin.regex_replace('\A[^@]*@', ''))
+        == (control_plane_running_image | ansible.builtin.regex_replace('\A[^@]*@', ''))
+    quiet: true
+    fail_msg: >-
+      control_plane[image-drift]: {{ control_plane_image_record }} records
+      {{ control_plane_recorded_image }}, but the stack's running portal container was created
+      from {{ control_plane_running_image }}. Taking the record would move the portal and the
+      console to the record's digest. Nothing was written. Find out which is right: restore the
+      record to the running image, or give control_plane_app_image to deploy the image meant.
 
 - name: Refuse a run with no image to deploy
   ansible.builtin.assert:

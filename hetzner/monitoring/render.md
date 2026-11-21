@@ -24,9 +24,10 @@ record a cutover has to hunt for. Every hostname below is derived.
 ## MonitoredHost / MONITORED_NODE_HOSTS
 
 The estate hosts this stack watches, and whether each node_exporter target
-is expected to answer today. Every entry is `true`, so all four node targets
-(edge1, app1, db1 and ops1) contribute to the `HostOrServiceDown` alert
-`renderAlertRules` emits below. `app1` flipped with the `node_exporter` role
+is expected to answer today. The first four entries are `true`, so those node
+targets (edge1, app1, db1 and ops1) contribute to the `HostOrServiceDown` alert
+`renderAlertRules` emits below. The tenant hosts after them are `false`; see
+[the tenant hosts' node targets](#the-tenant-hosts-node-targets). `app1` flipped with the `node_exporter` role
 joining its playbook (ws#885): the flag takes effect when the rendered config
 reaches edge1, so the gated apply that installs the exporter on app1 comes first.
 
@@ -63,6 +64,33 @@ yet, and `app2`/`app3` are scale-out rungs with no host behind them either.
 Listing a reserved address as a scrape target is not a mistake this file
 can catch on its own -- it would just be a target nobody set up, scraped
 forever. The membership below is reviewed, not derived, for that reason.
+
+## The tenant hosts' node targets
+
+`db-t1`, `app-t1` and `edge-t` (the tenants project, branchLeft/workspace#1810) are the last three
+entries of `MONITORED_NODE_HOSTS`, each `expectedUp: false`, at the addresses in `TENANTS_HOST_IPS`
+(`10.20.1.200`, `.201`, `.210`). The label is what keeps `HostOrServiceDown` and `ServiceFlapping`
+silent for a host that has never answered, and `ExpectedDownTargetAnswering` is the tripwire if one
+starts answering while still labelled `false`: the same arrangement every host above went through.
+
+Two facts shape them. The tenants project has its own network, and a network does not span projects,
+so these addresses are the tenants network's, which reuses the estate's range (ruling 5a of 2 Nov
+2026). The Prometheus on edge1 cannot reach them, so each scrape fails until a path across the two
+projects exists, and no host is flipped before a query for it returns `1` (`RUNBOOK-monitoring.md`,
+15f). And the disk and memory rules (`HostDiskSpaceLow`, `HostMemoryPressure`) select on neither
+`host` nor `expected_up`, which is what makes them evaluate for these hosts the moment their series
+arrive, flipped or not. `render.test.ts` holds both statements: the rendered rules carry no such
+selector, and every tenant host's address appears in a promtool case for the disk, memory and
+host-down alerts (`alert_rules_test.yml`, and `alert_rules_memory_test.yml` for the 24-hour memory
+rule, a separate file because its evaluation interval is coarser). `tenants.metricsPorts.test.ts`
+holds that no firewall of the tenants program opens an exporter's port.
+
+The tenant edge's outside reachability probe is not here: it is route-specific and belongs to
+branchLeft/shared-infra#947 (branchLeft/workspace#1640).
+
+The `db_t1_replica` job reads db-t1's MySQL exporter, which listens on `127.0.0.1:9104` there, through
+db1's replica tunnel; it has its own host label and is unchanged. The `node` job's `db-t1` row is the
+host's own node_exporter and is a different series.
 
 ## mx1's two watch paths
 
@@ -175,6 +203,77 @@ raise a false alert; the rules are still best applied once the scripts are on
 db1. The series are named for db1,
 not for the control host's worker, so the worker's series can never hide db1's
 absence.
+
+### The control plane's own backup
+
+Two more rules in the same group read the backup of the control plane's portal and
+sign-in databases on `ops1`, from two textfile gauges the program installed by the
+`control_plane_backup` Ansible role writes (`ansible/roles/control_plane_backup`).
+Both select on `host="ops1"`, are warnings on the same route as the rest of the
+group, and carry no `for:`, because the files are written once per run and are
+otherwise flat.
+
+| Alert                         | Fires when                                                                 | `for:` |
+| ----------------------------- | -------------------------------------------------------------------------- | ------ |
+| `ControlPlaneBackupStale`     | a stage's last success is over 129600s (36h) old, per `stage` label        | none   |
+| `ControlPlaneBackupRunFailed` | the unit last failed more recently than the last `shipped_offsite` success | none   |
+
+`ControlPlaneBackupStale` reads `control_plane_backup_last_success_timestamp_seconds`,
+which the program advances per stage: `verified_on_host` after the copy has been
+restored into a throwaway server and counted equal to live, `shipped_offsite` after
+the sealed copy is put to backup copy 1. The timer fires at 02:40 UTC with up to 5
+minutes of random delay and the unit is stopped at 2 hours, so two healthy
+successes are at most 26h05m apart and 36h leaves 9h55m of margin. Backup copy 1
+expires an object 10 days after it is put, so the alert leaves about 8.5 days to
+run the backup by hand before copy 1 holds no control-plane backup.
+
+`ControlPlaneBackupRunFailed` is the same night's signal. The service's
+`OnFailure=` starts `branchleft-control-plane-backup-failed.service`, which runs the
+program's `mark-failed` command to write `control_plane_backup_last_failure_timestamp_seconds`
+to its own file (`control_plane_backup_failed.prom`). A hook outside the program is
+what lets a kill, the two-hour timeout or a crash before the program printed a line
+be seen at all. The mark holds while it is strictly newer than the last
+`shipped_offsite` success, so only a copy that reached backup copy 1 clears it: a
+restore that proved a newer copy on the host does not, and a failure that comes
+after a ship (the prune that follows it) is not hidden by that ship.
+
+Named limits. Neither rule uses `absent()`: the role's timer stays off until the
+owner's apply turns it on, and a rule that fired for a backup nobody has switched
+on would be noise from the day it is deployed. So a timer that has never run, and
+never failed, is not seen. The names are not emitted by a collector under this
+directory, so `metricCrosscheck.ts` lists them under `EXTERNAL_METRICS`, and a unit
+test in the role pins both names and the `shipped_offsite` stage to these
+expressions.
+
+## The compose-unit rule group
+
+Two warnings on the compose template's own units
+(`hetzner/provision/branchleft-compose@.service`), added with the one-hour start
+limit. A stack that hangs to the template's 600 second
+start timeout fails about every ten minutes; with the old 900 second window the
+start limit never tripped and the unit retried for ever with no alert. The limit now
+trips after five starts (2520 seconds in), and these two rules are how the owner
+hears of it, by email and never by page (the severity is `warning`).
+
+- `ComposeUnitRestartLoop`: `increase(node_systemd_service_restart_total[1h]) >= 2`
+  for a `branchleft-compose@*` instance. It sees the loop from its third start, before
+  the limit stops it, and ignores a single retry (a start that raced a `containerd`
+  restart). There is no `for:`: the counter is the window.
+- `ComposeUnitFailed`: `node_systemd_unit_state{state="failed"} == 1` for ten minutes.
+  `start-limit-hit` is a failed state that nothing clears until `systemctl reset-failed`,
+  so this is the alert that stays up after the loop has ended.
+
+Both series come from the node exporter's systemd collector, which
+`hetzner/provision/node-exporter.service` switches on, limits to the compose
+instances with `--collector.systemd.unit-include`, and gives the restart counter
+(`--collector.systemd.enable-restarts-metrics`). Both rules are scoped to
+`expected_up="true"`, as the scanner group is. They see app1, db1 and ops1, whose
+exporters are the native one. edge1's exporter is the Compose container of the
+monitoring stack, which has no systemd bus, so a loop of an edge1 stack is not seen:
+the follow-up is a mount of the bus socket into that container, which is a change to
+a live stack and is not made here. `alert_rules_test.yml` holds a promtool case for
+each rule, including the single retry, a host not yet expected up and a unit that is
+not a compose instance.
 
 ## The `scanner` rule group
 
@@ -290,6 +389,46 @@ Every rule here carries `notify: on-host`: SNDS alerts are expected to
 fire while mx1's volume is too low for Microsoft to report on, and each
 repeat that leaves mx1 for an external mailbox is unengaged machine mail
 spending the very reputation these rules watch.
+
+## The release watcher scrape path
+
+The Ghost release watcher is a scheduled GitHub Actions workflow in
+`branchLeft/ghost-platform` (`release-watcher-run.yml`, every six hours); no
+host of ours runs it. After each poll it commits `release-watcher.prom` to the
+`state/release-watcher` branch, carrying
+`ghost_release_watcher_last_success_timestamp_seconds` (the time of the last
+successful poll) and `ghost_release_watcher_pr_writes_enabled`.
+
+The `release_watcher` scrape job reads that file from the raw-content host
+over HTTPS. The repository is public, so the job needs no credential and
+nothing is pushed anywhere: the path is a pull, and a watcher that stops
+leaves the file, and so the gauge, where it was. Two details are deliberate:
+
+- **`scrape_interval: 2m`.** The raw host caches the file for five minutes, so
+  faster reads return the same bytes, and a sample must land inside
+  Prometheus's five-minute lookback or the series would vanish between
+  scrapes and `ReleaseWatcherStale`'s `absent()` branch would fire for a
+  healthy watcher.
+- **No `expected_up` label.** The job is named in the exemption list in
+  `render.test.ts`. `true` would send `HostOrServiceDown`, a critical page,
+  for five minutes of GitHub's own outage; `false` would raise
+  `ExpectedDownTargetAnswering` the moment it answered. Left unmarked,
+  `TargetDownUnmarked` reads a sustained outage at 24 hours as a warning.
+
+## The `release-watcher` rule group
+
+`ReleaseWatcherStale` fires when the gauge is more than 24 hours old (four
+missed six-hour ticks) or absent, after `for: 30m` so one failed scrape of the
+raw host does not fire it. Severity `warning` with no `notify` label: it
+reaches the on-host mailbox through the existing warning route, and never
+pages. It cannot tell a watcher that errors on every run from one that is
+switched off, and does not need to: both leave the timestamp where it was. The
+promtool cases are at the end of `alert_rules_test.yml`.
+
+It exists because the watcher failed every run from 11 November 2026 and
+nothing alerted. The alert rule is an owner merge; the gauge appears in
+Prometheus once the
+rendered `prometheus.yml` and `alerts.yml` are applied to edge1.
 
 ## renderAlertmanagerTemplate
 

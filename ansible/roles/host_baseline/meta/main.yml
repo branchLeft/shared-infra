@@ -5,6 +5,6 @@ galaxy_info:
   # Molecule derives a fully qualified role name from the namespace, or from
   # the author when there is none, and refuses an upper-case author.
   namespace: branchleft
-  description: Hardened sshd, unattended upgrades, fail2ban and Docker CE for a container host.
+  description: Hardened sshd, unattended upgrades, fail2ban, Docker CE, a daily old-image prune and an opt-in journal bound for a container host.
   license: PolyForm-Shield-1.0.0
   min_ansible_version: '2.21.6'

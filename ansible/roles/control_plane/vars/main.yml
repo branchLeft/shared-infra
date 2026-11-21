@@ -122,12 +122,12 @@ control_plane_image_given: >-
 control_plane_image_record: /etc/branchleft/control-plane.image.env
 
 # Docker is read for the portal container where something uses it (the bring-up, the
-# deploy wrapper), or where no pin was given and the wrapper's record holds none.
+# deploy wrapper), or where no pin was given: the image is then the record's or the running
+# one, and the two are compared before either is used (control_plane[image-drift]).
 control_plane_reads_docker: >-
   {{ (control_plane_bring_up | ansible.builtin.bool)
      or (control_plane_start_units | ansible.builtin.bool)
-     or not ((control_plane_image_given | ansible.builtin.bool)
-             or (control_plane_recorded_image | default('') | length > 0)) }}
+     or not (control_plane_image_given | ansible.builtin.bool) }}
 
 # The shape the deploy wrapper accepts: a name and a sha256 digest.
 control_plane_image_pattern: '\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z'
