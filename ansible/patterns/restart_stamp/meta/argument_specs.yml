@@ -1,0 +1,15 @@
+---
+argument_specs:
+  main:
+    short_description: Record one example stamp with the shared restart_stamp module
+    description: Makes a directory, then records the sha256 of one input as the stamp of a class that was read back.
+    author: AUTHOR_NAME
+    options:
+      restart_stamp_dir:
+        type: str
+        description: Absolute path of the directory the example stamp is written into.
+        default: /var/lib/restart_stamp_example
+      restart_stamp_input:
+        type: str
+        description: The text whose sha256 is the example fingerprint.
+        default: EXAMPLE_INPUT

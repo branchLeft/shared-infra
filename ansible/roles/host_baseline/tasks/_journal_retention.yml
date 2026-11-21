@@ -1,0 +1,37 @@
+---
+# Bounds how long the host's own journal keeps an entry. It is opt-in:
+# the default, 0, writes nothing and leaves the journal as the host has it, so a host that does not
+# ask is unchanged. A host that sets a number of days gets a journald drop-in that deletes anything
+# older and caps the journal's size, so a full disk never has the journal as its cause. The figure
+# must sit inside the 90 days the website's privacy notice states for server logs.
+
+- name: Refuse a journal retention that is not a whole number of days between 0 and 90
+  ansible.builtin.assert:
+    that:
+      - host_baseline_journal_retention_days | string is match('^[0-9]{1,2}\Z')
+      - host_baseline_journal_retention_days | int <= 90
+      - host_baseline_journal_max_use is match('^[1-9][0-9]{0,3}[MG]\Z')
+    quiet: true
+    fail_msg: >-
+      host_baseline refused its journal retention (rule: shape): a whole number of days from 0 to 90,
+      and a size such as 500M or 2G.
+
+- name: Bound the journal on a host that asks for it
+  when: host_baseline_journal_retention_days | int > 0
+  block:
+    - name: Create the journald drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deliver the journal retention drop-in
+      ansible.builtin.template:
+        src: journald-retention.conf.j2
+        dest: /etc/systemd/journald.conf.d/50-branchleft-retention.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart journald

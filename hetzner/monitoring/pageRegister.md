@@ -31,14 +31,23 @@ route that exists only in the workflow.
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of
-`pageAlertNames`, so it cannot page. Two entries are dormant today:
-appeal latency, until a target is set for how long an appeal may wait, and
+`pageAlertNames`, so it cannot page. Three entries are dormant today:
+appeal latency, until a target is set for how long an appeal may wait, the
+abuse report (below), and
 the stopped demo reaper (`stopped-demo-reaper`, alertname
 `StoppedDemoReaper`), until the reaper that ends a demo at the close of its
 lease exists and the threshold for how long it may stay silent is set. The
 reaper entry is not tenant-scoped: a stopped reaper is an estate-wide
 condition, so its page carries no `tenant` label of its own and groups with
 the other estate-wide alerts.
+
+The abuse-report entry (`abuse-report`, alertname `AbuseReportReceived`) is
+dormant until its producer lands. The producer is mx1's arrival path for the
+abuse role mailbox, an owner-authorised patch, so no Prometheus rule raises it
+and its entry carries a `ruleExemption` saying so. The page names only that a
+report arrived: its labels carry no sender, no message text and no tenant, and
+the entry is not tenant-scoped. Flipping `dormant` to false belongs in the same
+change that lands the producer.
 
 Registering the reaper first is deliberate -- the register is the reviewed
 list of what may page, so the owner's decision that a stopped reaper pages
@@ -78,7 +87,7 @@ entry flipped to live with no rule, which must report it.
 
 One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
 three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
-match and the failed-unsafe tenant are raised by the platform itself, and the
+match and the failed-unsafe tenant have no producer yet: the platform is planned to raise them, and nothing does today. The
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.

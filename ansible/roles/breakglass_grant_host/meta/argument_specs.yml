@@ -6,8 +6,9 @@ argument_specs:
       Refuses a host with no working /usr/bin/docker (the binary the expire unit
       runs) or no Docker socket, pulls the Node image the role pins (a constant,
       not an input) by digest only when the host lacks it and reads it back,
-      fetches the grant tool, the wrapper and the two units from one pinned commit
-      and holds each to its sha256, and then turns the expire timer on. It never
+      fetches the grant tool, the wrapper, the two expire units and the support-access
+      textfile writer with its two units from one pinned commit and holds each to its
+      sha256, and then turns the expire timer and the writer's timer on. It never
       runs the tool, opens or closes a grant, or sets a run-time secret. The unit
       runs with --pull never, so the image is checked before the timer is enabled.
       The one input is not a secret.

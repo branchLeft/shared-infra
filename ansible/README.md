@@ -248,12 +248,14 @@ The workflow has these kinds of job:
   limit puts its refusal cases in a second scenario, which is a second shard,
   not in a longer limit.
 
-The `lint` job is a matrix of three legs that run at once: `static` (the
+The `lint` job is a matrix of four legs that run at once: `static` (the
 pins, yamllint, ansible-lint, mypy, ruff and the role program and library
-checks), `checks` (the unit tests of the harness, the checks and the tools) and
-`units` (every role's unit tests). Run one after the other these took 15 to 20
-minutes and a slow runner reached the job's limit; run at once the job takes as
-long as the longest leg. A step names its leg in `if: matrix.part == '<leg>'`,
+checks), `checks` (the unit tests of the harness and the tools, and of most of
+the checks), `slow` (the checks' slowest test modules, named in
+`checks/run_check_tests.py`) and `units` (every role's unit tests). Run one
+after the other these took 15 to 20 minutes and a slow runner reached the job's
+limit; run at once the job takes as long as the longest leg, and the job's limit
+is 15 minutes. A step names its leg in `if: matrix.part == '<leg>'`,
 and `test_ci_gate_order.py` holds each condition to a leg of the matrix so a
 typo cannot skip a step everywhere. The job's result is success only when every
 leg succeeded, so the gate reads it as before.
