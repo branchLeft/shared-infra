@@ -10,4 +10,5 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] == 200'

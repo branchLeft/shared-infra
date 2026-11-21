@@ -36,9 +36,40 @@ incident, and a success threshold would delay the resolution. The renderer sets 
 no `alerting` block, and the test pins both.
 
 Every probe uses the interval of 60 seconds that the rule's tests assume, a client timeout,
-and the condition `[STATUS] < 300`, the same pass rule as the blackbox `http_2xx` module.
-Gatus follows redirects, as the blackbox module does, so a redirect source is judged by where
-it ends.
+and two conditions: `[CONNECTED] == true` and `[STATUS] < 300`, the second being the same
+status rule as the blackbox `http_2xx` module. Gatus follows redirects, as the blackbox module
+does, so a redirect source is judged by where it ends.
+
+The first condition is not optional. In Gatus v5.37.0 a probe that cannot connect (DNS
+failure, refused connection, timeout) records only an error and leaves the status at 0, and
+`[STATUS] < 300` passes 0. Without `[CONNECTED] == true` every outage reads as success. For
+HTTP, `[CONNECTED]` is true only when a status code above 0 came back. `render.test.ts` fails
+if any probe, the TEST target's own probe included, lacks the condition.
+
+## Post-mortems
+
+A post-mortem is a markdown file in `postmortems/`, written by a person and merged by pull
+request. No agent writes or edits one. The file name is lower-case words joined by `-`, ending
+`.md`, and it opens with a front-matter block:
+
+```text
+---
+title: One line of plain text, no [ ] ` < > or backslash
+resolved: 2026-12-01T10:42:00Z
+---
+```
+
+`postmortems.ts` reads the files committed at `HEAD` (`git ls-tree` and `git show`), never the
+working tree, so a file that is only written, only staged, or on a branch that has not landed
+does not appear. A file with no `resolved` line is a draft of an incident still open and is
+skipped. A file that cannot be read (bad name, no title, a `resolved` that is not a UTC time)
+fails `pnpm test`, so a mistake is loud, not a silent omission. Each remaining file becomes one
+archived `announcements:` entry of type `operational`, stamped with `resolved`, whose message
+links to the file on `main` of the public repository. With no file, the key is absent.
+
+Limit: Gatus gives its incident list no hook to attach a link to, so the link sits in the page's
+Past Announcements section at the time the incident resolved, not inside the component's own
+incident list.
 
 ## What is not set, on purpose
 

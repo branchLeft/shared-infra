@@ -1,0 +1,21 @@
+---
+# The role owns this account, so a password or a shell that a person changed is put back. No
+# password argument: useradd leaves a new account's password field locked, and password_lock
+# keeps it so. The shell must be a real one, because sshd runs a forced command through it.
+- name: Make sure the entry account exists, locked, with a real shell
+  ansible.builtin.user:
+    name: '{{ tenant_entry_user }}'
+    system: true
+    create_home: true
+    shell: '{{ tenant_entry_shell }}'
+    password_lock: true
+    state: present
+
+# The key module needs the account. The role's own user task has only reported by now in check
+# mode on a host that has none yet, so the key task runs only when the account's home is there:
+# that is the one case a check-mode plan skips it, and a real run always has the account by now.
+- name: Look for the account's home
+  ansible.builtin.stat:
+    path: '/home/{{ tenant_entry_user }}'
+    get_checksum: false
+  register: tenant_entry_home

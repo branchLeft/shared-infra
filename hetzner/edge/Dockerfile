@@ -40,6 +40,25 @@ COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 # 1.4-r0 on the same Alpine release. Named, so a later base cannot move it silently.
 RUN apk add --no-cache zlib=1.4-r0
 
+# Ghost's front-end widgets, served by the edge at /bl-assets/ on every Ghost
+# hostname (render.ts, `widgetAssets`). They are the pinned bundles in
+# branchLeft/ghost-platform's widgets/dist/, fetched at that repository's commit
+# and refused unless the bytes match the sha256 named here (`ADD --checksum` fails
+# the build on a mismatch), so a build cannot pick up a changed file. To take a new
+# pin: set WIDGET_SOURCE_COMMIT to the commit that holds it and replace the seven
+# sums with `shasum -a 256 widgets/dist/*` from that commit. The seven files are
+# the seven rows of that repository's widgets/pins.json; `widgetAssets.test.ts`
+# fails when this list and the renderer's disagree.
+ARG WIDGET_SOURCE_COMMIT=7863b17996a9e59bf74b157339487c2a2a71faf2
+ARG WIDGET_BASE_URL=https://raw.githubusercontent.com/branchLeft/ghost-platform/${WIDGET_SOURCE_COMMIT}/widgets/dist
+ADD --checksum=sha256:065472c5dc60c443cdb4332235a4cb9cd07f27f05f8b43cf69d2fc162d426754 --chmod=0644 ${WIDGET_BASE_URL}/admin-toolbar.min.js /srv/bl-assets/admin-toolbar.min.js
+ADD --checksum=sha256:2f87745344dabf2c17a1fd8bf4761a5a0afcd11e7d1b1427b128d08cf2fd4dcf --chmod=0644 ${WIDGET_BASE_URL}/announcement-bar.min.js /srv/bl-assets/announcement-bar.min.js
+ADD --checksum=sha256:af76fd41bd86e030ddff5b7bfa627da0ae1aa7f4534184fb92270c0209a33c34 --chmod=0644 ${WIDGET_BASE_URL}/comments-ui.min.js /srv/bl-assets/comments-ui.min.js
+ADD --checksum=sha256:bf97c0a94eb564f0d3192d9ee1ea7534a0ed82c109c5111630076aed1e715583 --chmod=0644 ${WIDGET_BASE_URL}/portal.min.js /srv/bl-assets/portal.min.js
+ADD --checksum=sha256:883b6f4b333a0654773eb40e4ef992f5a1550e4153b2fa99406ca50014d3903c --chmod=0644 ${WIDGET_BASE_URL}/signup-form.min.js /srv/bl-assets/signup-form.min.js
+ADD --checksum=sha256:8351196b62e6c27858441427a27c8be4d08f0e2b3684c4c280de7bbfe2a2160a --chmod=0644 ${WIDGET_BASE_URL}/sodo-search.min.css /srv/bl-assets/sodo-search.min.css
+ADD --checksum=sha256:5ff29320840e94565b12c15d90a4ab9c884a7e01783e17ac329f27dba3395688 --chmod=0644 ${WIDGET_BASE_URL}/sodo-search.min.js /srv/bl-assets/sodo-search.min.js
+
 # Proves the two modules are actually registered rather than silently absent —
 # an xcaddy build that resolved nothing still produces a working Caddy, and the
 # first symptom would be a config full of unrecognised directives at deploy time.

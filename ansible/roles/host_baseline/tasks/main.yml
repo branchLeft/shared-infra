@@ -21,6 +21,15 @@
 - name: Install Docker CE
   ansible.builtin.import_tasks: _docker.yml
 
+# A fourth part with no script behind it, after Docker is in place: the timer that prunes old images.
+- name: Prune old Docker images on a timer
+  ansible.builtin.import_tasks: _docker_image_prune.yml
+
+# A fifth part, opt-in: a bound on how long the host's journal keeps an entry. Written only on a
+# host that sets host_baseline_journal_retention_days; every other host is unchanged.
+- name: Bound the journal on a host that asks for it
+  ansible.builtin.import_tasks: _journal_retention.yml
+
 # fail2ban's reload is queued by its configuration file and runs here, after
 # every half, so the role returns with the service reading what is on disk.
 - name: Run the handlers still queued

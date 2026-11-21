@@ -28,25 +28,16 @@ assumes Docker, `branchleft-compose@.service` and
 `/usr/local/sbin/branchleft-deploy` are already installed. Confirm in one
 command:
 
-**Select the hcloud project first.** The lookups below ask hcloud, so its active context
-must be the one for the project that holds the server. Which of your contexts that is
-is not recorded here. List them, read the name, then select it, each as its own paste:
+**Read `edge1`'s address from the estate stack.** The estate stack records it as the
+`edge1PublicIpv4` output, so no hcloud context is needed: an hcloud name lookup fails
+from a workstation whose contexts do not reach the project holding the server. The
+remote command first checks that the host answering is `edge1`, so a stale or wrong
+address stops here:
 
 ```bash
-hcloud context list
-```
-
-```bash
-read -r HCLOUD_CONTEXT
-```
-
-```bash
-hcloud context use "${HCLOUD_CONTEXT}"
-```
-
-```bash
-EDGE1_IPV4=$(hcloud server ip edge1)
+EDGE1_IPV4=$(pulumi stack output edge1PublicIpv4 --cwd hetzner/estate --stack production)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  test "$(hostname)" = edge1 &&
   systemctl is-active docker &&
   test -x /usr/local/sbin/branchleft-deploy &&
   systemctl cat branchleft-compose@.service >/dev/null &&
@@ -121,7 +112,8 @@ Once the package is public, the digest can be cross-checked against the
 registry, with `<N>` the revision that was dispatched:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/branchleft/edge-caddy:caddy-2.11.4-<N> \
+CADDY_VERSION=$(sed -n 's/^ARG CADDY_VERSION=//p' hetzner/edge/Dockerfile)
+docker buildx imagetools inspect ghcr.io/branchleft/edge-caddy:caddy-${CADDY_VERSION}-<N> \
   --format '{{.Manifest.Digest}}' | grep -o 'sha256:[0-9a-f]*' | head -1
 ```
 
@@ -329,8 +321,7 @@ handler chain as a public site and answers 204.
 **Both directions matter.** Checks (a) and (b) are a matched pair: (a) proves
 the general throttle is present and trips, (b) proves the magic-link throttle is
 present and trips on its own, tighter budget. Both expect a `429`, so neither
-passes if the whole `rate_limit` module has silently failed to load
-(`branchLeft/workspace#209`).
+passes if the whole `rate_limit` module has silently failed to load.
 
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering this section independently — every check below
@@ -648,8 +639,9 @@ Then:
    change, including the posture flips in this section.
 
    A successful reload prints nothing: it exits `0` and writes no line. Caddy
-   v2.11.4 (the pinned version) returns an error and keeps the previous
-   configuration running when the new one fails to load.
+   the pinned version (`ARG CADDY_VERSION` in `hetzner/edge/Dockerfile`) returns
+   an error and keeps the previous configuration running when the new one fails
+   to load.
 
 **Not `systemctl restart branchleft-compose@edge`.** That unit carries no
 `ExecStop` since `hetzner/provision/branchleft-compose@.service` changed, so a
@@ -658,8 +650,7 @@ _config hash_ moved. The **contents** of a bind-mounted file or directory are no
 hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
 `--wait` passes because the unchanged containers are already healthy, and Caddy
 goes on serving the configuration it loaded at container start. This was
-observed on the monitoring stack the same day it landed
-(branchLeft/workspace#666) and again here.
+observed on the monitoring stack the same day it landed and again here.
 
 The `edge` instance is deliberately **not** given the blanket
 `--force-recreate` that the monitoring instance gets: recreating this stack

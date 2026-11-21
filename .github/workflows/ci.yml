@@ -422,14 +422,13 @@ jobs:
       - name: Install the YAML parser the stack-keys check uses
         run: python3 -m pip install --quiet pyyaml==6.0.3
 
-      # test_compose_unit_contract.py uses a `X | None` return annotation
-      # with no `from __future__ import annotations` guard, so under Python
-      # 3.9 `unittest discover` doesn't refuse to run -- it swallows the
-      # TypeError as a single synthetic failing test and keeps collecting,
-      # reporting a smaller count that reads like an unrelated pre-existing
-      # failure. This fails loudly and specifically before that can happen.
-      - name: Python version floor (hetzner/provision needs >= 3.10)
-        run: python3 scripts/assert-min-python-version.py 3.10 --suite hetzner/provision
+      # The suite's floor is 3.9 (macOS's system python3), recorded as MIN_PYTHON in
+      # hetzner/provision/test_suite_size.py, which also checks this step names the same
+      # number. Below it `unittest discover` does not refuse: it turns each module that
+      # cannot import into one synthetic failing test and reports a smaller count that
+      # reads like an unrelated pre-existing failure. This fails loudly first.
+      - name: Python version floor (hetzner/provision needs >= 3.9)
+        run: python3 scripts/assert-min-python-version.py 3.9 --suite hetzner/provision
 
       - name: Python unit tests
         run: python3 -m unittest discover -s hetzner/provision -p 'test_*.py' -v
@@ -838,7 +837,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@0aa3335097d9b1bb7e5d53dcfddf405bc6c53905 # v1.2.4
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1191,7 +1190,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@0aa3335097d9b1bb7e5d53dcfddf405bc6c53905 # v1.2.4
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1603,7 +1602,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@0aa3335097d9b1bb7e5d53dcfddf405bc6c53905 # v1.2.4
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1958,7 +1957,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@0aa3335097d9b1bb7e5d53dcfddf405bc6c53905 # v1.2.4
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@b1092eafc16f34551fd2fd99328966beceb565e0 # v1.2.5
         with:
           preview-json: preview.json
           plan-file: preview-plan.json

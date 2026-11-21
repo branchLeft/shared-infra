@@ -1,6 +1,7 @@
 import type { EdgeSite } from '../../siteTypes';
 import { blackboxTargets } from '../monitoring/render';
 import { STATUS_TEST_COMPONENT, type StatusComponent } from '../monitoring/statusIncidents';
+import { type Postmortem, renderAnnouncements } from './postmortems';
 
 /**
  * Renders the Gatus config of the status page on ops1 from the hostname
@@ -24,8 +25,19 @@ export const TEST_TARGET_SERVICE = 'status-test-target';
 export const PROBE_INTERVAL = '60s';
 export const PROBE_TIMEOUT = '10s';
 
-/** The same pass rule as the blackbox `http_2xx` module: any final status below 300. */
-export const PASS_CONDITION = '[STATUS] < 300';
+/**
+ * A probe that cannot connect (DNS failure, refused connection, timeout) has the
+ * status 0 in Gatus, which `[STATUS] < 300` alone would read as a pass. So the
+ * connection is a condition of its own: for HTTP, `[CONNECTED]` is true only
+ * when a status code above 0 came back.
+ */
+export const CONNECTED_CONDITION = '[CONNECTED] == true';
+
+/** The blackbox `http_2xx` module's status rule: any final status below 300. */
+export const STATUS_CONDITION = '[STATUS] < 300';
+
+/** The pass rule of every page probe: connected, and then a status below 300. */
+export const PASS_CONDITIONS: readonly string[] = [CONNECTED_CONDITION, STATUS_CONDITION];
 
 const SITES_GROUP = 'sites';
 const TEST_GROUP = 'TEST';
@@ -40,7 +52,7 @@ interface Probe {
   name: string;
   group: string;
   url: string;
-  condition: string;
+  conditions: readonly string[];
 }
 
 function renderProbe(probe: Probe): string[] {
@@ -52,39 +64,47 @@ function renderProbe(probe: Probe): string[] {
     '    client:',
     `      timeout: ${PROBE_TIMEOUT}`,
     '    conditions:',
-    `      - '${probe.condition}'`,
+    ...probe.conditions.map((condition) => `      - '${condition}'`),
   ];
 }
 
-function renderConfig(storage: string[], probes: Probe[]): string {
+function renderConfig(storage: string[], probes: Probe[], announcements: string[] = []): string {
   const lines = [
     ...GENERATED_BANNER,
     'web:',
     `  port: ${GATUS_CONTAINER_PORT}`,
     ...storage,
+    ...announcements,
     'endpoints:',
     ...probes.flatMap(renderProbe),
   ];
   return `${lines.join('\n')}\n`;
 }
 
-/** The page: one probe per registry hostname, plus TEST, with its history in the sqlite volume. */
-export function renderStatusConfig(sites: readonly EdgeSite[]): string {
+/**
+ * The page: one probe per registry hostname, plus TEST, with its history in the sqlite
+ * volume, and a link for each merged, resolved post-mortem.
+ */
+export function renderStatusConfig(
+  sites: readonly EdgeSite[],
+  postmortems: readonly Postmortem[] = []
+): string {
   const hostnameProbes: Probe[] = blackboxTargets(sites).map((target) => ({
     name: target.replace('https://', ''),
     group: SITES_GROUP,
     url: target,
-    condition: PASS_CONDITION,
+    conditions: PASS_CONDITIONS,
   }));
   const testProbe: Probe = {
     name: STATUS_TEST_TARGET_COMPONENT.name,
     group: TEST_GROUP,
     url: STATUS_TEST_TARGET_COMPONENT.probeUrl,
-    condition: PASS_CONDITION,
+    conditions: PASS_CONDITIONS,
   };
   return renderConfig(
     ['storage:', '  type: sqlite', '  path: /data/data.db'],
-    [...hostnameProbes, testProbe]
+    [...hostnameProbes, testProbe],
+    renderAnnouncements(postmortems)
   );
 }
 
@@ -97,7 +117,7 @@ export function renderTargetConfig(): string {
         name: 'SELF',
         group: 'test-target',
         url: `http://127.0.0.1:${GATUS_CONTAINER_PORT}/health`,
-        condition: '[STATUS] == 200',
+        conditions: [CONNECTED_CONDITION, '[STATUS] == 200'],
       },
     ]
   );

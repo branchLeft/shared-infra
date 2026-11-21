@@ -7,7 +7,7 @@
       - systemctl
       - show
       - branchleft-compose@Molecule-Probe.service
-      - --property=ActiveState,SubState,Result,NRestarts,InvocationID,StartLimitBurst,Restart
+      - --property=ActiveState,SubState,Result,NRestarts,InvocationID,StartLimitBurst,Restart,StartLimitIntervalUSec,TimeoutStartUSec,RestartUSec
   register: deploy_tooling_scenario_probe_show
   changed_when: false
 
