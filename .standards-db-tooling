@@ -8,3 +8,7 @@ hetzner/provision/test_control_plane_hba_server.py
 ansible/roles/control_plane_backup/files/branchleft_control_plane_backup.py
 # The tests of that program, which hold the same statements as literals to prove what it sends.
 ansible/roles/control_plane_backup/tests/unit/test_control_plane_backup.py
+# The forced command that creates one tenant's database and account on the tenant database host (database provisioning, not application code), the stand-in database client of its scenario, and the tests that hold the statements it sends.
+ansible/roles/db_t1_tenant_entry/files/tenant_db_entry.py
+ansible/roles/db_t1_tenant_entry/molecule/default/files/fake_docker.py
+ansible/roles/db_t1_tenant_entry/tests/unit/test_tenant_db_entry.py

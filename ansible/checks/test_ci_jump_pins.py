@@ -86,7 +86,14 @@ def _load_module(root: Path) -> types.ModuleType:
         raise ImportError(message)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    # No bytecode is written: a sabotage that keeps the file's size, put back within the same
+    # second, would otherwise leave a cache the next load trusts (it checks only mtime and size).
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 

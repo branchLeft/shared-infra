@@ -107,6 +107,15 @@ it is (see above).
   could point `broker_deploy_verify_key_src` at another key file and give its digest; the pull
   route passes no `-e` of its own, and a run by hand with one is outside the signed route.
 
+- The owner's due-diligence address is `broker_deploy_owner_due_diligence_email`. It has no
+  value in the repository (the default is empty), and it is the broker's `OWNER_DUE_DILIGENCE_EMAIL`:
+  the broker adds it to every demo as a reader and refuses to start without it. The role checks it
+  before anything is written and before the environment file is templated: while a release is carried,
+  an empty value, or one that is not a plain address, stops the run and prints no value. The environment
+  file task and the restart decision that reads its result hide their output (`no_log`, `diff: false`).
+  It is the owner's to place. It is not yet fed from the host's inputs file: demo1 has no `host_inputs`
+  row, so the value has to reach the role by a route the owner decides (see "Steps the role does not take").
+
 [`meta/argument_specs.yml`](meta/argument_specs.yml) documents all of them. None
 of them is a secret. The private half of the key never reaches the role.
 

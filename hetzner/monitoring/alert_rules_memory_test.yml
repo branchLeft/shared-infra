@@ -1,0 +1,44 @@
+# Memory cases for the tenant hosts, kept apart from
+# alert_rules_test.yml because HostMemoryPressure holds for 24h: the evaluation
+# interval here is 5m so reaching it costs a few hundred evaluations, not
+# thousands, the same reason alert_rules_deadline_test.yml is its own file. The
+# series are one sample a minute, inside promtool's 5m lookback, so none goes
+# stale between evaluations.
+#
+# The three carry expected_up="false" today (render.ts, MONITORED_NODE_HOSTS),
+# and these series carry it too, to prove the rule does not wait on the flip.
+rule_files:
+  - stack/prometheus/alerts.yml
+
+evaluation_interval: 5m
+
+tests:
+  # Memory: 80% used on every host, held past the 24h `for`. One sample a
+  # minute for 25 hours.
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false"}'
+        values: '20x1500'
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false"}'
+        values: '100x1500'
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false"}'
+        values: '20x1500'
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false"}'
+        values: '100x1500'
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false"}'
+        values: '20x1500'
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false"}'
+        values: '100x1500'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostMemoryPressure", alertstate="firing"}
+        eval_time: 23h
+        exp_samples: []
+      - expr: ALERTS{alertname="HostMemoryPressure", alertstate="firing"}
+        eval_time: 24h5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostMemoryPressure", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false"}'
+            value: 1
+          - labels: 'ALERTS{alertname="HostMemoryPressure", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false"}'
+            value: 1
+          - labels: 'ALERTS{alertname="HostMemoryPressure", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false"}'
+            value: 1

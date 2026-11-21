@@ -20,6 +20,9 @@
     # those 32 bytes. Not a real key.
     broker_deploy_verify_key_src: '{{ playbook_dir }}/files/verify-key-stand-in.hex'
     broker_deploy_verify_key_sha256: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925'
+    # A stand-in address for the owner's, which the broker needs and the role refuses without. A
+    # reserved .invalid name: not the owner's.
+    broker_deploy_owner_due_diligence_email: 'owner-review@example.invalid'
   tasks:
     - name: Apply the role
       ansible.builtin.include_role:

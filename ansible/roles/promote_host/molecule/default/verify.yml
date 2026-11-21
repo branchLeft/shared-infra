@@ -1,0 +1,135 @@
+---
+# The role with no input set: the program and its files are in place with the owners and modes the
+# applier requires, the signer file is absent, the timer is held off, and the program, run by hand
+# on this host, refuses and changes nothing.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_config_dir }}'
+        - '{{ scenario_slots }}'
+        - '{{ scenario_env_file }}'
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_program }}'
+        - '{{ scenario_service }}'
+        - '{{ scenario_timer }}'
+        - '{{ scenario_signers }}'
+      register: promote_host_v_stats
+
+    - name: Name each file's facts by its path
+      ansible.builtin.set_fact:
+        promote_host_v_by_path: >-
+          {{ dict(promote_host_v_stats.results | map(attribute='item')
+          | zip(promote_host_v_stats.results | map(attribute='stat'))) }}
+
+    # The applier refuses a state directory, a slot map, a signer file or a program that is not
+    # root's or that anyone else can write, so the test names each owner and mode.
+    - name: Require each file to have the owner and mode the applier requires
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_by_path[scenario_config_dir].isdir
+          - promote_host_v_by_path[scenario_config_dir].mode == '0755'
+          - promote_host_v_by_path[scenario_state_dir].isdir
+          - promote_host_v_by_path[scenario_state_dir].mode == '0700'
+          - promote_host_v_by_path[scenario_slots].isreg
+          - promote_host_v_by_path[scenario_slots].mode == '0644'
+          - promote_host_v_by_path[scenario_env_file].isreg
+          - promote_host_v_by_path[scenario_env_file].mode == '0644'
+          - promote_host_v_by_path[scenario_program].isreg
+          - promote_host_v_by_path[scenario_program].mode == '0755'
+          - promote_host_v_by_path[scenario_service].mode == '0644'
+          - promote_host_v_by_path[scenario_timer].mode == '0644'
+          - promote_host_v_by_path.values() | map(attribute='pw_name', default='root') | unique | list == ['root']
+        quiet: true
+
+    - name: Require the signer file to be absent, so the applier trusts nothing
+      ansible.builtin.assert:
+        that:
+          - not promote_host_v_by_path[scenario_signers].exists
+        quiet: true
+        fail_msg: A signer file is on the host although no signer key was given.
+
+    - name: Read the slot map and the environment file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_slots }}'
+        - '{{ scenario_env_file }}'
+      register: promote_host_v_reads
+
+    # The website holds the top slot of the applier's range, and no other row is there.
+    - name: Require the slot map to be exactly the website's row
+      ansible.builtin.assert:
+        that:
+          - "(promote_host_v_reads.results[0].content | b64decode | from_json) == [{'slot': 30999, 'stack': 'website'}]"
+        quiet: true
+
+    - name: Require the environment file to name the one value, empty
+      ansible.builtin.assert:
+        that:
+          - (promote_host_v_reads.results[1].content | b64decode).splitlines() | reject('match', '#') | list == ['PROMOTE_LEDGER_URL=']
+        quiet: true
+
+    - name: Require the program to be the repository's, a Python program for the system interpreter
+      ansible.builtin.command:
+        argv: [head, -n, '1', '{{ scenario_program }}']
+      register: promote_host_v_shebang
+      changed_when: false
+
+    - name: Require the first line to name the system interpreter in isolated mode
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_shebang.stdout == '#!/usr/bin/python3 -I'
+        quiet: true
+
+    - name: Ask systemd for the timer and the service
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - branchleft-promote.timer
+        - branchleft-promote.service
+      register: promote_host_v_systemd
+
+    - name: Require the timer to be installed, disabled and not running, and the service idle
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_systemd.results[0].status.LoadState == 'loaded'
+          - promote_host_v_systemd.results[0].status.UnitFileState == 'disabled'
+          - promote_host_v_systemd.results[0].status.ActiveState == 'inactive'
+          - promote_host_v_systemd.results[1].status.LoadState == 'loaded'
+          - promote_host_v_systemd.results[1].status.ActiveState == 'inactive'
+        quiet: true
+        fail_msg: The timer is not installed and held off, or the service is running with no input set.
+
+    # An applier run by hand on an inert host refuses before it fetches anything, and leaves no
+    # state behind that would later read as "a ledger was seen". There is no wrapper on this
+    # instance and no signer, so it stops at its trust anchors.
+    - name: Run the applier by hand on the inert host
+      ansible.builtin.command:
+        argv: ['{{ scenario_program }}', --ledger-url, '{{ scenario_ledger_url }}']
+      register: promote_host_v_run
+      changed_when: false
+      failed_when: false
+
+    - name: List what the refused run left in the state directory
+      ansible.builtin.find:
+        paths: '{{ scenario_state_dir }}'
+        hidden: true
+        file_type: any
+      register: promote_host_v_state
+
+    - name: Require the refusal and an empty state, apart from the lock file
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_run.rc == 1
+          - "'branchleft-promote: refusing' in promote_host_v_run.stderr"
+          - promote_host_v_state.files | map(attribute='path') | map('basename') | difference(['promote.lock']) | list | length == 0
+        quiet: true

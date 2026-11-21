@@ -4,8 +4,10 @@
 # of the host's private inputs (host_inputs), the host baseline (which installs Docker),
 # the break-glass grant (breakglass_grant_host), then the website stack (website_app1) and
 # the publicpress website stack (publicpress_website_app1), then the deploy tooling and the
-# deploy slot keys, then the tenant onboarding role (which installs the volume program the
-# tenant compose role calls), then the export bundler, and last the node exporter.
+# deploy slot keys, then the host applier of the signed-image route (promote_host, which needs
+# the wrapper the deploy tooling installs and is inert until the owner gives it a ledger URL and a
+# signer), then the tenant onboarding role (which installs the volume program the tenant compose
+# role calls), then the export bundler, and last the node exporter.
 # The loader reads the one root-only file the owner places on the host and sets the four
 # SMTP values the website role requires and the list of deploy slots; it stops the run if
 # that file is missing or unsafe, or holds no slot, and it runs first so every later role
@@ -64,6 +66,7 @@
     - role: ../roles/publicpress_website_app1 # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
+    - role: ../roles/promote_host # noqa: role-name[path]
     - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]

@@ -80,6 +80,8 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - deploy_slot_keys_slots
+  demo1:
+    - broker_deploy_owner_due_diligence_email
 
 # The inputs of a row that the file may leave out. Each is a name from the same host's row above
 # (checks/test_host_inputs_registry.py), and each feeds a role that does nothing with it until the
@@ -91,6 +93,8 @@ host_inputs_required_by_host:
 # Left out of the file the input is simply not set; present, it must hold a usable value like
 # any other, and a name outside the row is refused as ever.
 host_inputs_optional_by_host:
+  demo1:
+    - broker_deploy_owner_due_diligence_email
   edge1:
     - ci_jump_user
   edget:

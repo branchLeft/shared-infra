@@ -54,6 +54,7 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/broker_deploy # noqa: role-name[path]
     - role: ../roles/demo1_build # noqa: role-name[path]
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]
