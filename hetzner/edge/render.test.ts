@@ -2345,6 +2345,55 @@ describe('the break-glass token in the rendered Caddyfile', () => {
     expect(matcher, 'the strip gate must accept either hex case').toContain(spelled);
     expect(logLine, 'the log filter must accept either hex case').toContain(spelled);
   });
+
+  describe("Caddy's default logger, which the error line and the no-site line reach", () => {
+    // The global options block: the first line `{` to the first closing `}` at column 0.
+    const globalBlock = rendered.slice(
+      rendered.indexOf('\n{\n') + 1,
+      rendered.indexOf('\n}\n') + 2
+    );
+    const defaultLog = (text: string): string => {
+      const start = text.indexOf('\n\tlog {\n');
+      return start < 0 ? '' : text.slice(start + 1, text.indexOf('\n\t}\n', start) + 3);
+    };
+
+    it('is configured in the global options, writing to stderr', () => {
+      const log = defaultLog(globalBlock);
+      expect(log, 'the global options must carry a log block').not.toBe('');
+      expect(log.split('\n')[0]).toBe('\tlog {');
+      expect(log).toContain('\n\t\toutput stderr\n');
+      expect(log, 'the default logger takes no name').not.toMatch(/\tlog \S+ \{/);
+    });
+
+    it('filters the token out of the uri, Referer and Location, as every site log does', () => {
+      const log = defaultLog(globalBlock);
+      expect(log).toContain('\t\tformat filter {\n\t\t\twrap json\n');
+      for (const field of FIELDS) {
+        const filterLines = log.split('\n').filter((l) => l.trim().startsWith(`${field} regexp `));
+        expect(filterLines, `the default logger must filter ${field}`).toHaveLength(1);
+        expect(filterLines[0]).toContain('REDACTED');
+      }
+    });
+
+    it('spells the filter exactly as the site logs do, so there is one source', () => {
+      const filters = (log: string) => log.split('\n').filter((l) => l.includes(' regexp '));
+      const site = filters(everyLog[0]!.log).map((l) => l.trim());
+      expect(site).toHaveLength(FIELDS.length);
+      expect(filters(defaultLog(globalBlock)).map((l) => l.trim())).toEqual(site);
+    });
+
+    it('is unconditional: every posture and the authoring site configure it', () => {
+      for (const posture of [DETECT_ONLY, IN_BAND_ONLY, ENFORCING, POSTURE]) {
+        const text = renderCaddyfile([site()], [], posture);
+        const global = text.slice(text.indexOf('\n{\n') + 1, text.indexOf('\n}\n') + 2);
+        expect(defaultLog(global)).toContain('\t\toutput stderr\n');
+      }
+    });
+
+    it('is written once, in the global options and nowhere else', () => {
+      expect(rendered.split('\n\t\toutput stderr\n').length - 1).toBe(1);
+    });
+  });
 });
 
 // Why: render.md, "Verified sessions". The behaviour is proved against a real
