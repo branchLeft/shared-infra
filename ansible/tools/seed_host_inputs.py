@@ -54,6 +54,10 @@ TYPED: Final = "typed"
 # the source addresses a tenant entry point accepts. The role refuses any other shape, so the tool
 # does too.
 ADDRESSES: Final = "addresses"
+# Typed only, checked before anything is written: one ssh-ed25519 public key line, with no
+# options and no comment, and one IPv4 address.
+KEYLINE: Final = "keyline"
+IPV4: Final = "ipv4"
 SLOT_ADOPT: Final = "adopt"
 
 type Value = str | Sequence[str] | Sequence[Mapping[str, str | int | bool]]
@@ -210,10 +214,10 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
-    "tenant_entry_key": (Source(TYPED, ""),),
+    "tenant_entry_key": (Source(KEYLINE, ""),),
     "tenant_entry_from": (Source(ADDRESSES, ""),),
-    "db_t1_tenant_entry_controller_key": (Source(TYPED, ""),),
-    "db_t1_tenant_entry_controller_address": (Source(TYPED, ""),),
+    "db_t1_tenant_entry_controller_key": (Source(KEYLINE, ""),),
+    "db_t1_tenant_entry_controller_address": (Source(IPV4, ""),),
     "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 
@@ -664,6 +668,48 @@ def ask_addresses(ctx: Context, key: str) -> list[str] | None:
     return tokens
 
 
+KEY_LINE_BODY: Final = r"AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}"
+KEY_LINE: Final = re.compile(rf"ssh-ed25519 {KEY_LINE_BODY}")
+SINGLE_ADDRESS: Final = re.compile(rf"{ADDRESS_OCTET}(\.{ADDRESS_OCTET}){{3}}")
+
+
+def ask_checked(
+    ctx: Context, key: str, prompt: str, pattern: re.Pattern[str], refusal: str
+) -> str | None:
+    """One hidden line, trimmed, that must match the pattern in full. A pasted private key, or a
+    line that does not match, writes nothing and echoes nothing."""
+    try:
+        line = ctx.ask_secret(f"{key}: {prompt}")
+    except (EOFError, OSError):
+        return None
+    text = line.strip()
+    if PRIVATE_KEY_MARK in line or not pattern.fullmatch(text):
+        ctx.flush_input()
+        print(f"{refusal}; nothing is written.", file=ctx.err)
+        return None
+    return text
+
+
+def ask_key_line(ctx: Context, key: str) -> str | None:
+    return ask_checked(
+        ctx,
+        key,
+        "one ssh-ed25519 public key line, no options and no comment: ",
+        KEY_LINE,
+        "that is not one ssh-ed25519 public key line",
+    )
+
+
+def ask_ipv4(ctx: Context, key: str) -> str | None:
+    return ask_checked(
+        ctx,
+        key,
+        "one IPv4 address: ",
+        SINGLE_ADDRESS,
+        "that is not one IPv4 address",
+    )
+
+
 def ask_for(ctx: Context, key: str) -> Value | None:
     kind = SOURCES[key][0].kind
     if kind == WHOLE:
@@ -676,6 +722,10 @@ def ask_for(ctx: Context, key: str) -> Value | None:
         return ask_slots(ctx, key)
     if kind == ADDRESSES:
         return ask_addresses(ctx, key)
+    if kind == KEYLINE:
+        return ask_key_line(ctx, key)
+    if kind == IPV4:
+        return ask_ipv4(ctx, key)
     try:
         answer = ctx.ask_secret(f"{key}: ")
     except (EOFError, OSError):
@@ -703,7 +753,7 @@ def collect(ctx: Context, host: str) -> Collected:
     pending: list[str] = []
     for key in HOSTS[host]:
         for source in SOURCES[key]:
-            if source.kind in (SLOTS, TYPED, ADDRESSES):
+            if source.kind in (SLOTS, TYPED, ADDRESSES, KEYLINE, IPV4):
                 break
             state, value = live.lookup(source)
             if state == "found" and value is not None:

@@ -126,6 +126,14 @@ def _required_options(ansible: Path, role: str) -> dict[str, bool]:
     return found
 
 
+def _declared_without_default(ansible: Path, role: str, name: str) -> bool:
+    """The role's main entry point declares the option, required or not, and gives it no default."""
+    spec = _mapping(_read(ansible / "roles" / role / "meta" / "argument_specs.yml"))
+    options = _mapping(_mapping(_mapping(spec.get("argument_specs")).get("main")).get("options"))
+    defaults = _mapping(_read(ansible / "roles" / role / "defaults" / "main.yml"))
+    return name in options and "default" not in _mapping(options[name]) and name not in defaults
+
+
 def _declared_with_default(ansible: Path, role: str, name: str) -> bool:
     spec = _mapping(_read(ansible / "roles" / role / "meta" / "argument_specs.yml"))
     options = _mapping(_mapping(_mapping(spec.get("argument_specs")).get("main")).get("options"))
@@ -192,7 +200,13 @@ def _check_rows(
                         f"{label}: {name} is optional but role {role} requires it,"
                         " so the play would stop when it is absent"
                     )
-            elif not required:
+            elif not required and not any(
+                _declared_without_default(ansible, r, name) for r in listed if r != LOADER
+            ):
+                # A row name is a row-required input (the loader stops the run when it is absent),
+                # so a role on the list may take it as an argument that is optional in its spec: the
+                # role then receives the value on every run, and the row keeps it required. Only an
+                # argument no role on the list declares at all is refused here.
                 findings.append(
                     f"{label}: {name} is not a required argument, without a default, "
                     f"of any role on {host}'s list"
