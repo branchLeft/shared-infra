@@ -272,7 +272,8 @@
 
 - name: Ask the host whether the unit is enabled
   ansible.builtin.command:
-    argv: [systemctl, is-enabled, 'branchleft-compose@example-tenant.service']
+    argv:
+      [systemctl, is-enabled, "{{ 'branchleft-compose@' ~ tenant_entry_stack_slug ~ '.service' }}"]
   register: tenant_entry_lifecycle_unit
   changed_when: false
   check_mode: false
