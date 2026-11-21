@@ -289,12 +289,13 @@
       when: ansible_check_mode and edge_stack_crowdsec_due | bool
 
     # A class with no stamp whose files equal the repository's is adopted: the stamp is
-    # the whole change (_stamp_adopt.yml). It runs in check mode too,
-    # which is how a plan shows the adoption.
+    # the whole change (the restart_stamp module, state adopt). It runs in check mode too,
+    # which is how a plan shows the adoption. The hash is of files that may hold a key, so the
+    # task is no_log and shows no diff.
     - name: Adopt the classes the host already has
-      ansible.builtin.include_tasks: _stamp_adopt.yml
-      vars:
-        edge_stack_stamp_classes:
+      restart_stamp:
+        state: adopt
+        classes:
           - name: caddy
             file: '{{ edge_stack_stamp_files.caddy }}'
             fingerprint: '{{ edge_stack_fp_caddy }}'
@@ -307,14 +308,17 @@
             file: '{{ edge_stack_stamp_files.crowdsec }}'
             fingerprint: '{{ edge_stack_fp_crowdsec }}'
             adopt: '{{ edge_stack_stamp_decisions.crowdsec.adopt }}'
+      no_log: true
+      diff: false
 
     # A stamp is written for a class whose marker the module returned after the read-back,
-    # whether or not a later step failed, and last of all (_stamp_record.yml). The marker is
-    # the module's: it returns it in `markers`, the read_back below reads it.
+    # whether or not a later step failed, and last of all (the restart_stamp module, state
+    # record). The marker is the locked module's: it returns it in `markers`, the read_back
+    # below reads it. Nothing is written in check mode: no action ran.
     - name: Record the classes the module read back
-      ansible.builtin.include_tasks: _stamp_record.yml
-      vars:
-        edge_stack_stamp_classes:
+      restart_stamp:
+        state: record
+        classes:
           - name: caddy
             file: '{{ edge_stack_stamp_files.caddy }}'
             fingerprint: '{{ edge_stack_fp_caddy }}'
@@ -327,6 +331,8 @@
             file: '{{ edge_stack_stamp_files.crowdsec }}'
             fingerprint: '{{ edge_stack_fp_crowdsec }}'
             read_back: "{{ edge_stack_locked is not skipped and 'crowdsec-restarted' in (edge_stack_locked.markers | default([])) }}"
+      no_log: true
+      diff: false
 
     - name: Fail the run when the locked step failed
       ansible.builtin.assert:
