@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import syslog
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import FrameType
 from typing import IO, Final, NoReturn
 
 SERVE_FLAG: Final = "--from-ssh"
@@ -71,6 +73,19 @@ class FailedError(Exception):
         super().__init__(step)
         self.step = step
         self.detail = detail
+
+
+class Terminated(BaseException):
+    """A termination signal reached the program. It is a BaseException, so the claim's cleanup runs
+    on it and no handler written for an ordinary error catches it by accident."""
+
+
+# A dropped connection sends SIGHUP to the session, which sudo relays. Both clean up the same way.
+TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
+
+
+def on_termination(signum: int, frame: FrameType | None) -> NoReturn:
+    raise Terminated(signum)
 
 
 def refuse(reason: str) -> NoReturn:
@@ -328,12 +343,22 @@ def require_enabled(host: Host, slug: str) -> dict[str, int]:
     return marker
 
 
+def secret_forms(value: str) -> tuple[str, ...]:
+    """The ways a value can show in a message: as it is, and escaped as JSON or as a Python repr."""
+    return (value, json.dumps(value)[1:-1], repr(value)[1:-1])
+
+
 def detail_of(outcome: Outcome, hidden: Iterable[str] = ()) -> str:
-    """A step's own message, cut short, and withheld whole if it holds any hidden value."""
-    text = (outcome.stderr or outcome.stdout).strip()[:1000]
-    if any(value and value in text for value in hidden):
+    """A step's own message, withheld whole if it holds a hidden value in any form, then cut short.
+
+    The check runs on the whole message before the cut, so a value that the cut would split still
+    counts, and a value escaped by a program's JSON or repr output still counts.
+    """
+    text = (outcome.stderr or outcome.stdout).strip()
+    forms = [form for value in hidden if value for form in secret_forms(value)]
+    if any(form in text for form in forms):
         return "withheld: the message held a secret value"
-    return text
+    return text[:1000]
 
 
 def slug_in_use(host: Host, slug: str) -> bool:
@@ -363,23 +388,32 @@ def first_free_port(taken: set[int]) -> int:
 
 
 def write_marker(host: Host, slug: str, uid: int, port: int) -> None:
-    """Create the marker with no way to replace one: exclusive, no link followed, mode 0600."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    """Make the marker whole or not at all.
+
+    The bytes go to a temporary file in the register first, are flushed and synced, and only then
+    are linked to the marker's name. The link is exclusive, so a marker is never replaced, and a
+    write that fails (a full disk, say) leaves no half marker behind: the temporary file is removed
+    and the slug is free for a retry. The temporary name starts with a dot, which the marker scan
+    skips.
+    """
+    fd, temporary = tempfile.mkstemp(prefix=".marker-", suffix=".tmp", dir=host.paths.entry_dir)
     try:
-        fd = os.open(marker_path(host, slug), flags, 0o600)
-    except FileExistsError:
-        refuse("slug-in-use")
-    with os.fdopen(fd, "wb") as handle:
-        os.fchown(handle.fileno(), host.paths.root_uid, -1)
-        os.fchmod(handle.fileno(), 0o600)
-        handle.write(json.dumps({"uid": uid, "port": port}).encode("utf-8"))
-        handle.flush()
-        os.fsync(handle.fileno())
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(json.dumps({"uid": uid, "port": port}).encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, marker_path(host, slug), follow_symlinks=False)
+        except FileExistsError:
+            refuse("slug-in-use")
+    finally:
+        os.unlink(temporary)
 
 
 def step_claim(host: Host, slug: str) -> list[str]:
     """Take a uid and four ports for a slug that exists nowhere, then make its volumes."""
     check_register_dir(host)
+    release_orphan_marker(host, slug)
     if slug_in_use(host, slug):
         refuse("slug-in-use")
     claims = list_claims(host)
@@ -388,9 +422,12 @@ def step_claim(host: Host, slug: str) -> list[str]:
     markers = all_markers(host)
     uid = first_free_uid(set(claims.values()) | {m["uid"] for m in markers.values()})
     port = first_free_port({m["port"] for m in markers.values()})
-    write_marker(host, slug, uid, port)
-    # Every way out of the volume step, a timeout or a missing program included, releases the
-    # marker when no claim sits behind it, so a retry needs no hand step.
+    try:
+        write_marker(host, slug, uid, port)
+    except OSError:
+        fail("marker")
+    # Every way out of the volume step, a timeout, a missing program or a termination signal
+    # included, releases the marker when no claim sits behind it, so a retry needs no hand step.
     try:
         outcome = host.runner([host.paths.volume_program, "--uid", str(uid), slug], None)
     except BaseException:
@@ -402,18 +439,37 @@ def step_claim(host: Host, slug: str) -> list[str]:
     return [f"claimed uid={uid} port_a={port} port_b={port + 1} port_health={port + 2}"]
 
 
+def release_orphan_marker(host: Host, slug: str) -> None:
+    """Remove a marker a failed claim left behind, so the slug can be claimed again.
+
+    Only this program writes markers, so a valid marker with no claim behind it is a failed claim's.
+    An unreadable marker, or one whose claim stands, keeps the slug in use. When the listing fails,
+    nothing is removed, and the request stops with the listing's own failure.
+    """
+    path = marker_path(host, slug)
+    if not os.path.lexists(path):
+        return
+    try:
+        read_marker(host, path)
+    except RefusedError:
+        refuse("slug-in-use")
+    if slug in list_claims(host):
+        refuse("slug-in-use")
+    os.unlink(path)
+
+
 def release_unclaimed_marker(host: Host, slug: str) -> None:
     """Remove the slug's marker unless the volume program lists a claim for it.
 
-    A marker with no claim holds the slug for nothing. A claim that is listed keeps its marker.
-    When the listing itself fails, no claim is confirmed, so the marker goes: later verbs then
-    refuse it by name (not-claimed-here), and the listing still refuses a repeat claim if the
-    volume program had in fact made one.
+    A marker with no claim holds the slug for nothing, and a listed claim keeps its marker. When the
+    listing itself fails, neither can be shown, so the marker stays: the failure that stopped the
+    claim is what the caller reports, and the next claim settles the marker with a working listing
+    (release_orphan_marker). Removing it here would drop the marker of a claim that may stand.
     """
     try:
         claimed = slug in list_claims(host)
     except FailedError:
-        claimed = False
+        return
     if not claimed:
         os.unlink(marker_path(host, slug))
 
@@ -610,6 +666,10 @@ def serve(
         if failure.detail:
             err.write(failure.detail + "\n")
         return EXIT_FAILED
+    except Terminated:
+        log(f"verb={verb} slug={slug} result=terminated")
+        err.write("failed: terminated\n")
+        return EXIT_FAILED
     log(f"verb={verb} slug={slug} result=done")
     out.write("\n".join(lines) + "\n")
     return EXIT_DONE
@@ -640,7 +700,12 @@ def main(
         err.write("refused: not-root\n")
         return EXIT_REFUSED
     os.umask(0o077)
-    return serve(environ, stdin, out, err, paths=chosen, runner=runner, log=log)
+    previous = {number: signal.signal(number, on_termination) for number in TERMINATION_SIGNALS}
+    try:
+        return serve(environ, stdin, out, err, paths=chosen, runner=runner, log=log)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 if __name__ == "__main__":
