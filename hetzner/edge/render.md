@@ -582,6 +582,55 @@ loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` ne
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind
 from the registries.
 
+## Blocked page
+
+A banned address, or a request AppSec refuses in-band, used to get the bouncer's own
+answer: a 403 with no body. The owner, locked out three times, could not tell an edge ban
+from an application error. Every block that carries `protectionChain` now ends with a
+site-level `handle_errors` (`blockedPageErrorBlock`, `blockedPage.ts`) that answers that
+403 with one static page. Only the `:9091` metrics listener has none. One function renders
+it for every block kind, so a block added later has it by construction, and
+`blockedPage.test.ts` fails for a block without it.
+
+**How it is reached.** The bouncer writes the 403 itself unless the global `crowdsec`
+option `enable_caddy_error` is set; then the refusal is a Caddy error and `handle_errors`
+sees it. The flag is bare and is rendered in every posture, because the handler is in the
+route in every posture. The status and the access-log line are unchanged, so no scenario
+reads a different log and a banned request counts as it did.
+
+**What it matches.** A Caddy error with status 403, and nothing else. A 429 from the
+throttle, a 502 from a down upstream and the 413 of the body cap keep their empty
+answers. The renderer's own `respond 403` (the Ghost setup refusal, the upload refusal)
+is a response, not an error, and stays bare: those refuse a method or a file type on a
+request that was let in, and a page about a ban would mislead there. A Ghost site's block
+also carries `nosniff` here, first, because Caddy allows one `handle_errors` per site.
+
+**What it carries.** One value: the time of the answer in UTC (`{time.now.http}`), which a
+person can quote and the owner can look up in `cscli alerts list` and `cscli decisions list`
+beside the address they were using. Nothing from the request, the address, the decision,
+the scenario or the site: the bouncer's `crowdsec.*` variables are not read. So the page
+tells a banned visitor no more than the bare 403 did, except that the edge, not the
+application, refused them. Its policy header is `default-src 'none'`: the page loads no
+script, style sheet, font, image or frame, from the edge or anywhere else. Styling is inline
+`style` attributes, never a `<style>` block, because Caddy replaces every `{...}` in a
+`respond` body and a CSS rule is written in braces. It is served `no-store` (a ban is
+temporary) and `noindex`.
+
+**The words are the owner's.** The page ships with the ALL_CAPS placeholders in
+`BLOCKED_PAGE_PLACEHOLDERS` (title, heading, explanation, next steps, contact, and the label
+before the time). To set the copy, replace each placeholder in `BLOCKED_PAGE_HTML`, run
+`pnpm run render`, and change the placeholder expectations in `blockedPage.test.ts` in the
+same pull request. The copy must not carry the address, the ban reason or any internal name.
+
+**What proves it.** `blockedPage.test.ts` checks the rendered text of every block kind, that
+the page names no hostname, upstream or address of the estate and loads nothing, then loads
+the renderer's own block into a real Caddy and raises 403 the way the bouncer and AppSec do
+(`error`). It asserts the page and its headers, that a 429, a 502 and the setup refusal are
+not replaced, and that nothing of the request or the bouncer's variables is shown. CI's
+`edge-config-validate` loads every rendered file through the real image with both modules,
+and `test_trusted_session_replay.py` asks the real bouncer, with a real ban and a real
+in-band refusal, for the page.
+
 ## Ghost admin preview exclusion
 
 `renderGhostAdminAppsecConfig` writes `stack/crowdsec/appsec-configs/ghost-admin-previews.yaml`,

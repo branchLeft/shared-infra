@@ -162,8 +162,9 @@ describe('a rendered webhook block', () => {
     expect(block).toMatch(/@webhook_wrong_method \{\s+not method POST\s+path \/webhook\s+\}/);
     expect(block).toContain('header @webhook_wrong_method Allow POST');
     expect(block).toContain('respond @webhook_wrong_method 405');
-    // The block ends with the route's closing brace; the 404 is the line before it.
-    const routeLines = block.trim().split('\n');
+    // The route ends with its closing brace and the 404 is the line before it. The
+    // site-level `handle_errors` follows the route and answers only a Caddy error.
+    const routeLines = block.slice(0, block.indexOf('\n\thandle_errors {')).trim().split('\n');
     expect(routeLines.at(-2)?.trim()).toBe('respond 404');
     expect(block.indexOf('respond 404')).toBeGreaterThan(block.indexOf('reverse_proxy'));
   });

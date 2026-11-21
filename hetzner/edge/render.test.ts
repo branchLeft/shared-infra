@@ -20,6 +20,7 @@ import {
   SHARED_TENANT_FILES,
   type StaticTextFile,
 } from './sharedTenantFiles';
+import { blockedPageErrorBlock } from './blockedPage';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -52,6 +53,14 @@ import {
  */
 const withEntries = (kinds: Array<[string, string[]]>): Array<[string, string[]]> =>
   kinds.filter(([, addresses]) => addresses.length > 0);
+
+/**
+ * A top-level block's text without its site-level `handle_errors`, which answers
+ * only an error Caddy writes itself (the page `blockedPage.test.ts` holds). The
+ * assertions that take a block as the answer to a request read the route, not it.
+ */
+const withoutErrorBlock = (block: string): string =>
+  block.replace(/\n\thandle_errors \{\n[\s\S]*?\n\t\}(?=\n|$)/, '');
 
 const DETECT_ONLY: EdgePosture = {
   crowdsec: 'detect-only',
@@ -1368,7 +1377,8 @@ describe('the publicpress.co.uk website', () => {
   const publicpress = sites.find((entry) => entry.name === 'publicpress-website') as EdgeSite;
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
   const enforcing = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
-  const blockIn = (text: string) => text.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+  const blockIn = (text: string) =>
+    withoutErrorBlock(text.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '');
   const block = () => blockIn(rendered);
   const lines = (text: string) => text.split('\n').map((line) => line.trim());
 
@@ -1555,6 +1565,11 @@ const WIDGET_ASSET_ROUTE_LINES = `
 			root /srv
 		}`;
 
+/** A Ghost site's site-level `handle_errors`, indented as it sits in a block. */
+const GHOST_ERROR_BLOCK = blockedPageErrorBlock({ nosniff: true })
+  .map((line) => `\t${line}`)
+  .join('\n');
+
 /**
  * The blog's site block exactly as it was served before the portal hostnames
  * existed, plus the verified staff session (render.md, "Verified sessions").
@@ -1642,9 +1657,7 @@ const BLOG_BLOCK = `
 		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
-	handle_errors {
-		header >X-Content-Type-Options "nosniff"
-	}`;
+${GHOST_ERROR_BLOCK}`;
 
 describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
   const ghost = site({ backend: 'ghost' });
@@ -1678,7 +1691,7 @@ describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
       routeStart > -1 &&
       header > -1 &&
       header < route.indexOf('reverse_proxy') &&
-      block.includes(`\thandle_errors {\n\t\t${NOSNIFF}\n\t}`)
+      block.includes(`\thandle_errors {\n\t\t${NOSNIFF}\n`)
     );
   };
 
@@ -1713,7 +1726,9 @@ describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
     expect(block.match(/X-Content-Type-Options/g)).toHaveLength(2);
     // Sabotage: with either half removed the same check goes red.
     expect(sniffSafe(block.replace(`\t\t${NOSNIFF}\n`, ''))).toBe(false);
-    expect(sniffSafe(block.replace(/\thandle_errors \{[^}]*\}\n?/, ''))).toBe(false);
+    expect(
+      sniffSafe(block.replace(`\thandle_errors {\n\t\t${NOSNIFF}\n`, '\thandle_errors {\n'))
+    ).toBe(false);
   });
 
   it('covers the three upload prefixes and every active extension in the glob matcher', () => {
@@ -1759,7 +1774,8 @@ describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
       const block = blockOf(render(ENFORCING, [site({ backend })]), 'example.test');
       expect(block).not.toContain('content/');
       expect(block).not.toContain('nosniff');
-      expect(block).not.toContain('handle_errors');
+      // The page for a refusal is on every block, and carries no `nosniff` here.
+      expect(block).toContain('handle_errors');
       // Sabotage: with the rules removed the same checks go red.
       expect(refusesUploads(block)).toBe(false);
       expect(sniffSafe(block)).toBe(false);
@@ -1884,7 +1900,7 @@ describe('the owner console and tenant portal routes', () => {
     });
 
     it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
-      const blog = blockOf(rendered, 'blog.branchleft.co.uk');
+      const blog = withoutErrorBlock(blockOf(rendered, 'blog.branchleft.co.uk'));
       expect(blog).toContain('reverse_proxy 10.20.1.100:8101');
       expect(blog).not.toMatch(/respond [^@\n]/);
       expect(blog).not.toContain('/members/api/member');
