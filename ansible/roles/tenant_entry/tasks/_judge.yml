@@ -1,0 +1,45 @@
+---
+# The judge the `stack` verb runs on a tenant's compose text: the same file tenant_compose runs,
+# copied here because no role imports another (ANS-12) and held equal to it by
+# tests/unit/test_branchleft_tenant_entry.py. Root's and closed to everyone else, so the account
+# that runs the program through sudo cannot replace it; the program refuses a judge that is not.
+- name: Make the directory of the tenant compose judge
+  ansible.builtin.file:
+    path: '{{ tenant_entry_judge_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the tenant compose judge
+  ansible.builtin.copy:
+    src: tenant_compose_check.py
+    dest: '{{ tenant_entry_judge }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# The program runs the judge under the host's own python3, which needs PyYAML to read the
+# compose text (ansible-core depends on it, so a host that runs the pull has it). Reading it is
+# safe in check mode and a plan should see a host without it, so the command runs there too
+# (ANS-10): it imports one module and changes nothing.
+- name: Look for PyYAML on the python3 the program runs under
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_entry_python }}'
+      - -I
+      - -c
+      - import yaml
+  register: tenant_entry_yaml_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse a host whose python3 has no PyYAML, which the judge needs
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_yaml_probe.rc == 0
+    quiet: true
+    fail_msg: >-
+      {{ tenant_entry_python }} cannot import PyYAML, which the tenant compose judge needs to read a
+      stack. The stack verb would refuse every request with judge-yaml-missing.
