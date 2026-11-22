@@ -424,6 +424,20 @@
     label: '{{ item.path }}'
   when: control_plane_provisioning_enabled | ansible.builtin.bool
 
+# The portal's support mail password, from the host's inputs (host_inputs, optional key). The portal's
+# container user reads it through group 1000 and nothing else can write it. Given: written on every
+# run, so a rotated value lands in the file; the portal reads it when it starts. Not given: nothing is
+# written and support stays off, which is not an error.
+- name: Write the portal's support mail password from the host's inputs
+  ansible.builtin.copy:
+    content: '{{ control_plane_portal_support_smtp_password }}'
+    dest: '{{ control_plane_portal_support_password_file }}'
+    owner: root
+    group: '1000'
+    mode: '0440'
+  no_log: true
+  when: control_plane_portal_support_smtp_password | default('', true) | string | length > 0
+
 # The access rules are delivered inside a block, with the steps that follow them: the
 # bring-up, the deploy wrapper, the unit check and the reload. The copy keeps the file it
 # replaces (Ansible's own backup, made only when the new file differs). If any task of the

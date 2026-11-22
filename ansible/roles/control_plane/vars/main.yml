@@ -37,6 +37,13 @@ control_plane_host_dirs:
     owner: root
     group: '1000'
     mode: '0750'
+  # The portal's support mail password (compose.yml's PORTAL_SUPPORT_SMTP_PASSWORD_FILE). The owner
+  # places one file in it, the submission credential of the sales@ account on mx1; the role never
+  # makes or reads it. Mounted as a directory, so an empty directory leaves support off, not the stack.
+  - path: /etc/branchleft/control-plane/portal-support
+    owner: root
+    group: '1000'
+    mode: '0750'
   - path: /var/lib/branchleft/control-plane/provisioning
     owner: '1000'
     group: '1000'
@@ -96,6 +103,10 @@ control_plane_provisioning_input_files:
 # Written on every run, from whether the API is enabled, so a host that disables it again is put
 # back. The process environment (the unit's two EnvironmentFile lines) outranks it, and neither
 # names any of these variables. It holds no secret: addresses, paths and a count.
+# The portal's support mail password: one file the owner places, mode and owner set by the role
+# when it exists (attributes only, never content). Absent is not an error: support stays off.
+control_plane_portal_support_password_file: /etc/branchleft/control-plane/portal-support/smtp-password
+
 control_plane_project_env_file: '{{ control_plane_project_dir }}/.env'
 control_plane_project_env_enabled: |
   # Written by the control_plane role. The provisioning API is enabled.
