@@ -1,0 +1,66 @@
+---
+# The host makes its own key and self-signed certificate, and trusts its peer's public certificate
+# as read from the repository. No private key is fetched, copied, printed or committed, and the
+# role reaches no other host. Which files, and for what, is the host's row in
+# host_tls_identity_profiles (vars/main.yml).
+- name: Refuse a host with no identity row, or a pinned certificate that is not text
+  ansible.builtin.assert:
+    that:
+      - enrolled_host is defined
+      - enrolled_host is string
+      - enrolled_host in host_tls_identity_profiles
+      - host_tls_identity_peer_cert is string
+    fail_msg: >-
+      host_tls_identity[no-profile]: this host has no row in host_tls_identity_profiles, or
+      host_tls_identity_peer_cert is not text.
+    quiet: true
+
+# The modules run under the host's own interpreter, so the library is the distribution's. The
+# result is read below: check mode installs nothing, so a host that lacks it cannot run them.
+- name: Install the library the certificate modules need
+  ansible.builtin.apt:
+    name: '{{ host_tls_identity_library_package }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: host_tls_identity_library
+
+- name: Make the directory of the key and certificates, closed to every other account
+  ansible.builtin.file:
+    path: '{{ host_tls_identity_dir }}'
+    state: directory
+    owner: root
+    group: '{{ host_tls_identity_profile.group | default(omit, true) }}'
+    mode: '0750'
+
+- name: Read whether the directory exists
+  ansible.builtin.stat:
+    path: '{{ host_tls_identity_dir }}'
+  register: host_tls_identity_dir_stat
+
+# Check mode on a fresh host installs no library and makes no directory, so the certificate modules
+# have nothing to run on. They are skipped there with this stated reason (ANS-10): the first plan
+# shows less than the first apply, and the apply never skips them.
+- name: Decide whether the certificate modules can run
+  ansible.builtin.set_fact:
+    host_tls_identity_can_run: >-
+      {{ host_tls_identity_dir_stat.stat.isdir | default(false)
+         and not (ansible_check_mode and host_tls_identity_library is changed) }}
+
+- name: Make this host's key and certificate
+  ansible.builtin.include_tasks: _identity.yml
+  when: host_tls_identity_can_run | bool
+
+- name: Say that the peer's certificate has not been supplied yet
+  ansible.builtin.debug:
+    msg: >-
+      host_tls_identity waits for the peer: host_tls_identity_peer_cert is empty, so no trust
+      file is written. Read this host's certificate off it and the peer's off its host (README,
+      "Owner steps").
+  when: host_tls_identity_peer_cert | trim == ''
+
+- name: Pin the peer's certificate
+  ansible.builtin.include_tasks: _pin.yml
+  when:
+    - host_tls_identity_peer_cert | trim != ''
+    - host_tls_identity_can_run | bool

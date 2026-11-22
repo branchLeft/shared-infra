@@ -1,0 +1,35 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. Every value has its reason
+# beside it, so a change is one reviewed edit to this file, the templates and the tests that
+# pin them.
+
+# The account the controller's key logs in as. It has a shell because sshd runs a forced
+# command through the account's shell (a nologin shell would ignore the command), no
+# password, and no home it can write to: the home and its .ssh directory belong to root, so
+# the account cannot add a key or change its own restrictions.
+db_t1_tenant_entry_account: tenantdb
+db_t1_tenant_entry_shell: /bin/sh
+db_t1_tenant_entry_home: /home/tenantdb
+db_t1_tenant_entry_ssh_directory: /home/tenantdb/.ssh
+db_t1_tenant_entry_authorized_keys_path: /home/tenantdb/.ssh/authorized_keys
+
+# The program, installed from this role's own files/ directory. It is the one home of the
+# program. ghost-platform's provision_tenant_db.py, which a person runs by hand on the other
+# database host, is not reused: it leaves an existing account in place and re-applies its
+# grant, where this program refuses an existing name, and it takes the root value from the
+# caller's environment, where this program never holds it.
+db_t1_tenant_entry_program_source: tenant_db_entry.py
+db_t1_tenant_entry_program_path: /usr/local/sbin/branchleft-tenant-db-entry
+
+# The one thing the key's forced command runs. sudo is named by its full path and `-n` makes
+# it fail rather than ask for a password.
+db_t1_tenant_entry_sudo_path: /usr/bin/sudo
+db_t1_tenant_entry_sudoers_path: /etc/sudoers.d/60-branchleft-tenant-db-entry
+
+# The shape of the one key line: ed25519 only, the whole line, no comment. 68 characters of
+# base64 follow the key type: the 25 that every ed25519 key starts with, then 43 more. \Z, not
+# $, because $ also matches before a trailing line break.
+db_t1_tenant_entry_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}\Z'
+
+# Four decimal octets, each 0 to 255 with no leading zero. No wildcard, no mask, no list.
+db_t1_tenant_entry_address_pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\Z'

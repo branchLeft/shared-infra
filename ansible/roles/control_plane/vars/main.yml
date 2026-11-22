@@ -15,6 +15,32 @@ control_plane_host_dirs:
     owner: '1000'
     group: '1000'
     mode: '0700'
+  # The provisioning API's directories (compose.yml's `provisioning` service). Each input is a
+  # directory of its own so that the portal is mounted the tenants' credentials alone and the
+  # console the owner's alone: a mount is a directory, and a directory shows every file in it.
+  # They are made on every host, enabled or not, because the portal and the console mount two of
+  # them whatever .env says. The container user is 1000, so the group 1000 reads, and nothing
+  # else can write. The state directory is the API's alone to write.
+  - path: /etc/branchleft/control-plane/provisioning
+    owner: root
+    group: root
+    mode: '0750'
+  - path: /etc/branchleft/control-plane/provisioning/tenant
+    owner: root
+    group: '1000'
+    mode: '0750'
+  - path: /etc/branchleft/control-plane/provisioning/owner
+    owner: root
+    group: '1000'
+    mode: '0750'
+  - path: /etc/branchleft/control-plane/provisioning/demos
+    owner: root
+    group: '1000'
+    mode: '0750'
+  - path: /var/lib/branchleft/control-plane/provisioning
+    owner: '1000'
+    group: '1000'
+    mode: '0700'
 
 control_plane_env_file: /etc/branchleft/control-plane.env
 control_plane_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
@@ -48,6 +74,40 @@ control_plane_masterkey_secret: >-
 
 control_plane_project_dir: /opt/branchleft/control-plane
 
+# ----- The provisioning API, off until the owner enables it -----
+# The three files the owner places before enabling it (the role never makes or reads them: it only
+# refuses to enable without them, and sets their owner, group and mode). The credentials are
+# read by the container user through the group, never writable; the demo register is not secret.
+control_plane_provisioning_input_files:
+  - path: /etc/branchleft/control-plane/provisioning/tenant/credentials
+    owner: root
+    group: '1000'
+    mode: '0440'
+  - path: /etc/branchleft/control-plane/provisioning/owner/credential
+    owner: root
+    group: '1000'
+    mode: '0440'
+  - path: /etc/branchleft/control-plane/provisioning/demos/demos.json
+    owner: root
+    group: root
+    mode: '0644'
+
+# The file Compose reads from the project directory for the ${VAR:-} references in compose.yml.
+# Written on every run, from whether the API is enabled, so a host that disables it again is put
+# back. The process environment (the unit's two EnvironmentFile lines) outranks it, and neither
+# names any of these variables. It holds no secret: addresses, paths and a count.
+control_plane_project_env_file: '{{ control_plane_project_dir }}/.env'
+control_plane_project_env_enabled: |
+  # Written by the control_plane role. The provisioning API is enabled.
+  PROVISIONING_SCALE=1
+  PORTAL_PROVISIONING_URL=http://provisioning:8095
+  PORTAL_PROVISIONING_CREDENTIALS_FILE=/run/provisioning/tenant/credentials
+  CONSOLE_PROVISIONING_URL=http://provisioning:8095
+  CONSOLE_PROVISIONING_CREDENTIAL_FILE=/run/provisioning/owner/credential
+control_plane_project_env_disabled: |
+  # Written by the control_plane role. The provisioning API is not enabled on this host.
+  PROVISIONING_SCALE=0
+
 # The Compose project of the stack: the `name:` of compose.yml, which the unit and
 # the deploy wrapper also use. The labels Compose puts on a container are read with it.
 control_plane_project_name: control-plane
@@ -62,12 +122,12 @@ control_plane_image_given: >-
 control_plane_image_record: /etc/branchleft/control-plane.image.env
 
 # Docker is read for the portal container where something uses it (the bring-up, the
-# deploy wrapper), or where no pin was given and the wrapper's record holds none.
+# deploy wrapper), or where no pin was given: the image is then the record's or the running
+# one, and the two are compared before either is used (control_plane[image-drift]).
 control_plane_reads_docker: >-
   {{ (control_plane_bring_up | ansible.builtin.bool)
      or (control_plane_start_units | ansible.builtin.bool)
-     or not ((control_plane_image_given | ansible.builtin.bool)
-             or (control_plane_recorded_image | default('') | length > 0)) }}
+     or not (control_plane_image_given | ansible.builtin.bool) }}
 
 # The shape the deploy wrapper accepts: a name and a sha256 digest.
 control_plane_image_pattern: '\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z'
@@ -128,14 +188,15 @@ control_plane_isolation_unit: /etc/systemd/system/branchleft-docker-user-policy.
 # play variable. Changing one is a change to this file, which review reads.
 #
 # The floors are the ones the delivery runbook reads by hand, in MiB as `free -m` and `df -BM`
-# print them. Memory: the stack's four hard limits sum to 1664 MiB, and the owner's margin on
-# top of them is 1000 MiB, so a host with no stack container yet needs 2664 MiB available. Once
+# print them. Memory: the stack's five hard limits sum to 1792 MiB (the provisioning API's 128 is
+# in it whether or not it is enabled), and the owner's margin on top of them is 1000 MiB, so a host
+# with no stack container yet needs 2792 MiB available. Once
 # a stack container exists its memory is already in use, so the runbook's own floor for a running
-# stack, 1000 MiB, applies; a floor of 2664 there would refuse an ordinary re-apply on a host
+# stack, 1000 MiB, applies; a floor of 2792 there would refuse an ordinary re-apply on a host
 # that has run the stack since the owner measured it. Disk: the stack's images and volume
 # headroom come to about 3.5 GiB, under the runbook's floor of 5 GiB, which applies to the root
 # file system and to Docker's data root (they are often one).
-control_plane_min_available_memory_fresh_mib: 2664
+control_plane_min_available_memory_fresh_mib: 2792
 control_plane_min_available_memory_running_mib: 1000
 control_plane_min_free_disk_mib: 5120
 

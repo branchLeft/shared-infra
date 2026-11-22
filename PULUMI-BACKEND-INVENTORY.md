@@ -1,10 +1,10 @@
 # Pulumi state-backend inventory
 
-This is the enumeration `branchLeft/workspace#130` step 4 asked for: every
+This is the enumeration the state-backend migration's step 4 asked for: every
 Pulumi stack in the estate, every place its state backend is named or a
 `pulumi login` is performed, and every place a GCS bucket name appears. The
 previous copy of this enumeration was dropped in `shared-infra`'s fresh-repo
-republish and only partially reinstated — see `branchLeft/workspace#126` and
+republish and only partially reinstated — see the earlier inventory issue and
 `scripts/pulumi-stack-inventory.json`, whose `backend_reference_sites` and
 `external_backend_reference_sites` arrays are a **related but narrower**
 artifact: they list sites for the KMS secrets-provider audit, not a
@@ -25,7 +25,7 @@ disk — that runbook lives under `hetzner/`.
 ## 1. Every Pulumi stack in the estate
 
 The retired edge stack that used to be the first row of this table was deleted
-with its program (branchLeft/workspace#1000), so it carries no migration state
+with its program in the GCP wind-down, so it carries no migration state
 to attest and `scripts/pulumi-stack-inventory.json` no longer has an entry for
 it.
 `branchleft-ghost-platform-hosts`, previously missing from the inventory
@@ -42,6 +42,7 @@ included below.
 | `branchleft-hetzner-network/production`                              | `shared-infra`      | `hetzner/Pulumi.yaml` / `Pulumi.production.yaml`          | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-hetzner-estate/production`                               | `shared-infra`      | `hetzner/estate/Pulumi.yaml` / `Pulumi.production.yaml`   | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-hetzner-dns/production`                                  | `shared-infra`      | `hetzner/dns/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
+| `branchleft-hetzner-tenants/production`                              | `shared-infra`      | `hetzner/tenants/Pulumi.yaml` / `Pulumi.production.yaml`  | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-ghost-platform-hosts` (project name; stack `production`) | `ghost-platform`    | `infra/hosts/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 
 **Verified two ways:**
@@ -65,14 +66,14 @@ rather than assuming a role from its name.
 
 | Repo                             | Workflow                                                   | Job(s)                                    | Backend logged into                                                                   |
 | -------------------------------- | ---------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| `website`                        | none -- deleted; deploys are a GHCR digest pinned over SSH | --                                        | none (removed, `branchLeft/workspace#1000`)                                           |
+| `website`                        | none -- deleted; deploys are a GHCR digest pinned over SSH | --                                        | none (removed in the GCP wind-down)                                                   |
 | `ghost-platform`                 | `.github/workflows/infra-platform-ci.yml`                  | `Deploy (pulumi up)`                      | `gs://branchleft-pulumi-state`                                                        |
 | `ghost-platform`                 | `.github/workflows/provision-tenant.yml`                   | `provision` (new tenant's own stack init) | `$HETZNER_PULUMI_BACKEND_URL` (repo variable, `s3://…`)                               |
 | `ghost-platform-tenant-template` | `.github/workflows/infra-ci.yml`                           | preview/deploy jobs                       | `$PULUMI_BACKEND_URL` (repo variable, `s3://…`, generated into every new tenant repo) |
 | `ghost-tenant-blog`              | `.github/workflows/infra-ci.yml`                           | preview/deploy jobs                       | `gs://$PULUMI_STATE_BUCKET` = `gs://branchleft-blog-pulumi-state`                     |
 
 `mail-plan`/`mail-apply`, `hetzner-network-plan`/`-apply`,
-`hetzner-estate-plan`/`-apply`, `hetzner-dns-plan`/`-apply` and the `hosts` plan/apply jobs run **no**
+`hetzner-estate-plan`/`-apply`, `hetzner-dns-plan`/`-apply`, `hetzner-tenants-plan`/`-apply` and the `hosts` plan/apply jobs run **no**
 `pulumi login` step — see §2.2.
 
 ### 2.2 Pinned `backend.url` in a committed `Pulumi.yaml` (no login step needed)
@@ -130,7 +131,7 @@ file they mirror.
 
 **`branchleft-pulumi-state`** — was 22 files across the estate as of the
 original pass below; **re-counted for `shared-infra` only** while fixing
-this document for the GCP wind-down (branchLeft/workspace#1000) — the
+this document for the GCP wind-down — the
 `ghost-platform` and `website` sub-counts are unchanged from that original
 pass and not re-verified here, since both repos' own GCP wind-downs are
 separate PRs:
@@ -156,7 +157,7 @@ gs://branchleft-pulumi-state` lines with the `deploy-plan`/`deploy-apply`
   `infra/hosts/Pulumi.yaml` — the Hetzner bucket of the same name,
   `.github/workflows/provision-tenant.yml`, `.github/workflows/infra-platform-ci.yml`.
 - **2 in `website`** (as of the original pass, not re-verified — and per
-  branchLeft/workspace#1000, `website`'s own CI now has no Pulumi job at
+  the GCP wind-down, `website`'s own CI now has no Pulumi job at
   all, which this document's original §2.1 pass had not yet caught; see the
   corrected §2.1/§4 rows above): `.github/workflows/ci.yml` and
   `infra/KNOWN_ISSUES.md`, already named in §2.3's table.
@@ -219,6 +220,7 @@ finding.
 | `branchleft-hetzner-network/production` | Yes                        | `hetzner-network-plan`/`-apply`, `shared-infra/.github/workflows/ci.yml`                      |
 | `branchleft-hetzner-estate/production`  | Yes                        | `hetzner-estate-plan`/`-apply`, same file                                                     |
 | `branchleft-hetzner-dns/production`     | Yes                        | `hetzner-dns-plan`/`-apply`, same file; plan in `dns-plan`, apply in `production-dns`         |
+| `branchleft-hetzner-tenants/production` | Yes                        | `hetzner-tenants-plan`/`-apply`, same file; apply in `production`, after the estate apply     |
 | `branchleft-ghost-platform-hosts`       | Yes                        | `Apply (hosts, pulumi up)`, `ghost-platform/.github/workflows/infra-hosts-ci.yml`             |
 
 ### 4.1 The one stack with no CI apply path anywhere: `branchleft-ghost-provisioning/blog`
@@ -249,11 +251,11 @@ a CI-applied stack gets, not less, precisely because nothing exercises it.
 
 This section used to ask what _would_ strand each remaining `gs://` stack if
 the bucket were deleted. It has happened: the GCP estate, both state
-buckets included, was destroyed 2026-09-13 (branchLeft/workspace#15).
+buckets included, was destroyed 2026-09-13 (the GCP teardown).
 
 `branchleft-shared-infra/production` is no longer one of the stranded
 stacks — its whole program was deleted rather than left stranded, in this
-same wave (branchLeft/workspace#1000, §1 above). The other three named
+same wave (the GCP wind-down, §1 above). The other three named
 here were not: `branchleft-website-infra/production`,
 `branchleft-ghost-platform/platform` and `branchleft-ghost-provisioning/blog`
 still declare a `gs://branchleft-pulumi-state` backend as of this writing,
@@ -299,7 +301,7 @@ is not something this session can check without escrow access (§8).
 ## 7. Discovered discrepancies
 
 Both filed as issues and since resolved — verified against current state
-while fixing this document for the GCP wind-down (branchLeft/workspace#1000).
+while fixing this document for the GCP wind-down.
 
 ### 7.1 Two runbooks were stale against mail's current backend — [branchLeft/shared-infra#172](https://github.com/branchLeft/shared-infra/issues/172), closed
 

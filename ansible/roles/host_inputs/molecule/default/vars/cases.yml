@@ -268,11 +268,31 @@ host_inputs_verify_cases:
     content: "{{ host_inputs_test_edge1_required_doc | combine({'extra_key': host_inputs_test_marker}) | to_json }}"
     host: edge1
     code: unknown-key
+  # ----- demo1's optional input (every input of its row is optional) -----
+  # A missing file is accepted for demo1 (verify.yml), so a refusal must come from a file that is
+  # present: its mode first, then its text.
+  - name: demo1 file present with mode 0644
+    kind: content
+    mode: '0644'
+    content: '{"broker_deploy_owner_due_diligence_email": "{{ host_inputs_test_marker }}"}'
+    host: demo1
+    code: file-mode
+  - name: demo1 file with the optional input empty
+    kind: content
+    content: '{"broker_deploy_owner_due_diligence_email": ""}'
+    host: demo1
+    code: missing-key
+    names: broker_deploy_owner_due_diligence_email
+  - name: demo1 file with a key outside the row
+    kind: content
+    content: '{"extra_key": "{{ host_inputs_test_marker }}"}'
+    host: demo1
+    code: unknown-key
   # ----- The host -----
   - name: a host with no row
     kind: content
     content: '{{ host_inputs_test_json }}'
-    host: demo1
+    host: appt1
     code: no-host-row
   - name: an empty host name
     kind: content

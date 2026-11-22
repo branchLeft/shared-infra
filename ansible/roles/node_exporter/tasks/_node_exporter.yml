@@ -87,6 +87,17 @@
     group: root
     mode: '0755'
 
+# The unit names a second textfile directory, the break-glass writer's on an app host.
+# It is made here on every host so that the unit's second flag never names a missing
+# directory; the writer's role makes it the same way and puts the file in it.
+- name: Create the support-access textfile directory the exporter also reads
+  ansible.builtin.file:
+    path: '{{ node_exporter_support_access_textfile_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
 # Regenerated from this run's address every time, so a host that changes its private
 # address does not keep serving on a stale one. The write is compared by content, so an
 # unchanged value does not restart the service.

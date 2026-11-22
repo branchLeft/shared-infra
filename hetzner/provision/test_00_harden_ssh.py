@@ -10,8 +10,9 @@ than only smoke-tested by a real provisioning run.
 The script itself talks to the live `sshd` and `systemctl` and writes into
 `/etc/ssh/sshd_config.d/`, none of which a test process may do. Both are
 substituted: `sshd` and `systemctl` are replaced by fakes earlier on `PATH`,
-and the drop-in path is redirected with the `DROPIN` environment variable
-the script reads as an override.
+and the drop-in path is redirected by passing it as the script's first
+argument. A decoy `DROPIN` environment variable is set on every run to prove
+the script no longer reads one.
 """
 
 import os
@@ -25,7 +26,9 @@ SCRIPT = os.path.join(os.path.dirname(__file__), "00-harden-ssh.sh")
 FAKE_SSHD = """#!/usr/bin/env bash
 case "$1" in
     -T)
+        echo "sshd -T" >> "$FAKE_CALL_LOG"
         printf '%s\\n' "$FAKE_SSHD_T_OUTPUT"
+        exit "${FAKE_SSHD_DUMP_EXIT:-0}"
         ;;
     -t)
         exit "${FAKE_SSHD_T_EXIT:-0}"
@@ -37,6 +40,7 @@ esac
 """
 
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
+echo "systemctl $*" >> "$FAKE_CALL_LOG"
 exit 0
 """
 
@@ -68,6 +72,11 @@ class HardenSshTests(unittest.TestCase):
         dropin_dir = os.path.join(self.tmp.name, "sshd_config.d")
         os.makedirs(dropin_dir)
         self.dropin = os.path.join(dropin_dir, "01-branchleft-hardening.conf")
+        self.env_decoy = os.path.join(dropin_dir, "env-decoy.conf")
+
+        # Both fakes append here, in the order the script calls them.
+        self.call_log = os.path.join(self.tmp.name, "calls.log")
+        open(self.call_log, "w", encoding="utf-8").close()
 
     @staticmethod
     def _write_fake(path, content):
@@ -76,14 +85,21 @@ class HardenSshTests(unittest.TestCase):
         mode = stat.S_IMODE(os.stat(path).st_mode)
         os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    def run_script(self, sshd_t_output, dropin=None, sshd_t_exit="0"):
+    def run_script(
+        self, sshd_t_output, dropin=None, sshd_t_exit="0", sshd_dump_exit="0"
+    ):
         env = dict(os.environ)
         env["PATH"] = self.bin_dir + os.pathsep + env.get("PATH", "")
-        env["DROPIN"] = dropin if dropin is not None else self.dropin
+        # The write path is the script's first argument. A decoy DROPIN in the
+        # environment must be ignored: if the script ever reads it again, the
+        # drop-in lands in the decoy instead and the tests below go red.
+        env["DROPIN"] = self.env_decoy
         env["FAKE_SSHD_T_OUTPUT"] = sshd_t_output
         env["FAKE_SSHD_T_EXIT"] = sshd_t_exit
+        env["FAKE_SSHD_DUMP_EXIT"] = sshd_dump_exit
+        env["FAKE_CALL_LOG"] = self.call_log
         return subprocess.run(
-            ["bash", SCRIPT],
+            ["bash", SCRIPT, dropin if dropin is not None else self.dropin],
             env=env,
             capture_output=True,
             text=True,
@@ -144,6 +160,30 @@ class HardenSshTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("sshd -t reported a config error", result.stderr)
         self.assertNotIn("sshd reloaded, effective config verified", result.stdout)
+
+    def calls(self):
+        with open(self.call_log, encoding="utf-8") as handle:
+            return handle.read().splitlines()
+
+    def test_reload_runs_before_the_effective_config_is_read(self):
+        # `sshd -T` read before the reload would verify the configuration that
+        # was live before our drop-in, and the check would still say hardened.
+        result = self.run_script(effective_config())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertEqual(calls.count("systemctl reload ssh"), 1, calls)
+        self.assertEqual(calls.count("sshd -T"), 1, calls)
+        self.assertLess(
+            calls.index("systemctl reload ssh"), calls.index("sshd -T"), calls
+        )
+
+    def test_failing_sshd_dump_aborts_even_when_its_output_looks_hardened(self):
+        # A fully hardened dump with a non-zero exit: a swallowed failure would
+        # pass every keyword check and report success.
+        result = self.run_script(effective_config(), sshd_dump_exit="3")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertNotIn("sshd reloaded, effective config verified", result.stdout)
+        self.assertNotIn("outranks", result.stderr)
 
 
 if __name__ == "__main__":

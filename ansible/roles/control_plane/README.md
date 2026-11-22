@@ -40,6 +40,11 @@ It does these, in order:
    `root:root` mode `0644` in `0755` directories. The database's access rules sit alone
    in `postgres/` because the compose file mounts that directory (not the single file)
    into the `db` container.
+   3a. Writes `/opt/branchleft/control-plane/.env`, the file Compose reads for the
+   `${VAR:-}` references in `compose.yml`, from the one switch
+   `control_plane_provisioning_enabled`: five lines that turn the provisioning API on and point the
+   portal and the console at it, or one line that keeps it at scale 0. It holds no secret. See
+   "The provisioning API" below.
 4. Only where the stack is not yet deployed: starts the database alone and
    waits until it is healthy.
 5. Only where the stack is not yet deployed: runs the sign-in service's init
@@ -129,6 +134,40 @@ the `start` of its replacement is that service's window. If a window is over 10 
 change is delivered another way (a database-only recreate first, so Compose finds the
 dependants unchanged), and this section records the figure measured.
 
+### The provisioning API
+
+`compose.yml` carries a fifth service, `provisioning` (services/provisioning-controller in
+ghost-platform, the contract the portal's Ask and the console's Approve call), at scale 0. It
+publishes nothing; the portal and the console reach it as `http://provisioning:8095` on the stack's
+own network. It is switched on by one input, `control_plane_provisioning_enabled`, which the owner
+sets in `owner_vars/ops1.yml` in the same change that pins the applications image carrying the
+service (`control_plane_app_image`). Until then the stack runs as before and an image without the
+service is never asked to start it.
+
+- **Off (the default).** The role writes `.env` with `PROVISIONING_SCALE=0`. The portal and the
+  console read empty provisioning variables and show no demo, request or approval screen.
+- **On.** Before it writes anything the role refuses, naming the path or the input and never a
+  value, unless all three files the owner places exist and are not empty
+  (`control_plane[provisioning-input-missing]`) and `control_plane_app_image` was given
+  (`control_plane[provisioning-image-missing]`): the tenants' credentials
+  (`/etc/branchleft/control-plane/provisioning/tenant/credentials`, lines of `<tenant uuid>=<credential>`),
+  the owner's (`.../owner/credential`) and the register of demos (`.../demos/demos.json`). The role
+  never makes, reads or prints one: where a secret comes from is the owner's decision. Each run sets
+  the three files' owner, group and mode (credentials `root:1000 0440`, the register `root:root 0644`)
+  and nothing else about them. It then writes `.env` with `PROVISIONING_SCALE=1` and the five
+  variables the portal and the console read.
+- **Who sees which file.** Each file is in a directory of its own, and a mount is a directory: the
+  portal is mounted the tenants' directory alone, the console the owner's alone, and the service all
+  three plus its own state directory (`/var/lib/branchleft/control-plane/provisioning`, `1000:1000 0700`).
+  A unit test holds that no application is given the other's directory.
+- **State.** The service writes `state.json` and `approvals.json` there. A `docker compose down -v`
+  is never run, so a disabled or recreated service keeps them.
+- **Memory.** Its `mem_limit` of 128 MiB brings the stack's five limits to 1792 MiB, under the
+  `test_control_plane_stack.py` ceiling; the fresh-host floor is 2792 MiB to match.
+- **First apply recreates the portal and the console.** Their configuration gains two variables and a
+  directory mount whether or not the API is enabled, so Compose recreates both once. The 10-second
+  window in "How a changed pg_hba.conf reaches the running database" is not measured for this either.
+
 ### What the role does not do
 
 - It does not generate the secrets. The runbook generated them on the host with
@@ -178,8 +217,8 @@ shows a refusal:
    records are printed.
 
 The floors are constants in `vars/main.yml`, so an inventory or play variable cannot lower them:
-memory 2664 MiB available while the stack has no container (the four hard limits, 1664 MiB, plus
-a margin of 1000 MiB), 1000 MiB once it has one (its memory is then already in use, and 2664
+memory 2792 MiB available while the stack has no container (the five hard limits, 1792 MiB, plus
+a margin of 1000 MiB), 1000 MiB once it has one (its memory is then already in use, and 2792
 would refuse an ordinary re-apply on a host that has run it), and 5120 MiB free disk on each of
 the two file systems. They are the figures of the delivery runbook, in the units `free -m` and
 `df -BM` print.
@@ -222,6 +261,19 @@ An empty string counts as not given.
   until a pin is given. With no pin and no portal container the run stops with
   `control_plane[image-missing]`; an image that is not `NAME@sha256:` and 64 hex digits
   stops it with `control_plane[image-not-pinned]`, as the deploy wrapper would.
+- **The record and the running image must agree.** With no pin, the record is what a restart of
+  the unit would run and the running portal container is what runs now. When both are digests
+  and the digests differ (a failed upgrade that left the pin in place, a hand edit), the run
+  stops with `control_plane[image-drift]`, names both images (names and digests, no secret) and
+  writes nothing; it would otherwise have moved the portal and the console to the record's
+  digest. Only the digests are compared, so the same bytes under another name pass. A pin
+  given skips the check, because the pin is the image meant, and so does a running image that is
+  not a digest. The run then reads Docker whenever no pin is given. The refusal shows in a plan,
+  because the two reads run in check mode.
+- **The record holds one `IMAGE=` line.** The role takes the first digest line and systemd,
+  reading the file as an environment file, the last. A record with more than one `IMAGE=` line
+  stops the run with `control_plane[image-record-duplicate]`, naming the file. It is read only
+  when no pin is given; the deploy wrapper rewrites the whole file when it deploys a pin.
 
 ### A host where the stack already runs
 
@@ -282,7 +334,7 @@ keeps the running image unless `control_plane_app_image` is given. On ops1 that 
   starts no container itself.
 - The stack's unit is enabled and active; the deploy wrapper writes its image pin. On
   every run the role restarts the unit through the wrapper, which costs one registry pull
-  and one start against the unit's start limit (five starts in fifteen minutes).
+  and one start against the unit's start limit (five starts in an hour).
 - `/usr/local/sbin/branchleft-docker-user-policy` (`0755`) and
   `/etc/systemd/system/branchleft-docker-user-policy.service` (`0644`). The
   policy is applied when either changed, and at every boot after.
@@ -361,7 +413,11 @@ converge is the idempotence step. `verify.yml` checks:
 - the image cases, with a stand-in for the `docker` command that answers the two reads:
   a given pin is used as given and `docker` is not called; with no image the one the
   stand-in reports is used, and the calls carry the project, service and one-off
-  filters; with no portal container the run stops with `control_plane[image-missing]`;
+  filters; a record that differs from the running image stops the run with
+  `control_plane[image-drift]` naming both and writing nothing, while the same two with a pin
+  given go on; a record with two `IMAGE=` lines stops it with
+  `control_plane[image-record-duplicate]`, and a record that agrees with the running image is
+  used with only the two reads asked; with no portal container the run stops with `control_plane[image-missing]`;
   with a running image that is a tag it stops with `control_plane[image-not-pinned]`;
 - that no throwaway value, from any apply, appears in the run's log.
 
@@ -405,7 +461,9 @@ command of the role can remove a container or a volume.
   corrections, the stack files and the isolation files only.
 - **The host is the source of the image until a pin is given.** With no pin the role
   deploys whatever the portal container runs, so it cannot upgrade or roll back the
-  image. A pin does.
+  image. A pin does. Where the record and the running image differ it refuses instead of
+  choosing (`control_plane[image-drift]`); the owner's way out is to correct the record or give
+  a pin.
 - **The owner and mode of the secret files are corrected at each run, not
   continuously.** A file widened between two runs stays wider until the next run
   that reaches this role.

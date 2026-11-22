@@ -21,11 +21,12 @@ import {
   type StaticTextFile,
 } from './sharedTenantFiles';
 import {
+  renderAdminProbingScenario,
   renderAppsecAcquisition,
   renderCaddyfile,
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
-  renderGhostAdminPostoverflow,
+  renderHubAdminProbingPostoverflow,
   renderNextcloudWhitelist,
   renderProfiles,
   renderSimulation,
@@ -103,7 +104,8 @@ describe('resolvePrivateAddress', () => {
   });
 
   // 18081 is the Sweego receiver's drain port: ops1 alone reaches it, so no edge route may name it.
-  it.each([80, 443, 3000, 9090, 9093, 2587, 25860, 18079, 18081])(
+  // 8084 is Karma's loopback port: it has no login, so no edge route may ever reach it.
+  it.each([80, 443, 3000, 9090, 9093, 8084, 2587, 25860, 18079, 18081])(
     'refuses edge1 on port %s: only the pager port and the receiver webhook port are published for the edge',
     (port) => {
       expect(() => resolvePrivateAddress('edge1', port)).toThrow(
@@ -2015,8 +2017,11 @@ describe('the committed stack directory', () => {
     await expect(renderGhostAdminAppsecConfig(sites)).toMatchFileSnapshot(
       './stack/crowdsec/appsec-configs/ghost-admin-previews.yaml'
     );
-    await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
+    await expect(renderHubAdminProbingPostoverflow()).toMatchFileSnapshot(
       './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
+    );
+    await expect(renderAdminProbingScenario(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/scenarios/http-admin-interface-probing.yaml'
     );
     await expect(renderTrustedSessionWhitelist()).toMatchFileSnapshot(
       './stack/crowdsec/parsers/edge-trusted-session.yaml'
@@ -2118,10 +2123,11 @@ describe('the Ghost admin CrowdSec exclusions', () => {
   const ghost = site({ name: 'ghost-one', hostnames: ['ghost-one.test'], backend: 'ghost' });
   const other = site({ name: 'other-one', hostnames: ['other-one.test'], backend: 'other' });
   const appsec = renderGhostAdminAppsecConfig([ghost, other]);
-  const postoverflow = renderGhostAdminPostoverflow([ghost, other]);
+  const postoverflow = renderHubAdminProbingPostoverflow();
+  const probing = renderAdminProbingScenario([ghost, other]);
 
   it('name only Ghost hostnames, never another site', () => {
-    for (const rendered of [appsec, postoverflow]) {
+    for (const rendered of [appsec, probing]) {
       expect(rendered).toContain("['ghost-one.test']");
       expect(rendered).not.toContain('other-one.test');
     }
@@ -2153,20 +2159,48 @@ describe('the Ghost admin CrowdSec exclusions', () => {
     expect(appsec).toContain("req.Header.Get('X-Ghost-Preview') != ''");
   });
 
-  it('whitelist one scenario, only when every event is the Ghost admin API', () => {
-    expect(postoverflow).toContain(
-      "evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing' &&"
+  it('silence the hub admin-probing scenario and nothing else', () => {
+    const expressions = postoverflow
+      .split('\n')
+      .filter((line) => line.startsWith('    - '))
+      .map((line) => line.trim());
+    expect(expressions).toEqual([
+      "- evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing'",
+    ]);
+    expect(postoverflow).not.toContain('target_fqdn');
+  });
+
+  it('count a probe in our scenario unless it is the Ghost admin API on a Ghost hostname', () => {
+    expect(probing).toContain('name: branchleft/http-admin-interface-probing');
+    expect(probing).toContain(
+      'any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # })'
     );
-    expect(postoverflow).toContain('all(evt.Overflow.Alert.Events, {');
-    expect(postoverflow).not.toMatch(/\bany\(/);
-    expect(postoverflow).toContain("startsWith '/ghost/api/admin/'");
-    expect(postoverflow).toContain("not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')");
+    // Each clause of the exemption, joined by `&&` inside one `not (...)`.
+    const exemption = probing.slice(probing.indexOf('  not (\n'));
+    expect(exemption).toContain("evt.Meta.target_fqdn in ['ghost-one.test'] &&");
+    expect(exemption).toContain("evt.Meta.http_path startsWith '/ghost/api/admin/' &&");
+    expect(exemption).toContain("not (evt.Meta.http_path matches '(?i)[.][.]|%2e')");
+    // Nothing is exempt from a Ghost-less registry: the clause names no hostname.
+    expect(renderAdminProbingScenario([other])).toContain('evt.Meta.target_fqdn in []');
+  });
+
+  it('keep the hub scenario thresholds, so a probe bans as before', () => {
+    for (const line of [
+      'groupby: evt.Meta.source_ip',
+      'distinct: evt.Meta.http_path',
+      'capacity: 2',
+      'leakspeed: 10s',
+      'blackhole: 1m',
+      '  remediation: true',
+    ]) {
+      expect(probing.split('\n')).toContain(line);
+    }
   });
 
   it('refuse a Ghost hostname that could break out of a quoted literal', () => {
     const hostile = site({ hostnames: ["x.test' || true || '"], backend: 'ghost' });
     expect(() => renderGhostAdminAppsecConfig([hostile])).toThrow(/plain lower-case hostname/);
-    expect(() => renderGhostAdminPostoverflow([hostile])).toThrow(/plain lower-case hostname/);
+    expect(() => renderAdminProbingScenario([hostile])).toThrow(/plain lower-case hostname/);
   });
 
   it('are named in the AppSec acquisition ahead of the hub configurations in every posture', () => {
@@ -2192,10 +2226,10 @@ describe('the Ghost admin brute-force scenario', () => {
     expect(scenario).not.toContain('other-one.test');
   });
 
-  it('is not the scenario the admin-API post-overflow drops', () => {
+  it('is not a scenario the admin-probing post-overflow drops', () => {
     const name = scenario.split('\n').find((line) => line.startsWith('name: '));
     expect(name).toBe('name: branchleft/ghost-admin-login-bruteforce');
-    expect(renderGhostAdminPostoverflow([ghost])).not.toContain(
+    expect(renderHubAdminProbingPostoverflow()).not.toContain(
       'branchleft/ghost-admin-login-bruteforce'
     );
     expect(scenario).not.toContain('http-admin-interface-probing');

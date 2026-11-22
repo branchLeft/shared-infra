@@ -108,6 +108,16 @@ export interface EdgeSite {
    */
   inboundWebhookPath?: string;
   /**
+   * Set on a site that is a signed object-store gateway: a service that speaks
+   * path-style S3 requests signed by the client, and answers `/healthz` and
+   * `/readyz`. The edge then forwards only those request shapes, byte for byte
+   * (it rewrites no path and touches no header the signature covers), never
+   * caches a response, and answers 404 or 405 itself to everything else. Why,
+   * and what it lets through: `hetzner/edge/render.md`, "`siteBlock`: signed
+   * object gateway".
+   */
+  signedObjectGateway?: boolean;
+  /**
    * Where the Hetzner edge proxies this site. Absent means the site has no
    * private-network backend yet: it is skipped entirely by the Caddy renderer,
    * which is what keeps the edge from requesting a certificate for a hostname

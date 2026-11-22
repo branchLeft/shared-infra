@@ -1,0 +1,15 @@
+# The tick of the host applier. Installed by the promote_host role, enabled only when the role is
+# given a ledger URL and a signer, and stopped and disabled again when either is cleared. The
+# ledger is re-signed at least daily and is valid for at most 36 hours, so a quarter-hour tick
+# keeps a quiet host fresh and a promotion lands within a quarter of an hour of it being signed.
+[Unit]
+Description=Host applier tick
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+RandomizedDelaySec=60
+Unit=branchleft-promote.service
+
+[Install]
+WantedBy=timers.target
