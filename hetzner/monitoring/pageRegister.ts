@@ -62,9 +62,10 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tier-two safety match is recorded, not by a ' +
-      "Prometheus rule: nothing this stack scrapes measures one, so this stack's " +
-      'rendered rules carry no rule for it and cannot.',
+      'No producer exists yet: nothing raises TierTwoSafetyMatch today. The platform is ' +
+      'planned to raise it when a tier-two safety match is recorded, not through a ' +
+      'Prometheus rule, since nothing this stack scrapes measures one; the rendered ' +
+      'rules carry no rule for it.',
   },
   {
     id: 'tenant-failed-unsafe',
@@ -75,7 +76,8 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tenant enters failed-unsafe, not by a Prometheus ' +
+      'No producer exists yet: nothing raises TenantFailedUnsafe today. The platform is ' +
+      'planned to raise it when a tenant enters failed-unsafe, not through a Prometheus ' +
       "rule: that state is the platform's own, and this stack scrapes no metric for it, " +
       'so the rendered rules carry no rule for it.',
   },
@@ -99,10 +101,11 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised per tenant by the external reader-facing probe, not by a Prometheus rule: ' +
-      "this stack's blackbox probes carry an instance label and no tenant label, so no " +
-      'rule here can raise a tenant-labelled page. A failing probe reaches the phone ' +
-      'meanwhile through BlackboxProbeFailed at critical severity.',
+      'No producer exists yet: nothing raises ReadersCannotRead today. The external ' +
+      'reader-facing probe is planned to raise it per tenant, not through a Prometheus ' +
+      "rule: this stack's blackbox probes carry an instance label and no tenant label, so no " +
+      'rule here can raise a tenant-labelled page. Until that producer exists, a failing ' +
+      'probe reaches the phone through BlackboxProbeFailed at critical severity.',
   },
   {
     id: 'edge-ban',
@@ -140,6 +143,23 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     deliveryPath: 'alertmanager',
     dormant: true,
     tenantScoped: false,
+  },
+  {
+    id: 'abuse-report',
+    name: 'A report to the abuse mailbox',
+    reason:
+      'Dormant: a report of abusive or harmful material must reach the owner within ' +
+      'minutes, not on the digest. The arrival producer on mx1 is an owner-authorised ' +
+      'patch, so the entry stays dormant until that patch lands. Flip `dormant` to false ' +
+      'in the same change that lands the producer.',
+    alertName: 'AbuseReportReceived',
+    deliveryPath: 'alertmanager',
+    dormant: true,
+    tenantScoped: false,
+    ruleExemption:
+      'Raised on mx1 when a message reaches the abuse role mailbox, not by a Prometheus ' +
+      'rule: this stack scrapes no metric for a mailbox arrival, so the rendered rules ' +
+      'carry no rule for it and cannot.',
   },
 ] as const;
 

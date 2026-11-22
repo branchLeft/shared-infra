@@ -1,8 +1,9 @@
 # breakglass_grant_host
 
 Installs on an application host the break-glass grant tool, its root-only
-wrapper and the unit and timer that close expired grants, and pulls the image
-they run in. It never opens or closes a grant.
+wrapper, the unit and timer that close expired grants, and the program, unit and
+timer that write each tenant's support-access state to a node_exporter textfile,
+and pulls the image they run in. It never opens or closes a grant.
 
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14).
@@ -21,14 +22,27 @@ application host (`app1`):
    an owner and a mode.
 4. Probes for the Node image under its digest and pulls it only when the host
    lacks it, then reads the digest back and refuses if it is not there.
-5. Downloads six files from the pinned commit of the `ghost-platform` repository,
+5. Downloads nine files from the pinned commit of the `ghost-platform` repository,
    each held to its sha256: three programs, the root-only wrapper
-   `/usr/local/sbin/branchleft-break-glass`, and the expire unit and timer.
-6. Loads the changed units into systemd, then enables and starts the timer.
+   `/usr/local/sbin/branchleft-break-glass`, the expire unit and timer, and the
+   textfile writer `/usr/local/sbin/branchleft-break-glass-textfile` with its unit
+   and timer.
+6. Loads the changed units into systemd, then enables and starts the expire timer,
+   and then the textfile writer's timer.
 
 The order matters. The expire unit starts the image with `--pull never`, so a host
 without the image would fail the unit every minute and no grant would ever close.
 The image is therefore confirmed before the files, and the timer is enabled last.
+
+The textfile writer runs once a minute as root. It lists the running tenants with
+`docker ps`, runs the wrapper's read-only `report` for each, and replaces
+`/var/lib/branchleft/support-access-exporter/support_access.prom` whole. The
+node_exporter role's unit reads that directory (its second textfile directory), so
+the file is served on the host's private address. The writer never makes the
+directory: this role does, and the node_exporter role makes it too on every host.
+`test_support_access_textfile_dir_agrees.py` in `ansible/checks/` holds the
+three names of that directory together. The writer's source says what its file
+holds; this role only places it.
 
 It does not mint a token, open a grant, close a grant, run the wrapper, set a
 secret, or create the minting key: that belongs to `breakglass_mint_host` on the
@@ -79,23 +93,27 @@ and are outside it: they are held by the gated pull's approval.
 
 ## What it changes on a host
 
-| Path                                                        | Owner | Mode | What                                                 |
-| ----------------------------------------------------------- | ----- | ---- | ---------------------------------------------------- |
-| `/usr/local/lib/branchleft`                                 | root  | 0755 | Shared parent, also made by other roles.             |
-| `/usr/local/lib/branchleft/break-glass`                     | root  | 0755 | The tool directory.                                  |
-| `.../break-glass/break-glass-grant.mjs`                     | root  | 0644 | The grant tool.                                      |
-| `.../break-glass/docker-engine.mjs`                         | root  | 0644 | Its Docker client.                                   |
-| `.../break-glass/provision-support-account.mjs`             | root  | 0644 | Its account helper.                                  |
-| `/usr/local/sbin/branchleft-break-glass`                    | root  | 0700 | The wrapper. Root-only: an operator runs it as root. |
-| `/etc/systemd/system/branchleft-break-glass-expire.service` | root  | 0644 | The expire unit.                                     |
-| `/etc/systemd/system/branchleft-break-glass-expire.timer`   | root  | 0644 | The timer, enabled and started.                      |
-| `/var/lib/branchleft`                                       | root  | 0755 | Shared parent, also made by other roles.             |
-| `/var/lib/branchleft/break-glass-grants`                    | root  | 0700 | Where the grant records are kept.                    |
-| `/var/log/branchleft`                                       | root  | 0700 | Shared parent, also made by other roles.             |
-| The Node image, in Docker's store                           | n/a   | n/a  | Pulled by digest when absent.                        |
+| Path                                                          | Owner | Mode | What                                                 |
+| ------------------------------------------------------------- | ----- | ---- | ---------------------------------------------------- |
+| `/usr/local/lib/branchleft`                                   | root  | 0755 | Shared parent, also made by other roles.             |
+| `/usr/local/lib/branchleft/break-glass`                       | root  | 0755 | The tool directory.                                  |
+| `.../break-glass/break-glass-grant.mjs`                       | root  | 0644 | The grant tool.                                      |
+| `.../break-glass/docker-engine.mjs`                           | root  | 0644 | Its Docker client.                                   |
+| `.../break-glass/provision-support-account.mjs`               | root  | 0644 | Its account helper.                                  |
+| `/usr/local/sbin/branchleft-break-glass`                      | root  | 0700 | The wrapper. Root-only: an operator runs it as root. |
+| `/etc/systemd/system/branchleft-break-glass-expire.service`   | root  | 0644 | The expire unit.                                     |
+| `/etc/systemd/system/branchleft-break-glass-expire.timer`     | root  | 0644 | The timer, enabled and started.                      |
+| `/usr/local/sbin/branchleft-break-glass-textfile`             | root  | 0700 | The textfile writer. Run by its unit as root.        |
+| `/etc/systemd/system/branchleft-break-glass-textfile.service` | root  | 0644 | The writer's unit.                                   |
+| `/etc/systemd/system/branchleft-break-glass-textfile.timer`   | root  | 0644 | The writer's timer, enabled and started.             |
+| `/var/lib/branchleft/support-access-exporter`                 | root  | 0755 | The directory the writer's file is replaced in.      |
+| `/var/lib/branchleft`                                         | root  | 0755 | Shared parent, also made by other roles.             |
+| `/var/lib/branchleft/break-glass-grants`                      | root  | 0700 | Where the grant records are kept.                    |
+| `/var/log/branchleft`                                         | root  | 0700 | Shared parent, also made by other roles.             |
+| The Node image, in Docker's store                             | n/a   | n/a  | Pulled by digest when absent.                        |
 
 Besides these the role reloads the systemd manager when a unit file changed, and
-enables and starts the timer.
+enables and starts the two timers.
 
 ## Refusals leave the host untouched
 
@@ -128,6 +146,9 @@ Use the digest in this role's `vars/main.yml`, not a copy of it.
   second `--security-opt` fails. The unit's command also matches the wrapper's apart
   from the one environment pair. It does not prove that the image pulls from a real registry, or
   that the unit starts a real container. The gated run on the host is that proof.
+- **The test runs the writer with no tenant.** The stand-in lists no container, so
+  the writer never runs `report`; the series values are proven by the writer's own
+  tests in `ghost-platform`, not here.
 - **The test runs the wrapper in `status` mode only.** The grant and close commands
   need a real Ghost and are never run by the test.
 - **A systemd container.** The test needs a systemd platform to prove the timer is
@@ -170,7 +191,11 @@ refusal state first and then the role once. `verify.yml` checks:
   table;
 - one pull over two applies, by digest, never by tag;
 - the wrapper's recorded `docker` command and the unit's, as in "Named limits";
-- the timer is enabled and active, and still is after the wrapper and unit runs.
+- the timer is enabled and active, and still is after the wrapper and unit runs;
+- the writer's timer is enabled and active; the writer, run once from its unit
+  against the stand-in, ends in success, makes one `docker ps` call and no other,
+  and leaves one file of mode 0644 holding each of the five series' headers and,
+  as no tenant runs on the test host, no sample.
 
 The test reads the role and runs it. It does not read or run any playbook.
 

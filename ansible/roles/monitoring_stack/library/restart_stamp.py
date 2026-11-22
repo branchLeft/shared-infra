@@ -1,0 +1,1 @@
+../../../patterns/restart_stamp/library/restart_stamp.py

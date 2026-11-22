@@ -140,7 +140,9 @@ services:
       - ./crowdsec/parsers:/etc/crowdsec/parsers/s02-enrich/branchleft:ro
       # The brute-force scenario ("Ghost admin brute force" in render.md), kept
       # apart from the hub's admin-probing scenario so the postoverflow above
-      # never drops it. A local scenario under the same `branchleft/` convention,
+      # never drops it, and our own admin-probing scenario ("Ghost admin API and
+      # admin-interface probing"), the only one that bans a probe of an admin
+      # interface. Local scenarios under the same `branchleft/` convention,
       # for the same reasons as the two mounts above; no image path is under it.
       - ./crowdsec/scenarios:/etc/crowdsec/scenarios/branchleft:ro
       # How long a ban lasts and which scenarios only watch (hetzner/edge/render.md,

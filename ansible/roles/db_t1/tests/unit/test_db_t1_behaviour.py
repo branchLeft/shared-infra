@@ -24,6 +24,8 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
+from netfilter_fake import FakeTable
+
 ROLE = Path(__file__).resolve().parents[2]
 DIGEST = "a" * 64
 OTHER_DIGEST = "b" * 64
@@ -286,6 +288,172 @@ class ImageInput(Lab):
                 outcome = self.run_role(image)
                 self.assertNotEqual(outcome.code, 0, outcome.output)
                 self.assertIn("must be empty", outcome.output)
+
+
+CHAIN = "BRANCHLEFT-DBT1-IN"
+JUMP = f"-A INPUT -j {CHAIN}"
+ACCEPT = f"-A {CHAIN} -s 10.20.1.201/32 -p tcp -m tcp --dport 3306 -j ACCEPT"
+DROP = f"-A {CHAIN} -p tcp -m tcp --dport 3306 -j DROP"
+REPORT_RULE = "Report in check mode that the database port rule would be installed or reloaded"
+PROBE = "Ask the rule program whether the loaded rule is the wanted one"
+
+
+class ListenerRule(unittest.TestCase):
+    """The rule's task file, run for real against a fake iptables, with no systemd.
+
+    systemd is absent here, so the tasks that load the rule through the unit, enable it and
+    read systemd back are skipped (Molecule runs them). What is proven is the rest: what a plan
+    says before and after the rule is loaded, that the apply installs the files, that a rule
+    that admits another source is seen, and that a second run changes nothing.
+    """
+
+    def setUp(self) -> None:
+        """Make the scratch tree, a copy of the program for this interpreter, and the fakes."""
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        for name in ("sbin", "units", "src"):
+            (self.root / name).mkdir()
+        self.fakes = FakeTable(self)
+        source = (ROLE / "files" / "branchleft_dbt1_listener_rule.py").read_text(encoding="utf-8")
+        self.program_source = self.root / "src" / "branchleft_dbt1_listener_rule.py"
+        self.program_source.write_text(
+            source.replace("#!/usr/bin/python3 -I", f"#!{sys.executable} -I", 1), encoding="utf-8"
+        )
+        self.program = self.root / "sbin" / "branchleft-dbt1-listener-rule"
+        self.unit = self.root / "units" / "rule.service"
+        self.dropin_dir = self.root / "units" / "docker.service.d"
+        self.dropin = self.dropin_dir / "20-rule.conf"
+        self.play = self.root / "play.yml"
+        self.play.write_text(
+            "- hosts: localhost\n"
+            "  connection: local\n"
+            "  gather_facts: false\n"
+            "  tasks:\n"
+            "    - ansible.builtin.include_role:\n"
+            f"        name: {ROLE}\n"
+            "        tasks_from: _listener_rule.yml\n",
+            encoding="utf-8",
+        )
+
+    def run_rule(self, *, check: bool = False, path: str | None = None) -> Outcome:
+        """Run the rule's task file once; path replaces the fakes' PATH when given."""
+        variables: dict[str, object] = {
+            "db_t1_rule_program_src": str(self.program_source),
+            "db_t1_rule_program_dest": str(self.program),
+            "db_t1_rule_unit_dest": str(self.unit),
+            "db_t1_rule_docker_dropin_dir": str(self.dropin_dir),
+            "db_t1_rule_docker_dropin_dest": str(self.dropin),
+            "db_t1_systemd_running_path": str(self.root / "no-systemd"),
+            "db_t1_root_user_id": os.getuid(),
+            "db_t1_root_group_id": os.getgid(),
+            "ansible_python_interpreter": sys.executable,
+        }
+        extra = self.root / "extra.json"
+        extra.write_text(json.dumps(variables), encoding="utf-8")
+        command = [str(ansible_playbook()), "-i", "localhost,", "-e", f"@{extra}"]
+        if check:
+            command.append("--check")
+        command.append(str(self.play))
+        environment = {
+            **os.environ,
+            **self.fakes.environment(),
+            "ANSIBLE_LOCALHOST_WARNING": "False",
+            "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
+            "ANSIBLE_NOCOLOR": "1",
+            "ANSIBLE_HOME": str(self.root / "ansible-home"),
+        }
+        if path is not None:
+            environment["PATH"] = path
+        # The command is built here from fixed paths and the scratch tree.
+        done = subprocess.run(  # noqa: S603
+            command, capture_output=True, text=True, check=False, env=environment, timeout=120
+        )
+        output = done.stdout + done.stderr
+        return Outcome(done.returncode, output, parse(output))
+
+    def load_rule(self) -> None:
+        """Load the rule the way the unit does at boot: run the installed program."""
+        done = subprocess.run(  # noqa: S603
+            [str(self.program), "--allow-source", "10.20.1.201", "--port", "3306"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=self.fakes.environment(),
+            timeout=60,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_plan_on_a_fresh_host_reports_a_change_and_writes_nothing(self) -> None:
+        outcome = self.run_rule(check=True)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(outcome.status_of(REPORT_RULE), "changed")
+        self.assertFalse(self.program.exists())
+        self.assertFalse(self.unit.exists())
+        self.assertEqual(self.fakes.calls(), [])
+
+    def test_the_apply_installs_the_program_the_unit_and_the_drop_in(self) -> None:
+        outcome = self.run_rule()
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(stat.S_IMODE(self.program.stat().st_mode), 0o755)
+        self.assertEqual(self.program.read_bytes(), self.program_source.read_bytes())
+        self.assertIn(
+            f"\nExecStart={self.program} --allow-source 10.20.1.201 --port 3306\n",
+            self.unit.read_text(),
+        )
+        self.assertIn("Requires=branchleft-dbt1-listener-rule.service", self.dropin.read_text())
+        self.assertEqual(stat.S_IMODE(self.unit.stat().st_mode), 0o644)
+
+    def test_the_apply_sees_that_the_rule_is_not_loaded_and_says_what_is_missing(self) -> None:
+        outcome = self.run_rule()
+        self.assertEqual(outcome.status_of(PROBE), "changed")
+        self.assertIn(f"+ {JUMP}", outcome.output)
+        self.assertIn("+ chain " + CHAIN, outcome.output)
+
+    def test_a_plan_after_the_rule_is_loaded_and_the_files_are_in_place_shows_no_change(
+        self,
+    ) -> None:
+        self.assertEqual(self.run_rule().code, 0)
+        self.load_rule()
+        outcome = self.run_rule(check=True)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(outcome.changed, 0, outcome.output)
+        self.assertEqual(outcome.status_of(PROBE), "ok")
+
+    def test_the_second_apply_changes_nothing(self) -> None:
+        self.assertEqual(self.run_rule().code, 0)
+        self.load_rule()
+        before = self.fakes.writes()
+        outcome = self.run_rule()
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(outcome.changed, 0, outcome.output)
+        self.assertEqual(self.fakes.writes(), before)
+
+    def test_a_loaded_rule_that_admits_another_source_shows_in_the_plan_as_a_change(self) -> None:
+        self.assertEqual(self.run_rule().code, 0)
+        self.load_rule()
+        stray = f"-A {CHAIN} -s 10.20.1.99/32 -p tcp -m tcp --dport 3306 -j ACCEPT"
+        self.fakes.put(input_rules=[JUMP], chain=[stray, DROP])
+        outcome = self.run_rule(check=True)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(outcome.status_of(PROBE), "changed")
+        self.assertIn("- -A BRANCHLEFT-DBT1-IN -s 10.20.1.99/32", outcome.output)
+        self.assertIn("+ -A BRANCHLEFT-DBT1-IN -s 10.20.1.201/32", outcome.output)
+        self.assertEqual(self.fakes.table()["chain"], [stray, DROP])
+
+    def test_a_jump_under_another_rule_fails_the_plan(self) -> None:
+        self.assertEqual(self.run_rule().code, 0)
+        ssh = "-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT"
+        self.fakes.put(input_rules=[ssh, JUMP], chain=[ACCEPT, DROP])
+        outcome = self.run_rule(check=True)
+        self.assertNotEqual(outcome.code, 0, outcome.output)
+        self.assertIn("is rule 2 of INPUT", outcome.output)
+
+    def test_a_host_with_no_iptables_fails_the_plan_naming_the_role_that_installs_it(self) -> None:
+        self.assertEqual(self.run_rule().code, 0)
+        outcome = self.run_rule(check=True, path="/usr/bin:/bin")
+        self.assertNotEqual(outcome.code, 0, outcome.output)
+        self.assertIn("iptables is not installed", outcome.output)
 
 
 if __name__ == "__main__":

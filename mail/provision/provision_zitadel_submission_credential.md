@@ -4,8 +4,7 @@
 `68-provision-zitadel-submission-credential.sh`, gives the sign-in service
 (Zitadel, on `ops1`) one SMTP submission credential on Stalwart. It can send as
 `noreply@publicpress.co.uk` and as nothing else.
-`check_zitadel_sender_scope.py` proves that on the live server. Tracking:
-[branchLeft/workspace#1892](https://github.com/branchLeft/workspace/issues/1892).
+`check_zitadel_sender_scope.py` proves that on the live server. Tracking: the Zitadel submission-credential issue.
 
 Read from Stalwart's source at the pinned version `v0.16.17`
 (`docker-compose.yml`); the mechanism is the one

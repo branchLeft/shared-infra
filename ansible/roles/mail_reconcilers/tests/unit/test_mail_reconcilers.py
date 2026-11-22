@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from typing import cast
 
+from jinja2 import Environment, select_autoescape
 from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
@@ -21,6 +22,7 @@ REPO = ROLE.parents[2]
 PROGRAMS = REPO / "mail" / "provision"
 STEPS = ("configure", "mailboxes", "mint", "collector")
 COLLECTOR = "67-provision-collector-submission-credential.sh"
+PROBE = ROLE / "files" / "check_stalwart_bootstrap_mode.py"
 ROWS = {
     "website": "60-provision-website-submission-credential.sh",
     "blog": "61-provision-blog-submission-credential.sh",
@@ -30,19 +32,35 @@ ROWS = {
     "zitadel": "68-provision-zitadel-submission-credential.sh",
 }
 INSTALLED = (
-    "configure_stalwart.py", "provision_mailboxes.py", "provision_sending_domain.py",
-    "provision_website_submission_credential.py", "provision_zitadel_submission_credential.py",
-    "provision_collector_submission_credential.py", "check_collector_sender_scope.py",
-    "check_zitadel_sender_scope.py", "trigger_acme_renewal.py", "list_and_clear_blocked_ips.py",
-    "40-configure-stalwart.sh", "50-provision-mailboxes.sh", *ROWS.values(), COLLECTOR,
+    "configure_stalwart.py",
+    "provision_mailboxes.py",
+    "provision_sending_domain.py",
+    "provision_website_submission_credential.py",
+    "provision_zitadel_submission_credential.py",
+    "provision_collector_submission_credential.py",
+    "check_collector_sender_scope.py",
+    "check_zitadel_sender_scope.py",
+    "trigger_acme_renewal.py",
+    "list_and_clear_blocked_ips.py",
+    "40-configure-stalwart.sh",
+    "50-provision-mailboxes.sh",
+    *ROWS.values(),
+    COLLECTOR,
 )
 # Every file the mail host's stack role owns. check_role_paths.py skips a destination that is a
 # loop item, so it cannot stop this role writing one of them.
 STACK_OWNED = (
-    "30-deploy-stalwart.sh", "63-deploy-mailgun-shim.sh", "65-install-local-resolver.sh",
-    "70-schedule-dnsbl-check.sh", "run-all.sh", "shim-compose.yml", "render_shim_env.py",
+    "30-deploy-stalwart.sh",
+    "63-deploy-mailgun-shim.sh",
+    "65-install-local-resolver.sh",
+    "70-schedule-dnsbl-check.sh",
+    "run-all.sh",
+    "shim-compose.yml",
+    "render_shim_env.py",
     "shim-env-contracts.json",
-    "check_dnsbl_blocklist.py", "docker-compose.yml", "Caddyfile",
+    "check_dnsbl_blocklist.py",
+    "docker-compose.yml",
+    "Caddyfile",
 )
 Task = dict[str, object]
 
@@ -79,12 +97,34 @@ def _text(name: str) -> str:
 
 def _module(task: Task) -> str:
     """Return the short module name a task uses, or an empty string."""
-    return next((k.rsplit(".", 1)[-1] for k in map(str, task) if k.startswith("ansible.builtin.")), "")
+    return next(
+        (k.rsplit(".", 1)[-1] for k in map(str, task) if k.startswith("ansible.builtin.")), ""
+    )
 
 
 def _that(task: Task) -> list[str]:
     """Return the conditions of an assert task."""
     return cast(dict[str, list[str]], task["ansible.builtin.assert"])["that"]
+
+
+def _assert_named(name: str, prefix: str) -> Task:
+    """Return the one assert task of a tasks file whose name starts with the prefix."""
+    found = [
+        t for t in _tasks(name) if _module(t) == "assert" and str(t["name"]).startswith(prefix)
+    ]
+    if len(found) != 1:
+        raise AssertionError(f"{len(found)} assert tasks in {name} start with {prefix!r}")
+    return found[0]
+
+
+def _holds(conditions: list[str], **context: object) -> bool:
+    """Return whether every condition of an assert is true for the context, as Ansible reads them.
+
+    The conditions are evaluated, not searched, so a test of one fails when its behaviour changes
+    and passes when only its spelling does.
+    """
+    environment = Environment(autoescape=select_autoescape())
+    return all(bool(environment.compile_expression(c)(**context)) for c in conditions)
 
 
 def _all_tasks() -> list[tuple[str, Task]]:
@@ -151,7 +191,9 @@ class CredentialTableTests(unittest.TestCase):
             ],
         )
         self.assertIn("REFUSED:", str(first["ansible.builtin.assert"]))
-        self.assertIn("mail_reconcilers_credential_rows[mail_reconcilers_credential]", _text("_mint.yml"))
+        self.assertIn(
+            "mail_reconcilers_credential_rows[mail_reconcilers_credential]", _text("_mint.yml")
+        )
 
 
 class CollectorGateTests(unittest.TestCase):
@@ -161,7 +203,9 @@ class CollectorGateTests(unittest.TestCase):
             [_module(t) for t in tasks], ["import_tasks", "command", "assert", "command", "assert"]
         )
         _, dry, gate, real, stored = tasks
-        self.assertEqual(cast(dict[str, list[str]], dry["ansible.builtin.command"])["argv"][-1], "--dry-run")
+        self.assertEqual(
+            cast(dict[str, list[str]], dry["ansible.builtin.command"])["argv"][-1], "--dry-run"
+        )
         self.assertIs(dry.get("check_mode"), False)
         self.assertEqual(
             _that(gate),
@@ -174,7 +218,10 @@ class CollectorGateTests(unittest.TestCase):
         self.assertEqual(real["when"], "not ansible_check_mode")
         self.assertEqual(
             _that(stored),
-            ["mail_reconcilers_run.rc == 0", "'sender scope stored' in mail_reconcilers_run.stdout"],
+            [
+                "mail_reconcilers_run.rc == 0",
+                "'sender scope stored' in mail_reconcilers_run.stdout",
+            ],
         )
         self.assertIn("the collector dry run phase did not end clean", _text("_collector.yml"))
         self.assertIn("the collector real run phase did not store", _text("_collector.yml"))
@@ -192,11 +239,22 @@ class PreconditionTests(unittest.TestCase):
         self,
     ) -> None:
         constants = _vars()
-        self.assertEqual(constants["mail_reconcilers_admin_credentials"], "/root/.stalwart-admin-credentials")
-        self.assertEqual(constants["mail_reconcilers_service_credentials"], "/root/.stalwart-service-credentials")
-        self.assertEqual(constants["mail_reconcilers_mailbox_credentials"], "/root/.stalwart-mailbox-credentials")
         self.assertEqual(
-            [f["required"] for f in cast(list[dict[str, object]], constants["mail_reconcilers_credential_files"])],
+            constants["mail_reconcilers_admin_credentials"], "/root/.stalwart-admin-credentials"
+        )
+        self.assertEqual(
+            constants["mail_reconcilers_service_credentials"], "/root/.stalwart-service-credentials"
+        )
+        self.assertEqual(
+            constants["mail_reconcilers_mailbox_credentials"], "/root/.stalwart-mailbox-credentials"
+        )
+        self.assertEqual(
+            [
+                f["required"]
+                for f in cast(
+                    list[dict[str, object]], constants["mail_reconcilers_credential_files"]
+                )
+            ],
             [True, False, False],
         )
         stats = [t for t in _tasks("_preconditions.yml") if _module(t) == "stat"]
@@ -204,26 +262,167 @@ class PreconditionTests(unittest.TestCase):
         for stat in stats:
             self.assertIs(cast(dict[str, object], stat["ansible.builtin.stat"])["follow"], False)
 
-    def test_the_check_compares_kind_owner_and_mode_and_refuses_by_name(self) -> None:
-        text = _text("_preconditions.yml")
-        for needle in (
-            "item.stat.exists or not item.item.required",
-            "item.stat.isreg",
-            "(item.stat.pw_name | default('')) == 'root'",
-            "item.stat.mode == '0600'",
-            "mail_reconcilers_install_stat.stat.mode == mail_reconcilers_install_dir_mode",
+    def test_every_precondition_refuses_by_name(self) -> None:
+        asserts = [t for t in _tasks("_preconditions.yml") if _module(t) == "assert"]
+        self.assertEqual(len(asserts), 3)
+        for task in asserts:
+            fail_msg = cast(dict[str, str], task["ansible.builtin.assert"])["fail_msg"]
+            self.assertTrue(fail_msg.startswith("REFUSED:"), task["name"])
+
+    def test_a_credential_file_passes_only_when_it_is_what_the_programs_need(self) -> None:
+        """The check is run, not read: a loosened mode or owner test that keeps its text fails."""
+        conditions = _that(_assert_named("_preconditions.yml", "Refuse a credential file that is"))
+
+        def verdict(required: bool, **stat: object) -> bool:
+            item = {"stat": stat, "item": {"required": required}}
+            return _holds(conditions, item=item)
+
+        present = {"exists": True, "isreg": True, "pw_name": "root", "mode": "0600"}
+        self.assertTrue(verdict(True, **present))
+        self.assertTrue(verdict(False, **present))
+        self.assertFalse(verdict(True, exists=False))
+        self.assertTrue(verdict(False, exists=False))
+        for wrong in (
+            {"mode": "0644"},
+            {"mode": "0640"},
+            {"mode": "0660"},
+            {"mode": "0666"},
+            {"mode": "0700"},
+            {"mode": "0400"},
+            {"mode": "0000"},
+            {"isreg": False},
+            {"pw_name": "nobody"},
+            {"pw_name": "rootless"},
         ):
-            self.assertIn(needle, text)
-        self.assertEqual(text.count("REFUSED:"), 2)
+            for required in (True, False):
+                self.assertFalse(verdict(required, **{**present, **wrong}), (wrong, required))
+        self.assertFalse(verdict(True, exists=True, isreg=True, mode="0600"), "no owner is no root")
+        self.assertFalse(
+            verdict(False, exists=True, isreg=True, mode="0600"), "no owner is no root"
+        )
+
+    def test_the_install_directory_passes_only_as_a_root_directory_of_the_named_mode(self) -> None:
+        conditions = _that(_assert_named("_preconditions.yml", "Refuse an install directory"))
+
+        def verdict(**stat: object) -> bool:
+            return _holds(
+                conditions,
+                mail_reconcilers_install_stat={"stat": stat},
+                mail_reconcilers_install_dir_mode="0755",
+            )
+
+        good = {"exists": True, "isdir": True, "pw_name": "root", "mode": "0755"}
+        self.assertTrue(verdict(**good))
+        self.assertFalse(verdict(exists=False))
+        for wrong in (
+            {"mode": "0775"},
+            {"mode": "0777"},
+            {"mode": "0750"},
+            {"isdir": False},
+            {"pw_name": "nobody"},
+        ):
+            self.assertFalse(verdict(**{**good, **wrong}), wrong)
+
+    def test_the_list_of_credential_files_passes_only_as_the_roles_own_three(self) -> None:
+        """An extra variable outranks the constant, so an empty list must not skip the checks."""
+        constants = _vars()
+        admin, service, mailbox = (
+            cast(str, constants[f"mail_reconcilers_{kind}_credentials"])
+            for kind in ("admin", "service", "mailbox")
+        )
+        conditions = _that(_assert_named("_preconditions.yml", "Refuse a credential file list"))
+
+        def verdict(files: object) -> bool:
+            return _holds(
+                conditions,
+                mail_reconcilers_credential_files=files,
+                mail_reconcilers_admin_credentials=admin,
+                mail_reconcilers_service_credentials=service,
+                mail_reconcilers_mailbox_credentials=mailbox,
+            )
+
+        def row(path: str, *, required: bool = False) -> dict[str, object]:
+            return {"path": path, "required": required}
+
+        own = [row(admin, required=True), row(service), row(mailbox)]
+        self.assertTrue(verdict(own))
+        for wrong in (
+            [],
+            "[]",
+            "",
+            None,
+            own[:2],
+            own[1:],
+            [*own, row("/root/other")],
+            [own[1], own[0], own[2]],
+            [row(admin), row(service), row(mailbox)],
+            [row(admin, required=True), row(service, required=True), row(mailbox)],
+            [row(admin, required=True), row(service), row("/root/other")],
+        ):
+            self.assertFalse(verdict(wrong), wrong)
+
+    def test_configure_asks_whether_stalwart_is_in_bootstrap_mode_before_it_runs_the_program(
+        self,
+    ) -> None:
+        tasks = _tasks("_configure.yml")
+        modules = [_module(t) for t in tasks]
+        self.assertEqual(
+            modules, ["import_tasks", "script", "assert", "command", "assert"], "order of the steps"
+        )
+        _, probe, refusal, run, _ = tasks
+        self.assertEqual(cast(dict[str, str], probe["ansible.builtin.script"])["cmd"], PROBE.name)
+        self.assertEqual(
+            cast(dict[str, str], probe["ansible.builtin.script"])["executable"],
+            "/usr/bin/python3 -I",
+        )
+        self.assertTrue((ROLE / "files" / PROBE.name).is_file())
+        self.assertEqual(probe["environment"], "{{ mail_reconcilers_program_environment }}")
+        # A read that writes nothing, so a check-mode request asks too and shows the refusal.
+        self.assertIs(probe.get("check_mode"), False)
+        self.assertNotIn("when", probe)
+        self.assertNotIn("when", refusal)
+        self.assertEqual(run["when"], "not ansible_check_mode")
+
+    def test_the_refusal_lets_configure_go_on_only_when_the_probe_exited_0(self) -> None:
+        conditions = _that(_assert_named("_configure.yml", "Refuse a configure while Stalwart"))
+
+        def verdict(**probe: object) -> bool:
+            return _holds(conditions, mail_reconcilers_bootstrap_probe=probe)
+
+        self.assertTrue(verdict(rc=0))
+        for rc in (1, 2, 3, 4, 126, 127, -1):
+            self.assertFalse(verdict(rc=rc), rc)
+        self.assertFalse(verdict(), "a probe that left no exit status is a refusal")
+        self.assertFalse(verdict(rc=None))
+        self.assertFalse(verdict(rc="0"))
+        text = _text("_configure.yml")
+        self.assertIn("REFUSED: Stalwart is in bootstrap mode", text)
+        self.assertIn("40-configure-stalwart", text + str(_vars()["mail_reconcilers_wrappers"]))
+        self.assertIn("RUNBOOK-mx1-provision.md", text)
+
+    def test_the_probe_is_the_one_program_the_role_runs_without_placing_it(self) -> None:
+        installed = {
+            e["program"] for e in cast(list[dict[str, str]], _vars()["mail_reconcilers_installed"])
+        }
+        self.assertNotIn(PROBE.name, installed)
+        self.assertEqual(sorted(p.name for p in (ROLE / "files").glob("*.py")), [PROBE.name])
 
     def test_a_program_reads_the_files_that_were_checked(self) -> None:
         env = cast(dict[str, str], _vars()["mail_reconcilers_program_environment"])
-        self.assertEqual(env["STALWART_CREDENTIALS_PATH"], "{{ mail_reconcilers_admin_credentials }}")
-        self.assertEqual(env["SERVICE_CREDENTIALS_PATH"], "{{ mail_reconcilers_service_credentials }}")
-        self.assertEqual(env["MAILBOX_CREDENTIALS_PATH"], "{{ mail_reconcilers_mailbox_credentials }}")
+        self.assertEqual(
+            env["STALWART_CREDENTIALS_PATH"], "{{ mail_reconcilers_admin_credentials }}"
+        )
+        self.assertEqual(
+            env["SERVICE_CREDENTIALS_PATH"], "{{ mail_reconcilers_service_credentials }}"
+        )
+        self.assertEqual(
+            env["MAILBOX_CREDENTIALS_PATH"], "{{ mail_reconcilers_mailbox_credentials }}"
+        )
         for name, task in _all_tasks():
-            if _module(task) == "command":
-                self.assertEqual(task["environment"], "{{ mail_reconcilers_program_environment }}", name)
+            if _module(task) in {"command", "script"}:
+                self.assertEqual(
+                    task["environment"], "{{ mail_reconcilers_program_environment }}", name
+                )
 
 
 class SecretHandlingTests(unittest.TestCase):
@@ -234,15 +433,19 @@ class SecretHandlingTests(unittest.TestCase):
                 seen += 1
                 self.assertIs(task.get("no_log"), True, f"{name}: {task['name']}")
                 self.assertIs(task.get("failed_when"), False, f"{name}: {task['name']}")
-        self.assertEqual(seen, 5)
+        self.assertEqual(seen, 6)
 
     def test_the_role_never_reads_or_writes_a_secret_itself(self) -> None:
         for name, task in _all_tasks():
-            self.assertNotIn(_module(task), {"slurp", "lineinfile", "blockinfile", "template"}, name)
+            self.assertNotIn(
+                _module(task), {"slurp", "lineinfile", "blockinfile", "template"}, name
+            )
             if _module(task) == "copy":
                 self.assertIn("mail_reconcilers_programs_dir", str(task), name)
         for step in STEPS:
-            self.assertNotRegex(_text(f"_{step}.yml"), r"lookup\(|slurp|password|secret|stdout_lines")
+            self.assertNotRegex(
+                _text(f"_{step}.yml"), r"lookup\(|slurp|password|secret|stdout_lines"
+            )
 
     def test_a_refusal_shows_only_the_closed_refusal_lines_cut_short(self) -> None:
         shown = str(_vars()["mail_reconcilers_shown_lines"])
@@ -299,10 +502,14 @@ class InstallListTests(unittest.TestCase):
             )
             self.assertFalse(path.name in installed and path.name in named, path.name)
         for name in installed | named:
-            self.assertTrue((PROGRAMS / name).is_file(), f"{name} is named but not in mail/provision")
+            self.assertTrue(
+                (PROGRAMS / name).is_file(), f"{name} is named but not in mail/provision"
+            )
 
     def test_the_programs_are_read_in_place_and_placed_with_the_explicit_mode(self) -> None:
-        self.assertEqual(_vars()["mail_reconcilers_programs_dir"], "{{ role_path }}/../../../mail/provision")
+        self.assertEqual(
+            _vars()["mail_reconcilers_programs_dir"], "{{ role_path }}/../../../mail/provision"
+        )
         places = [t for t in _tasks("main.yml") if _module(t) == "copy"]
         self.assertEqual(len(places), 2, "one task whose diff is hidden and one that shows it")
         for place in places:
@@ -316,7 +523,8 @@ class InstallListTests(unittest.TestCase):
                     "mode": "{{ item.mode }}",
                 },
             )
-        self.assertFalse((ROLE / "files").exists(), "the programs have one home, mail/provision")
+        # files/ holds the probe alone; the reconcilers have one home, mail/provision.
+        self.assertEqual([p.name for p in (ROLE / "files").glob("*.py")], [PROBE.name])
 
     def test_the_two_placing_tasks_split_the_install_list_and_only_one_hides_its_diff(self) -> None:
         hidden, shown = (t for t in _tasks("main.yml") if _module(t) == "copy")
