@@ -162,6 +162,14 @@
       {{ attempt_reverse if attempt_expect == 'no_remote_forward'
       else (attempt_forward if attempt_target is defined else attempt_remote) }}
   register: ci_jump_scenario_attempt
+  # A `through` forward may meet the target's sshd while it is restarting after a reload, and
+  # the client then fails in key exchange before any banner. Only that reset is retried, and only
+  # for `through`: a refusal, a denial or a banner that never came is judged on the first answer.
+  until: >-
+    attempt_expect != 'through' or ci_jump_scenario_attempt.rc == 0
+    or 'kex_exchange_identification' not in (ci_jump_scenario_attempt.stderr | default(''))
+  retries: 4
+  delay: 2
   changed_when: false
   failed_when: false
   check_mode: false
