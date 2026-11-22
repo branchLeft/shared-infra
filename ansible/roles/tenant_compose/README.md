@@ -390,5 +390,9 @@ rebuilds the whole file, and a key that only ever had a typed value (such as
 - The stamp is written last. A task added after the restart must not be able to fail without the stamp
   being left behind, and nothing may be recorded before the unit is shown active.
 - A new input is added to `meta/argument_specs.yml` and `defaults/main.yml` together, with the role's prefix.
+- The module has a byte-identical copy in `roles/tenant_entry/files/`, which the tenant entry point's
+  `stack` verb runs on a new tenant's compose text so that both routes use one judge. A change to the
+  module is copied there in the same change; a test in `tenant_entry` fails when the two differ. The
+  module imports Ansible's own code inside `main()` so that copy can be loaded without Ansible.
 - Run the harness, the unit tests and the type check before every push, and never loosen
   `verify.yml` or a unit test to make a change pass.
