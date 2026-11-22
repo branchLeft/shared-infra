@@ -83,6 +83,7 @@ host_inputs_required_by_host:
     - tenant_entry_key
     - tenant_entry_from
     - tenant_entry_bind_address
+    - tenant_compose_stacks
   dbt1:
     - db_t1_tenant_entry_controller_key
     - db_t1_tenant_entry_controller_address
@@ -99,6 +100,8 @@ host_inputs_required_by_host:
 # Left out of the file the input is simply not set; present, it must hold a usable value like
 # any other, and a name outside the row is refused as ever.
 host_inputs_optional_by_host:
+  appt1:
+    - tenant_compose_stacks
   demo1:
     - broker_deploy_owner_due_diligence_email
   edge1:

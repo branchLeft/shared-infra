@@ -340,7 +340,12 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
                 ],
-                "appt1": ["tenant_entry_key", "tenant_entry_from", "tenant_entry_bind_address"],
+                "appt1": [
+                    "tenant_entry_key",
+                    "tenant_entry_from",
+                    "tenant_entry_bind_address",
+                    "tenant_compose_stacks",
+                ],
                 "dbt1": [
                     "db_t1_tenant_entry_controller_key",
                     "db_t1_tenant_entry_controller_address",
@@ -357,6 +362,7 @@ class RealTree(unittest.TestCase):
             {
                 "edge1": ["ci_jump_user"],
                 "edget": ["ci_jump_user"],
+                "appt1": ["tenant_compose_stacks"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
@@ -419,6 +425,7 @@ class Mutations(unittest.TestCase):
             "backup_restore",
             "tenant_onboarding",
             "tenant_entry",
+            "tenant_compose",
             "db_t1",
             "db_t1_tenant_entry",
             "broker_deploy",

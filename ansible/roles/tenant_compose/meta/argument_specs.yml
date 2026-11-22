@@ -17,11 +17,12 @@ argument_specs:
       tenant_compose_stacks:
         type: list
         elements: dict
-        required: true
+        required: false
         description: >-
           The tenants of this host, one entry each, as the renderer produced them. Supplied at run
           time: the list names tenants and is never kept in this repository. An empty list is
-          valid and delivers no tenant.
+          valid and delivers no tenant. Undefined (no tenant list declared, as on a host with no
+          tenant yet) also delivers no tenant: the role sets an empty list in its first task.
         options:
           slug:
             type: str

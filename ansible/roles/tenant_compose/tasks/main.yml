@@ -13,6 +13,18 @@
 # whole item, nested items included, so every assertion below reads only the sanitised
 # lists built from the verdicts.
 
+# ----- An undefined tenant list delivers nothing -----
+
+# A host with no tenant yet has no list in its host_inputs file, and the loader counts an empty list
+# as missing, so the list is optional. Undefined is read as the empty list the role already accepts
+# (argument spec: an empty list is valid and delivers no tenant). Only an undefined list is set
+# here; a defined list is never overwritten. Tested by checks/test_tenant_compose_optional_list.py.
+- name: Read an undefined tenant list as an empty one
+  ansible.builtin.set_fact:
+    tenant_compose_stacks: []
+  when: tenant_compose_stacks is not defined
+  no_log: true
+
 # ----- What the host must already have -----
 
 - name: Look at the stack and the configuration directories

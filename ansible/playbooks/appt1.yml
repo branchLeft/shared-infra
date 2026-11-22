@@ -1,6 +1,6 @@
 ---
 # appt1: the logical name of the tenant app host app-t1 (HOST_NAME allows [a-z][a-z0-9]*; the
-# server and its hostname keep the hyphen). Under the gated pull. Eleven roles, in order: the
+# server and its hostname keep the hyphen). Under the gated pull. Twelve roles, in order: the
 # Ansible toolchain the host runs this playbook with, the trigger that runs it, the loader of the
 # host's private inputs (host_inputs: the controller's key and source addresses for the tenant
 # entry point), the host baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the
@@ -9,7 +9,9 @@
 # (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), the deploy slot keys
 # (deploy_slot_keys) and the tenant volume program (tenant_onboarding), which tenant_entry calls,
 # the tenant entry point itself (tenant_entry), and the host's metrics exporter (node_exporter,
-# last, so a disk refusal holds nothing back). The tenant stack itself, the two colours and the
+# last, so a disk refusal holds nothing back), and the tenant compose stacks (tenant_compose, last
+# of all, because it restarts a tenant's live stack; it delivers nothing while no tenant list is
+# declared). The tenant stack itself, the two colours and the
 # drain sidecar, is a later role: this playbook brings the host to the point where one can be
 # delivered. Its private inputs are the two keys of checks/host_roles.yml's loader row for appt1,
 # seeded by the owner before the first apply. The gateway switch is not set here, so
@@ -51,3 +53,4 @@
     - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/tenant_entry # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
+    - role: ../roles/tenant_compose # noqa: role-name[path]
