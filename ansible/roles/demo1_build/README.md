@@ -47,8 +47,8 @@ What the role does, in the order of `tasks/main.yml`:
    and `/root/.ansible` (the module payload directory) only under `/root`. A symbolic link
    under the roots is followed for its target; a link whose name or target is a secret path
    refuses. A found path that no row names refuses the run, naming the path and never a value.
-   The root's CI key row (`/root/.ssh/authorized_keys`, owner-confirmed) arrives with
-   `pull_trigger`'s route, not with a file this role installs. A host the list covers is
+   The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
+   runbook Part 3) is listed. A host the list covers is
    accepted and says how many files it found. A plan runs the step too.
 3. **Stages the programs** (`_release.yml`): the ten programs, each copied with
    `copy` from the role's own `files/ghost-platform` (which step 1 has held to the

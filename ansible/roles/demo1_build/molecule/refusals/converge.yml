@@ -856,7 +856,7 @@
 
 # The CI key the pull trigger's route puts in root's authorized_keys is named by a holder row, and is
 # accepted; the control above proves an absent row is not an error, this proves the row accepts the file.
-- name: Accept the CI key in root's authorized_keys, which the holder list names
+- name: Accept the CI key in the ansible-ci account's authorized_keys, which the holder list names
   ansible.builtin.import_playbook: refused_secret.yml
   vars:
     converge_case:

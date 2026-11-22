@@ -376,13 +376,12 @@ demo1_build_secret_holders:
     owner: root
     mode: '0644'
 
-  # The pull trigger's CI keys. The pull trigger installs none itself (its README names root's
-  # authorised keys as the route, with the key written by the host's operator or the
-  # sudoers_and_keys pattern); each key runs one mode only, check, apply or step, by a forced command.
-  - name: Pull trigger CI keys in root's authorised keys
-    path_regex: '/root/\.ssh/authorized_keys'
-    reaches: 'the forced-command pull trigger: each key runs one mode only (check, apply or step); the public key only, its private half in the CI secret'
-    owner: root
+  # The CI keys of demo1's ansible-ci account (enrol runbook Part 3; ansible-ci-jump-through-edge1
+  # runbook step 8.8, owner ruling demo1-ci-login-r2). Each key runs one forced command only.
+  - name: CI keys in the ansible-ci account's authorised keys
+    path_regex: '/home/ansible-ci/\.ssh/authorized_keys'
+    reaches: 'the forced-command pull trigger: each key runs one mode only (check or apply); the public key only, its private half in the CI secret'
+    owner: ansible-ci
     mode: '0600'
 
 # The regex the scan's unlisted check reads: a found path that matches none of the rows is refused.
