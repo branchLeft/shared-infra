@@ -436,6 +436,7 @@
     group: '1000'
     mode: '0440'
   no_log: true
+  diff: false
   when: control_plane_portal_support_smtp_password | default('', true) | string | length > 0
 
 # The access rules are delivered inside a block, with the steps that follow them: the
