@@ -523,6 +523,9 @@ does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-iss
 (also a name holding a word the plan job's secret scan reads, which would fail the plan of every
 host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
 four directories, or not a plain name), `bad-unit` (not a plain unit name), `bad-port`,
+`service-not-declared` (an `http_status` fact whose name is not in `LOOK_HTTP_PORTS`, the
+program's allow-list of loopback ports per declared service), `port-not-allowed` (a port its
+service does not declare; the request path refuses it too, before any connection),
 `bad-url-path` (a query, a fragment, `..`, a doubled slash), `bad-host-name`, `line-shape` (a line
 that is not of the one shape, which is not printed) and `look-fault` (the look itself failed;
 the run is as it would have been without it).

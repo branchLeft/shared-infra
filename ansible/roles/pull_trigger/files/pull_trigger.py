@@ -162,6 +162,10 @@ LOOK_FILE_ROOTS: Final = (
     "/usr/local/sbin/",
 )
 LOOK_LOOPBACK: Final = "127.0.0.1"
+# The declared services an http fact may name: the fact's ``name`` maps to the only loopback ports
+# that fact may GET. A name not here, or a port not in its set, is refused before any request.
+# Adding a service or a port is a change to this program, reviewed by the owner, as a new kind is.
+LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {}
 LOOK_NAME_PATTERN: Final = re.compile(r"[a-z][a-z0-9-]{0,47}")
 # The plan job withholds a host's output that matches the credential words of its scan, and that
 # would fail the plan of every host. A name can never be the cause.
@@ -347,6 +351,8 @@ class LookWhy(enum.Enum):
     PATH_NOT_ALLOWED = "path-not-allowed"
     BAD_UNIT = "bad-unit"
     BAD_PORT = "bad-port"
+    SERVICE_NOT_DECLARED = "service-not-declared"
+    PORT_NOT_ALLOWED = "port-not-allowed"
     BAD_URL_PATH = "bad-url-path"
     BAD_HOST_NAME = "bad-host-name"
     LINE_SHAPE = "line-shape"
@@ -485,6 +491,11 @@ def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
     if kind is LookKind.HTTP_STATUS:
         if not _whole_number(entry["port"], 1, 65_535):
             return LookWhy.BAD_PORT
+        declared = LOOK_HTTP_PORTS.get(str(entry["name"]))
+        if declared is None:
+            return LookWhy.SERVICE_NOT_DECLARED
+        if entry["port"] not in declared:
+            return LookWhy.PORT_NOT_ALLOWED
         if not _text_matching(entry["url_path"], LOOK_URL_PATH, LOOK_MAX_URL_PATH):
             return LookWhy.BAD_URL_PATH
         parts = str(entry["url_path"]).split("/")
@@ -2154,8 +2165,11 @@ class Looker:
         """Return the status of one GET to the loopback address, or a word saying why not.
 
         Only the status is read: no body, no header, no redirect followed, and the connection is
-        to the loopback address whatever name the entry gives for the ``Host`` header.
+        to the loopback address whatever name the entry gives for the ``Host`` header. A port the
+        fact's service does not declare is refused here too, before any connection is made.
         """
+        if fact.port not in LOOK_HTTP_PORTS.get(fact.name, frozenset()):
+            return LookWhy.PORT_NOT_ALLOWED.value
         connection = http.client.HTTPConnection(LOOK_LOOPBACK, fact.port, timeout=LOOK_HTTP_SECONDS)
         try:
             connection.request(
