@@ -30,6 +30,55 @@
   hosts: all
   gather_facts: false
   tasks:
+    # iptables loads the database port rule. The rules are real, in the container's own network
+    # namespace; the chain and the jump are read back by verify.yml.
+    - name: Install iptables, which loads the database port rule, and iproute2, which gives the loopback addresses
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iproute2
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # verify.yml connects over the loopback from three source addresses to the database address,
+    # so the loopback carries db-t1's private address, app-t1's and one that is neither. Each as a
+    # single address, once.
+    - name: Look at the addresses on the loopback
+      ansible.builtin.command:
+        argv: [ip, -4, -o, addr, show, dev, lo]
+      register: db_t1_standin_addresses
+      changed_when: false
+
+    - name: Give the loopback the test addresses
+      ansible.builtin.command:
+        argv: [ip, addr, add, '{{ item }}/32', dev, lo]
+      changed_when: true
+      loop:
+        - 10.20.1.200
+        - 10.20.1.201
+        - 10.20.1.99
+      when: (item ~ '/32') not in db_t1_standin_addresses.stdout
+
+    # The host baseline installs Docker on db-t1; there is none here. A stand-in unit of the
+    # same name gives the drop-in that orders Docker after the rule a unit to apply to, so
+    # verify.yml can read the order back from systemd.
+    - name: Install a stand-in for docker.service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for docker.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Install a placeholder for the shared Compose unit template
       ansible.builtin.copy:
         content: |

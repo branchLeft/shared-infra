@@ -8,3 +8,4 @@
 - host_baseline
 - egress_nat
 - ci_jump
+- node_exporter
