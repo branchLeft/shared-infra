@@ -1,0 +1,3 @@
+---
+# The role takes no input. Its paths, port and package are in vars/main.yml, which a caller's
+# variables do not outrank except by an explicit parameter.

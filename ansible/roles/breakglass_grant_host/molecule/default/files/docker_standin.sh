@@ -57,6 +57,10 @@ case "${1:-}" in
   run)
     echo '[]'
     ;;
+  ps)
+    # The textfile writer lists the running tenants. This test host runs none, so the
+    # list is empty and the writer's file carries no series.
+    ;;
   *)
     echo "docker stand-in: unsupported command" >&2
     exit 2

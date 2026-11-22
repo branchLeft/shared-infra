@@ -312,6 +312,13 @@ export async function startContainer(
     );
   };
 
+  // A run killed after `create` leaves its container behind; sweep those before this
+  // run adds one. A stale container that cannot be removed stops the start, named.
+  const stale = await sweepStaleContainers(ctx, limits.removeMs);
+  if (stale.failed.length > 0) {
+    throw new DockerFailure(`${stale.failed.join(' ')} Nothing was started.`);
+  }
+
   arm();
   owned.set(spec.name, ctx.env);
   const created = await docker(
@@ -554,4 +561,47 @@ export async function takeSlot(opts: SlotOptions): Promise<Slot> {
     }
     await new Promise((r) => setTimeout(r, poll));
   }
+}
+
+/** Every container this harness names starts with this, then a run name, then the creating process's pid. */
+export const CONTAINER_PREFIX = 'bl-';
+const CREATOR_PID = /-(\d+)$/;
+
+export interface SweepResult {
+  removed: string[];
+  /** One message per stale container that could not be removed, or for a listing that failed. */
+  failed: string[];
+}
+
+/**
+ * Remove the containers a dead run left behind. A run killed by SIGKILL never removes a
+ * container it created and did not start, so the leftover is found by its prefix and
+ * by its pid: a container whose pid is still alive belongs to another run and is left
+ * alone. Never throws; what it could not remove is returned, not hidden.
+ */
+export async function sweepStaleContainers(
+  ctx: DockerContext = {},
+  deadlineMs = CONTAINER_LIMITS.removeMs
+): Promise<SweepResult> {
+  const result: SweepResult = { removed: [], failed: [] };
+  const listed = await docker(
+    ['ps', '-a', '--filter', `name=^${CONTAINER_PREFIX}`, '--format', '{{.Names}}'],
+    deadlineMs,
+    ctx
+  );
+  if (listed.status !== 0) {
+    const cause = listed.timedOut
+      ? `no answer within ${seconds(deadlineMs)}`
+      : firstLine(listed.stderr);
+    result.failed.push(`The containers left by earlier runs could not be listed (${cause}).`);
+    return result;
+  }
+  for (const name of listed.stdout.split('\n').map((s) => s.trim())) {
+    const pid = CREATOR_PID.exec(name)?.[1];
+    if (!name.startsWith(CONTAINER_PREFIX) || pid === undefined || alive(Number(pid))) continue;
+    const left = await removeByName(name, ctx, deadlineMs);
+    if (left === undefined) result.removed.push(name);
+    else result.failed.push(left);
+  }
+  return result;
 }

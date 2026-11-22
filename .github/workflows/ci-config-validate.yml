@@ -139,8 +139,10 @@ jobs:
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
-    # Observed 0.3-0.62min over the last 20 successful runs (p95 0.5min).
-    timeout-minutes: 10
+    # The promtool step took 5.2 to 6.4 min on healthy main runs
+    # (44761941918, 44779408332, 44790350557). The job limit covers the
+    # promtool step's worst case (22 min) plus the other steps.
+    timeout-minutes: 30
     # Same reasoning as edge-config-validate above and deliberately not in
     # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
     # program, it renders config for a Compose stack colocated on edge1, so
@@ -209,27 +211,27 @@ jobs:
       # layout below has to mirror hetzner/monitoring/'s own directory shape.
       - name: Test the alert rules with promtool
         if: steps.skip.outputs.run != 'false'
+        # promtool_shards.py runs each file's test groups as four concurrent
+        # promtool processes in the pinned image. The serial run took 11 min
+        # locally; sharded it takes about 3 min, bounded by the one slowest
+        # group. Each file is its own process, so the deadline file's 1000h
+        # evaluation interval never reaches the other two, as before. The
+        # script refuses to run unless the shards hold every group of each
+        # file exactly once, and prints the group and case counts.
+        # The 10 min cap is the limit a stalled `docker run` gets before the
+        # step fails, instead of hanging to the job's timeout.
+        timeout-minutes: 12
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
+            hetzner/monitoring/alert_rules_memory_test.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
-          docker run --rm \
-            -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
-            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
-            --workdir /etc/prometheus-tests \
-            --entrypoint /bin/promtool \
-            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
-            test rules alert_rules_test.yml
-          # Its own invocation: promtool carries the first file's evaluation
-          # interval into the rest, and this file needs 1000h to reach a real
-          # calendar date without hundreds of millions of evaluations.
-          docker run --rm \
-            -v "$PWD/hetzner/monitoring/alert_rules_deadline_test.yml:/etc/prometheus-tests/alert_rules_deadline_test.yml:ro" \
-            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
-            --workdir /etc/prometheus-tests \
-            --entrypoint /bin/promtool \
-            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
-            test rules alert_rules_deadline_test.yml
+          timeout --kill-after=10 600 python3 hetzner/monitoring/promtool_shards.py \
+            --image docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            --shards 4 --jobs 4 \
+            hetzner/monitoring/alert_rules_test.yml \
+            hetzner/monitoring/alert_rules_deadline_test.yml \
+            hetzner/monitoring/alert_rules_memory_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
         if: steps.skip.outputs.run != 'false'
@@ -320,6 +322,9 @@ jobs:
           route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
+          # The abuse-report entry is dormant until its mx1 producer lands:
+          # a page under its alertname reaches no route either.
+          route email alertname=AbuseReportReceived severity=page
           # A page-severity alertname the register has never heard of
           # reaches no route either -- the wiring half of the control
           # sabotage. pageRegister.test.ts's `findUnregisteredPageSeverityAlerts`
@@ -359,6 +364,40 @@ jobs:
           # Anonymous read of the topic is refused by the server itself.
           anon=$(docker exec "$cid" sh -c 'wget -S -q -O /dev/null http://127.0.0.1:80/branchleft-pages/json?poll=1 2>&1 | head -1')
           grep -q '403' <<<"$anon"
+
+      # Starts the stack's own Alertmanager and Karma from compose.yml, posts one
+      # alert to Alertmanager, and reads it back out of Karma's own API, so a
+      # wrong Alertmanager address, a pin the image refuses or a flag it no
+      # longer reads fails here and not as an empty dashboard on edge1. The
+      # alert is gone with the containers; its name appears in no real rule.
+      - name: Start Karma against Alertmanager and read an alert through it
+        if: steps.skip.outputs.run != 'false'
+        env:
+          GRAFANA_ADMIN_PASSWORD: validation-only
+        run: |
+          compose() { docker compose -f hetzner/monitoring/stack/compose.yml "$@"; }
+          compose up -d --wait --wait-timeout 120 alertmanager
+          curl -fsS -X POST http://127.0.0.1:9093/api/v2/alerts \
+            -H 'Content-Type: application/json' \
+            -d '[{"labels":{"alertname":"KarmaCiProbe","severity":"none"}}]'
+          compose up -d --wait --wait-timeout 120 karma
+          grep -q Pong <(curl -fsS http://127.0.0.1:8084/health)
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8084/alertList.json | grep -q KarmaCiProbe; then
+              echo "Karma read KarmaCiProbe from Alertmanager"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Karma never listed the alert Alertmanager holds"
+          compose logs --no-color karma alertmanager
+          exit 1
+
+      - name: Stop the Karma and Alertmanager containers
+        if: always() && steps.skip.outputs.run != 'false'
+        env:
+          GRAFANA_ADMIN_PASSWORD: validation-only
+        run: docker compose -f hetzner/monitoring/stack/compose.yml down --volumes
 
       - name: Remove the rendered ntfy config
         if: always() && steps.skip.outputs.run != 'false'

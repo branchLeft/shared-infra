@@ -12,6 +12,7 @@
     - '{{ verify_mailbox }}'
     - /var/tmp/stand-in/calls.jsonl
     - /var/tmp/stand-in/fail
+    - /var/tmp/stand-in/bootstrap
     - /var/tmp/stand-in/docker.calls
 
 - name: Place the credential files the case wants

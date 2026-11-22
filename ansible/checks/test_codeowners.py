@@ -286,6 +286,8 @@ BOOTSTRAP_GUARD_PATHS = [
     "ansible/tools/fixtures/docker-inspect-absent.json",
 ]
 
+# promote_host places the one key the host applier trusts to sign what it moves, and installs the
+# root timer that acts on it, so the whole role is the owner's as well.
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
@@ -295,8 +297,19 @@ BOOTSTRAP_GUARD_PATHS = [
 # writes its client configuration, and spool_path_account makes the far-host account and the key
 # line that bounds what that key may open.
 KEY_ROLE_PATHS = [
+    "ansible/roles/promote_host/tasks/main.yml",
+    "ansible/roles/promote_host/vars/main.yml",
+    "ansible/roles/promote_host/meta/argument_specs.yml",
+    "ansible/roles/promote_host/files/branchleft-promote.service",
+    "ansible/roles/promote_host/files/branchleft-promote.timer",
+    "ansible/roles/promote_host/templates/allowed_signers.j2",
+    "ansible/roles/promote_host/templates/slots.json.j2",
+    "ansible/roles/promote_host/templates/promote.env.j2",
+    "ansible/roles/promote_host/tests/unit/test_promote_host.py",
+    "ansible/roles/promote_host/molecule/configured/verify.yml",
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
+    "ansible/roles/safety_channel_key/vars/main.yml",
     "ansible/roles/ring_controller_host/tasks/main.yml",
     "ansible/roles/ring_controller_host/vars/main.yml",
     "ansible/roles/ring_controller_host/meta/argument_specs.yml",
@@ -426,6 +439,14 @@ HOST_APPLIER_PATHS = [
     "hetzner/provision/branchleft_promote.py",
     "hetzner/provision/test_branchleft_promote.py",
     "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
+]
+
+# The control-plane database role provisions the portal logins and reads the admin credentials,
+# so its tasks and its variables are the owner's; its CODEOWNERS line is pinned here, as the key
+# roles are.
+CONTROL_PLANE_DB_PATHS = [
+    "ansible/roles/control_plane_db/tasks/main.yml",
+    "ansible/roles/control_plane_db/vars/main.yml",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
@@ -604,6 +625,9 @@ class CodeownersTests(unittest.TestCase):
         self.assertGreaterEqual(len(found), 8)
         self.assert_owned(found)
 
+    def test_the_control_plane_db_role_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(CONTROL_PLANE_DB_PATHS)
+
     def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
         patterns = {pattern for pattern, _ in self.rules}
         self.assertIn("/ansible/roles/ring_controller_host/", patterns)
@@ -759,6 +783,7 @@ class CodeownersTests(unittest.TestCase):
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS
+            + CONTROL_PLANE_DB_PATHS
             + ACCESS_PATHS
             + ACCOUNT_TASK_PATHS
             + ACCESS_TEST_PATHS
