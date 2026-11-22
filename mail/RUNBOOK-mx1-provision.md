@@ -386,12 +386,12 @@ each role's script is left alone once its content matches and it's active,
 corrected otherwise (content drift, not just presence, is checked — the
 script's content is downloaded and compared, not assumed from existence
 alone). Run twice against a fully-reconciled box. The transcript below is a
-**historical capture**, from a provisioning run recorded in this repository on
-or before 17 Aug 2026 (commit `1509de5e`). It is not regenerated and does not
-describe the current mailbox set: at that run `MAILBOXES` held five entries
-(`rob`, `contact`, `info`, `sales`, `complaints`). The current set is
-`MAILBOXES` in `mail/provision/provision_mailboxes.py`, which has since grown.
-Read the transcript for its shape, not as the count to expect today:
+**historical capture**. It is not regenerated and does not describe the current
+mailbox set. The run it records had five mailboxes (`rob`, `contact`, `info`,
+`sales`, `complaints`); that run predates the commit that first recorded this
+transcript (`1509de5e`, 17 Aug 2026), where `MAILBOXES` already held seven. The
+current set is `MAILBOXES` in `mail/provision/provision_mailboxes.py`, which has
+since grown. Read the transcript for its shape, not as the count to expect today:
 
 ```console
 $ ssh root@<mail-host> /root/mail-provision/50-provision-mailboxes.sh
