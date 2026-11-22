@@ -11,6 +11,12 @@ python_version = "3.13"
 # The program is a single file in files/, imported by the tests by its own name.
 mypy_path = "$MYPY_CONFIG_FILE_DIR/files"
 
+# files/ also holds the byte-identical copy of tenant_compose's judge, which names Ansible's own
+# untyped import inside main(). The override names the ansible.* modules and nothing else (ANS-2).
+[[tool.mypy.overrides]]
+module = ["ansible.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 # The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
 extend = "../../pyproject.toml"
