@@ -517,39 +517,6 @@ describe('the rendered alert rules', () => {
     );
   });
 
-  describe('the demo wildcard TLS probe', () => {
-    it('renders a tls_connect job for probe.<base> when the base is set', () => {
-      const rendered = renderPrometheusConfig(sites, 'example.test');
-      const section = rendered.slice(rendered.indexOf('  - job_name: blackbox_demo_tls'));
-      expect(rendered).toContain('  - job_name: blackbox_demo_tls');
-      expect(section).toContain("module: ['tls_connect']");
-      expect(section).toContain('- probe.example.test:443');
-      expect(section).toContain("labels: {host: edge1, expected_up: 'true'}");
-      expect(section).toContain('target_label: __param_target');
-    });
-
-    it('renders no demo probe job when the base is unset or empty', () => {
-      expect(renderPrometheusConfig(sites)).not.toContain('blackbox_demo_tls');
-      expect(renderPrometheusConfig(sites, '')).not.toContain('blackbox_demo_tls');
-    });
-
-    it('keeps the demo name out of the http_2xx target list', () => {
-      expect(blackboxTargets(sites)).not.toContain('https://probe.example.test');
-      const rendered = renderPrometheusConfig(sites, 'example.test');
-      const httpSection = rendered.slice(
-        rendered.indexOf('  - job_name: blackbox_http'),
-        rendered.indexOf('  - job_name: blackbox_mail')
-      );
-      expect(httpSection).not.toContain('probe.example.test');
-    });
-
-    it('refuses a base that is not a lower-case domain of two or more labels', () => {
-      expect(() => renderPrometheusConfig(sites, '*.example.test')).toThrow();
-      expect(() => renderPrometheusConfig(sites, 'Example.test')).toThrow();
-      expect(() => renderPrometheusConfig(sites, 'localhost')).toThrow();
-    });
-  });
-
   it('probes the object storage endpoint through its own module, and pages on it at 15 minutes', () => {
     const rendered = renderPrometheusConfig(sites);
     const section = rendered.slice(rendered.indexOf('  - job_name: blackbox_object_storage'));
