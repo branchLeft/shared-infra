@@ -73,8 +73,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
-# all: it refuses to run until its secret files exist), app1's host_inputs,
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (it refuses to run until its secret files exist), then host_tls_identity (last of
+# all: it fails the run while a certificate has under 60 days left), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
@@ -108,6 +108,7 @@ APPLIED_ON_MAIN = {
         "ntfy_pager",
         "monitoring_stack",
         "sweego_receiver",
+        "host_tls_identity",
     ],
     "ops1": [
         "host_inputs",
@@ -474,11 +475,12 @@ class HostRoleLists(unittest.TestCase):
                 "ntfy_pager",
                 "monitoring_stack",
                 "sweego_receiver",
+                "host_tls_identity",
             ],
         )
         self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
-        self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
+        self.assertEqual(names[-3:], ["monitoring_stack", "sweego_receiver", "host_tls_identity"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
         self.assertEqual(names.count("egress_nat"), 1)

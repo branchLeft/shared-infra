@@ -30,3 +30,7 @@ ci_jump_keys:
 # unprivileged port. ansible/checks/test_sweego_receiver_wiring.py holds both facts.
 sweego_receiver_port: 18080
 sweego_receiver_drain_port: 18081
+# The host_tls_identity role: demo1's public server certificate, the one certificate edge1's Prometheus
+# trusts for demo1's exporter. Empty until the owner has read it off demo1 (roles/host_tls_identity/README.md,
+# "Owner steps"). It is public data, never a key.
+host_tls_identity_peer_cert: ''

@@ -20,6 +20,11 @@
 # its two secret files and refuses a half-finished placement, and that refusal must not hold the
 # roles before it back.
 #
+# host_tls_identity is last of all, for the same reason: it makes edge1's own client key and self-signed
+# certificate for the scrape of demo1's exporter and pins demo1's server certificate from the owner's value
+# in owner_vars/edge1.yml, and it fails the run while a certificate has under 60 days left, which must not hold
+# the roles before it back.
+#
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
 # from vars_files: the shared includes, edge1's own trust file and its owner_vars file. The one-time
@@ -61,3 +66,4 @@
     - role: ../roles/ntfy_pager # noqa: role-name[path]
     - role: ../roles/monitoring_stack # noqa: role-name[path]
     - role: ../roles/sweego_receiver # noqa: role-name[path]
+    - role: ../roles/host_tls_identity # noqa: role-name[path]

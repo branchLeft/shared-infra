@@ -1038,6 +1038,7 @@ class Sabotage(unittest.TestCase):
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n"
             "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
+            "host_tls_identity_peer_cert: ''\n"
         )
         self.assertEqual(check(self.root), [])
 
@@ -1137,6 +1138,14 @@ class Sabotage(unittest.TestCase):
     def test_r10_demo1_owner_vars_holds_an_extra_key(self) -> None:
         self._write("owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: ''\nci_login_keys: []\n")
         self._assert_one("R10 owner_vars/demo1.yml: must hold exactly")
+
+    def test_r10_edge1_owner_vars_lacks_the_peer_certificate(self) -> None:
+        self._edit("owner_vars/edge1.yml", "host_tls_identity_peer_cert: ''\n", "")
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    def test_r10_edge1_owner_vars_peer_certificate_is_not_text(self) -> None:
+        self._edit("owner_vars/edge1.yml", "host_tls_identity_peer_cert: ''", "host_tls_identity_peer_cert: 5")
+        self._assert_one("R10 owner_vars/edge1.yml: host_tls_identity_peer_cert must be text")
 
     def test_r10_the_pin_key_is_allowed_for_the_hosts_that_apply_the_role_and_no_other(self) -> None:
         for host, keys in OWNER_VARS_KEYS.items():

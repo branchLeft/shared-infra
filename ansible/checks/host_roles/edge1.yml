@@ -12,3 +12,7 @@
 - ntfy_pager
 - monitoring_stack
 - sweego_receiver
+# host_tls_identity makes edge1's own client key and certificate for the demo1 scrape and pins demo1's server
+# certificate. Last of all: it fails the run while a certificate has under 60 days left, and that must not
+# hold the roles before it back.
+- host_tls_identity
