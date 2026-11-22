@@ -9,5 +9,5 @@
 - host_baseline
 - egress_nat
 - ci_jump
-- node_exporter
 - tenant_scrape_tunnel
+- node_exporter
