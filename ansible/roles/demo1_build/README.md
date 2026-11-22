@@ -306,7 +306,10 @@ caddyfile --config -`, the candidate on standard input. Nothing is pulled, start
    run. It accepts only: the admin endpoint off; the `http` and `tls` apps and no
    other (`pki` is where `skip_install_trust` shows); one server, listening on `:443`
    alone (a plain-HTTP site is a server on `:80`), with one route whose host matcher
-   is `*.<base>` and no other key (`auto_https` options show as keys); one TLS
+   is `*.<base>` and no other key (`auto_https` options show as keys), except an `errors`
+   key that is exactly the renderer's one header-only route, the `nosniff` header of the
+   site-level `handle_errors` block, and nothing else, since `errors` is
+   a second route table Caddy serves on an error response (`server-errors`); one TLS
    automation policy, for the subject `*.<base>` alone, with one issuer that is ACME
    with exactly the DNS-01 provider `hetzner` and the token file reference
    `{file.<token path>}`; no `internal` issuer anywhere in the JSON; and no other
@@ -424,7 +427,7 @@ it. The image is not run by the role beyond `caddy adapt`, which fails on such a
 
 ### The pin
 
-The commit is `595bcce0ee2bb1c7f8de565cf008060ea43122cf`, which is at or after
+The commit is `5e20991adefcdb9edde4157c6a56d2796ec1da6c`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
