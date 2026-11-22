@@ -881,7 +881,7 @@ class LookEndToEndTests(unittest.TestCase):
             def writable(self) -> bool:
                 return True
 
-            def write(self, _data: object) -> int:  # type: ignore[override]
+            def write(self, _data: object) -> int:
                 raise BrokenPipeError
 
         out, errors = io.StringIO(), io.StringIO()
