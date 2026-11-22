@@ -854,6 +854,41 @@
       plant: [forms]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
+# The scan's cycle-3 rules: a client key under /etc/docker (the image stores are pruned by full path,
+# so /etc/docker is scanned), and a binary key file named *-key.bin, which grep cannot read and so
+# the name rule must find. Each is refused when no row names it.
+- name: Case refused_secret_docker, refuse a client key under /etc/docker the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [docker]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_binkey, refuse a binary key file the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [binkey]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# Root's authorized_keys is named by a holder row (owner ruling, workspace#4048). Both key files are
+# accepted by their rows; the control above proves the host as prepared is accepted.
+- name: Accept root's authorised_keys and the ansible-ci account's authorised_keys, both listed
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [keys]
+      accepted: true
+
+# The broker verify key is named by a holder row, and the row accepts the file (the binary key name
+# rule finds it, and the row lists it).
+- name: Accept the broker request-signing verify key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [verify]
+      accepted: true
+
 # The CI key the pull trigger's route puts in root's authorized_keys is named by a holder row, and is
 # accepted; the control above proves an absent row is not an error, this proves the row accepts the file.
 - name: Accept the CI key in the ansible-ci account's authorized_keys, which the holder list names
