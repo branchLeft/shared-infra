@@ -108,6 +108,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "backup_restore_state_copy_tenant_endpoint",
         "backup_restore_state_copy_tenant_region",
         "backup_restore_state_copy_tenant_access_key_id",
+        "control_plane_portal_support_smtp_password",
     ),
     "app1": (
         "website_app1_smtp_host",
@@ -195,6 +196,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "backup_restore_state_copy_tenant_access_key_id": (
         _env("state-copy.env", "STATE_COPY_TENANT_ACCESS_KEY_ID"),
     ),
+    "control_plane_portal_support_smtp_password": (Source(TYPED, ""),),
     "website_app1_smtp_host": (_env("website.env", "CONTACT_SMTP_HOST"),),
     "website_app1_smtp_port": (_env("website.env", "CONTACT_SMTP_PORT"),),
     "website_app1_smtp_user": (_env("website.env", "CONTACT_SMTP_USER"),),

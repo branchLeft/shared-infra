@@ -313,6 +313,7 @@ class RealTree(unittest.TestCase):
                     "backup_restore_state_copy_tenant_endpoint",
                     "backup_restore_state_copy_tenant_region",
                     "backup_restore_state_copy_tenant_access_key_id",
+                    "control_plane_portal_support_smtp_password",
                 ],
                 "db1": [
                     "db1_stack_exporter_password",
@@ -339,6 +340,7 @@ class RealTree(unittest.TestCase):
                 "edge1": ["ci_jump_user"],
                 "edget": ["ci_jump_user"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
+                "ops1": ["control_plane_portal_support_smtp_password"],
             },
         )
 
@@ -387,6 +389,7 @@ class Mutations(unittest.TestCase):
             "db1_backup_timers",
             "tunnel_account",
             "ci_jump",
+            "control_plane",
             "website_app1",
             "publicpress_website_app1",
             "deploy_tooling",
