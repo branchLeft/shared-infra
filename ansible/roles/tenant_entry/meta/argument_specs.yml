@@ -17,6 +17,13 @@ argument_specs:
           The controller's public key, one ed25519 public key on one line as ssh-keygen writes it,
           with no options in front. An empty value, another key type and a body of the wrong
           length are refused. Public, but treated as sensitive: no task prints it.
+      tenant_entry_bind_address:
+        type: str
+        required: true
+        description: >-
+          This app host's own private IPv4 address (10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16),
+          where the stack verb publishes each tenant's ports. Kept in a root-owned file beside the
+          register; never part of a request. A public, loopback or wildcard address is refused.
       tenant_entry_from:
         type: list
         elements: str

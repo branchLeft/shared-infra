@@ -1,7 +1,6 @@
 # Runbook — move the estate into its own hcloud project
 
-Executes the project split decided in
-[branchLeft/workspace#171](https://github.com/branchLeft/workspace/issues/171)
+Executes the project split decided in the project-split issue
 and recorded in `ghost-platform-docs` doc 14 §3.4: `mx1` stays in the existing
 project alone, and the `platform` network plus every platform host moves to a
 new one.
@@ -141,8 +140,7 @@ Once done: the mail project holds `mx1`, the `platform` network and its subnet.
 ### Step 4 fallback — when the estate stack's passphrase is unavailable
 
 This is the path that was actually executed on 2026-08-21: the stack's
-passphrase was lost at creation-time storage (the incident record is
-[branchLeft/workspace#207](https://github.com/branchLeft/workspace/issues/207)),
+passphrase was lost at creation-time storage (a passphrase-loss incident),
 and a stack whose checkpoint cannot be decrypted cannot run `pulumi destroy`.
 The resources still exist and the API still answers, so the teardown moves
 down a layer: delete the resources with the `hcloud` CLI, then discard the
@@ -345,9 +343,9 @@ past a warning you have not read.
 
 ## 10. Close it out
 
-Comment on [branchLeft/workspace#171](https://github.com/branchLeft/workspace/issues/171)
+Comment on the project-split issue
 with the new public addresses and the date, then close it. That unblocks
-[branchLeft/workspace#110](https://github.com/branchLeft/workspace/issues/110),
+the server-creation issue,
 which creates `app1` and `db1` in the project this runbook just made.
 
 Update `ghost-platform-docs` doc 14 §3.1's applied-state note — it quotes
