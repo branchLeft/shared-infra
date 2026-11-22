@@ -68,9 +68,9 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), egress_nat (the
-# NAT gateway, after host_baseline for its Docker and iptables), ci_jump (directly after ci_login;
-# it only reports until the owner enables it), deploy_tooling and
+# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall
+# (after host_baseline for Docker), egress_nat (after the firewall role: it reads its table),
+# ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
@@ -98,6 +98,7 @@ APPLIED_ON_MAIN = {
     "edge1": [
         "host_inputs",
         "host_baseline",
+        "edge_firewall",
         "egress_nat",
         "ci_login",
         "ci_jump",
@@ -167,7 +168,10 @@ APPLIED_ON_MAIN = {
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
-    "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
+    "edge1": (
+        "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n"
+        "    edge_firewall_nat_source: 10.20.1.0/24\n    edge_firewall_enforce: false\n"
+    ),
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
     "ops1": "    deploy_tooling_host_class: internal\n",
     "db1": "    deploy_tooling_host_class: internal\n",
@@ -466,6 +470,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "edge_firewall",
                 "egress_nat",
                 "ci_login",
                 "ci_jump",
@@ -485,6 +490,12 @@ class HostRoleLists(unittest.TestCase):
         self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
+        self.assertEqual(names.count("edge_firewall"), 1)
+        # The firewall role loads and confirms the masquerade table first; the reconciler that
+        # follows it reads that table and, finding it, inserts no masquerade of its own, so the
+        # order is the control.
+        self.assertLess(names.index("host_baseline"), names.index("edge_firewall"))
+        self.assertLess(names.index("edge_firewall"), names.index("egress_nat"))
         self.assertEqual(names.count("egress_nat"), 1)
         self.assertLess(names.index("host_baseline"), names.index("egress_nat"))
         self.assertLess(names.index("egress_nat"), names.index("ci_login"))
