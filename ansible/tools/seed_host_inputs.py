@@ -124,15 +124,25 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_password",
         "deploy_slot_keys_slots",
     ),
-    "appt1": ("tenant_entry_key", "tenant_entry_from", "tenant_entry_bind_address"),
+    "appt1": (
+        "tenant_entry_key",
+        "tenant_entry_from",
+        "tenant_entry_bind_address",
+        STACKS_KEY,
+    ),
     "dbt1": ("db_t1_tenant_entry_controller_key", "db_t1_tenant_entry_controller_address"),
 }
 
-# Inputs the tool can read live although no host's row holds them yet. The tenant stacks are for
-# the tenant ring's app host, which the loader does not have a row for yet; until a row names the
-# key, `--host` never seeds it and `--set` refuses it. A test fails once a row holds a key that is
-# still listed here, so the list only shrinks.
-NOT_YET_ROUTED: Final = frozenset({STACKS_KEY})
+# Inputs the tool can read live although no host's row holds them yet. Empty now: the tenant stacks
+# are routed to appt1's row. A test fails once a row holds a key still listed here, so the list only
+# shrinks.
+NOT_YET_ROUTED: Final[frozenset[str]] = frozenset()
+
+# The inputs of a host's row that may be left out of the file, as the loader's optional list says
+# (host_inputs_optional_by_host). An empty answer for one of these omits it instead of refusing the
+# fill. appt1 has no tenant yet, so its tenant list is absent until a tenant is claimed; app1's
+# stacks are required, and an empty answer there still refuses.
+OPTIONAL_BY_HOST: Final[dict[str, frozenset[str]]] = {"appt1": frozenset({STACKS_KEY})}
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
 # pager keys look in the pager's own file first (the unit loads it later, so it wins), then in
@@ -770,7 +780,8 @@ def collect(ctx: Context, host: str) -> Collected:
     for key in pending:
         answer = ask_for(ctx, key)
         if answer is None:
-            missing.append(key)
+            if key not in OPTIONAL_BY_HOST.get(host, frozenset()):
+                missing.append(key)
         else:
             found[key] = answer
             typed.append(key)

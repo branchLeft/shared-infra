@@ -245,9 +245,9 @@ class TableTests(unittest.TestCase):
         in_rows = {key for keys in tool.HOSTS.values() for key in keys}
         self.assertEqual(set(), in_rows & tool.NOT_YET_ROUTED)
         self.assertEqual(set(), tool.NOT_YET_ROUTED - set(tool.SOURCES))
-        self.assertEqual(frozenset({STACKS_KEY}), tool.NOT_YET_ROUTED)
-        for host, keys in self.rows.items():
-            self.assertNotIn(STACKS_KEY, keys, host)
+        self.assertEqual(frozenset(), tool.NOT_YET_ROUTED)
+        self.assertIn(STACKS_KEY, self.rows["appt1"])
+        self.assertEqual(frozenset({STACKS_KEY}), tool.OPTIONAL_BY_HOST["appt1"])
 
     def test_the_unsupported_hosts_are_real_hosts_of_the_loader(self) -> None:
         self.assertEqual(set(), UNSUPPORTED - set(self.rows))
