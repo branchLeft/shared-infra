@@ -63,3 +63,14 @@ argument_specs:
         description: >-
           Whether to enable and start the stack's unit, run the deploy wrapper and
           apply the isolation policy. False writes the files and leaves systemd alone.
+      control_plane_provisioning_enabled:
+        type: bool
+        default: false
+        description: >-
+          Whether the provisioning API runs in the stack and the portal and the console are
+          pointed at it. On, the role refuses before it writes anything unless the three files
+          the owner places (the tenant credentials, the owner credential and the register of
+          demos, under /etc/branchleft/control-plane/provisioning) exist and are not empty and
+          control_plane_app_image is given, because the applications image the stack already runs
+          may not carry the service. Off, the role writes an interpolation file that keeps it at
+          scale 0. Not a secret.

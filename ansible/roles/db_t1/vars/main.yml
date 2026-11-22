@@ -84,6 +84,35 @@ db_t1_server_id: 2
 # loudly otherwise.
 db_t1_container_uid: 1001
 
+# ----- The listener: where the database binds, and who may reach it -----
+
+# This host's private address, where mysqld binds, and the application host's, the one source
+# the host firewall rule admits. Both are hetzner-host/addressPlan.ts TENANTS_HOST_IPS (dbT1 and
+# appT1); a test reads that file and holds these to it. The role never writes a wildcard address.
+db_t1_private_address: 10.20.1.200
+db_t1_client_address: 10.20.1.201
+# The database's TCP port: the server's `port`, the health check, and the rule's one port. The
+# X protocol (33060) is off and the admin interface is not enabled, so this is the only one.
+db_t1_port: 3306
+
+# The program that loads the rule, its boot unit, and the drop-in that orders Docker after the
+# unit. The program is the role's own file under files/. Its chain name is a constant in the
+# program, written out here so a test can hold the two to each other.
+db_t1_rule_chain: BRANCHLEFT-DBT1-IN
+db_t1_rule_program_src: branchleft_dbt1_listener_rule.py
+db_t1_rule_program_dest: /usr/local/sbin/branchleft-dbt1-listener-rule
+db_t1_rule_unit_name: branchleft-dbt1-listener-rule.service
+db_t1_rule_unit_dest: /etc/systemd/system/branchleft-dbt1-listener-rule.service
+# Docker itself is ordered after the rule and requires it, not only the stack's unit: Docker
+# restarts a container with `restart: unless-stopped` as soon as the daemon starts, without the
+# stack's unit, so the order has to bind the daemon.
+db_t1_rule_docker_unit_name: docker.service
+db_t1_rule_docker_dropin_dir: /etc/systemd/system/docker.service.d
+db_t1_rule_docker_dropin_dest: /etc/systemd/system/docker.service.d/20-branchleft-dbt1-listener-rule.conf
+# What the program's --check exits with when the chain or the jump differs from what is wanted
+# (0 when they are as wanted, any other status a refusal). The tasks read it as "would change".
+db_t1_rule_probe_differs_status: 3
+
 # ----- The root credential file (owner-placed, never written by the role) -----
 
 # The shape of the one line the file may hold. The alphabet is what the image's
@@ -118,7 +147,8 @@ db_t1_exporter_image: ghcr.io/branchleft/mysqld-exporter@sha256:25d73600fb442f5f
 # Loopback, never the private address or 0.0.0.0. Nothing on the tenants network reads it
 # directly: db1's replica tunnel forwards its own port 9105 to this one (the `-L` of
 # hetzner/provision/branchleft-db-tunnel.service, scraped by hetzner/monitoring/render.ts as
-# REPLICA_TUNNEL_METRICS_PORT), and the database itself listens on loopback only.
+# REPLICA_TUNNEL_METRICS_PORT). The database port is the only one the host firewall rule covers,
+# and the database binds the private address, so the exporter's port stays off it.
 db_t1_exporter_listen_address: 127.0.0.1
 db_t1_exporter_metrics_port: 9104
 
