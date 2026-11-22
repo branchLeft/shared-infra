@@ -39,6 +39,11 @@ scrape_configs:
         labels: {host: app1, expected_up: 'true'}
 
   - job_name: node
+    tls_config:
+      ca_file: /etc/prometheus/demo1-metrics-tls/ca.crt
+      cert_file: /etc/prometheus/demo1-metrics-tls/client.crt
+      key_file: /etc/prometheus/demo1-metrics-tls/client.key
+      server_name: demo1
     static_configs:
       - targets: ['node-exporter:9100']
         labels: {host: edge1, expected_up: 'true'}
@@ -54,6 +59,8 @@ scrape_configs:
         labels: {host: app-t1, expected_up: 'false'}
       - targets: ['10.20.1.210:9100']
         labels: {host: edge-t, expected_up: 'false'}
+      - targets: ['2.28.114.186:9100']
+        labels: {host: demo1, expected_up: 'false', __scheme__: https}
 
   - job_name: mysqld
     static_configs:

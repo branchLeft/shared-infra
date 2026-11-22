@@ -56,6 +56,13 @@ services:
       # HostOrServiceDown, which is the intended failure mode. See
       # RUNBOOK-monitoring.md.
       - ./prometheus/mx1-metrics-password:/etc/prometheus/mx1-metrics-password:ro
+      # The CA, client certificate and client key the `node` job presents to
+      # demo1's exporter (ca.crt, client.crt, client.key). Placed on edge1 by
+      # the owner before this config is delivered; the repository ships none of
+      # them. Prometheus reads them at start, so a missing file stops it, and
+      # the first delivery of this line waits for the files:
+      # render.md#demo1s-node-target.
+      - /etc/branchleft/demo1-metrics-tls:/etc/prometheus/demo1-metrics-tls:ro
       - prometheus-data:/prometheus
     # Sized from the §3.1 arithmetic in RUNBOOK-monitoring.md: a ceiling well
     # above the ~300-500 MB doc 14 estimates for this host count and series

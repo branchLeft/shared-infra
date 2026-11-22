@@ -17,6 +17,9 @@ import {
   CADDY_METRICS_PORT,
   CADVISOR_PORT,
   CROWDSEC_METRICS_PORT,
+  DEMO1_METRICS_SERVER_NAME,
+  DEMO1_METRICS_TLS_DIR,
+  DEMO1_PUBLIC_IPV4,
   MONITORED_MYSQLD_HOST,
   MYSQLD_EXPORTER_PORT,
   PROMETHEUS_PORT,
@@ -108,6 +111,7 @@ describe('the rendered Prometheus config', () => {
       'db-t1',
       'app-t1',
       'edge-t',
+      'demo1',
     ]);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.address).toBe('10.20.1.10');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.address).toBe('10.20.1.100');
@@ -1231,6 +1235,96 @@ describe('the tenant hosts', () => {
           metricsPorts.filter((port) => covers(String(rule.port), port)).map((port) => `${port}`)
         );
       expect(opened, name).toEqual([]);
+    }
+  });
+});
+
+describe('demo1, scraped over its public address with a verified client certificate', () => {
+  const demo1 = MONITORED_NODE_HOSTS.find((host) => host.name === 'demo1');
+  const promConfig = renderPrometheusConfig(sites);
+  const rules = renderAlertRules();
+  const compose = readFileSync(join(__dirname, 'stack', 'compose.yml'), 'utf8');
+  const promtoolCases = ['alert_rules_test.yml', 'alert_rules_memory_test.yml']
+    .map((file) => readFileSync(join(__dirname, file), 'utf8'))
+    .join('\n');
+
+  it('is the last node target, on its public address, expected down until its exporter is read back answering', () => {
+    expect(MONITORED_NODE_HOSTS.at(-1)?.name).toBe('demo1');
+    expect(demo1?.address).toBe(DEMO1_PUBLIC_IPV4);
+    expect(demo1?.expectedUp).toBe(false);
+    expect(promConfig).toContain(
+      `targets: ['${DEMO1_PUBLIC_IPV4}:${NODE_EXPORTER_PORT}']\n        labels: {host: demo1, expected_up: 'false', __scheme__: https}`
+    );
+  });
+
+  it("holds demo1's address equal to the one the jump destinations already carry, so two homes cannot drift apart unseen", () => {
+    const ownerVars = readFileSync(
+      join(__dirname, '..', '..', 'ansible', 'owner_vars', 'edge1.yml'),
+      'utf8'
+    );
+    expect(ownerVars).toContain(`  - '${DEMO1_PUBLIC_IPV4}'\n`);
+  });
+
+  it('is the only node target scraped over https; every private-network target stays plain', () => {
+    const nodeJob = promConfig.slice(promConfig.indexOf('  - job_name: node\n'));
+    const nodeSection = nodeJob.slice(0, nodeJob.indexOf('  - job_name: mysqld'));
+    expect(nodeSection.match(/__scheme__/g)).toHaveLength(1);
+    expect(
+      MONITORED_NODE_HOSTS.filter((host) => host.publicTls === true).map((h) => h.name)
+    ).toEqual(['demo1']);
+  });
+
+  it('verifies the exporter against the monitoring CA and presents a client certificate, all by file path', () => {
+    expect(promConfig).toContain(
+      [
+        '    tls_config:',
+        `      ca_file: ${DEMO1_METRICS_TLS_DIR}/ca.crt`,
+        `      cert_file: ${DEMO1_METRICS_TLS_DIR}/client.crt`,
+        `      key_file: ${DEMO1_METRICS_TLS_DIR}/client.key`,
+        `      server_name: ${DEMO1_METRICS_SERVER_NAME}`,
+      ].join('\n')
+    );
+    // Verification must never be switched off for the public scrape.
+    expect(promConfig).not.toMatch(/insecure_skip_verify:\s*true/);
+  });
+
+  it('carries no key material, only the paths that name it', () => {
+    expect(promConfig).not.toMatch(/BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)/);
+    expect(promConfig).not.toMatch(/\n\s+(cert|key|ca):\s/);
+  });
+
+  it('mounts the certificate directory read-only from a host path the repository does not ship', () => {
+    expect(compose).toContain(`- /etc/branchleft/demo1-metrics-tls:${DEMO1_METRICS_TLS_DIR}:ro`);
+  });
+
+  it('evaluates the disk and memory rules for it with no change, because neither selects on host or expected_up', () => {
+    for (const alert of ['HostDiskSpaceLow', 'HostMemoryPressure']) {
+      const start = rules.indexOf(`- alert: ${alert}`);
+      expect(start, alert).toBeGreaterThan(-1);
+      expect(rules.slice(start, rules.indexOf('labels:', start)), alert).not.toMatch(
+        /host\s*=|expected_up|job\s*=|instance\s*=/
+      );
+    }
+  });
+
+  it("holds a promtool case for demo1's disk, memory and host-down alert", () => {
+    const instance = `instance="${DEMO1_PUBLIC_IPV4}:${NODE_EXPORTER_PORT}", host="demo1"`;
+    for (const metric of [
+      'node_filesystem_avail_bytes',
+      'node_filesystem_size_bytes',
+      'node_memory_MemAvailable_bytes',
+      'node_memory_MemTotal_bytes',
+      'up',
+    ]) {
+      expect(promtoolCases, metric).toContain(`${metric}{job="node", ${instance}`);
+    }
+    for (const alert of ['HostDiskSpaceLow', 'HostMemoryPressure', 'HostOrServiceDown']) {
+      expect(
+        new RegExp(`alertname="${alert}"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        alert
+      ).toBe(true);
     }
   });
 });
