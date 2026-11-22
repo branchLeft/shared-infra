@@ -34,8 +34,8 @@ from pathlib import Path
 
 GROUP_START = re.compile(r"^  - interval:")
 TESTS_KEY = re.compile(r"^tests:\s*$")
-EVAL_TIME = re.compile(r"^\s*- eval_time:", re.MULTILINE)
-EVAL_TIME_VALUE = re.compile(r"^\s*- eval_time:\s*(\S+)\s*$", re.MULTILINE)
+EVAL_TIME = re.compile(r"^\s*(?:- )?eval_time:", re.MULTILINE)
+EVAL_TIME_VALUE = re.compile(r"^\s*(?:- )?eval_time:\s*(\S+)\s*$", re.MULTILINE)
 DURATION = re.compile(r"(\d+[hms])+")
 DURATION_PART = re.compile(r"(\d+)([hms])")
 RULE_FILES_ENTRY = re.compile(r"^\s*-\s*(\S+)\s*$")
@@ -230,7 +230,7 @@ def run_file(path: Path, image: str, shards: int, jobs: int) -> bool:
         groups, evals = check_partition(
             split, [p.read_text(encoding="utf-8") for p in shard_paths]
         )
-        print(f"{path.name}: {groups} test groups, {evals} eval_time cases, {len(shard_paths)} shards")
+        print(f"{path.name}: {groups} test groups, {evals} test cases (eval_time keys), {len(shard_paths)} shards")
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             results = list(pool.map(lambda p: run_shard(image, work, p), shard_paths))

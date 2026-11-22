@@ -10,7 +10,7 @@ from promtool_shards import balance, check_partition, duration_seconds, group_co
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "alert_rules_test.yml"
-EVAL = re.compile(r"^\s*- eval_time:", re.MULTILINE)
+EVAL = re.compile(r"^\s*(?:- )?eval_time:", re.MULTILINE)
 
 SAMPLE = """rule_files:
   - stack/prometheus/alerts.yml
