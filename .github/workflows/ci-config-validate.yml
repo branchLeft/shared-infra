@@ -139,10 +139,10 @@ jobs:
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
-    # The promtool step took 5.2 to 6.4 min on healthy main runs
-    # (44761941918, 44779408332, 44790350557). The job limit covers the
-    # promtool step's worst case (22 min) plus the other steps.
-    timeout-minutes: 30
+    # The promtool step took 5.6 to 8.3 min on healthy main runs (see its own
+    # comment). The job limit covers the promtool step's worst case (46 min)
+    # plus the other steps.
+    timeout-minutes: 50
     # Same reasoning as edge-config-validate above and deliberately not in
     # `deploy`'s `needs` for the same reason: monitoring/ is not a Pulumi
     # program, it renders config for a Compose stack colocated on edge1, so
@@ -215,11 +215,12 @@ jobs:
         # output until the job's own timeout cancelled it. Each invocation has
         # its own cap and one retry, taken only when it timed out (124 or 137
         # after the kill): a real promtool failure exits 1 and fails at once.
-        # The rules invocation healthy takes 5.2 to 6.4 min on main, and ran
-        # past 8 min twice in merge-group run 44828584958, so it gets 10 min;
-        # the deadline invocation takes about 3 s, so it gets 2 min. The step
-        # limit covers 2 x 10 min + 2 x 2 min, plus margin.
-        timeout-minutes: 26
+        # The rules invocation healthy takes 5.6 to 8.3 min on main, and in
+        # runs 44886189184 and 44887164907 both attempts exceeded 10 min (the
+        # step printed nothing: promtool reports only when a file finishes), so
+        # it gets 20 min. The deadline invocation takes about 3 s, so it gets
+        # 2 min. The step limit covers 2 x 20 min + 2 x 2 min, plus margin.
+        timeout-minutes: 46
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
@@ -244,7 +245,7 @@ jobs:
             done
             return "$rc"
           }
-          run_promtool 600 promtool-rules-test \
+          run_promtool 1200 promtool-rules-test \
             -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
             -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
             --workdir /etc/prometheus-tests \
