@@ -72,3 +72,15 @@ on the host, including the CI deploy account.
 Only when running as root -- which is how the systemd ExecStartPre invokes
 this. Under CI, or a local render, there is no container to read the file and
 no privilege to chown with.
+
+## The demo wildcard TLS probe
+
+`DEMO_WILDCARD_BASE` in `/etc/branchleft/monitoring.env` is the lower-case domain
+the demo edge's wildcard certificate covers (the same value the demo host reads as
+`demo1_build_wildcard_base`). The script writes `prometheus/demo_tls_probe.yml`
+from `prometheus/demo_tls_probe.yml.tmpl` on every start, filling the probe's
+target as `probe.<base>:443`. Prometheus reads that file through
+`scrape_config_files`. An unset or empty base writes an empty scrape list, so no
+demo name is ever committed or left as a placeholder. A base that is not a
+lower-case domain of two or more labels disables the probe with a message; it
+never stops the stack from starting.

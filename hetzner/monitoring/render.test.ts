@@ -1144,6 +1144,15 @@ describe('the Alertmanager template', () => {
   });
 });
 
+describe('the demo wildcard TLS probe hand-off', () => {
+  it('names the file the host renders into the Prometheus scrape config', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain('scrape_config_files:\n  - /etc/prometheus/demo_tls_probe.yml');
+    // The probe is not a static target: its name never appears in the committed config.
+    expect(rendered).not.toContain('blackbox_demo_tls');
+  });
+});
+
 describe('the committed stack directory', () => {
   it('is what this renderer produces from the registry', async () => {
     await expect(renderPrometheusConfig(sites)).toMatchFileSnapshot(

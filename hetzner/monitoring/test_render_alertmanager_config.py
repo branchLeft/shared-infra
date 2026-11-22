@@ -551,5 +551,98 @@ class HeartbeatRouteTests(unittest.TestCase):
         self.assertNotIn("hc-ping.com", rendered)
 
 
+DEMO_TEMPLATE_PATH = MODULE_PATH.parent / "prometheus" / "demo_tls_probe.yml.tmpl"
+REPO_ROOT = MODULE_PATH.resolve().parents[3]
+COMPOSE_PATH = MODULE_PATH.parent / "compose.yml"
+PROMETHEUS_CONFIG_PATH = MODULE_PATH.parent / "prometheus" / "prometheus.yml"
+MONITORING_VARS_PATH = REPO_ROOT / "ansible" / "roles" / "monitoring_stack" / "vars" / "main.yml"
+
+
+class DemoTlsProbeTests(unittest.TestCase):
+    """The demo wildcard probe is rendered on the host from the monitoring env.
+
+    The base never reaches a committed file: an unset or empty base writes an
+    empty scrape file, and a set one fills the template's token.
+    """
+
+    def setUp(self) -> None:
+        self.template = DEMO_TEMPLATE_PATH.read_text()
+        self.render = render_alertmanager_config.render_demo_tls_probe
+
+    def test_an_unset_or_empty_base_renders_no_scrape_config(self) -> None:
+        self.assertEqual("scrape_configs: []\n", self.render(self.template, None))
+        self.assertEqual("scrape_configs: []\n", self.render(self.template, ""))
+
+    def test_a_set_base_probes_the_fixed_label_under_it_over_tls(self) -> None:
+        rendered = self.render(self.template, "example.test")
+        self.assertIn("job_name: blackbox_demo_tls", rendered)
+        self.assertIn("- probe.example.test:443", rendered)
+        self.assertIn("module: ['tls_connect']", rendered)
+        self.assertNotIn("__DEMO_WILDCARD_BASE__", rendered)
+
+    def test_a_base_that_is_not_a_lower_case_domain_is_refused(self) -> None:
+        for bad in ("*.example.test", "Example.test", "localhost", "a b.test", "example.test."):
+            with self.subTest(base=bad), self.assertRaises(ValueError):
+                self.render(self.template, bad)
+
+    def test_the_committed_template_is_the_tls_probe_with_a_token_for_the_base(self) -> None:
+        self.assertIn("job_name: blackbox_demo_tls", self.template)
+        self.assertIn("module: ['tls_connect']", self.template)
+        self.assertIn("__DEMO_WILDCARD_BASE__", self.template)
+
+
+class DemoTlsProbeWiringTests(unittest.TestCase):
+    """Each link in the chain from monitoring.env to the running Prometheus."""
+
+    def test_the_rendered_file_is_mounted_read_only_where_prometheus_reads_it(self) -> None:
+        compose = COMPOSE_PATH.read_text()
+        self.assertIn(
+            "./prometheus/demo_tls_probe.yml:/etc/prometheus/demo_tls_probe.yml:ro", compose
+        )
+
+    def test_the_prometheus_config_names_the_mounted_file(self) -> None:
+        self.assertIn("  - /etc/prometheus/demo_tls_probe.yml", PROMETHEUS_CONFIG_PATH.read_text())
+
+    def test_ansible_delivers_the_template_the_host_renders(self) -> None:
+        self.assertIn("  - prometheus/demo_tls_probe.yml.tmpl", MONITORING_VARS_PATH.read_text())
+
+    def test_the_host_writes_the_file_and_a_bad_base_disables_rather_than_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stack_dir = pathlib.Path(tmp)
+            (stack_dir / "prometheus").mkdir()
+            (stack_dir / "prometheus" / "demo_tls_probe.yml.tmpl").write_text(
+                DEMO_TEMPLATE_PATH.read_text()
+            )
+            output = stack_dir / "prometheus" / "demo_tls_probe.yml"
+            with contextlib.redirect_stdout(io.StringIO()):
+                render_alertmanager_config.write_demo_tls_probe(
+                    stack_dir, {"DEMO_WILDCARD_BASE": "example.test"}
+                )
+            self.assertIn("- probe.example.test:443", output.read_text())
+            self.assertEqual(0o644, stat.S_IMODE(output.stat().st_mode))
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                render_alertmanager_config.write_demo_tls_probe(
+                    stack_dir, {"DEMO_WILDCARD_BASE": "*.bad"}
+                )
+            self.assertEqual("scrape_configs: []\n", output.read_text())
+            self.assertIn("DEMO_WILDCARD_BASE", err.getvalue())
+
+    def test_a_directory_left_at_the_output_path_is_cleared_and_the_probe_renders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stack_dir = pathlib.Path(tmp)
+            (stack_dir / "prometheus").mkdir()
+            (stack_dir / "prometheus" / "demo_tls_probe.yml.tmpl").write_text(
+                DEMO_TEMPLATE_PATH.read_text()
+            )
+            (stack_dir / "prometheus" / "demo_tls_probe.yml").mkdir()
+            with contextlib.redirect_stdout(io.StringIO()):
+                render_alertmanager_config.write_demo_tls_probe(stack_dir, {})
+            output = stack_dir / "prometheus" / "demo_tls_probe.yml"
+            self.assertTrue(output.is_file())
+            self.assertEqual("scrape_configs: []\n", output.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
