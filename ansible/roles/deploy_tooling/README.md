@@ -30,8 +30,10 @@ what it is is not guessed.
 
 The role does not write the sudoers drop-in. First-boot configuration writes it, and a
 broken sudoers file locks every account out of `sudo`, so the role reads it and refuses
-anything but the one grant. It does not start, enable or restart a compose instance
-(`branchleft-compose@`): a restart redeploys a tenant's stack. It does not edit the
+anything but the one grant. It enables, and never starts or restarts, the compose instance of each
+tenant in the list `tenant_compose_stacks` (`branchleft-compose@<slug>`), and enables none when the
+list is undefined: a start or restart redeploys a tenant's stack, and tenant_compose starts it once
+it has a pin (branchLeft/workspace#2821). It does not edit the
 policy program, and it does not decide which host is which class: that belongs to the
 inventory or the play.
 
@@ -366,7 +368,8 @@ leaves every step green is not claimed.
 | The policy unit is restarted only when something changed                              | a restart of the unit on every run                              | idempotence: `changed=1` on the second converge                                                                                                                             |
 | A changed program is applied by the handler                                           | the handler made a `started` instead of a `restarted`           | verify, program changed: `The chain was put right by the read-back's repair`                                                                                                |
 | The role never restarts a compose instance                                            | a restart handler notified when the template unit is written    | verify, compose probe: `The role restarted a compose instance`, the invocation id changed                                                                                   |
-| The role never enables a compose instance                                             | an `enabled: true` task for the probe instance                  | verify, compose probe: `A compose unit is enabled`                                                                                                                          |
+| The role enables a listed tenant's instance and never starts one (no `state:` key)    | a `started`/`restarted` state on the instance enable task       | `test_deploy_tooling_tenant_enable.py`                                                                                                                                      |
+| The role enables no instance while no tenant list is declared                         | the enable loop with no `default([])`                           | `test_deploy_tooling_tenant_enable.py`                                                                                                                                      |
 | The compose probe is real                                                             | the start of the probe instance taken out                       | verify, compose probe: `The probe instance did not start`                                                                                                                   |
 | The firewall chains are read back                                                     | the read-back task replaced by a no-op                          | verify, chain: `The role did not notice that the chains had been flushed`                                                                                                   |
 | A flushed chain is repaired once                                                      | the restart in the rescue taken out                             | verify, chain: the second read-back fails with the module's `established accept is missing`                                                                                 |
