@@ -7,12 +7,14 @@ A control is proven by sabotage: each refusal below goes red when the line that 
 broken (the role README lists the edits).
 """
 
+import datetime
 import fcntl
 import gzip
 import hashlib
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -22,6 +24,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import IO, cast
+from unittest import mock
 
 import branchleft_control_plane_backup as program
 import yaml
@@ -478,7 +481,18 @@ class VerifyTests(TmpCase):
         said = self.verify(backup, docker)
         self.assertEqual(docker.created, ["portal", "zitadel"])
         self.assertTrue(docker.removed())
-        self.assertEqual(len(said), 2)
+        self.assertEqual(len(said), 3)
+        self.assertEqual(said[-1], f"proven {backup.name}: counted toward retention")
+
+    def test_a_restore_that_passes_marks_the_copy_proven_and_one_that_fails_does_not(self) -> None:
+        backup, _ = make_backup(self.root)
+        self.assertFalse(program.is_proven(backup))
+        with self.assertRaises(program.CheckFailed):
+            self.verify(backup, FakeDocker(self.restored(portal={"public.prospects": 1})))
+        self.assertFalse(program.is_proven(backup))
+        self.assertFalse((self.root / f"{backup.name}{program.PROVEN_SUFFIX}").exists())
+        self.verify(backup, FakeDocker(self.restored()))
+        self.assertTrue(program.is_proven(backup))
 
     def test_the_throwaway_has_no_network_no_logs_and_a_trust_only_socket(self) -> None:
         backup, _ = make_backup(self.root)
@@ -820,29 +834,196 @@ class ShipTests(TmpCase):
             )
 
 
+def found(pattern: str, text: str) -> "re.Match[str]":
+    match = re.search(pattern, text, re.MULTILINE)
+    if match is None:
+        raise AssertionError(f"{pattern!r} is not in the text")
+    return match
+
+
+NOW = datetime.datetime(2026, 11, 19, 12, 0, tzinfo=datetime.UTC)
+
+
+def plant(root: Path, name: str, *, manifest: bool = True, proven: bool = True) -> Path:
+    """A backup directory as `take` leaves it (manifest) and `verify` leaves it (mark)."""
+    backup = root / name
+    backup.mkdir(parents=True)
+    (backup / "portal.sql.gz").write_bytes(b"x")
+    if manifest:
+        (backup / program.MANIFEST_FILE).write_text(json.dumps({"version": 1}) + "\n")
+    if proven:
+        program.mark_proven(backup)
+    (root / f"{name}{program.SEALED_SUFFIX}").write_bytes(b"x")
+    (root / f"{name}{program.SEALED_SUFFIX}.sha256").write_text("x")
+    return backup
+
+
+def nights(count: int) -> list[str]:
+    """Stamps of `count` nights, oldest first, the newest two days before NOW."""
+    first = NOW - datetime.timedelta(days=count + 1)
+    return [(first + datetime.timedelta(days=n)).strftime("%Y%m%dT024000Z") for n in range(count)]
+
+
 class PruneTests(TmpCase):
-    def test_the_newest_are_kept_and_the_protected_one_is_never_removed(self) -> None:
-        names = [f"2026111{d}T024000Z" for d in range(1, 6)]
+    def prune(self, keep: int, protect: Path, now: datetime.datetime = NOW) -> list[str]:
+        said: list[str] = []
+        program.prune(self.root, keep, protect=protect, now=now, say=said.append)
+        return said
+
+    def left(self) -> list[str]:
+        return sorted(p.name for p in self.root.iterdir() if p.is_dir())
+
+    def test_the_newest_proven_are_kept_and_the_protected_one_is_never_removed(self) -> None:
+        names = nights(5)
         for name in names:
-            (self.root / name).mkdir(parents=True)
-            (self.root / f"{name}.tar.age").write_bytes(b"x")
-            (self.root / f"{name}.tar.age.sha256").write_text("x")
-        program.prune(self.root, 2, protect=self.root / names[0], say=lambda _: None)
-        left = sorted(p.name for p in self.root.iterdir() if p.is_dir())
-        self.assertEqual(left, [names[0], names[3], names[4]])
-        self.assertFalse((self.root / f"{names[1]}.tar.age").exists())
+            plant(self.root, name)
+        self.prune(2, self.root / names[0])
+        self.assertEqual(self.left(), [names[0], names[3], names[4]])
+        for gone in names[1:3]:
+            self.assertFalse((self.root / f"{gone}.tar.age").exists())
+            self.assertFalse((self.root / f"{gone}.tar.age.sha256").exists())
+            self.assertFalse((self.root / f"{gone}{program.PROVEN_SUFFIX}").exists())
         self.assertTrue((self.root / f"{names[0]}.tar.age").exists())
+
+    def test_a_directory_without_a_manifest_does_not_push_out_a_proven_copy(self) -> None:
+        names = nights(9)
+        proven, killed = names[:7], names[7:]
+        for name in proven:
+            plant(self.root, name)
+        for name in killed:
+            plant(self.root, name, manifest=False, proven=False)
+        said = self.prune(7, self.root / proven[-1])
+        self.assertEqual(self.left(), proven)
+        self.assertEqual(said, ["swept 2 unproven directories"])
+
+    def test_a_directory_that_lost_its_manifest_does_not_count_though_its_mark_is_there(
+        self,
+    ) -> None:
+        names = nights(8)
+        proven, lost = names[:7], names[7]
+        for name in proven:
+            plant(self.root, name)
+        (plant(self.root, lost) / program.MANIFEST_FILE).unlink()
+        self.prune(7, self.root / proven[-1])
+        self.assertEqual(self.left(), proven)
+
+    def test_a_directory_whose_restore_failed_does_not_count_either(self) -> None:
+        names = nights(9)
+        proven, unproven = names[:7], names[7:]
+        for name in proven:
+            plant(self.root, name)
+        for name in unproven:
+            plant(self.root, name, proven=False)
+        self.prune(7, self.root / proven[-1])
+        self.assertEqual(self.left(), proven)
+
+    def test_a_directory_swept_for_want_of_proof_takes_its_sidecars(self) -> None:
+        proven, killed = nights(2)
+        plant(self.root, proven)
+        plant(self.root, killed, manifest=False, proven=False)
+        self.prune(1, self.root / proven)
+        self.assertFalse((self.root / f"{killed}{program.SEALED_SUFFIX}").exists())
+        self.assertFalse((self.root / f"{killed}{program.SEALED_SUFFIX}.sha256").exists())
+
+    def test_a_take_still_running_is_left_alone(self) -> None:
+        proven = nights(1)[0]
+        plant(self.root, proven)
+        running = (NOW - datetime.timedelta(hours=2, minutes=59)).strftime("%Y%m%dT%H%M%SZ")
+        abandoned = (NOW - datetime.timedelta(hours=3)).strftime("%Y%m%dT%H%M%SZ")
+        plant(self.root, running, manifest=False, proven=False)
+        plant(self.root, abandoned, manifest=False, proven=False)
+        self.prune(7, self.root / proven)
+        self.assertEqual(self.left(), sorted([proven, running]))
+
+    def test_a_stamp_from_the_future_is_not_swept(self) -> None:
+        proven = nights(1)[0]
+        plant(self.root, proven)
+        future = (NOW + datetime.timedelta(days=1)).strftime("%Y%m%dT%H%M%SZ")
+        plant(self.root, future, manifest=False, proven=False)
+        self.prune(7, self.root / proven)
+        self.assertIn(future, self.left())
+
+    def test_a_stamp_that_is_not_a_date_is_left_alone(self) -> None:
+        proven = nights(1)[0]
+        plant(self.root, proven)
+        odd = "20269999T999999Z"
+        plant(self.root, odd, manifest=False, proven=False)
+        self.prune(7, self.root / proven)
+        self.assertIn(odd, self.left())
+
+    def test_the_last_proven_copy_survives_whatever_else_is_there(self) -> None:
+        names = nights(5)
+        plant(self.root, names[0])
+        for name in names[1:]:
+            plant(self.root, name, proven=False)
+        self.prune(1, self.root / names[0])
+        self.assertEqual(self.left(), [names[0]])
+        self.assertTrue(program.is_proven(self.root / names[0]))
+
+    def test_a_proven_copy_is_kept_when_the_newest_directories_are_all_unproven(self) -> None:
+        names = nights(4)
+        plant(self.root, names[0])
+        for name in names[1:]:
+            plant(self.root, name, manifest=False, proven=False)
+        # `protect` is a directory that was not proven; it stays, and so does the proven one.
+        self.prune(1, self.root / names[3])
+        self.assertEqual(self.left(), [names[0], names[3]])
+
+    def test_a_manifest_changed_after_the_proof_is_no_longer_proven(self) -> None:
+        backup = plant(self.root, nights(1)[0])
+        self.assertTrue(program.is_proven(backup))
+        (backup / program.MANIFEST_FILE).write_text(json.dumps({"version": 1, "x": 1}) + "\n")
+        self.assertFalse(program.is_proven(backup))
+
+    def test_a_mark_without_a_manifest_proves_nothing(self) -> None:
+        backup = plant(self.root, nights(1)[0])
+        (backup / program.MANIFEST_FILE).unlink()
+        self.assertFalse(program.is_proven(backup))
+
+    def test_a_mark_is_not_written_for_a_directory_without_a_manifest(self) -> None:
+        backup = plant(self.root, nights(1)[0], manifest=False, proven=False)
+        with self.assertRaises(program.CheckFailed):
+            program.mark_proven(backup)
+        self.assertFalse((self.root / f"{backup.name}{program.PROVEN_SUFFIX}").exists())
+
+    def test_a_removal_that_stops_half_way_leaves_no_proven_copy(self) -> None:
+        old, new = nights(2)
+        half = plant(self.root, old)
+        plant(self.root, new)
+        with (
+            mock.patch("shutil.rmtree", side_effect=OSError("disk error")),
+            self.assertRaises(OSError),
+        ):
+            self.prune(1, self.root / new)
+        self.assertTrue(half.is_dir())
+        self.assertFalse(program.is_proven(half))
 
     def test_a_directory_that_is_not_a_stamp_is_left_alone(self) -> None:
         (self.root / "notes").mkdir(parents=True)
-        (self.root / "20261111T024000Z").mkdir()
-        program.prune(self.root, 1, protect=self.root / "20261111T024000Z", say=lambda _: None)
+        newest = plant(self.root, "20261111T024000Z")
+        self.prune(1, newest)
         self.assertTrue((self.root / "notes").is_dir())
+
+    def test_a_link_named_like_a_stamp_is_left_alone(self) -> None:
+        proven = nights(1)[0]
+        plant(self.root, proven)
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        link = self.root / "20200101T024000Z"
+        link.symlink_to(elsewhere)
+        self.prune(7, self.root / proven)
+        self.assertTrue(elsewhere.is_dir())
+        self.assertTrue(link.is_symlink())
 
     def test_keeping_none_is_refused(self) -> None:
         self.root.mkdir(parents=True)
         with self.assertRaises(program.Precondition):
             program.prune(self.root, 0, protect=self.root)
+
+    def test_the_abandon_age_is_longer_than_the_service_allows_a_run(self) -> None:
+        service = (ROLE / "files" / "branchleft-control-plane-backup.service").read_text()
+        hours = int(found(r"^TimeoutStartSec=(\d+)h$", service)[1])
+        self.assertGreater(program.ABANDONED_AFTER, datetime.timedelta(hours=hours))
 
 
 class MetricsTests(TmpCase):
@@ -856,6 +1037,43 @@ class MetricsTests(TmpCase):
         again = (self.root / program.METRICS_FILE).read_text()
         self.assertIn('{stage="verified_on_host"} 300', again)
         self.assertIn('{stage="shipped_offsite"} 200', again)
+
+
+class FailureMarkTests(TmpCase):
+    def test_a_failure_writes_its_time_to_a_file_of_its_own(self) -> None:
+        program.record_failure(self.root, now=1234.0)
+        text = (self.root / program.FAILED_METRICS_FILE).read_text()
+        self.assertIn(f"# TYPE {program.FAILURE_METRIC} gauge\n", text)
+        self.assertIn(f"\n{program.FAILURE_METRIC} 1234\n", text)
+        mode = (self.root / program.FAILED_METRICS_FILE).stat().st_mode
+        self.assertEqual(stat.S_IMODE(mode), 0o644)
+
+    def test_a_later_failure_replaces_the_time(self) -> None:
+        program.record_failure(self.root, now=100.0)
+        program.record_failure(self.root, now=200.0)
+        text = (self.root / program.FAILED_METRICS_FILE).read_text()
+        self.assertIn(f"{program.FAILURE_METRIC} 200", text)
+        self.assertNotIn(f"{program.FAILURE_METRIC} 100", text)
+
+    def test_a_success_never_touches_the_failure_mark(self) -> None:
+        program.record_failure(self.root, now=100.0)
+        before = (self.root / program.FAILED_METRICS_FILE).read_text()
+        program.record_success(self.root, "shipped_offsite", now=200.0)
+        self.assertEqual((self.root / program.FAILED_METRICS_FILE).read_text(), before)
+        self.assertNotIn(program.FAILURE_METRIC, (self.root / program.METRICS_FILE).read_text())
+
+    def test_the_success_line_is_the_one_the_alert_reads(self) -> None:
+        program.record_success(self.root, "shipped_offsite", now=200.0)
+        line = f'{program.SUCCESS_METRIC}{{stage="shipped_offsite"}} 200'
+        self.assertIn(line, (self.root / program.METRICS_FILE).read_text().splitlines())
+        self.assertTrue(program.METRIC_LINE.match(line))
+
+    def test_the_command_marks_the_failure_without_touching_docker_or_a_lock(self) -> None:
+        said: list[str] = []
+        code = program.main(["--metrics-dir", str(self.root), "mark-failed"], say=said.append)
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / program.FAILED_METRICS_FILE).is_file())
+        self.assertEqual(said[-1], "OK")
 
 
 class LockTests(TmpCase):
@@ -990,6 +1208,74 @@ class RoleContractTests(unittest.TestCase):
         timer = (ROLE / "files" / "branchleft-control-plane-backup.timer").read_text()
         self.assertIn("OnCalendar=*-*-* 02:40:00\n", timer)
         self.assertIn("Persistent=true", timer)
+
+    def test_a_failed_run_starts_the_unit_that_marks_it(self) -> None:
+        mine = role_vars("control_plane_backup")
+        failed = str(mine["control_plane_backup_failed_unit"])
+        service = (ROLE / "files" / "branchleft-control-plane-backup.service").read_text()
+        self.assertIn(f"\nOnFailure={failed}\n", service)
+        # In [Unit], where systemd reads it; under [Service] it is ignored without a word.
+        self.assertLess(service.index("OnFailure="), service.index("[Service]"))
+        self.assertTrue((ROLE / "files" / failed).is_file())
+
+    def test_the_failure_unit_runs_the_programs_mark_and_nothing_else(self) -> None:
+        mine = role_vars("control_plane_backup")
+        failed = (ROLE / "files" / str(mine["control_plane_backup_failed_unit"])).read_text()
+        directory, name = (
+            mine["control_plane_backup_program_dir"],
+            mine["control_plane_backup_program_name"],
+        )
+        installed = f"{directory}/{name}"
+        self.assertEqual(
+            re.findall(r"^Exec\w+=.*$", failed, re.MULTILINE),
+            [f"ExecStart=/usr/bin/python3 -I {installed} mark-failed"],
+        )
+        self.assertIn("\nType=oneshot\n", failed)
+        # node_exporter reads the mark and is not root.
+        self.assertIn("\nUMask=0022\n", failed)
+        # A failure unit that itself named OnFailure= could start itself without end.
+        self.assertEqual(re.findall(r"^OnFailure=", failed, re.MULTILINE), [])
+
+    def test_the_failure_unit_is_installed_before_the_service_that_names_it(self) -> None:
+        task = next(t for t in self.tasks() if "failure unit" in str(t["name"]))
+        loop = cast(list[str], task["loop"])
+        self.assertEqual(
+            loop,
+            [
+                "{{ control_plane_backup_failed_unit }}",
+                "{{ control_plane_backup_service_unit }}",
+                "{{ control_plane_backup_timer_unit }}",
+            ],
+        )
+        copy = cast(dict[str, object], task["ansible.builtin.copy"])
+        self.assertEqual((copy["owner"], copy["mode"]), ("root", "0644"))
+
+    def test_the_program_writes_where_the_monitoring_stacks_node_exporter_reads(self) -> None:
+        unit = (ROLES.parents[1] / "hetzner" / "provision" / "node-exporter.service").read_text()
+        self.assertIn(str(program.METRICS_DIR), unit)
+
+    def test_the_alert_rules_read_the_names_the_program_writes(self) -> None:
+        rules = (
+            ROLES.parents[1] / "hetzner" / "monitoring" / "stack" / "prometheus" / "alerts.yml"
+        ).read_text()
+        self.assertIn(f'time() - {program.SUCCESS_METRIC}{{host="ops1"}} > 129600', rules)
+        self.assertIn(f'{program.FAILURE_METRIC}{{host="ops1"}}', rules)
+        self.assertIn(f'{program.SUCCESS_METRIC}{{host="ops1", stage="shipped_offsite"}}', rules)
+        # The stage the failure rule clears on is one the program records, after the ship.
+        source = Path(program.__file__).read_text()
+        self.assertIn('record_success(args.metrics_dir, "shipped_offsite")', source)
+
+    def test_the_stale_bound_leaves_days_before_copy_1_expires_the_last_object(self) -> None:
+        rules = (
+            ROLES.parents[1] / "hetzner" / "monitoring" / "stack" / "prometheus" / "alerts.yml"
+        ).read_text()
+        bound = int(found(rf'{program.SUCCESS_METRIC}\{{host="ops1"\}} > (\d+)', rules)[1])
+        service = (ROLE / "files" / "branchleft-control-plane-backup.service").read_text()
+        hours = int(found(r"^TimeoutStartSec=(\d+)h$", service)[1])
+        # Past one healthy night (24h, the timer's 5m delay and a run that takes the whole timeout).
+        self.assertGreater(bound, (24 + hours) * 3600 + 5 * 60)
+        # Copy 1 expires a state/ object after 10 days (README); the alert leaves most of them.
+        self.assertLess(bound, 5 * 24 * 3600)
 
     def tasks(self) -> list[dict[str, object]]:
         loaded = yaml.safe_load((ROLE / "tasks" / "main.yml").read_text())

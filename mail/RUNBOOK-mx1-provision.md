@@ -41,7 +41,7 @@ needed to change.
 | `64-provision-alerting-submission-credential.sh`                                               | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs _before_ `63` in `run-all.sh` — see "Alerting submission credential" below.                                   |
 | `65-install-local-resolver.sh`                                                                 | Installs `unbound` as a loopback-only, fully recursive resolver (no forwarders) so DNSBL queries originate from mx1's own IP. Leaves `/etc/resolv.conf` alone. See "Local recursive resolver" below.                                             |
 | `70-schedule-dnsbl-check.sh`                                                                   | Idempotently installs the hourly `/etc/cron.d/dnsbl-check` entry that runs `check_dnsbl_blocklist.py`. See "DNSBL blocklist monitoring" below.                                                                                                   |
-| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (what the cron entry above runs) — checks mx1's IP against five DNSBLs, logs findings and also forwards each run to a Healthchecks.io check. `--status` pings nothing. See "DNSBL blocklist monitoring" below. |
+| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (what the cron entry above runs) — checks mx1's IP against four DNSBLs, logs findings and also forwards each run to a Healthchecks.io check. `--status` pings nothing. See "DNSBL blocklist monitoring" below. |
 | `rotate_admin_credential.py`                                                                   | Not part of `run-all.sh` — a standalone, on-demand rotation for the admin credential. See "Rotating the admin credential" below.                                                                                                                 |
 | `list_and_clear_blocked_ips.py`                                                                | Not part of `run-all.sh` — lists (`--list-only`), and clears specific (`--ip`, repeatable) or all (`--all`) IPs Stalwart's own scan-ban has blocked. See "Scan-ban" below.                                                                       |
 | `trigger_acme_renewal.py`                                                                      | Not part of `run-all.sh` — manually triggers a certificate renewal check. See "What remains owner-gated" below; normally unnecessary, since renewal is self-scheduled.                                                                           |
@@ -372,6 +372,13 @@ back the _script's_ `blobId`, not the upload response's.
 
 ### Idempotency
 
+> **Captured output, not current state.** The console transcript below is a
+> record of one historical mx1 run, pasted into this runbook on 2026-08-17
+> (commit `1509de5e`). The run it captured predates that date. It was never
+> regenerated, so it does not reflect the current mailbox set: the set today is
+> `MAILBOXES` in `mail/provision/provision_mailboxes.py`. Compare a live run
+> against that list, not against this transcript.
+
 `provision_mailboxes.py` follows `configure_stalwart.py`'s diff-before-write
 pattern: an existing mailbox is never touched (this script does not rotate
 passwords — that's `rotate_admin_credential.py`'s model, not this one's) and
@@ -404,6 +411,11 @@ run above shows exactly the mixed "some already there, some new" case a real
 re-run hits.)
 
 ### Live validation
+
+> **Captured result, not current state.** The table below was recorded on
+> 2026-08-17 (commit `1509de5e`) from the same historical run as the
+> idempotency transcript above. It covers the four forwarding pairs that existed
+> then, not the current forwarding set.
 
 Forwarding is proven rather than assumed: send a real message to each role
 address and confirm it lands both there and in `rob@`. Done via
@@ -692,12 +704,10 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   touches transactional mail or vice versa. **Read by `render_shim_env.py`**
   for the image `shim-compose.yml` pins: that image delivers mail itself, and its `smtp-delivery` contract in
   `shim-env-contracts.json` renders this credential as `SMTP_PASS`. A later
-  image whose outbound delivery is gone (`ghost-platform#238`,
-  `branchLeft/workspace#1237`) reads no SMTP variable, and would use the
+  image whose outbound delivery is gone (`ghost-platform#238`) reads no SMTP variable, and would use the
   `drain` contract instead; the credential is then retained because
   authenticated SMTP submission to mx1 is the only way anything reaches this
-  host (HLD §03), and something has to hold it once the mail collector
-  (`branchLeft/workspace#1239`) exists.
+  host (HLD §03), and something has to hold it once the mail collector exists.
 - `63-deploy-mailgun-shim.sh` / `render_shim_env.py` — installs the compose
   file and Caddyfile, seeds `/var/lib/mailgun-shim/throttle.json` only if
   absent, renders `/etc/mailgun-shim/env` (mode 600) and brings the stack up.
@@ -834,7 +844,7 @@ under `shim-drain-token`. Once a drain digest is pinned and listed,
 `63-deploy-mailgun-shim.sh` run with that digest) and records it in
 `/root/.stalwart-service-credentials` under the `shim-drain-token` label —
 the same file `62`'s credential lives in, never printed by either script.
-The mail collector (`branchLeft/workspace#1239`), once built and deployed to
+The mail collector, once built and deployed to
 `ops1`, needs this exact value to authenticate its `GET /drain` calls
 (`Authorization: Bearer <token>`, per `config.ts`'s `requireDrainToken`).
 Nothing here copies it there automatically — moving a live secret between
@@ -941,7 +951,7 @@ does this script exiting 0.
 A listed IP silently kills deliverability for everyone sending through this
 host, and this is the check that catches it instead of waiting for a
 complaint. `check_dnsbl_blocklist.py` resolves the mail host's own address and
-queries it against five DNSBLs every hour via `/etc/cron.d/dnsbl-check`
+queries it against four DNSBLs every hour via `/etc/cron.d/dnsbl-check`
 (installed idempotently by `70-schedule-dnsbl-check.sh`, part of
 `run-all.sh`):
 
@@ -950,7 +960,6 @@ queries it against five DNSBLs every hour via `/etc/cron.d/dnsbl-check`
 | Spamhaus ZEN                    | `zen.spamhaus.org`       |
 | Barracuda Reputation Block List | `b.barracudacentral.org` |
 | SpamCop Blocking List           | `bl.spamcop.net`         |
-| SORBS                           | `dnsbl.sorbs.net`        |
 | UCEPROTECT Level 1              | `dnsbl-1.uceprotect.net` |
 
 ### Query mechanics, verified per-list rather than assumed identical
@@ -1294,7 +1303,6 @@ also collected here for convenience:
 | Spamhaus ZEN                    | <https://check.spamhaus.org/>                          |
 | Barracuda Reputation Block List | <https://www.barracudacentral.org/rbl/removal-request> |
 | SpamCop Blocking List           | <https://www.spamcop.net/bl.shtml>                     |
-| SORBS                           | <http://www.sorbs.net/lookup.shtml>                    |
 | UCEPROTECT Level 1              | <http://www.uceprotect.net/en/rblcheck.php>            |
 
 ## Secrets: what is secret, and where it lives
@@ -1619,8 +1627,7 @@ creates the domain and its key, every run after that is a no-op that
 reprints the same records.
 
 **This deliberately does not touch the rotation risk on
-`branchleft.co.uk`'s own domain**
-([branchLeft/workspace#1294](https://github.com/branchLeft/workspace/issues/1294)):
+`branchleft.co.uk`'s own domain** (see the domain-rotation issue):
 that domain was set up by Stalwart's wizard under **Automatic** management,
 before this script existed, and already has DKIM keys under selectors this
 script did not create — so `plan_sending_domain` refuses it outright (keys

@@ -13,8 +13,15 @@
 # call-home agent, which is on when the variable is unset. The root value comes
 # from the unit's environment file and is read on the first start only.
 #
-# The container uses the host network so that mysqld binds the host's loopback
-# address (see conf.d/branchleft.cnf). No port is published and none is opened.
+# The container uses the host network so that mysqld binds the host's private address
+# (see conf.d/branchleft.cnf). No port is published by Docker, so Docker adds no rule for
+# it: the host firewall rule of the same role (branchleft-dbt1-listener-rule, in INPUT)
+# admits the application host to the database port and drops every other source.
+# The exporter beside it uses the host network too, and listens on loopback only.
+# Its credentials file is placed by the owner and is mounted by name with
+# create_host_path off, so a missing file fails the start loudly instead of Docker
+# creating a directory in its place. Both services keep a bounded log: three files
+# of 10 MB each.
 # The configuration is mounted as one file, not as a directory, so the image's own
 # option files (skip-name-resolve among them) stay in force.
 name: {{ db_t1_stack }}
@@ -25,6 +32,11 @@ services:
     restart: unless-stopped
     network_mode: host
     stop_grace_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: '{{ db_t1_log_max_size }}'
+        max-file: '{{ db_t1_log_max_file }}'
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in /etc/branchleft/dbt1.env}
       MYSQL_ROOT_HOST: localhost
@@ -37,7 +49,7 @@ services:
       # A real query on the final server, over the socket, never a ping: the
       # image's entrypoint first runs a socket-only server with networking off, and
       # a ping answers on it. The query returns ready only when the server is the
-      # pinned Percona build, networking is on and bound to loopback, and the
+      # pinned Percona build, networking is on and bound to the private address, and the
       # replication-relevant settings are in force, so a configuration file that
       # was not read fails the check. The root value reaches the client through the
       # container's own environment, never through this file.
@@ -49,7 +61,8 @@ services:
           "SELECT IF(@@global.skip_networking = 0
           AND @@version = '{{ db_t1_server_version }}'
           AND @@version_comment LIKE '{{ db_t1_version_comment_prefix }}%'
-          AND @@global.bind_address = '127.0.0.1'
+          AND @@global.bind_address = '{{ db_t1_private_address }}'
+          AND @@global.port = {{ db_t1_port }}
           AND @@global.server_id = {{ db_t1_server_id }}
           AND @@global.gtid_mode = 'ON'
           AND @@global.enforce_gtid_consistency = 'ON'
@@ -63,6 +76,40 @@ services:
       timeout: 10s
       retries: 6
       start_period: 120s
+
+  mysqld-exporter:
+    image: {{ db_t1_exporter_image }}
+    restart: unless-stopped
+    network_mode: host
+    logging:
+      driver: json-file
+      options:
+        max-size: '{{ db_t1_log_max_size }}'
+        max-file: '{{ db_t1_log_max_file }}'
+    volumes:
+      - ./run/mysqld:/var/run/mysqld
+      - type: bind
+        source: {{ db_t1_exporter_cnf_path }}
+        target: /etc/mysqld-exporter/.my.cnf
+        read_only: true
+        bind:
+          create_host_path: false
+    command:
+      - --config.my-cnf=/etc/mysqld-exporter/.my.cnf
+      - --mysqld.address=unix:///var/run/mysqld/mysqld.sock
+      - --web.listen-address={{ db_t1_exporter_listen_address }}:{{ db_t1_exporter_metrics_port }}
+    healthcheck:
+      # mysql_up 1, not process liveness and not an HTTP 200: the exporter serves
+      # /metrics while failing to authenticate, so anything weaker reports a healthy
+      # container that exports nothing. The same check db1's exporter runs.
+      test: ['CMD-SHELL', 'wget -qO- http://{{ db_t1_exporter_listen_address }}:{{ db_t1_exporter_metrics_port }}/metrics | grep -qx "mysql_up 1"']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      mysql:
+        condition: service_healthy
 
 volumes:
   mysql-data:

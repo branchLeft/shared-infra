@@ -1,0 +1,23 @@
+---
+# The pattern's own use of the module: one class, read back, recorded. The stamp is a hash of
+# the inputs of a unit and may stand for a key, so the task is no_log and shows no diff (ANS-16).
+# A role that restarts by fingerprint does the same with its own classes (README, "How a role
+# uses it").
+- name: Create the directory of the stamp
+  ansible.builtin.file:
+    path: '{{ restart_stamp_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Record the example fingerprint as applied
+  restart_stamp:
+    state: record
+    classes:
+      - name: example
+        file: '{{ restart_stamp_dir }}/example.applied'
+        fingerprint: "{{ restart_stamp_input | hash('sha256') }}"
+        read_back: true
+  no_log: true
+  diff: false
