@@ -129,10 +129,12 @@ class Placement(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(ROLE in roles, host == HOST)
 
-    def test_the_playbook_applies_the_role_once_and_last(self) -> None:
+    def test_the_playbook_applies_the_role_once_and_last_but_for_host_tls_identity(self) -> None:
         roles = _playbook_roles()
         self.assertEqual(roles.count(ROLE), 1)
-        self.assertEqual(roles[-1], ROLE)
+        # host_tls_identity follows it on purpose: it fails the run while a certificate has under
+        # 60 days left, and that must not hold sweego_receiver back.
+        self.assertEqual(roles[-2:], [ROLE, "host_tls_identity"])
 
     def test_the_playbook_applies_what_the_role_relies_on_first(self) -> None:
         roles = _playbook_roles()

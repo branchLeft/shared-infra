@@ -73,8 +73,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (it refuses to run until its secret files exist), then host_tls_identity (last of
-# all: it fails the run while a certificate has under 60 days left), app1's host_inputs,
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (it refuses
+# to run until its secret files exist), then host_tls_identity (last of all: it fails the run
+# while a certificate has under 60 days left), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
