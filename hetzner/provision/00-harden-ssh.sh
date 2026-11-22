@@ -12,9 +12,11 @@ set -euo pipefail
 # `ssh_pwauth` is set, which would restore password authentication while a
 # byte-comparison check on this file kept reporting it up to date.
 #
-# Overridable so tests can point this at a throwaway path; production always
-# gets the default since nothing sets DROPIN in the environment.
-DROPIN="${DROPIN:-/etc/ssh/sshd_config.d/01-branchleft-hardening.conf}"
+# The drop-in path is the first argument, so tests can point this at a
+# throwaway path. It is deliberately not read from the environment: a
+# variable exported by some future wrapper must not redirect a file this
+# script writes as root. With no argument, the production path is used.
+DROPIN="${1:-/etc/ssh/sshd_config.d/01-branchleft-hardening.conf}"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 

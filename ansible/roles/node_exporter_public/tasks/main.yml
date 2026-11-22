@@ -1,0 +1,38 @@
+---
+# For a host with no address in the estate subnet, scraped over its public address (demo1). The
+# exporter is the Debian package, never a download, and it serves TLS only: its web config demands
+# the one client certificate pinned in ca.crt, and refuses every client without it.
+# The host's cloud firewall narrows who can try; the certificate check is the control.
+#
+# Three files are in node_exporter_public_tls_dir: server.crt and server.key, which the
+# host_tls_identity role makes on this host, and ca.crt, the pinned client certificate it writes from
+# the owner's value. This role ships none of them and makes none. Until all three are there the role
+# installs nothing and says so, as broker_deploy does while it carries no release, so no exporter
+# ever starts without its certificates.
+- name: Read the certificate files the owner places
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ node_exporter_public_ca_file }}'
+    - '{{ node_exporter_public_cert_file }}'
+    - '{{ node_exporter_public_key_file }}'
+  register: node_exporter_public_stat
+
+- name: Decide whether all three certificate files are in place
+  ansible.builtin.set_fact:
+    node_exporter_public_ready: >-
+      {{ node_exporter_public_stat.results
+         | selectattr('stat.isreg', 'defined') | selectattr('stat.isreg') | list | length == 3 }}
+
+- name: Say that the exporter waits for its certificate files
+  ansible.builtin.debug:
+    msg: >-
+      node_exporter_public waits: the pinned client certificate, server certificate and key
+      the exporter serves TLS with are not all in the certificate directory (host_tls_identity writes
+      them), so nothing is installed.
+  when: not node_exporter_public_ready
+
+- name: Install and start the exporter once the files are in place
+  ansible.builtin.include_tasks: _install.yml
+  when: node_exporter_public_ready

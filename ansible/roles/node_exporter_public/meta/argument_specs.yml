@@ -1,0 +1,12 @@
+---
+argument_specs:
+  main:
+    short_description: Install the Debian node_exporter package, serving TLS to a verified client certificate only
+    description: >-
+      For a host with no address in the estate subnet (demo1). Waits, installing nothing, until the owner
+      has placed the CA, server certificate and server key in /etc/branchleft/node-exporter-tls. Then
+      writes the exporter's arguments and web config, installs the Debian package with its unit held
+      masked until the web config is in place, gives the certificate files to the exporter's group, and
+      starts the exporter. It takes no input, ships no key and makes none.
+    author: branchLeft
+    options: {}

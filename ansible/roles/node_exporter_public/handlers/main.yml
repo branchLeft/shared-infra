@@ -1,0 +1,13 @@
+---
+# The reload comes first, so the restart that follows it starts the unit as it now is on disk.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Check mode would restart a unit it has not installed, so the restart is skipped in check mode
+# only. The skip is stated here (ANS-10); a real run never skips it.
+- name: Restart node_exporter
+  ansible.builtin.systemd_service:
+    name: '{{ node_exporter_public_service }}'
+    state: restarted
+  when: not ansible_check_mode

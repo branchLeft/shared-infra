@@ -10,8 +10,9 @@ than only smoke-tested by a real provisioning run.
 The script itself talks to the live `sshd` and `systemctl` and writes into
 `/etc/ssh/sshd_config.d/`, none of which a test process may do. Both are
 substituted: `sshd` and `systemctl` are replaced by fakes earlier on `PATH`,
-and the drop-in path is redirected with the `DROPIN` environment variable
-the script reads as an override.
+and the drop-in path is redirected by passing it as the script's first
+argument. A decoy `DROPIN` environment variable is set on every run to prove
+the script no longer reads one.
 """
 
 import os
@@ -71,6 +72,7 @@ class HardenSshTests(unittest.TestCase):
         dropin_dir = os.path.join(self.tmp.name, "sshd_config.d")
         os.makedirs(dropin_dir)
         self.dropin = os.path.join(dropin_dir, "01-branchleft-hardening.conf")
+        self.env_decoy = os.path.join(dropin_dir, "env-decoy.conf")
 
         # Both fakes append here, in the order the script calls them.
         self.call_log = os.path.join(self.tmp.name, "calls.log")
@@ -88,13 +90,16 @@ class HardenSshTests(unittest.TestCase):
     ):
         env = dict(os.environ)
         env["PATH"] = self.bin_dir + os.pathsep + env.get("PATH", "")
-        env["DROPIN"] = dropin if dropin is not None else self.dropin
+        # The write path is the script's first argument. A decoy DROPIN in the
+        # environment must be ignored: if the script ever reads it again, the
+        # drop-in lands in the decoy instead and the tests below go red.
+        env["DROPIN"] = self.env_decoy
         env["FAKE_SSHD_T_OUTPUT"] = sshd_t_output
         env["FAKE_SSHD_T_EXIT"] = sshd_t_exit
         env["FAKE_SSHD_DUMP_EXIT"] = sshd_dump_exit
         env["FAKE_CALL_LOG"] = self.call_log
         return subprocess.run(
-            ["bash", SCRIPT],
+            ["bash", SCRIPT, dropin if dropin is not None else self.dropin],
             env=env,
             capture_output=True,
             text=True,

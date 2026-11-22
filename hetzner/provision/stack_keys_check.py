@@ -38,8 +38,11 @@ ALLOWED_SERVICE_KEYS = {
     "oom_score_adj": "kill priority, checked by the tests",
     "ports": "published addresses, checked by the tests",
     "profiles": "gates the application services behind the apps profile",
+    "read_only": "a read-only root file system; carries no value",
     "restart": "restart policy; carries no value",
+    "scale": "how many instances; a number from a variable the project's .env sets, and 0 keeps an unenabled service off",
     "secrets": "secrets mounted as files from the top-level secrets block",
+    "tmpfs": "an in-memory scratch mount; names no file",
     "volumes": "bind mounts and named volumes, checked by the tests",
 }
 
