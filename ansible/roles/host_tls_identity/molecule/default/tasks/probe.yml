@@ -1,0 +1,82 @@
+---
+# One server on demo1's files taking the wait's connection and the client's, one client with the given files, and what the
+# client was told. The client verifies the server against demo1's own certificate (what edge1 pins)
+# and the name host_tls_identity_probe_name, as Prometheus does.
+- name: Forget the last probe's results
+  ansible.builtin.set_fact:
+    host_tls_identity_probe_server: {}
+    host_tls_identity_probe_client: {}
+    host_tls_identity_probe_wait: {}
+
+- name: Start the server that requires and verifies a client certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - s_server
+      - -accept
+      - '127.0.0.1:{{ host_tls_identity_probe_port }}'
+      - -cert
+      - /etc/branchleft/node-exporter-tls/server.crt
+      - -key
+      - /etc/branchleft/node-exporter-tls/server.key
+      - -CAfile
+      - /etc/branchleft/node-exporter-tls/ca.crt
+      - -Verify
+      - '1'
+      # Without this the program prints a failed verification and carries on, as a test aid does.
+      - -verify_return_error
+      - -tls1_3
+      - -www
+      # Two: the wait below opens one connection to see the port is listening, and the client is the other.
+      - -naccept
+      - '2'
+  async: 30
+  poll: 0
+  changed_when: false
+  register: host_tls_identity_probe_server
+
+- name: Wait until the server listens
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: '{{ host_tls_identity_probe_port }}'
+    timeout: 10
+
+- name: Connect as the client
+  ansible.builtin.command:
+    argv: >-
+      {{ ['openssl', 's_client', '-connect', '127.0.0.1:' ~ host_tls_identity_probe_port, '-tls1_3',
+          '-ign_eof', '-CAfile', '/etc/branchleft/node-exporter-tls/server.crt',
+          '-verify_hostname', host_tls_identity_probe_name | default('demo1'), '-verify_return_error']
+         + (['-cert', host_tls_identity_probe_client_cert, '-key', host_tls_identity_probe_client_key] if host_tls_identity_probe_client_cert != '' else []) }}
+    stdin: "GET / HTTP/1.0\r\n\r\n"
+  register: host_tls_identity_probe_client
+  changed_when: false
+  failed_when: false
+
+- name: Let the server finish
+  ansible.builtin.async_status:
+    jid: '{{ host_tls_identity_probe_server.ansible_job_id }}'
+  register: host_tls_identity_probe_wait
+  until: host_tls_identity_probe_wait.finished
+  retries: 10
+  delay: 1
+  failed_when: false
+
+- name: Assert the client was served
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_probe_client.rc == 0
+      - "'HTTP/1.0 200 ok' in host_tls_identity_probe_client.stdout"
+    fail_msg: >-
+      expected to be served, but got: {{ host_tls_identity_probe_client.stdout_lines | default([]) | last | default('') }}
+      {{ host_tls_identity_probe_client.stderr_lines | default([]) | last | default('') }}
+    quiet: true
+  when: host_tls_identity_probe_expect_ok | bool
+
+- name: Assert the client was refused
+  ansible.builtin.assert:
+    that:
+      - "'HTTP/1.0 200 ok' not in host_tls_identity_probe_client.stdout"
+    fail_msg: 'expected a refusal but was served'
+    quiet: true
+  when: not (host_tls_identity_probe_expect_ok | bool)

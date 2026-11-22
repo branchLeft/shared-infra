@@ -7,6 +7,17 @@ import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 const WEBHOOK_HOSTNAME: string | undefined = undefined;
 const WEBHOOK_PORT: number | undefined = undefined;
 
+// Placeholders until the tenant-state gateway's host exists in the estate's
+// address plan (`@branchleft/hetzner-host`) and its state listener's port is
+// fixed. The name below is a ruling; the address the
+// edge forwards to is not in this repository. While either is unset the state
+// entry claims no hostname and has no upstream, so the renderer skips it and
+// the edge asks for no certificate. Setting both is a deliberate step: see
+// "Signed object gateway sites" in `sites.md`.
+const STATE_GATEWAY_HOST: string | undefined = undefined;
+const STATE_GATEWAY_PORT: number | undefined = undefined;
+const STATE_GATEWAY_UNSET = STATE_GATEWAY_HOST === undefined || STATE_GATEWAY_PORT === undefined;
+
 /**
  * The site registry: everything the Hetzner edge serves. Hostnames and service
  * addressing only; nothing else about a site belongs in this file.
@@ -177,6 +188,27 @@ export const sites: EdgeSite[] = [
     backend: 'other',
     // The page answers GET requests only; no upload surface exists.
     requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // The tenant-state gateway: the S3-compatible front for tenants' Pulumi
+    // state, reached by tenant CI on GitHub-hosted runners, whose addresses are
+    // not a fixed list, so it is a public name. Hostname is a ruling. The
+    // upstream is the state listener on the gateway host's private address,
+    // plain HTTP behind this edge's TLS; the host and port come from the two
+    // constants at the top of this file.
+    name: 'state-gateway',
+    hostnames: STATE_GATEWAY_UNSET ? [] : ['state.branchleft.co.uk'],
+    privateUpstream:
+      STATE_GATEWAY_HOST === undefined || STATE_GATEWAY_PORT === undefined
+        ? undefined
+        : { host: STATE_GATEWAY_HOST, port: STATE_GATEWAY_PORT },
+    backend: 'other',
+    // A Pulumi checkpoint is a few hundred kilobytes; this is an order of
+    // magnitude above it, and the edge refuses a larger body before the gateway
+    // sees it.
+    requestBodyMaxSize: '8MiB',
+    signedObjectGateway: true,
   },
 
   {

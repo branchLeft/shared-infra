@@ -1,0 +1,32 @@
+---
+# Runs one request the way the controller's key does: through sudo as the entry account, with
+# the request text in SSH_ORIGINAL_COMMAND and the payload on stdin. The caller sets `request`
+# and may set `request_stdin`. The result is kept in tenant_entry_request with literal keys,
+# reset first so a case can never read the one before it (HELD in the ansible skill, 5.2).
+# The run is hidden: a payload may hold a secret value, and the program never prints one.
+- name: Reset the result of the last request
+  ansible.builtin.set_fact:
+    tenant_entry_request:
+      rc: -1
+      stdout: ''
+      stderr: ''
+
+- name: Run the request through sudo as the entry account
+  ansible.builtin.command:
+    argv: [runuser, -u, '{{ scenario_user }}', --, sudo, -n, '{{ scenario_program }}', --from-ssh]
+  environment:
+    SSH_ORIGINAL_COMMAND: '{{ request }}'
+  args:
+    stdin: '{{ request_stdin | default("") }}'
+  register: tenant_entry_request_run
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Keep the exit code and both streams of the request
+  ansible.builtin.set_fact:
+    tenant_entry_request:
+      rc: '{{ tenant_entry_request_run.rc }}'
+      stdout: '{{ tenant_entry_request_run.stdout }}'
+      stderr: '{{ tenant_entry_request_run.stderr }}'

@@ -1,6 +1,6 @@
 # Runbook — move the publicpress.co.uk zone to Hetzner DNS
 
-Refs branchLeft/workspace#1887. The zone is the second one in the `dns` stack,
+Tracked by the publicpress DNS issue. The zone is the second one in the `dns` stack,
 built by the same code as branchleft.co.uk (`../dns.ts`, `ZONE_FILES` in
 `../dnsZone.ts`) from `publicpress.co.uk.json`. Every step is inlined here; the
 first-time setup of the stack is in `RUNBOOK-dns-cutover.md` and is **not**

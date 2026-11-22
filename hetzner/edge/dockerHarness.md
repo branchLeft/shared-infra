@@ -105,12 +105,15 @@ surprise is recognised.
   with the worker. Measured with a client that never answers under a 30 s
   bound, the worker killed 1.5 s in: the client was still alive 2, 20, 35 and
   45 seconds after the kill. It lives until the engine answers it or restarts.
-  A container the run had created but not started is not removed by the
-  harness either: remove it by hand with `docker rm -f -v <name>` (the live
-  check's containers carry the label
-  `branchleft.agent=edge-ghost-setup-test`, so
-  `docker ps -a --filter label=branchleft.agent=edge-ghost-setup-test` lists
-  them).
+  A container the run had created but not started is left in Created state.
+  The next start that uses this harness sweeps it: `sweepStaleContainers`
+  removes every `bl-*` container whose trailing pid names no live process, and
+  a start refuses, naming the container, when one cannot be removed. A
+  container whose pid is still alive is left alone (another run owns it). A
+  sweep that cannot run (the engine is silent) fails the start in seconds with
+  the same message. Until a later start runs, remove a leftover by hand with
+  `docker rm -f -v <name>`, listed by
+  `docker ps -a --filter name=^bl- --format '{{.Names}} {{.State}}'`.
 - **A SIGINT or SIGTERM sent to the test runner's main process alone orphans
   the worker and its docker client.** The review recorded that they are
   cleaned up when the step deadline expires (30 seconds by default); that was

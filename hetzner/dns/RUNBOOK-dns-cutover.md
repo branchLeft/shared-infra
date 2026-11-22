@@ -1,6 +1,6 @@
 # Runbook — move the branchleft.co.uk zone to Hetzner DNS
 
-Refs branchLeft/workspace#1164. That issue stays open after this runbook: it
+Tracked by the DNS-cutover issue. That issue stays open after this runbook: it
 closes when DNS-01 completes against the zone and a wildcard certificate
 issues, which is follow-up work that needs this move first.
 
@@ -63,8 +63,7 @@ because a signed zone moved this way would fail validation everywhere.
 
 ### 1. Generate a Read & Write token in the existing dns project (console)
 
-**Which project holds the zone is already settled — [ISSUE
-branchLeft/workspace#1165](https://github.com/branchLeft/workspace/issues/1165):
+**Which project holds the zone is already settled — the seven-projects decision:
 the estate's seven Hetzner projects, this zone's among them.** A Hetzner
 token has full power over its project, so whichever project holds this zone,
 every token for it can rewrite the organisation's MX, SPF and DKIM records;
@@ -74,8 +73,7 @@ other zone — able to reach it.
 
 The project already exists: **branchLeft dns**, Hetzner Console project id
 **16139783**, created and proven isolated by `RUNBOOK-seven-projects.md` on
-2026-09-23 ([comment
-5802428073](https://github.com/branchLeft/workspace/issues/1165#issuecomment-5802428073)).
+2026-09-23 (the proof comment on the seven-projects issue).
 It holds no servers, and one unattached marker firewall,
 `project-marker-dns`, created by that runbook — do not remove it: the
 program refuses to apply without it (see "If it fails" below).
@@ -95,8 +93,7 @@ generate one from **branchLeft dns** (16139783). If it fails with `cannot
 see the firewall project-marker-dns`, the token's project has no marker —
 confirm you generated it inside **branchLeft dns**, not a lookalike empty
 project; the marker is what tells them apart, and a servers-only check
-would have let a wrong empty project's token through silently
-([ISSUE branchLeft/workspace#1306](https://github.com/branchLeft/workspace/issues/1306)).
+would have let a wrong empty project's token through silently.
 
 ### 2. Supply the state and API credentials
 
@@ -422,7 +419,7 @@ two copies match again.
 
 ## After it succeeds
 
-Comment on branchLeft/workspace#1164 with the output of step 7, step 11's
+Comment on the DNS-cutover issue with the output of step 7, step 11's
 registry answer, and step 12's header lines (`SPF`, `DKIM` with selector,
 `DMARC` — no addresses). Leave the issue open: it closes when DNS-01 completes
 against the zone, which is its own follow-up.

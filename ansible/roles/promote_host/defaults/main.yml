@@ -1,0 +1,7 @@
+---
+# Both inputs are public data and both default to empty. Empty means inert: the program, the
+# slot map and the units are installed, the signer file is not written, and the timer is held
+# disabled and stopped, so nothing is fetched and nothing moves. The inputs are named, with the
+# shapes they must have, in meta/argument_specs.yml and in the patterns of vars/main.yml.
+promote_host_ledger_url: ''
+promote_host_signer_key: ''

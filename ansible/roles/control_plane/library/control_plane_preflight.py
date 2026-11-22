@@ -89,7 +89,7 @@ EXAMPLES = r"""
   control_plane_preflight:
     action: snapshot
     stack_project: control-plane
-    min_available_memory_fresh_mib: 2664
+    min_available_memory_fresh_mib: 2792
     min_available_memory_running_mib: 1000
     min_free_disk_mib: 5120
   register: before

@@ -1,9 +1,10 @@
 """Unit tests for the db_t1 role: what its rendered files and its tasks must say.
 
 The role is proven on a host only by the gated apply. These tests hold the properties a
-review would otherwise have to find by eye: no listener beyond loopback, no root account
-reachable from another host, no call-home agent, the configuration actually mounted, the
-deploy only ever on an empty host, and the owner-placed root file never read or written.
+review would otherwise have to find by eye: no listener beyond the private address, one source
+admitted to it, no root account reachable from another host, no call-home agent, the
+configuration actually mounted, the deploy only ever on an empty host, and the owner-placed root
+file never read or written.
 Each one fails when the line it guards is removed (the sabotage record is in the pull
 request). They need no network and no Docker.
 """
@@ -14,8 +15,9 @@ import re
 import unittest
 from pathlib import Path
 
+import branchleft_dbt1_listener_rule as program
 import jinja2
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 ROLE = Path(__file__).resolve().parents[2]
 ROOT = ROLE.parents[2]
@@ -97,22 +99,34 @@ def compose() -> dict[str, object]:
     return {str(key): value for key, value in loaded.items()}
 
 
-def mysql_service() -> dict[str, object]:
-    """Return the one service of the compose file.
+def services() -> dict[str, dict[str, object]]:
+    """Return the compose file's services, each as a mapping.
 
     Raises:
-        AssertionError: the file holds a service other than mysql.
-        TypeError: the service is not a mapping.
+        AssertionError: the file holds a service other than mysql and the exporter.
+        TypeError: the services or a service is not a mapping.
     """
-    services = compose()["services"]
-    if not isinstance(services, dict) or list(services) != ["mysql"]:
-        message = "the compose file must hold the mysql service and no other"
+    found = compose()["services"]
+    if not isinstance(found, dict) or sorted(found) != ["mysql", "mysqld-exporter"]:
+        message = "the compose file must hold the mysql and mysqld-exporter services and no other"
         raise AssertionError(message)
-    service = services["mysql"]
-    if not isinstance(service, dict):
-        message = "the mysql service is not a mapping"
-        raise TypeError(message)
-    return {str(key): value for key, value in service.items()}
+    result: dict[str, dict[str, object]] = {}
+    for name, service in found.items():
+        if not isinstance(service, dict):
+            message = f"the {name} service is not a mapping"
+            raise TypeError(message)
+        result[str(name)] = {str(key): value for key, value in service.items()}
+    return result
+
+
+def mysql_service() -> dict[str, object]:
+    """Return the mysql service of the compose file."""
+    return services()["mysql"]
+
+
+def exporter_service() -> dict[str, object]:
+    """Return the mysqld-exporter service of the compose file."""
+    return services()["mysqld-exporter"]
 
 
 def cnf_settings() -> dict[str, str]:
@@ -242,7 +256,8 @@ class ComposeContract(unittest.TestCase):
             "skip_networking = 0",
             f"@@version = '{VARS['db_t1_server_version']}'",
             f"@@global.server_id = {VARS['db_t1_server_id']}",
-            "@@global.bind_address = '127.0.0.1'",
+            f"@@global.bind_address = '{VARS['db_t1_private_address']}'",
+            f"@@global.port = {VARS['db_t1_port']}",
             "@@global.gtid_mode = 'ON'",
             "@@global.enforce_gtid_consistency = 'ON'",
             "@@global.log_bin = 1",
@@ -267,13 +282,95 @@ class ComposeContract(unittest.TestCase):
         self.assertEqual(health["start_period"], "120s")
 
 
+EXPORTER_IMAGE = re.compile(r"ghcr\.io/branchleft/mysqld-exporter@sha256:[0-9a-f]{64}")
+TUNNEL_UNIT = ROOT / "hetzner" / "provision" / "branchleft-db-tunnel.service"
+
+
+class ExporterContract(unittest.TestCase):
+    """The metrics exporter beside the database."""
+
+    def test_the_image_is_the_attested_one_pinned_by_digest(self) -> None:
+        self.assertEqual(exporter_service()["image"], VARS["db_t1_exporter_image"])
+        self.assertRegex(str(exporter_service()["image"]), EXPORTER_IMAGE.pattern)
+
+    def test_the_exporter_listens_on_loopback_and_publishes_nothing(self) -> None:
+        service = exporter_service()
+        self.assertEqual(service["network_mode"], "host")
+        self.assertNotIn("ports", service)
+        self.assertNotIn("expose", service)
+        listen = [
+            str(argument).split("=", 1)[1]
+            for argument in sequence(service["command"])
+            if str(argument).startswith("--web.listen-address=")
+        ]
+        self.assertEqual(listen, [f"127.0.0.1:{VARS['db_t1_exporter_metrics_port']}"])
+
+    def test_the_port_is_the_one_the_replica_tunnel_forwards(self) -> None:
+        unit = TUNNEL_UNIT.read_text(encoding="utf-8")
+        forward = re.search(r"-L \$\{DB_TUNNEL_SOURCE_ADDRESS\}:\d+:127\.0\.0\.1:(\d+)", unit)
+        self.assertIsNotNone(forward)
+        assert forward is not None  # noqa: S101 - narrows the type for the line below
+        self.assertEqual(int(forward.group(1)), VARS["db_t1_exporter_metrics_port"])
+
+    def test_the_credentials_are_a_read_only_file_that_must_already_exist(self) -> None:
+        mounts = [
+            mapping(volume)
+            for volume in sequence(exporter_service()["volumes"])
+            if isinstance(volume, dict)
+        ]
+        self.assertEqual(len(mounts), 1)
+        mount = mounts[0]
+        self.assertEqual(mount["source"], VARS["db_t1_exporter_cnf_path"])
+        self.assertEqual(mount["target"], "/etc/mysqld-exporter/.my.cnf")
+        self.assertIs(mount["read_only"], True)
+        self.assertIs(mapping(mount["bind"])["create_host_path"], False)
+
+    def test_no_credential_is_in_the_environment_or_the_command(self) -> None:
+        service = exporter_service()
+        self.assertNotIn("environment", service)
+        for argument in sequence(service["command"]):
+            self.assertNotRegex(str(argument).lower(), "password|pwd")
+
+    def test_it_starts_only_once_the_database_is_healthy_and_is_judged_on_mysql_up(self) -> None:
+        service = exporter_service()
+        self.assertEqual(
+            mapping(service["depends_on"]), {"mysql": {"condition": "service_healthy"}}
+        )
+        command = str(sequence(mapping(service["healthcheck"])["test"])[1])
+        self.assertIn('grep -qx "mysql_up 1"', command)
+        self.assertIn(f"127.0.0.1:{VARS['db_t1_exporter_metrics_port']}", command)
+
+    def test_the_exporter_file_is_not_one_this_role_writes_or_reads(self) -> None:
+        path = str(VARS["db_t1_exporter_cnf_path"])
+        for tasks in task_files().values():
+            self.assertNotIn(path, str(tasks))
+        self.assertNotIn(path, str(DEFAULTS))
+
+
+class LogRetentionContract(unittest.TestCase):
+    """Each container's log is bounded in size and rotated, never left to grow."""
+
+    def test_both_services_keep_three_files_of_ten_megabytes(self) -> None:
+        for name, service in services().items():
+            with self.subTest(name):
+                logging = mapping(service["logging"])
+                self.assertEqual(logging["driver"], "json-file")
+                self.assertEqual(mapping(logging["options"]), {"max-size": "10m", "max-file": "3"})
+
+
 class ConfigurationContract(unittest.TestCase):
     """The rendered MySQL configuration."""
 
-    def test_the_server_listens_on_loopback_only(self) -> None:
+    def test_the_server_listens_on_the_private_address_only(self) -> None:
         settings = cnf_settings()
-        self.assertEqual(settings["bind_address"], "127.0.0.1")
-        self.assertNotIn("0.0.0.0", render("branchleft.cnf.j2"))  # noqa: S104
+        self.assertEqual(settings["bind_address"], "10.20.1.200")
+        self.assertEqual(settings["bind_address"], VARS["db_t1_private_address"])
+        self.assertEqual(settings["port"], str(VARS["db_t1_port"]))
+        rendered = render("branchleft.cnf.j2")
+        # Neither a wildcard nor loopback, and no second bind line that could widen the first.
+        for wildcard in ("0.0.0.0", "*", "::"):  # noqa: S104
+            self.assertNotIn(f"bind-address = {wildcard}", rendered)
+        self.assertEqual(len(re.findall(r"^bind[-_]address\b", rendered, re.MULTILINE)), 1)
 
     def test_the_x_protocol_listener_is_off(self) -> None:
         # It listens on every address whatever bind-address says.
@@ -455,10 +552,12 @@ class SecretFileShape(unittest.TestCase):
 class TaskContract(unittest.TestCase):
     """The tasks: what they may call, in what order, and under what condition."""
 
-    def test_the_role_installs_nothing_and_runs_no_shell_and_no_docker(self) -> None:
+    def test_the_role_installs_no_package_and_runs_no_shell_and_no_docker(self) -> None:
         allowed = {
             "ansible.builtin.assert",
             "ansible.builtin.command",
+            "ansible.builtin.copy",
+            "ansible.builtin.debug",
             "ansible.builtin.file",
             "ansible.builtin.include_tasks",
             "ansible.builtin.lineinfile",
@@ -473,8 +572,12 @@ class TaskContract(unittest.TestCase):
         for word in ("ansible.builtin.shell", "docker compose", "sudo", "become"):
             self.assertNotIn(word, text)
 
-    def test_the_only_commands_are_the_check_mode_report_and_the_deploy(self) -> None:
-        commands = [task for task in all_tasks() if module_of(task) == "ansible.builtin.command"]
+    def test_the_only_commands_of_the_pin_are_the_check_mode_report_and_the_deploy(self) -> None:
+        commands = [
+            task
+            for task in task_files()["_pin.yml"]
+            if module_of(task) == "ansible.builtin.command"
+        ]
         self.assertEqual(len(commands), 2)
         report, deploy = commands
         self.assertEqual(report["ansible.builtin.command"], {"argv": ["true"]})
@@ -610,6 +713,183 @@ class TaskContract(unittest.TestCase):
         self.assertEqual(first["ansible.builtin.include_tasks"], "_inputs.yml")
         refusal = task_files()["_inputs.yml"][0]
         self.assertIn("db_t1_image_pattern", str(refusal))
+
+
+def address_plan() -> dict[str, str]:
+    """Return the tenants network's host addresses from hetzner-host/addressPlan.ts.
+
+    Raises:
+        AssertionError: the block is not in the file.
+    """
+    plan = (ROOT / "hetzner-host" / "addressPlan.ts").read_text(encoding="utf-8")
+    block = re.search(r"TENANTS_HOST_IPS = \{(.*?)\}", plan, re.DOTALL)
+    if block is None:
+        message = "TENANTS_HOST_IPS is not in hetzner-host/addressPlan.ts"
+        raise AssertionError(message)
+    return dict(re.findall(r"(\w+): '([0-9.]+)'", block.group(1)))
+
+
+class ListenerRuleContract(unittest.TestCase):
+    """The host firewall rule that admits the application host to the database, and its order."""
+
+    def test_the_addresses_are_the_address_plans_for_db_t1_and_app_t1(self) -> None:
+        plan = address_plan()
+        self.assertEqual(VARS["db_t1_private_address"], plan["dbT1"])
+        self.assertEqual(VARS["db_t1_client_address"], plan["appT1"])
+        self.assertNotEqual(VARS["db_t1_private_address"], VARS["db_t1_client_address"])
+
+    def test_no_template_writes_an_address_of_its_own(self) -> None:
+        for path in sorted((ROLE / "templates").glob("*.j2")):
+            self.assertNotRegex(path.read_text(encoding="utf-8"), r"10\.20\.\d", path.name)
+
+    def test_the_port_is_one_value_in_the_server_the_check_and_the_rule(self) -> None:
+        self.assertEqual(VARS["db_t1_port"], 3306)
+        self.assertEqual(cnf_settings()["port"], "3306")
+        self.assertIn("@@global.port = 3306", " ".join(render("compose.yml.j2").split()))
+        self.assertIn("--port 3306", render("branchleft-dbt1-listener-rule.service.j2"))
+
+    def test_the_x_protocol_and_the_exporter_stay_off_the_private_address(self) -> None:
+        # The X protocol (33060) is off, and the exporter's port is not the database port.
+        self.assertEqual(cnf_settings()["mysqlx"], "OFF")
+        self.assertEqual(VARS["db_t1_exporter_listen_address"], "127.0.0.1")
+        self.assertNotEqual(VARS["db_t1_exporter_metrics_port"], VARS["db_t1_port"])
+
+    def test_the_program_and_the_role_agree_on_the_chain_and_the_probe_status(self) -> None:
+        self.assertEqual(VARS["db_t1_rule_chain"], program.CHAIN)
+        self.assertEqual(VARS["db_t1_rule_probe_differs_status"], program.CHECK_DIFFERS_STATUS)
+        self.assertEqual(
+            VARS["db_t1_rule_program_dest"], "/usr/local/sbin/branchleft-dbt1-listener-rule"
+        )
+        self.assertEqual(VARS["db_t1_rule_program_src"], "branchleft_dbt1_listener_rule.py")
+        self.assertTrue((ROLE / "files" / text_var("db_t1_rule_program_src")).is_file())
+
+    def test_the_unit_runs_the_program_with_the_one_source_and_the_port_at_boot_and_on_reload(
+        self,
+    ) -> None:
+        unit = render("branchleft-dbt1-listener-rule.service.j2")
+        command = (
+            f"{VARS['db_t1_rule_program_dest']} --allow-source {VARS['db_t1_client_address']}"
+            f" --port {VARS['db_t1_port']}"
+        )
+        self.assertIn(f"\nExecStart={command}\n", unit)
+        self.assertIn(f"\nExecReload={command}\n", unit)
+        self.assertIn("\nType=oneshot\n", unit)
+        self.assertIn("\nRemainAfterExit=yes\n", unit)
+        # The program retries five times; the unit bounds the whole run.
+        self.assertIn("\nTimeoutStartSec=300\n", unit)
+        self.assertEqual(program.ATTEMPTS, 5)
+        self.assertIn("\nWantedBy=multi-user.target\n", unit)
+        # Stopping the unit must leave the rule in place.
+        self.assertNotRegex(unit, r"(?m)^ExecStop")
+
+    def test_the_unit_is_before_docker_and_the_drop_in_makes_docker_require_and_follow_it(
+        self,
+    ) -> None:
+        unit = render("branchleft-dbt1-listener-rule.service.j2")
+        self.assertIn(f"\nBefore={VARS['db_t1_rule_docker_unit_name']}\n", unit)
+        self.assertEqual(VARS["db_t1_rule_docker_unit_name"], "docker.service")
+        dropin = render("branchleft-dbt1-listener-rule-docker.conf.j2")
+        name = VARS["db_t1_rule_unit_name"]
+        self.assertIn(f"\nRequires={name}\n", dropin)
+        self.assertIn(f"\nAfter={name}\n", dropin)
+        self.assertIn("\n[Unit]\n", dropin)
+        dropin_dest = text_var("db_t1_rule_docker_dropin_dest")
+        self.assertEqual(Path(dropin_dest).parent, Path("/etc/systemd/system/docker.service.d"))
+        self.assertEqual(
+            VARS["db_t1_rule_docker_dropin_dir"], "/etc/systemd/system/docker.service.d"
+        )
+        self.assertTrue(text_var("db_t1_rule_docker_dropin_dest").endswith(".conf"))
+        self.assertEqual(
+            VARS["db_t1_rule_unit_dest"], f"/etc/systemd/system/{VARS['db_t1_rule_unit_name']}"
+        )
+
+    def test_the_rule_unit_is_never_restarted_because_docker_requires_it(self) -> None:
+        # A restart of a required unit restarts the unit that requires it: Docker, and the database.
+        for task in all_tasks():
+            if module_of(task) == "ansible.builtin.systemd_service":
+                self.assertNotEqual(arguments_of(task).get("state"), "restarted", task["name"])
+        reload_task = task_named(
+            "Load the database port rule when the files or the loaded rule changed"
+        )
+        self.assertEqual(arguments_of(reload_task)["state"], "reloaded")
+        self.assertEqual(arguments_of(reload_task)["name"], "{{ db_t1_rule_unit_name }}")
+
+    def test_the_program_is_installed_root_owned_and_not_writable_by_others(self) -> None:
+        task = task_named("Install the database port rule program")
+        arguments = arguments_of(task)
+        self.assertEqual(arguments["mode"], "0755")
+        self.assertEqual(arguments["owner"], "{{ db_t1_root_user_id }}")
+        self.assertEqual(arguments["group"], "{{ db_t1_root_group_id }}")
+        self.assertEqual(arguments["dest"], "{{ db_t1_rule_program_dest }}")
+        self.assertEqual((VARS["db_t1_root_user_id"], VARS["db_t1_root_group_id"]), (0, 0))
+        self.assertEqual(
+            (ROLE / "files" / text_var("db_t1_rule_program_src")).read_bytes()[:21],
+            b"#!/usr/bin/python3 -I",
+        )
+
+    def test_the_rule_is_loaded_after_the_configuration_and_before_the_deploy(self) -> None:
+        main = task_files()["main.yml"]
+        includes = [
+            str(task.get("ansible.builtin.include_tasks"))
+            for task in main
+            if "ansible.builtin.include_tasks" in task
+        ]
+        self.assertLess(includes.index("_listener_rule.yml"), includes.index("_pin.yml"))
+        names = [str(task.get("name")) for task in main]
+        rendered = next(
+            i for i, n in enumerate(names) if n.startswith("Render the MySQL configuration")
+        )
+        rule = next(i for i, n in enumerate(names) if n.startswith("Load the rule that admits"))
+        self.assertLess(rendered, rule)
+
+    def test_the_plan_asks_the_program_and_says_what_would_change(self) -> None:
+        probe = task_named("Ask the rule program whether the loaded rule is the wanted one")
+        self.assertIs(probe["check_mode"], False)
+        self.assertEqual(sequence(arguments_of(probe)["argv"])[-1], "--check")
+        self.assertIn("db_t1_rule_probe_differs_status", str(probe["changed_when"]))
+        self.assertIn("db_t1_rule_probe_differs_status", str(probe["failed_when"]))
+        report = task_named("Report in check mode that the database port rule would be installed")
+        self.assertEqual(arguments_of(report), {"argv": ["true"]})
+        self.assertIs(report["changed_when"], True)
+
+    def test_the_read_back_asks_the_kernel_and_systemd_after_the_load(self) -> None:
+        names = [str(task.get("name")) for task in task_files()["_listener_rule.yml"]]
+        load = names.index("Load the database port rule when the files or the loaded rule changed")
+        back = names.index("Read the loaded rule back from the kernel")
+        refuse = next(
+            i
+            for i, n in enumerate(names)
+            if n.startswith("Refuse a database port rule that is not loaded")
+        )
+        self.assertLess(load, back)
+        self.assertLess(back, refuse)
+        that = str(arguments_of(task_files()["_listener_rule.yml"][refuse])["that"])
+        for needle in (
+            "readback.rc == 0",
+            "ActiveState == 'active'",
+            "UnitFileState == 'enabled'",
+            ".Requires",
+            ".After",
+        ):
+            self.assertIn(needle, that)
+
+    def test_the_program_never_touches_a_policy_another_chain_or_another_port(self) -> None:
+        text = program.restore_text("10.20.1.201", "3306")
+        self.assertNotIn("INPUT", text)
+        self.assertNotIn("-P ", text)
+        self.assertNotIn("-X", text)
+        self.assertEqual(sorted(set(re.findall(r"--dport (\d+)", text))), ["3306"])
+        source = (ROLE / "files" / text_var("db_t1_rule_program_src")).read_text(encoding="utf-8")
+        for forbidden in ("-D", "-X", "-P", "--flush", '-t", "nat', "nft"):
+            self.assertNotIn(f'"{forbidden}"', source)
+
+    def test_the_readme_states_the_design_and_not_the_old_loopback_claim(self) -> None:
+        readme = (ROLE / "README.md").read_text(encoding="utf-8")
+        self.assertTrue("\n## The listener rule\n" in readme)
+        self.assertNotIn(
+            "listen on loopback only and the\n  compose file publishes nothing", readme
+        )
+        self.assertNotIn("**Loopback only.**", readme)
 
 
 if __name__ == "__main__":

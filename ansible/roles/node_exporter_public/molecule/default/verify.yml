@@ -1,0 +1,132 @@
+---
+# The role is proven on a running exporter: what it accepts, and what it refuses. The files and
+# modes are read from the host.
+- name: Verify the exporter
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_url: https://demo1:9100/metrics
+  tasks:
+    - name: Ask systemd for the exporter service
+      ansible.builtin.systemd_service:
+        name: prometheus-node-exporter.service
+      register: node_exporter_public_verify_unit
+
+    - name: Assert the exporter is active, enabled and not masked
+      ansible.builtin.assert:
+        that:
+          - node_exporter_public_verify_unit.status.ActiveState == 'active'
+          - node_exporter_public_verify_unit.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: The exporter service is not active, enabled and unmasked.
+
+    - name: Read the files the role writes and the certificate files it adjusts
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft/node-exporter-tls
+        - /etc/branchleft/node-exporter-tls/ca.crt
+        - /etc/branchleft/node-exporter-tls/server.crt
+        - /etc/branchleft/node-exporter-tls/server.key
+      register: node_exporter_public_verify_files
+
+    - name: Assert the certificate files are readable by the exporter's group and no other account
+      ansible.builtin.assert:
+        that:
+          - node_exporter_public_verify_files.results[0].stat.isdir
+          - node_exporter_public_verify_files.results[0].stat.mode == '0750'
+          - node_exporter_public_verify_files.results[0].stat.gr_name == 'prometheus'
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'prometheus'
+          - item.stat.mode == '0640'
+        quiet: true
+        fail_msg: A certificate file or its directory is not root-owned, in the exporter's group, with no access for any other account.
+      loop: '{{ node_exporter_public_verify_files.results[1:4] }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the exporter's arguments and its web config
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/default/prometheus-node-exporter
+        - /etc/node-exporter/web-config.yml
+      register: node_exporter_public_verify_text
+
+    - name: Assert the arguments name the web config, and the web config demands a verified client certificate
+      ansible.builtin.assert:
+        that:
+          - >-
+            (node_exporter_public_verify_text.results[0].content | b64decode)
+            == 'ARGS="--web.listen-address=:9100 --web.config.file=/etc/node-exporter/web-config.yml"\n'
+          - "'client_auth_type: RequireAndVerifyClientCert' in (node_exporter_public_verify_text.results[1].content | b64decode)"
+          - "'BEGIN' not in (node_exporter_public_verify_text.results[1].content | b64decode)"
+        quiet: true
+        fail_msg: The exporter's arguments or web config is not what the role writes.
+
+    - name: Read the installed package's version
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - --showformat=${Version}
+          - --show
+          - prometheus-node-exporter
+      register: node_exporter_public_verify_version
+      changed_when: false
+
+    - name: Say which packaged version answered
+      ansible.builtin.debug:
+        msg: 'prometheus-node-exporter {{ node_exporter_public_verify_version.stdout }}'
+
+    # The exporter takes a moment after the service is active before it answers.
+    - name: Scrape with the good client certificate
+      ansible.builtin.uri:
+        url: '{{ verify_url }}'
+        ca_path: /root/pki/server.crt
+        client_cert: /root/pki/client.crt
+        client_key: /root/pki/client.key
+        return_content: true
+        status_code: 200
+      register: node_exporter_public_verify_good
+      retries: 10
+      delay: 2
+      until: node_exporter_public_verify_good.status | default(0) == 200
+
+    - name: Scrape with no client certificate
+      ansible.builtin.uri:
+        url: '{{ verify_url }}'
+        ca_path: /root/pki/server.crt
+        status_code: [200]
+      register: node_exporter_public_verify_none
+      failed_when: false
+
+    - name: Scrape with a client certificate that is not the pinned one
+      ansible.builtin.uri:
+        url: '{{ verify_url }}'
+        ca_path: /root/pki/server.crt
+        client_cert: /root/pki/rogue-client.crt
+        client_key: /root/pki/rogue-client.key
+        status_code: [200]
+      register: node_exporter_public_verify_rogue
+      failed_when: false
+
+    - name: Scrape over plain HTTP
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9100/metrics
+        status_code: [200]
+      register: node_exporter_public_verify_plain
+      failed_when: false
+
+    - name: Assert metrics come only to the good client certificate
+      ansible.builtin.assert:
+        that:
+          - node_exporter_public_verify_good.status == 200
+          - "'node_exporter_build_info' in node_exporter_public_verify_good.content"
+          - node_exporter_public_verify_none.status | default(0) != 200
+          - node_exporter_public_verify_rogue.status | default(0) != 200
+          - node_exporter_public_verify_plain.status | default(0) != 200
+        quiet: true
+        fail_msg: >-
+          The exporter did not answer the client certificate it must trust, or it answered a client
+          with no certificate, with a certificate other than the pinned one, or over plain HTTP.
