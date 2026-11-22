@@ -4,6 +4,8 @@
 See test_control_plane_stack.md.
 """
 
+from __future__ import annotations
+
 import pathlib
 import re
 import sys
@@ -11,12 +13,6 @@ import textwrap
 import unittest
 
 import yaml
-
-if sys.version_info < (3, 10):
-    raise RuntimeError(
-        "test_control_plane_stack.py requires Python 3.10 or newer; running under "
-        f"{sys.version.split()[0]}. On macOS, `/usr/bin/python3` is the system 3.9."
-    )
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import stack_keys_check  # noqa: E402  (needs the path above when run by file)
@@ -56,7 +52,7 @@ HOST_AVAILABLE_MB = 3009
 # reached its limit at once. A third of the available memory.
 REQUIRED_MARGIN_MB = 1000
 
-SERVICES = {"db", "zitadel", "portal", "console"}
+SERVICES = {"db", "zitadel", "portal", "console", "provisioning"}
 APPLICATION_SERVICES = {"portal", "console"}
 
 

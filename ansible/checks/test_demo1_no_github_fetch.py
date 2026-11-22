@@ -50,7 +50,10 @@ PINS = {
     "demo1_egress_spool": "demo1_egress_spool_files",
 }
 
-BANNED_HOSTS = re.compile(r"raw\.githubusercontent\.com|ghcr\.io", re.IGNORECASE)
+# GitHub in every host it serves files from, and its container registry.
+BANNED_HOSTS = re.compile(
+    r"\b(?:[\w-]+\.)*(?:github\.com|githubusercontent\.com|ghcr\.io)\b", re.IGNORECASE
+)
 # Modules that fetch from a network place. uri is allowed to the host's own loopback only.
 FETCH_MODULES = frozenset(
     {
@@ -141,6 +144,12 @@ def url_of(text: str) -> str:
     return found.group(1) if found else ""
 
 
+def src_of(text: str) -> str:
+    """Return the value of the src argument in a module's arguments, empty when it has none."""
+    found = re.search(r"\bsrc\s*:\s*(\S+)", text)
+    return found.group(1) if found else ""
+
+
 def file_findings(path: Path, label: str) -> list[str]:
     """Return one finding, with file and line, for each fetch a YAML file of a role makes."""
     findings: list[str] = []
@@ -161,6 +170,11 @@ def file_findings(path: Path, label: str) -> list[str]:
                 findings.append(
                     f"{label}:{number}: uri to {where}, which is not the host's own loopback"
                 )
+        elif module == "unarchive":
+            # A local archive (remote_src, broker_deploy) is fine; one read from a URL is a fetch.
+            src = src_of(text)
+            if "://" in src:
+                findings.append(f"{label}:{number}: unpacks an archive from {src}, which fetches")
         elif module in COMMAND_MODULES:
             findings.extend(
                 f"{label}:{number}: runs a command that pulls or logs in"
@@ -488,6 +502,45 @@ class NoGithubFetchTest(unittest.TestCase):
         found = get_url_findings_after("tasks/_other.yml", lambda _: node_task_text())
         self.assertEqual(1, len(found), found)
 
+    def test_a_github_archive_reached_through_a_default_or_a_handler_is_named(self) -> None:
+        archive = "https://github.com/x/y/releases/download/v1/z.tar.gz"
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            base = tree / ROLES / "demo1_build"
+            for area in ("defaults", "tasks", "handlers"):
+                (base / area).mkdir(parents=True)
+            (base / "defaults" / "main.yml").write_text(
+                doc(f"demo1_archive_url: {archive}"), encoding="utf-8"
+            )
+            (base / "tasks" / "main.yml").write_text(
+                doc(
+                    "- ansible.builtin.unarchive:",
+                    "    src: '{{ demo1_archive_url }}'",
+                    "    dest: /opt/x",
+                    "    remote_src: true",
+                ),
+                encoding="utf-8",
+            )
+            (base / "handlers" / "main.yml").write_text(
+                doc(
+                    "- name: Unpack again",
+                    "  ansible.builtin.unarchive:",
+                    f"    src: {archive}",
+                    "    dest: /opt/x",
+                    "    remote_src: true",
+                ),
+                encoding="utf-8",
+            )
+            found = role_findings(tree, "demo1_build")
+        self.assertTrue(
+            any(line.startswith("ansible/roles/demo1_build/defaults/main.yml:") for line in found),
+            found,
+        )
+        self.assertTrue(
+            any(line.startswith("ansible/roles/demo1_build/handlers/main.yml:") for line in found),
+            found,
+        )
+
     def test_the_same_download_in_another_role_is_named(self) -> None:
         for role in ("demo1_build", "demo1_egress_spool", "pull_trigger", "ansible_runtime"):
             with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
@@ -509,6 +562,7 @@ class NoGithubFetchTest(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",
@@ -557,6 +611,23 @@ class NoGithubFetchTest(unittest.TestCase):
                 "- ansible.builtin.shell:", "    cmd: docker compose -f x pull --quiet"
             ),
             "docker login": doc("- ansible.builtin.command:", "    cmd: docker login a.example"),
+            "unarchive from github": doc(
+                "- ansible.builtin.unarchive:",
+                "    src: https://github.com/x/y/releases/download/v1/z.tar.gz",
+                "    dest: /opt/x",
+                "    remote_src: true",
+            ),
+            "unarchive from objects": doc(
+                "- ansible.builtin.unarchive:",
+                "    src: 'https://objects.githubusercontent.com/x/z.tar.gz'",
+                "    dest: /opt/x",
+            ),
+            "unarchive from another host": doc(
+                "- ansible.builtin.unarchive:",
+                "    src: https://example.org/z.tar.gz",
+                "    dest: /opt/x",
+                "    remote_src: true",
+            ),
         }
         for name, text in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
@@ -579,6 +650,12 @@ class NoGithubFetchTest(unittest.TestCase):
                 "    src: x",
             ),
             "copy": doc("- ansible.builtin.copy:", "    src: x", "    dest: /y"),
+            "local unarchive": doc(
+                "- ansible.builtin.unarchive:",
+                "    src: '/var/tmp/x.tar.xz'",
+                "    dest: /opt/x",
+                "    remote_src: true",
+            ),
         }
         for name, text in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:

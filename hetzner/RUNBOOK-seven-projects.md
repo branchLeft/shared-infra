@@ -1,6 +1,6 @@
 # Runbook — seven Hetzner projects, a probe token each, isolation proven
 
-Refs branchLeft/workspace#1165. The issue closes on this runbook's verify
+Tracked by the seven-projects Hetzner issue. The issue closes on this runbook's verify
 output, not on the merge of the PR that adds it.
 
 ## What is wrong, and why now
@@ -48,7 +48,7 @@ more.
 
 1. **The rule.** A server joins the project of its trust tier. A new project is allowed only for a new trust tier, or for a credential that must not reach its neighbours. Never one project per server. A tier is the line already drawn between org, tenants, demos and mail; a credential that must be fenced is the reason `dns`, `demo-dns` and `backup` exist.
 2. **The per-server-project pattern**, as org already runs it (`hetzner/network.ts`: edge1 is web edge, NAT and jump). A project that holds more than one server has one private network, with an address range no other project uses (the whole-estate address register). It has **one edge**, the only host with a public interface, doing three jobs: public HTTPS, source-NAT egress for the private-only hosts, and the single SSH entry through restricted no-shell accounts. Every other host in the project is private-only. In a less-trusted project the edge's SSH is open only from the more-trusted project's edge (edge1's public address, as for demo1). A project with one host is its own edge and needs no gateway. A second gateway host exists only for a purpose that conflicts with the edge's, for example a host that holds a secret the edge must not hold (the storage gateway).
-3. **Tenants is the second project built this way**, with edge-t as its edge ([ISSUE branchLeft/workspace#2898](https://github.com/branchLeft/workspace/issues/2898)).
+3. **Tenants is the second project built this way**, with edge-t as its edge.
 4. One line: projects that fence a single storage key are under a separate discussion and are not covered by this rule yet.
 
 ## Blast radius
@@ -262,7 +262,7 @@ unset HCLOUD_PROBE_TOKEN_MAIL HCLOUD_PROBE_TOKEN_ORG HCLOUD_PROBE_TOKEN_TENANTS 
 
 Paste the seven `name → ID` pairs from step 2, and the full output of steps 5
 and 6, back into the session. The agent posts them on
-branchLeft/workspace#1165. They contain no secret: the probe never prints a
+the seven-projects issue. They contain no secret: the probe never prints a
 token, and it names only markers and the servers in `hetzner/projects.ts`.
 
 ## Verify
@@ -299,7 +299,7 @@ what it added. Run any subset, in this order:
   list and fetch what its own project already exposes, and it turns every
   future isolation check back into a console trip.
 - The agent posts the ID map and the step 5/6 output on
-  branchLeft/workspace#1165 and closes it, citing that comment.
+  the seven-projects issue and closes it, citing that comment.
 - Later stories, not this one: register the owner SSH key
   (`rob@branchleft.co.uk`, `id_ed25519_hetzner`) in `branchLeft tenants` and
   `branchLeft demos` before their first server apply, because `sshKeys` is

@@ -46,7 +46,7 @@ both read it.
 | -------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                                                                                                                   |
 | org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                                                                                                                                 |
-| tenants  | Built fresh: `edge-t`, `db-t1`, `app-t1`                                  | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| tenants  | Built fresh: `edge-t`, `db-t1`, `app-t1`                                  | `HCLOUD_TOKEN_TENANTS` (Read and Write, this project only): CI plans and applies the stack (`hetzner-tenants-plan`, `hetzner-tenants-apply` in `production`) — `hetzner/tenants/`'s stack                              |
 | demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                                                                                                                       |
 | dns      | The branchleft.co.uk and publicpress.co.uk DNS zones and no hosts         | `HCLOUD_TOKEN`: first-time init by hand per `hetzner/dns/RUNBOOK-dns-cutover.md`; CI plans and applies every later change (`HCLOUD_TOKEN_DNS`, plan in `dns-plan`, apply in `production-dns`) — `hetzner/dns/`'s stack |
 | backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                                                                                                                       |
@@ -60,8 +60,7 @@ project buys is billable-resource and server-cap containment, the same as
 dns and demo-dns. Object Storage's own default is that an S3 key reaches
 _every bucket in its project_, so the real reason the backup bucket wants its
 own project is to keep every other project's S3 key from reaching it — a
-different boundary, proven by a different credential, owed by [ISSUE
-branchLeft/workspace#1203](https://github.com/branchLeft/workspace/issues/1203),
+different boundary, proven by a different credential, owed by the separate bucket-provisioning story,
 which provisions the bucket. Nothing here provisions it or proves that.
 
 For dns, demo-dns and backup alike, a Read & Write Cloud API token can still

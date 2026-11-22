@@ -2,7 +2,9 @@
 
 It keeps objects by kind and id in one JSON file, answers the JMAP get and set calls and the
 readiness poll, and logs every request, so a test can count calls and see any write. While the
-file `fail` exists it answers every request with a 500 whose body is that file's text.
+file `fail` exists it answers every request with a 500 whose body is that file's text. While the
+file `bootstrap` exists its account answer holds the permission that only a server in bootstrap
+mode gives, as the real one does for the temporary account.
 """
 
 import json
@@ -13,6 +15,7 @@ HOME = "/var/tmp/stand-in"
 STATE = f"{HOME}/state.json"
 CALLS = f"{HOME}/calls.jsonl"
 FAIL = f"{HOME}/fail"
+BOOTSTRAP = f"{HOME}/bootstrap"
 SECRET = f"{HOME}/secret"
 
 
@@ -44,7 +47,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if not self.record({"method": "GET", "path": self.path, "jmap": ""}):
-            self.send(200, {"permissions": []})
+            self.send(200, {"permissions": ["sysBootstrapUpdate"] if os.path.exists(BOOTSTRAP) else []})
 
     def do_POST(self) -> None:
         call = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["methodCalls"][0]

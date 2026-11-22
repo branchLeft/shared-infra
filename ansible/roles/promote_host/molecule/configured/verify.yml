@@ -1,0 +1,183 @@
+---
+# The role with both inputs set: the signer file is the one line the applier reads, the timer is on,
+# and a ledger signed with the placed key's other half passes the same check the applier makes while
+# one signed for another namespace, by another key, or after its body changed does not. The play
+# ends by clearing both inputs and requires the host to go back to trusting nothing.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    promote_host_v_cases:
+      - name: control
+        key: '{{ scenario_signer_private }}'
+        namespace: '{{ scenario_namespace }}'
+        checked_body: ledger body one
+        accepted: true
+      - name: another-namespace
+        key: '{{ scenario_signer_private }}'
+        namespace: git
+        checked_body: ledger body one
+        accepted: false
+      - name: another-key
+        key: '{{ scenario_other_private }}'
+        namespace: '{{ scenario_namespace }}'
+        checked_body: ledger body one
+        accepted: false
+      - name: changed-body
+        key: '{{ scenario_signer_private }}'
+        namespace: '{{ scenario_namespace }}'
+        checked_body: ledger body two
+        accepted: false
+  tasks:
+    - name: Read the signer's public key and the signer file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_signer_public }}'
+        - '{{ scenario_signers }}'
+      register: promote_host_v_reads
+
+    - name: Hold the key line and the file
+      ansible.builtin.set_fact:
+        promote_host_v_key: "{{ (promote_host_v_reads.results[0].content | b64decode).split()[:2] | join(' ') }}"
+        promote_host_v_signers: '{{ promote_host_v_reads.results[1].content | b64decode }}'
+
+    - name: Require the signer file to be exactly one line naming the signer, the namespace and the key
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_signers == 'ring-controller namespaces="' ~ scenario_namespace ~ '" ' ~ promote_host_v_key ~ '\n'
+        quiet: true
+
+    - name: Look at the signer file
+      ansible.builtin.stat:
+        path: '{{ scenario_signers }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: promote_host_v_signers_stat
+
+    - name: Require the signer file to be root's and closed to writes by anyone else
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_signers_stat.stat.isreg
+          - promote_host_v_signers_stat.stat.pw_name == 'root'
+          - promote_host_v_signers_stat.stat.mode == '0644'
+        quiet: true
+
+    - name: Read the environment file
+      ansible.builtin.slurp:
+        src: '{{ scenario_env_file }}'
+      register: promote_host_v_env
+
+    - name: Require the environment file to carry the ledger URL
+      ansible.builtin.assert:
+        that:
+          - "('PROMOTE_LEDGER_URL=' ~ scenario_ledger_url ~ '\\n') in (promote_host_v_env.content | b64decode)"
+        quiet: true
+
+    - name: Ask systemd for the timer
+      ansible.builtin.systemd_service:
+        name: branchleft-promote.timer
+      register: promote_host_v_timer
+
+    - name: Require the timer to be enabled and running
+      ansible.builtin.assert:
+        that:
+          - promote_host_v_timer.status.UnitFileState == 'enabled'
+          - promote_host_v_timer.status.ActiveState == 'active'
+        quiet: true
+
+    # --- The same check the applier makes: ssh-keygen -Y verify with the placed file, the
+    # principal and the ledger's namespace. The first case is the control: without it a check that
+    # refused everything would pass every refusal after it.
+    - name: Write a body for each case
+      ansible.builtin.copy:
+        content: ledger body one
+        dest: '/root/ledger-body-{{ item.name }}'
+        mode: '0600'
+      loop: '{{ promote_host_v_cases }}'
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Sign each body with the key and the namespace the case names
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -Y
+          - sign
+          - -f
+          - '{{ item.key }}'
+          - -n
+          - '{{ item.namespace }}'
+          - '/root/ledger-body-{{ item.name }}'
+        creates: '/root/ledger-body-{{ item.name }}.sig'
+      loop: '{{ promote_host_v_cases }}'
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Verify each signature as the applier does, against the body the case names
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -Y
+          - verify
+          - -f
+          - '{{ scenario_signers }}'
+          - -I
+          - ring-controller
+          - -n
+          - '{{ scenario_namespace }}'
+          - -s
+          - '/root/ledger-body-{{ item.name }}.sig'
+        stdin: '{{ item.checked_body }}'
+        stdin_add_newline: false
+      loop: '{{ promote_host_v_cases }}'
+      loop_control:
+        label: '{{ item.name }}'
+      register: promote_host_v_checks
+      changed_when: false
+      failed_when: false
+
+    - name: Require the control to pass and every other case to be refused
+      ansible.builtin.assert:
+        that:
+          - (item.rc == 0) == item.item.accepted
+        quiet: true
+        fail_msg: 'The case "{{ item.item.name }}" was {{ "accepted" if item.rc == 0 else "refused" }} by the placed signer file.'
+      loop: '{{ promote_host_v_checks.results }}'
+      loop_control:
+        label: '{{ item.item.name }}'
+
+    # --- The way back: clearing both inputs removes the trust anchor and holds the timer off.
+    - name: Apply the role with both inputs cleared
+      ansible.builtin.include_role:
+        name: branchleft.promote_host
+
+    - name: Look at the signer file after the clearing
+      ansible.builtin.stat:
+        path: '{{ scenario_signers }}'
+      register: promote_host_v_signers_after
+
+    - name: Ask systemd for the timer after the clearing
+      ansible.builtin.systemd_service:
+        name: branchleft-promote.timer
+      register: promote_host_v_timer_after
+
+    - name: Require the signer file gone and the timer disabled and stopped
+      ansible.builtin.assert:
+        that:
+          - not promote_host_v_signers_after.stat.exists
+          - promote_host_v_timer_after.status.UnitFileState == 'disabled'
+          - promote_host_v_timer_after.status.ActiveState == 'inactive'
+        quiet: true
+        fail_msg: Clearing the inputs left a trust anchor on the host or left the timer on.
+
+    # The steps after verify check the host in check mode against the state the converge made, so
+    # the host is put back in that state.
+    - name: Apply the role again with both inputs set, to leave the host as the converge made it
+      ansible.builtin.include_role:
+        name: branchleft.promote_host
+      vars:
+        promote_host_ledger_url: '{{ scenario_ledger_url }}'
+        promote_host_signer_key: '{{ promote_host_v_key }}'

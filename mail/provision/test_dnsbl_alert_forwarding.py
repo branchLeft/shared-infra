@@ -226,8 +226,8 @@ class ControlCaseTests(MainRunTestCase):
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.content_type, "text/plain; charset=utf-8")
         self.assertIn("NEW LISTING: Spamhaus ZEN (zen.spamhaus.org)", request.body)
-        # 5 IP lists listed, plus the 4 default sending domains checked clean: 9 in all.
-        self.assertIn(f"dnsbl check for {TARGET}: 5 of 9 list(s) need attention", request.body)
+        # 4 IP lists listed, plus the 4 default sending domains checked clean: 8 in all.
+        self.assertIn(f"dnsbl check for {TARGET}: 4 of 8 list(s) need attention", request.body)
         self.assert_url_not_leaked(outcome, server)
 
     def test_a_clean_run_pings_the_bare_url_and_never_fail(self) -> None:
@@ -276,7 +276,7 @@ class ControlCaseTests(MainRunTestCase):
             self.run_main(resolver_listing_everything)
 
         self.assertTrue(observed["state_saved"])
-        self.assertEqual(len(observed["findings_logged"]), 5)
+        self.assertEqual(len(observed["findings_logged"]), 4)
 
 
 class CrashPathTests(MainRunTestCase):
@@ -361,7 +361,7 @@ class ForwarderContainmentTests(MainRunTestCase):
 
         self.assert_check_unaffected(clean, 0, "not_listed")
         self.assertIn("ConnectionRefusedError", clean.log_text)
-        self.assertEqual(len([line for line in listed.log_lines if line.startswith("ERROR NEW LISTING")]), 5)
+        self.assertEqual(len([line for line in listed.log_lines if line.startswith("ERROR NEW LISTING")]), 4)
         self.assertEqual(listed.exit_code, 1)
         self.assert_url_not_leaked(listed)
         self.assert_url_not_leaked(clean)
