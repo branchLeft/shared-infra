@@ -83,7 +83,7 @@
     - name: Scrape with the good client certificate
       ansible.builtin.uri:
         url: '{{ verify_url }}'
-        ca_path: /root/pki/good-ca.crt
+        ca_path: /root/pki/server.crt
         client_cert: /root/pki/client.crt
         client_key: /root/pki/client.key
         return_content: true
@@ -96,15 +96,15 @@
     - name: Scrape with no client certificate
       ansible.builtin.uri:
         url: '{{ verify_url }}'
-        ca_path: /root/pki/good-ca.crt
+        ca_path: /root/pki/server.crt
         status_code: [200]
       register: node_exporter_public_verify_none
       failed_when: false
 
-    - name: Scrape with a client certificate from a CA the exporter does not trust
+    - name: Scrape with a client certificate that is not the pinned one
       ansible.builtin.uri:
         url: '{{ verify_url }}'
-        ca_path: /root/pki/good-ca.crt
+        ca_path: /root/pki/server.crt
         client_cert: /root/pki/rogue-client.crt
         client_key: /root/pki/rogue-client.key
         status_code: [200]
@@ -129,4 +129,4 @@
         quiet: true
         fail_msg: >-
           The exporter did not answer the client certificate it must trust, or it answered a client
-          with no certificate, with one from another CA, or over plain HTTP.
+          with no certificate, with a certificate other than the pinned one, or over plain HTTP.
