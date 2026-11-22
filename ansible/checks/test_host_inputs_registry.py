@@ -222,7 +222,11 @@ def _check_set_task(
     if len(setters) != 1 or not str(setters[0].get("name", "")).startswith(SET_TASK_PREFIX):
         findings.append(f"tasks: want exactly one input task, named '{SET_TASK_PREFIX}...'")
         return
-    keys = _mapping(setters[0]["ansible.builtin.set_fact"])
+    keys = {
+        key: value
+        for key, value in _mapping(setters[0]["ansible.builtin.set_fact"]).items()
+        if not key.startswith(INTERNAL_PREFIX)
+    }
     wanted = sorted({name for names in rows.values() for name in names})
     if sorted(keys) != wanted:
         findings.append(f"tasks: the input task sets {sorted(keys)}, the rows name {wanted}")
@@ -653,9 +657,9 @@ class Mutations(unittest.TestCase):
     def test_a_task_that_shows_the_content_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/tasks/main.yml",
-            "        host_inputs_doc: '{{ host_inputs_raw.content | b64decode | from_json }}'\n"
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n"
             "      no_log: true\n",
-            "        host_inputs_doc: '{{ host_inputs_raw.content | b64decode | from_json }}'\n",
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n",
         )
         self._expect("'Parse the file (no value is shown)' must have no_log: true")
 
