@@ -1,0 +1,164 @@
+---
+# Test setup only, never part of the role. It makes a throwaway CA, a server certificate for the
+# name demo1, a client certificate from that CA, and a second CA with a client certificate the
+# exporter must refuse. Every key is made here, in the container, and lives and dies with it.
+# The three files the owner places on a real host are put where the role reads them.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The base image ships no package lists. A check-mode run cannot refresh them (the role's own
+    # cache refresh is skipped there), so without this the check run finds no package to install.
+    - name: Refresh the package lists, as a real host's have been
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Make a directory for the throwaway keys, closed to everyone but root
+      ansible.builtin.file:
+        path: /root/pki
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Make the two throwaway CAs
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -keyout
+          - '/root/pki/{{ item }}-ca.key'
+          - -out
+          - '/root/pki/{{ item }}-ca.crt'
+          - -subj
+          - '/CN={{ item }}-ca'
+          # The scraping client verifies strictly: a CA must say it may sign certificates.
+          - -addext
+          - basicConstraints=critical,CA:TRUE
+          - -addext
+          - keyUsage=critical,keyCertSign,cRLSign
+          - -days
+          - '2'
+        creates: '/root/pki/{{ item }}-ca.crt'
+      loop:
+        - good
+        - rogue
+
+    - name: Make the server key and the two client keys, each with a certificate request
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -keyout
+          - '/root/pki/{{ item }}.key'
+          - -out
+          - '/root/pki/{{ item }}.csr'
+          - -subj
+          - '/CN={{ item }}'
+        creates: '/root/pki/{{ item }}.csr'
+      loop:
+        - server
+        - client
+        - rogue-client
+
+    - name: Say what each certificate is for
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '/root/pki/{{ item.name }}.ext'
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - name: server
+          content: "subjectAltName=DNS:demo1\nextendedKeyUsage=serverAuth\n"
+        - name: client
+          content: "extendedKeyUsage=clientAuth\n"
+        - name: rogue-client
+          content: "extendedKeyUsage=clientAuth\n"
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Sign the server and client certificates with the good CA, and the rogue one with the rogue CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -req
+          - -in
+          - '/root/pki/{{ item.name }}.csr'
+          - -CA
+          - '/root/pki/{{ item.ca }}-ca.crt'
+          - -CAkey
+          - '/root/pki/{{ item.ca }}-ca.key'
+          - -CAcreateserial
+          - -out
+          - '/root/pki/{{ item.name }}.crt'
+          - -days
+          - '2'
+          - -extfile
+          - '/root/pki/{{ item.name }}.ext'
+        creates: '/root/pki/{{ item.name }}.crt'
+      loop:
+        - name: server
+          ca: good
+        - name: client
+          ca: good
+        - name: rogue-client
+          ca: rogue
+      loop_control:
+        label: '{{ item.name }}'
+
+    # host_inputs makes this directory first on demo1, root-owned and mode 0755, so the exporter's
+    # account can pass through it to its certificate directory.
+    - name: Create the estate's configuration directory, as host_inputs does
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the directory the owner places the exporter's files in, closed to everyone but root
+      ansible.builtin.file:
+        path: /etc/branchleft/node-exporter-tls
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place the three files, as the owner does
+      ansible.builtin.copy:
+        src: '/root/pki/{{ item.src }}'
+        dest: '/etc/branchleft/node-exporter-tls/{{ item.dest }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - src: good-ca.crt
+          dest: ca.crt
+        - src: server.crt
+          dest: server.crt
+        - src: server.key
+          dest: server.key
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Make the name demo1 resolve to this container
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: 127.0.0.1 demo1
+        # A container's hosts file is a bind mount, so it is written in place.
+        unsafe_writes: true

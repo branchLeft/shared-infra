@@ -1,0 +1,22 @@
+---
+# Internal to the role, not part of its interface: role variables outrank every value a caller
+# passes, and the paths below are written into the files the role installs.
+
+# The Debian package: its binary, its unit, the account it makes and the file whose ARGS it reads.
+node_exporter_public_package: prometheus-node-exporter
+node_exporter_public_service: prometheus-node-exporter.service
+node_exporter_public_binary: /usr/bin/prometheus-node-exporter
+node_exporter_public_unit_path: /usr/lib/systemd/system/prometheus-node-exporter.service
+node_exporter_public_mask_path: /etc/systemd/system/prometheus-node-exporter.service
+node_exporter_public_account: prometheus
+node_exporter_public_defaults_file: /etc/default/prometheus-node-exporter
+node_exporter_public_port: 9100
+
+# The three files the owner places, root-only, before the role installs anything. The role ships
+# none of them and makes none: where the keys come from is the owner's decision.
+node_exporter_public_tls_dir: /etc/branchleft/node-exporter-tls
+node_exporter_public_ca_file: /etc/branchleft/node-exporter-tls/ca.crt
+node_exporter_public_cert_file: /etc/branchleft/node-exporter-tls/server.crt
+node_exporter_public_key_file: /etc/branchleft/node-exporter-tls/server.key
+node_exporter_public_web_config_dir: /etc/node-exporter
+node_exporter_public_web_config_path: /etc/node-exporter/web-config.yml
