@@ -340,7 +340,7 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
                 ],
-                "appt1": ["tenant_entry_key", "tenant_entry_from"],
+                "appt1": ["tenant_entry_key", "tenant_entry_from", "tenant_entry_bind_address"],
                 "dbt1": [
                     "db_t1_tenant_entry_controller_key",
                     "db_t1_tenant_entry_controller_address",

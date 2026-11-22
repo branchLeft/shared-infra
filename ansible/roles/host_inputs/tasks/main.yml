@@ -223,6 +223,7 @@
     deploy_slot_keys_slots: "{{ host_inputs_doc['deploy_slot_keys_slots'] | default(omit) }}"
     tenant_entry_key: "{{ host_inputs_doc['tenant_entry_key'] | default(omit) }}"
     tenant_entry_from: "{{ host_inputs_doc['tenant_entry_from'] | default(omit) }}"
+    tenant_entry_bind_address: "{{ host_inputs_doc['tenant_entry_bind_address'] | default(omit) }}"
     db_t1_tenant_entry_controller_key: "{{ host_inputs_doc['db_t1_tenant_entry_controller_key'] | default(omit) }}"
     db_t1_tenant_entry_controller_address: "{{ host_inputs_doc['db_t1_tenant_entry_controller_address'] | default(omit) }}"
     broker_deploy_owner_due_diligence_email: "{{ host_inputs_doc['broker_deploy_owner_due_diligence_email'] | default(omit) }}"

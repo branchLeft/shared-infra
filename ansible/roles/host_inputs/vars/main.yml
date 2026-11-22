@@ -82,6 +82,7 @@ host_inputs_required_by_host:
   appt1:
     - tenant_entry_key
     - tenant_entry_from
+    - tenant_entry_bind_address
   dbt1:
     - db_t1_tenant_entry_controller_key
     - db_t1_tenant_entry_controller_address

@@ -154,8 +154,8 @@ IMAGE_VARIABLE = "${IMAGE}"
 DIGEST_REFERENCE = r"[^\s@$]+@sha256:[0-9a-f]{64}"
 INLINE_IMAGE_PATTERN = re.compile(DIGEST_REFERENCE)
 IMAGE_LINE_PATTERN = re.compile(rf"IMAGE=({DIGEST_REFERENCE})")
-SECRET_KEY_PATTERN = re.compile(r"GHOST_[A-Z0-9_]+")
-SECRET_LINE_PATTERN = re.compile(r"([A-Z][A-Z0-9_]*)=(.*)")
+ENV_NAME_PATTERN = re.compile(r"GHOST_[A-Z0-9_]+")
+ENV_LINE_PATTERN = re.compile(r"([A-Z][A-Z0-9_]*)=(.*)")
 REFERENCE_PATTERN = re.compile(r"(?<!\$)\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 CLAIM_LINE_PATTERN = re.compile(r"([a-z][a-z0-9-]*)=([0-9]+)")
 SPOOL_REFERENCE_NAMES = frozenset({"SHIM_DRAIN_TOKEN"})
@@ -438,10 +438,10 @@ def parse_secrets(text: str) -> tuple[dict[str, str], list[str]]:
         elif line == "" or line.startswith("#"):
             continue
         else:
-            match = SECRET_LINE_PATTERN.fullmatch(line)
+            match = ENV_LINE_PATTERN.fullmatch(line)
             if match is None:
                 refusals.append(f"secrets line {number} is not KEY=value")
-            elif SECRET_KEY_PATTERN.fullmatch(match.group(1)) is None:
+            elif ENV_NAME_PATTERN.fullmatch(match.group(1)) is None:
                 refusals.append(f"secrets key {match.group(1)} does not start with GHOST_")
             elif match.group(1) in pairs:
                 refusals.append(f"secrets key {match.group(1)} is given twice")

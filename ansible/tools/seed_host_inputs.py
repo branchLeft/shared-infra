@@ -124,7 +124,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_password",
         "deploy_slot_keys_slots",
     ),
-    "appt1": ("tenant_entry_key", "tenant_entry_from"),
+    "appt1": ("tenant_entry_key", "tenant_entry_from", "tenant_entry_bind_address"),
     "dbt1": ("db_t1_tenant_entry_controller_key", "db_t1_tenant_entry_controller_address"),
 }
 
@@ -216,6 +216,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "ci_jump_user": (Source(TYPED, ""),),
     "tenant_entry_key": (Source(KEYLINE, ""),),
     "tenant_entry_from": (Source(ADDRESSES, ""),),
+    "tenant_entry_bind_address": (Source(IPV4, ""),),
     "db_t1_tenant_entry_controller_key": (Source(KEYLINE, ""),),
     "db_t1_tenant_entry_controller_address": (Source(IPV4, ""),),
     "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),

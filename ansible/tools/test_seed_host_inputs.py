@@ -1736,14 +1736,18 @@ DBT1_KEY = VALID_KEY
 class TenantEntryInputTests(unittest.TestCase):
     """appt1 and dbt1 are seeded the way app1 is: one command per host, each input typed hidden."""
 
-    def test_appt1_is_filled_from_two_typed_answers_and_the_addresses_are_a_list(self) -> None:
-        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 10.20.0.0/24"])
+    def test_appt1_is_filled_from_three_typed_answers_and_the_addresses_are_a_list(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 10.20.0.0/24", "10.0.0.5"])
         self.assertEqual(0, rig.run("--host", "appt1"))
         self.assertEqual(
-            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7", "10.20.0.0/24"]},
+            {
+                "tenant_entry_key": APPT1_KEY,
+                "tenant_entry_from": ["203.0.113.7", "10.20.0.0/24"],
+                "tenant_entry_bind_address": "10.0.0.5",
+            },
             rig.document(),
         )
-        self.assertEqual(2, len(rig.prompts))
+        self.assertEqual(3, len(rig.prompts))
         self.assertIn("still missing (0): none", rig.stdout)
         self.assertNotIn(APPT1_KEY, rig.stdout)
         self.assertNotIn("203.0.113.7", rig.stdout)
