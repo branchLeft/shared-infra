@@ -15,7 +15,7 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
-`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack`, then
+`roles/exporters_and_collectors`, then `roles/edge_ban_owner` (it writes its textfile into the directory that collector creates), then `roles/ntfy_pager`, then `roles/monitoring_stack`, then
 `roles/sweego_receiver` (the complaint-webhook receiver; last, and refusing until the owner has placed its two secret files), and
 `playbooks/ops1.yml` adds `roles/ci_step_login` (the step account, its one-command sudoers file and
 its one forced-command key line; its key and source addresses are in `owner_vars/ops1.yml`), then
