@@ -1,0 +1,32 @@
+---
+# The role is applied as each of its two hosts, one after the other in one container, each with the
+# certificate its peer would supply. In a real run the play names one host and the owner's file
+# supplies the value; here the verify step does the cross-checks.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the certificate demo1 would trust, a client certificate
+      ansible.builtin.slurp:
+        src: /root/fixtures/client-pin.crt
+      register: host_tls_identity_converge_client_pin
+
+    - name: Read the certificate edge1 would trust, a server certificate for demo1
+      ansible.builtin.slurp:
+        src: /root/fixtures/server-pin.crt
+      register: host_tls_identity_converge_server_pin
+
+    - name: Apply the role as demo1
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, from meta/main.yml.
+        name: branchleft.host_tls_identity
+      vars:
+        enrolled_host: demo1
+        host_tls_identity_peer_cert: '{{ host_tls_identity_converge_client_pin.content | b64decode }}'
+
+    - name: Apply the role as edge1
+      ansible.builtin.include_role:
+        name: branchleft.host_tls_identity
+      vars:
+        enrolled_host: edge1
+        host_tls_identity_peer_cert: '{{ host_tls_identity_converge_server_pin.content | b64decode }}'

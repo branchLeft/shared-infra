@@ -1,0 +1,46 @@
+---
+# Renewal: the owner removes the certificate and the next run issues a new one on the same key.
+- name: Read the key and certificate before
+  community.crypto.openssl_privatekey_info:
+    path: /etc/branchleft/node-exporter-tls/server.key
+  register: host_tls_identity_renew_key_before
+  no_log: true
+
+- name: Read the certificate before
+  community.crypto.x509_certificate_info:
+    path: /etc/branchleft/node-exporter-tls/server.crt
+  register: host_tls_identity_renew_cert_before
+
+- name: Remove the certificate, as the README says
+  ansible.builtin.file:
+    path: /etc/branchleft/node-exporter-tls/server.crt
+    state: absent
+
+- name: Apply the role as demo1
+  ansible.builtin.include_role:
+    name: branchleft.host_tls_identity
+  vars:
+    enrolled_host: demo1
+    host_tls_identity_peer_cert: '{{ host_tls_identity_verify_pem["client-pin"] }}'
+
+- name: Read the key and certificate after
+  community.crypto.openssl_privatekey_info:
+    path: /etc/branchleft/node-exporter-tls/server.key
+  register: host_tls_identity_renew_key_after
+  no_log: true
+
+- name: Read the certificate after
+  community.crypto.x509_certificate_info:
+    path: /etc/branchleft/node-exporter-tls/server.crt
+    valid_at:
+      before_end: '+729d'
+  register: host_tls_identity_renew_cert_after
+
+- name: Assert a new certificate on the same key
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_renew_key_after.public_key_fingerprints.sha256 == host_tls_identity_renew_key_before.public_key_fingerprints.sha256
+      - host_tls_identity_renew_cert_after.public_key_fingerprints.sha256 == host_tls_identity_renew_key_before.public_key_fingerprints.sha256
+      - host_tls_identity_renew_cert_after.serial_number != host_tls_identity_renew_cert_before.serial_number
+      - host_tls_identity_renew_cert_after.valid_at.before_end
+    quiet: true

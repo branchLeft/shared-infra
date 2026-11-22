@@ -2,6 +2,8 @@
 - name: Verify
   hosts: all
   gather_facts: false
+  vars_files:
+    - vars/stack.yml
   vars:
     verify_entry_type: "{{ scenario_entry_public.split(' ')[0] }}"
     verify_entry_body: "{{ scenario_entry_public.split(' ')[1] }}"
@@ -139,10 +141,10 @@
         hidden: true
       register: tenant_entry_verify_register_clean
 
-    - name: Assert the hostile requests wrote nothing but the lock file
+    - name: Assert the hostile requests wrote nothing but the lock file and the address file
       ansible.builtin.assert:
         that:
-          - tenant_entry_verify_register_clean.files | map(attribute='path') | map('basename') | difference(['.lock']) | length == 0
+          - tenant_entry_verify_register_clean.files | map(attribute='path') | map('basename') | difference(['.lock', 'bind-address']) | length == 0
         quiet: true
 
     - name: Try to read the register directory as the entry account
@@ -245,11 +247,16 @@
         hidden: true
       register: tenant_entry_verify_register_after
 
-    - name: Assert the register holds the lock file and the one marker, and no leftover template
+    - name: Assert the register holds the lock file, the address file and the one marker, and no leftover template
       ansible.builtin.assert:
         that:
-          - tenant_entry_verify_register_after.files | map(attribute='path') | map('basename') | sort | list == ['.lock', 'example-tenant.json']
+          - tenant_entry_verify_register_after.files | map(attribute='path') | map('basename') | sort | list == ['.lock', 'bind-address', 'example-tenant.json']
         quiet: true
+
+    # A fresh tenant through claim (above), secrets, stack and enable, with status after each,
+    # and every way the stack verb must refuse. See tasks/lifecycle.yml.
+    - name: Run a fresh tenant through the set-up and refuse every stack that must be refused
+      ansible.builtin.include_tasks: tasks/lifecycle.yml
 
     - name: Refuse an empty key, which is never read as remove every key
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -346,6 +353,26 @@
         refused_from:
           - '!192.0.2.10'
 
+    # The host's own address is one private address: a public, loopback or wildcard one would
+    # publish a tenant's ports where they must not be.
+    - name: Refuse a public address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 8.8.8.8
+
+    - name: Refuse the loopback address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 127.0.0.1
+
+    - name: Refuse the wildcard address as the host's address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Check the app host's private address
+        refused_bind_address: 0.0.0.0
+
     # A source address that brings an option of its own through a quote or a comma.
     - name: Refuse a source address that carries a second option
       ansible.builtin.include_tasks: tasks/refused.yml
@@ -369,6 +396,7 @@
       vars:
         tenant_entry_key: '{{ scenario_entry_public }}'
         tenant_entry_from: '{{ scenario_from }}'
+        tenant_entry_bind_address: '{{ scenario_bind_address }}'
 
     - name: Assert the refusals left the host as it was and the account is as the role makes it
       ansible.builtin.include_tasks: tasks/assert_state.yml
@@ -388,6 +416,7 @@
       vars:
         tenant_entry_key: '{{ scenario_entry_public }}'
         tenant_entry_from: '{{ scenario_from }}'
+        tenant_entry_bind_address: '{{ scenario_bind_address }}'
 
     - name: Assert the key the role was not given is gone
       ansible.builtin.include_tasks: tasks/assert_state.yml
@@ -424,4 +453,5 @@
         that:
           - verify_key_bodies | select('in', tenant_entry_verify_log) | list | length == 0
           - "'EXAMPLEHASH' not in tenant_entry_verify_log"
+          - tenant_entry_stack_secrets_values.values() | select('in', tenant_entry_verify_log) | list | length == 0
         quiet: true

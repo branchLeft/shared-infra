@@ -1,0 +1,112 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/refusals.yml
+  vars:
+    host_tls_identity_verify_fixture_names:
+      - client-pin
+      - rogue-client
+      - server-pin
+      - other-name-server
+      - nameless-server
+      - both-usages
+      - ca-client
+      - short-client
+      - signed-client
+      - lapsed-client
+    # What each host's row must have made.
+    host_tls_identity_verify_rows:
+      - host: demo1
+        dir: /etc/branchleft/node-exporter-tls
+        key: server.key
+        cert: server.crt
+        usage: TLS Web Server Authentication
+        cn: demo1
+        san: ['DNS:demo1']
+        gid: 0
+        pin: client-pin
+      - host: edge1
+        dir: /etc/branchleft/demo1-metrics-tls
+        key: client.key
+        cert: client.crt
+        usage: TLS Web Client Authentication
+        cn: edge1
+        san: []
+        gid: 65534
+        pin: server-pin
+  tasks:
+    # An expired certificate cannot be made with a day count, so this one is made with fixed dates.
+    - name: Make the key of a certificate that lapsed in 2021
+      community.crypto.openssl_privatekey:
+        path: /root/fixtures/lapsed-client.key
+        type: ECC
+        curve: secp256r1
+        mode: '0600'
+      no_log: true
+
+    - name: Make its request
+      community.crypto.openssl_csr_pipe:
+        privatekey_path: /root/fixtures/lapsed-client.key
+        subject:
+          commonName: edge1-fixture
+        key_usage:
+          - digitalSignature
+        extended_key_usage:
+          - clientAuth
+        basic_constraints:
+          - 'CA:FALSE'
+      register: host_tls_identity_verify_lapsed_csr
+      no_log: true
+
+    - name: Make the lapsed certificate
+      community.crypto.x509_certificate:
+        path: /root/fixtures/lapsed-client.crt
+        provider: selfsigned
+        csr_content: '{{ host_tls_identity_verify_lapsed_csr.csr }}'
+        privatekey_path: /root/fixtures/lapsed-client.key
+        selfsigned_not_before: '20200101000000Z'
+        selfsigned_not_after: '20210101000000Z'
+      no_log: true
+
+    - name: Read the fixtures the owner might supply
+      ansible.builtin.slurp:
+        src: '/root/fixtures/{{ item }}.crt'
+      register: host_tls_identity_verify_slurps
+      loop: '{{ host_tls_identity_verify_fixture_names }}'
+
+    - name: Name each fixture's text
+      ansible.builtin.set_fact:
+        host_tls_identity_verify_pem: >-
+          {{ dict(host_tls_identity_verify_slurps.results | map(attribute='item')
+                  | zip(host_tls_identity_verify_slurps.results | map(attribute='content') | map('b64decode'))) }}
+
+    - name: Check what each host's row made
+      ansible.builtin.include_tasks: tasks/identity_case.yml
+      loop: '{{ host_tls_identity_verify_rows }}'
+      loop_control:
+        loop_var: host_tls_identity_row
+        label: '{{ host_tls_identity_row.host }}'
+
+    - name: Try every refusal, and that each leaves the trust file as it was
+      ansible.builtin.include_tasks: tasks/refusal_case.yml
+      loop: '{{ host_tls_identity_verify_refusals }}'
+      loop_control:
+        loop_var: host_tls_identity_case
+        label: '{{ host_tls_identity_case.name }}'
+
+    - name: Renew a certificate, and check the key is kept
+      ansible.builtin.include_tasks: tasks/renew_case.yml
+
+    - name: Try the files as the two services would, with the openssl program
+      ansible.builtin.include_tasks: tasks/tls_cases.yml
+
+    # The check run that follows this step compares the host with what converge left, and the cases
+    # above pinned another client certificate, so put the pin back as converge wrote it.
+    - name: Put demo1's pin back as converge wrote it
+      ansible.builtin.include_role:
+        name: branchleft.host_tls_identity
+      vars:
+        enrolled_host: demo1
+        host_tls_identity_peer_cert: '{{ host_tls_identity_verify_pem["client-pin"] }}'
