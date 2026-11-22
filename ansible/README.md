@@ -37,8 +37,8 @@ allow-list (`pull_trigger_steps`) and the values of its other roles that R10 all
 the host's private inputs, then `roles/host_baseline`, then `roles/deploy_tooling` (as class internal), then `roles/db1_stack`, then
 `roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
-`roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
-`roles/broker_deploy`.
+`roles/demo1_egress_spool`, then `roles/node_exporter_public` last, and not
+`roles/host_baseline`, `roles/egress_nat` or `roles/broker_deploy`.
 The other trees hold only what those hosts need. Delivery is `.github/workflows/ansible-delivery.yml`,
 which calls the reusable workflow in `branchLeft/github-workflows`; the trigger on the host is
 `roles/pull_trigger`, and ANS-17 describes the only approved path.
