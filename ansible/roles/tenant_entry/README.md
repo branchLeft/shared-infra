@@ -18,15 +18,23 @@ it:
   argument) and its authorised keys, which are exactly one line: the controller's key, restricted,
   limited to the declared source addresses, and forced to the program;
 - the register directory of the tenants the program has claimed;
-- the tenant secrets program, fetched from ghost-platform at one pinned commit.
+- the tenant secrets program, fetched from ghost-platform at one pinned commit;
+- the judge of a tenant's compose text, a byte-identical copy of `tenant_compose`'s module, which
+  the program loads from a root-owned file;
+- the host's own private address, kept in a root-owned file beside the register, where the stack
+  verb publishes each tenant's ports.
 
 It does not run the program. A request is made over SSH by the controller, never by Ansible.
 
 It does not install the programs the entry point calls. The volume program and its name register
-come from `tenant_onboarding`, the slot program from `deploy_slot_keys`, and the compose file and
-the deploy wrapper from `tenant_compose` and `deploy_tooling`. This role reads that they are there
-and fails closed, naming the program, when one is not. It never writes a compose file, because every
-line of that file is an isolation control that the renderer owns and `tenant_compose` judges.
+come from `tenant_onboarding`, the slot program from `deploy_slot_keys`, and the deploy wrapper from
+`deploy_tooling`. This role reads that they are there and fails closed, naming the program, when one
+is not. It writes a compose file only through the `stack` verb, which builds the file itself from
+its own template, the tenant's claim and a few checked parameters, and gives the result to the same
+judge `tenant_compose` runs. A caller never sends compose text: every line of that file is an
+isolation control, and the judge is a short list of forbidden keys, not a description of what a
+tenant stack may do. It never writes an image pin: the first pin is `branchleft-deploy`'s, written
+after it has verified the image's attestation.
 
 It does not mint, store or print a key or a secret. The controller's public key is the role's one
 input. The role adds itself to no playbook (see "Owner steps").
@@ -38,22 +46,72 @@ more reads one JSON object on stdin, at most 64 KiB, whose keys are exactly the 
 slug must match the volume program's own rule (a lower-case letter first, then letters, digits and
 hyphens, 26 characters at most); the volume program stays the authority on reserved names.
 
-| Verb      | Stdin                                      | What it does                                                                                                                                                                                                                                                        | Needs first             |
-| --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `status`  | none                                       | Reports how far one slug has got. A slug this entry point never claimed reports only that.                                                                                                                                                                          | nothing                 |
-| `claim`   | none                                       | Takes the lowest free uid in 30000 to 30999 and the first free block of four ports from 40000, writes the slug's marker, and asks the volume program to make the volumes and claim the uid. Prints the uid and the three ports (colour a, colour b, health router). | the slug exists nowhere |
-| `secrets` | `template`, `values`                       | Writes the template to a closed temporary file and passes the values on the secrets program's stdin. The program writes the tenant's secrets file.                                                                                                                  | `claim`                 |
-| `enable`  | none                                       | Enables the tenant's compose unit, never starts it: the unit has no image pin until its first deploy.                                                                                                                                                               | `secrets` file in place |
-| `key`     | `public_key`                               | Grants the slug's deploy slot to one ed25519 public key through the slot program, once. A slot that exists is never replaced.                                                                                                                                       | `enable`                |
-| `owner`   | `colour`, `name`, `site_url`, `site_title` | Finds the running colour's container and runs the platform's own owner script, so the Ghost owner exists before the hostname is served.                                                                                                                             | `enable`                |
+| Verb      | Stdin                                      | What it does                                                                                                                                                                                                                                                                     | Needs first             |
+| --------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `status`  | none                                       | Reports how far one slug has got. A slug this entry point never claimed reports only that.                                                                                                                                                                                       | nothing                 |
+| `claim`   | none                                       | Takes the lowest free uid in 30000 to 30999 and the first free block of four ports from 40000, writes the slug's marker, and asks the volume program to make the volumes and claim the uid. Prints the uid and the three ports (colour a, colour b, health router).              | the slug exists nowhere |
+| `secrets` | `template`, `values`                       | Writes the template to a closed temporary file and passes the values on the secrets program's stdin. The program writes the tenant's secrets file.                                                                                                                               | `claim`                 |
+| `stack`   | `size`, `mail`, `environment`              | Builds `compose.yml` from the host's template, the claim's uid and ports and these parameters, judges it with the judge `tenant_compose` runs and, only if it passes, writes it. No pin. The same parameters again succeed; never over a different file, never outside the slot. | `secrets` file in place |
+| `enable`  | none                                       | Enables the tenant's compose unit, never starts it: the unit has no image pin until its first deploy, and without one it stays inactive.                                                                                                                                         | `secrets` file in place |
+| `key`     | `public_key`                               | Grants the slug's deploy slot to one ed25519 public key through the slot program, once. A slot that exists is never replaced.                                                                                                                                                    | `enable`                |
+| `owner`   | `colour`, `name`, `site_url`, `site_title` | Finds the running colour's container and runs the platform's own owner script, so the Ghost owner exists before the hostname is served.                                                                                                                                          | `enable`                |
 
 The order is enforced by the program, not by the caller: a later verb on a slug that has not passed
 the earlier step is refused by name (`secrets-first`, `enable-first`). The secrets file is in place
 before the service is named, because the reverse aborts the whole stack.
 
+The `stack` verb takes parameters only. The compose file is the host's own template (two Ghost
+colours, both on `${IMAGE}`, the platform renderer's runtime posture for a paying tenant) filled from
+four things the caller does not choose: the slug, the claim's uid (the service `user`), the claim's
+ports (colour a on `port_a`, colour b on `port_b`) and this host's private address (the bind
+address). The caller chooses three:
+
+- `size`: `small`, `standard` or `large`, which the host maps to its own cpu, process and file caps.
+- `mail`: true or false, whether both colours join the spool's network for this uid.
+- `environment`: 1 to 64 names and values. A name is a letter then letters, digits and
+  underscores. A value is a number, a boolean, text of printable ASCII with no `$` (so no compose
+  reference), or `{"secret": "GHOST_NAME"}`, which the host writes as a reference to that key of
+  the tenant's secrets file.
+
+The file is JSON, which is YAML, so the encoder quotes every value and no value can add a key. The
+judge then reads the built text against the tenant's uid, the volume program's claims and the
+secrets file. A request repeated with the same parameters finds its file in place and succeeds
+(`compose.yml already in place`), so a retry after a lost reply needs no hand step. Other
+parameters over an existing file are `stack-exists`.
+
+It refuses by name: `not-claimed-here` and `secrets-first` before it reads its payload;
+`pin-not-accepted` for a request that carries an image pin, and `compose-not-accepted` for one that
+carries a compose text; `payload-keys` for any other key or a missing one (a `volumes`, `user`,
+`entrypoint` or `ports` key included), `payload-not-json`, `payload-not-object` and
+`payload-too-large`; `field-size`, `field-mail` and `field-environment`; `path-outside-slot` for a
+stack root that is missing or open to another user's write, or a stack directory that is a link,
+not a directory or not root's; `stack-exists` for a file that is already there and is not this
+request's own; `judge-refused` when the judge refuses the built stack; `claim-mismatch`; and
+`judge-unsafe` for a judge file that is not root's or is writable by another user. A judge that is
+missing, or has no PyYAML, is `failed: judge-missing` or `failed: judge-yaml-missing`; a missing or
+unreadable address file is `failed: bind-address`; a write that fails is `failed: write`. A
+`judge-refused` is the one refusal that carries more than its word: the rules the judge says were
+broken follow it, one line, cut to 1000 characters. The judge names rules, services and key names
+and never a value, and the program withholds the whole line if it repeats a secret value anyway.
+
+`status` also prints the claim: `uid=`, `port_a=`, `port_b=` and `port_health=` for a slug this entry
+point claimed, so a caller that was not there for the claim reads the host's own numbers. `stack=yes`
+means the compose file is in place; it says nothing about a pin.
+
+### The first pin, and a unit with no pin
+
+The verb writes no `SLUG.image.env`. The first pin comes from `branchleft-deploy`, which verifies the
+image's attestation against its register before it writes the pin and starts the unit, exactly as
+`tenant_compose` runs it for a tenant with no pin. `enable` enables the unit and starts nothing.
+The compose unit asserts that the pin file exists (`AssertPathExists`, no leading dash), so an
+enabled unit with a compose file and no pin stays inactive at boot and at `systemctl start`; a test
+holds that line of the unit. Order for a new tenant, none of it by hand: claim, secrets, stack,
+enable, key, then the tenant's first deploy through its slot.
+
 Exit codes: 0 done, 1 refused (stderr `refused: WORD`), 2 usage, 3 another request is running,
 4 a step failed (stderr `failed: STEP`, then the step's own message, cut to 1000 characters).
-A refusal is a fixed word and never repeats the request. Every request leaves one syslog line with
+A refusal is a fixed word and never repeats the request (`judge-refused` adds the judge's rules,
+above). Every request leaves one syslog line with
 the verb, the slug and the result, and never a payload.
 
 ### Why a tenant set up by hand is never touched
@@ -64,6 +122,10 @@ Every later verb requires that marker. A tenant made by hand has none, so no ver
 files, however well-formed the request.
 
 ### Where each secret goes
+
+The `stack` verb reads the tenant's secrets file only to give it to the judge, which checks that the
+stack asks for no secret the file lacks; the text is never written, printed or logged. A secret
+reaches the stack only as a reference to its name (`${GHOST_NAME:?...}`), never as a value.
 
 Values reach the secrets program on its stdin and the template reaches it as a file in the register
 directory, which is deleted after the call. Neither is an argument or an environment variable. A
@@ -77,10 +139,11 @@ never passed.
 when the role starts. Neither has a default (ANS-7): a host that is not told its controller key and
 source addresses is not given any.
 
-| Variable            | Meaning                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `tenant_entry_key`  | The controller's public key: one ed25519 public key on one line. Hidden from logs.                                        |
-| `tenant_entry_from` | The source addresses the key may connect from: dotted IPv4 addresses or ranges from /24 to /32. An empty list is refused. |
+| Variable                    | Meaning                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tenant_entry_key`          | The controller's public key: one ed25519 public key on one line. Hidden from logs.                                        |
+| `tenant_entry_from`         | The source addresses the key may connect from: dotted IPv4 addresses or ranges from /24 to /32. An empty list is refused. |
+| `tenant_entry_bind_address` | This host's own private IPv4 address (10/8, 172.16/12 or 192.168/16), where each tenant's ports are published.            |
 
 Every path, the account name, the sudoers lines, the pinned ghost-platform commit and the digest are
 in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them.
@@ -99,8 +162,12 @@ in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them
 
 - `/usr/local/sbin/branchleft-tenant-entry`: the program (`root:root`, `0755`).
 - `/etc/branchleft/tenant-entry`: the register directory (`root:root`, `0700`).
+- `/etc/branchleft/tenant-entry/bind-address`: the host's private address, one line (`root:root`,
+  `0600`).
 - `/root/platform-provision/render_tenant_secrets.py`: the secrets program, the pinned bytes
   (`root:root`, `0755`).
+- `/usr/local/lib/branchleft-tenant-entry/tenant_compose_check.py`: the judge, a copy of
+  `tenant_compose`'s module (`root:root`, `0644`, in a `root:root` `0755` directory).
 - The account `tenant-entry`: a system account with a home, a real shell and a locked password. An
   password or shell that a person changed on it is put back by the next apply.
 - `/etc/sudoers.d/tenant-entry` (`root:root`, `0440`), checked by `visudo -csf` before it replaces
@@ -115,7 +182,9 @@ restrict,from="ADDRESSES",command="sudo /usr/local/sbin/branchleft-tenant-entry 
 
 A request on a running host changes more, through the programs it calls: volumes, the uid claim, the
 secrets file, the unit's enable link and the deploy slot. Those are the programs' changes and are
-described in their own documents.
+described in their own documents. The `stack` verb writes one file itself, as root: the stack
+directory `/opt/branchleft/SLUG` (`0755`) with `compose.yml` in it (`0644`), the names and modes
+`tenant_compose` uses. It never writes `/etc/branchleft/SLUG.image.env`.
 
 ## How to test it
 
@@ -133,8 +202,11 @@ The harness runs lint, the container scenario and the rest:
 ```
 
 The scenario fetches the secrets program from the network at its pinned commit. It stands in a
-small volume program that keeps the claims it is given, applies the role, applies it again (no
-change), and then runs the real program as root through sudo as the entry account.
+small volume program that keeps the claims it is given and a placeholder template unit, applies the
+role, applies it again (no change), and then runs the real program, the real judge and the real
+secrets program as root through sudo as the entry account, taking a fresh tenant through claim,
+secrets, stack and enable with `status` after each. The Molecule scenario needs Docker; the unit
+tests do not.
 
 ## How it is delivered
 
@@ -194,19 +266,52 @@ has a case that goes red when the guard is removed:
 - A value never reaches a program's argument list, the output or the log, and a program message that
   repeats one is withheld.
 - A register directory or marker that is loose, a link or unreadable stops every verb.
+- `stack` takes parameters only. A request that carries a compose text, an image pin or any key
+  beyond `size`, `mail` and `environment` (a mount, a user, an entrypoint, a port) is refused by
+  name; a value outside its schema is refused by its field; every value that passes is encoded, so
+  the built file has the same keys whatever the parameters say. It writes nothing for a stack the
+  judge refuses (a secret nobody supplies, a uid another tenant holds), for a slug that was never
+  claimed here or whose secrets step is not done, and over no file that is not its own request's
+  built text, a dangling link included. The same parameters again succeed and change nothing. A
+  file that appears between the check and the write is not replaced. A stack root that is open to
+  writes, or a stack directory that is a link or not a directory, is refused, and the directory a
+  link pointed at stays empty. A failed write leaves no temporary file. It writes no pin, and a
+  test pins the compose unit's assertion that a missing pin keeps the unit from starting. A judge
+  that is not root's, is a link or is writable by another user is not loaded, and a judge message
+  that repeats a secret is withheld.
+- The judge file is a byte-identical copy of `tenant_compose`'s, and the stack paths and modes are
+  those `tenant_compose` uses.
 
 The container scenario then runs the real program through sudo as the entry account: another mode,
 an extra or doubled argument and another program are refused by sudo, hostile requests are refused
 by word with nothing written, the account cannot read the register, a claim takes the first uid and
-ports and writes a closed marker, and the later verbs refuse in order.
+ports and writes a closed marker, and the later verbs refuse in order. It then runs a fresh tenant
+through secrets, stack and enable, reads the file `stack` wrote (owner, mode, the uid, ports and
+address in it, nothing else beside it, and no pin anywhere) and `status` after each step, and shows
+the verb refusing by name: a stack the judge refuses, a request that carries a pin or a compose
+text, a parameter that tries to add a mount or a user, a value that is a compose reference, a
+name that tries to carry a key, a tenant never claimed, other parameters over the existing file (the
+file unchanged), and a slot whose directory leads outside it (the directory outside left empty). The
+same parameters again succeed.
 
 ## Named limits
 
 - **The container is not the app host.** The scenario stands in the volume program and has no
-  systemd, no Docker and no slot program. The unit tests cover those calls with fakes. The first
-  live request is the evidence for the rest.
-- **The program does not write the compose file.** Delivery of that file stays with `tenant_compose`.
-  A controller that needs the file delivered per tenant needs that route first.
+  running systemd, no Docker and no slot program. The unit tests cover those calls with fakes. The
+  first live request is the evidence for the rest.
+- **The first pin is not written here.** It is `branchleft-deploy`'s, after the attestation check.
+  Until the tenant's first deploy runs, an enabled unit stays inactive (no pin file). That deploy is
+  the platform's own step (`first-deploy`), not this verb's.
+- **The template is a copy of the renderer's posture, not the renderer.** It writes two Ghost
+  colours with the platform's runtime controls and carries no verdict sidecar and no per-tenant
+  limits beyond three sizes. A change to the renderer's posture is a change to
+  `build_stack` here too; the two are held together by review, and the judge is the second lock.
+- **`tenant_compose` and `stack` are two routes to the same file.** A tenant that is both stacked
+  here and named in `tenant_compose_stacks` has its compose file replaced by that role's text on its
+  next run; keep a tenant on one route.
+- **The judge needs PyYAML on `/usr/bin/python3`.** The role refuses a host that lacks it (task
+  `Refuse a host whose python3 has no PyYAML`), and the verb fails `judge-yaml-missing` if it is
+  removed later.
 - **The `owner` verb is untested against a live Ghost.** It calls the platform's owner script with
   checked arguments. The script's own tests are in ghost-platform.
 - **A port assigned by hand inside the reserved range is not seen.** The program knows only the

@@ -11,6 +11,7 @@
       vars:
         tenant_entry_key: '{{ scenario_entry_public }}'
         tenant_entry_from: '{{ scenario_from }}'
+        tenant_entry_bind_address: '{{ scenario_bind_address }}'
 
     # The control case for the log check in verify.yml: a task with no no_log that is
     # given a known value. If the log did not show it, an empty scan would mean nothing.
