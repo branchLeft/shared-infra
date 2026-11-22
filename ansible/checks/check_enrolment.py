@@ -85,6 +85,14 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 STEP_LOGIN_KEY = "ci_step_login_key"
 STEP_LOGIN_FROM = "ci_step_login_from"
 STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
+# The one input of the host_tls_identity role: the peer's public certificate, as PEM text, empty until
+# the owner has read it off the peer's host. It is public data. The role holds every shape check (one
+# certificate, self-signed, the use, the name, the lifetime), so only the type is read here. The hosts
+# that apply the role are exactly HOST_TLS_HOSTS, so a host cannot gain the role without its value, nor
+# the value without the role (_check_host_tls_hosts).
+HOST_TLS_KEY = "host_tls_identity_peer_cert"
+HOST_TLS_ROLE = "host_tls_identity"
+HOST_TLS_HOSTS = frozenset(("demo1",))
 # The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
 # range and the difference between them (its _inputs.yml), so only the type is read here. edge1
 # only: the role refuses any other host, and the playbook lists it there alone.
@@ -124,7 +132,8 @@ _BASE_OWNER_KEYS = {
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
     | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
-    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
+    | (frozenset((HOST_TLS_KEY,)) if host in HOST_TLS_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS, *HOST_TLS_HOSTS)
 }
 STEPS_KEY = "pull_trigger_steps"
 # Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
@@ -880,6 +889,8 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
         if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
+    if HOST_TLS_KEY in doc and not isinstance(doc[HOST_TLS_KEY], str):
+        problems.append(f"{HOST_TLS_KEY} must be text")
     problems.extend(_mail_collector_problems(doc))
     problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
@@ -939,6 +950,20 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
     )
 
 
+def _check_host_tls_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the host_tls_identity role are exactly HOST_TLS_HOSTS, the hosts whose
+    owner_vars file holds the peer's certificate it pins."""
+    applying = {host for host, roles in host_roles.items() if HOST_TLS_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {HOST_TLS_ROLE} but is not in HOST_TLS_HOSTS"
+        for host in sorted(applying - HOST_TLS_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in HOST_TLS_HOSTS but does not list {HOST_TLS_ROLE}"
+        for host in sorted(HOST_TLS_HOSTS - applying)
+    )
+
+
 def check(root: Path) -> list[str]:
     """Return one finding per broken rule, or an empty list when the tree passes."""
     findings: list[str] = []
@@ -974,6 +999,7 @@ def check(root: Path) -> list[str]:
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
     _check_jump_hosts(host_roles, findings)
+    _check_host_tls_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}
