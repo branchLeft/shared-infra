@@ -1,0 +1,3 @@
+---
+restart_stamp_dir: /var/lib/restart_stamp_example
+restart_stamp_input: EXAMPLE_INPUT

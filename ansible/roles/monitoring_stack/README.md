@@ -123,6 +123,17 @@ it with a stamp that it writes only after a restart was read back as active.
   read-back that finds the unit `active`. The directory `/var/lib/branchleft` is
   shared with `broker_deploy`, which sets it to `0755` `root:root`, so this role
   sets the same.
+- **The stamp steps** (read the stamp, decide whether a restart is due, record the stamp) are
+  the `restart_stamp` module, shared with `edge_stack` and any later restart-by-fingerprint role.
+  Its source is `ansible/patterns/restart_stamp/library/restart_stamp.py`; this role holds it as a
+  symbolic link in `library/`, with its unit test in `tests/unit/`, because a role may not load
+  another role (ANS-12). The role works out its fingerprint and its unit state itself and calls the
+  module three times: `read` (a stamp that is not there, or is there and cannot be read, is
+  `none`), `decide` (the unit being enabled is the gate, and a unit that is down counts as a file
+  that differs) and `record` (only for a restart that was read back, and never in check mode).
+  Each call is `no_log`, and the module refuses a fingerprint that is not a sha256. A fix to the
+  stamp steps is made once, in the pattern; run this role's harness and `edge_stack`'s before
+  proposing it.
 - **A restart is due** when the unit is enabled (`enabled` or `enabled-runtime`)
   and either the fingerprint differs from the stamp, or the unit is `failed` or
   `inactive` (`monitoring_stack_down_states`). The second term matters when a bad
@@ -383,6 +394,16 @@ systemd container (the same Debian 13 image and settings as the
 `files_and_units` pattern; the reason for each platform key is in `molecule.yml`).
 It removes its container when it finishes and never touches a host.
 
+The cases are shared out between three scenarios, each its own CI shard, because the one verify took about seventeen minutes and the shard sets the length of every pull request that touches the role (a full scheduled run on 20 November measured 20.2 minutes for the whole job, 17 of them in verify; the times below regroup that run's per-case times, each scenario adds about a minute and a half of create, converge and destroy, and the log scan about half a minute):
+
+| Scenario   | Verify file           | Cases                                                                                                                                                                                                                                                                                                                     | Expected verify time |
+| ---------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `default`  | `verify.yml`          | the file, directory and drop-in checks; the project-directory case; the secrets file and renderer-path checks; the restart decision for the stamp, no change, a rotated key, a run that fails before the restart and the SNDS key; plus every step the harness has (plan, second apply, configured check, Molecule check) | about 3.5 minutes    |
+| `pager`    | `verify_pager.yml`    | the restart decision for a key `ntfy_pager` owns and for the renderer; the stale `NTFY_` lines and the pager gauge                                                                                                                                                                                                        | about 4.5 minutes    |
+| `restarts` | `verify_restarts.yml` | the restart decision for a new drop-in, an inactive unit, a unit that is not enabled, a restart that fails or leaves the unit not active, a bad change, the value and renderer checks and a plan; the inputs put back                                                                                                     | about 8.8 minutes    |
+
+Every scenario applies the role once by the converge it imports from `default`, runs the plays of its own file and then `verify_log_scan.yml`, the log scan, over that scenario's own log. The plays of the restart decision share their names and sentinels from `molecule/default/vars/restart_decision.yml`. The scenarios other than `default` leave out `check-fresh`, `idempotence`, `check-configured` and `molecule-check` (`skip-steps.txt`), which `default` runs once for the role (ANS-15). `molecule/<scenario>/` holds, for each, only the imports of the default scenario's converge and prepare, an import of its own verify file, a link to `molecule.yml` and that list. `tasks/assert_parts.yml`, run first by `default`, fails when a scenario named there has no `molecule.yml` or `verify.yml` or leaves `verify` out, and `tests/unit/test_verify_parts.py` fails when a verify file is imported by no scenario, a scenario is not named in the guard, or a scenario leaves out a step `default` must run. A new case goes in the file of the scenario whose shard is shortest.
+
 What each part of the scenario does:
 
 - `prepare.yml` installs a placeholder for the shared unit template
@@ -414,7 +435,8 @@ What each part of the scenario does:
   that names another project directory, and that directory must not exist and the
   stack must stay where the unit runs it; the three copies of the path (this
   role's, `ntfy_pager`'s, the unit template's `WorkingDirectory`) must agree.
-- `verify.yml`, "Exercise the restart decision": each case applies the role (with
+- `verify.yml`, `verify_pager.yml` and `verify_restarts.yml`, "Exercise the restart decision" (the cases
+  are shared out between the three scenarios, above; each case is written once, in one file): each case applies the role (with
   `include_role`, overriding inputs where the case needs it), and compares
   snapshots of the stand-in's calls log, the stamp and systemd's `ActiveState` and
   `UnitFileState` before and after. The cases:
@@ -453,7 +475,7 @@ What each part of the scenario does:
   - check mode with a changed key and a stale stamp: the restart is found due,
     nothing is restarted, nothing is written; the real run then restarts once and
     replaces the stale stamp.
-- `verify.yml`, "Scan the log for the values": the converge ends with a harmless
+- `verify_log_scan.yml`, "Scan the log for the values" (run at the end of every scenario's verify): the converge ends with a harmless
   command given a canary argument, and the scenario's Ansible log is written at
   verbosity 3 with `--diff` always on. The scan finds the canary and the role's
   task names, and then none of the sentinel inputs or the rotated values. That is
@@ -488,7 +510,10 @@ The reload and the files:
 | A new file added to `hetzner/monitoring/stack/`           | `verify`        | the same task names the file                                                  |
 | The stamp written with mode `0644`                        | `verify`        | "Assert the stamp is one sha256 and a newline, in a root-only file ..."       |
 
-The restart decision:
+The restart decision. The decision and the stamp read and write are the shared module's
+(`ansible/patterns/restart_stamp/library/restart_stamp.py`): a row that names `restart_due` is
+made in `decide` there, or in this role's call of it, and the module's own unit test names the same
+breaks (it fails at `lint`, before any container):
 
 | Edit to the role                                                                         | Step that fails | Assertion or task that names it                                                                                                                             |
 | ---------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |

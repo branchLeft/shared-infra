@@ -1,7 +1,7 @@
 ---
 argument_specs:
   main:
-    short_description: Baseline every container host needs - key-only sshd, unattended upgrades, fail2ban, Docker CE and a daily Docker image prune
+    short_description: Baseline every container host needs - key-only sshd, updates, fail2ban, Docker CE, an image prune, opt-in journal retention
     description: >-
       Writes the key-only sshd drop-in, checks the whole sshd configuration and
       reloads sshd only after that check passes, then reads the resolved
@@ -28,3 +28,17 @@ argument_specs:
           Set true, on one host, to write the jail with no ignoreip line at all.
           Unset (false) keeps the ignore list. The input is still checked, so
           an empty host_baseline_fail2ban_ignoreip refuses either way.
+      host_baseline_journal_retention_days:
+        type: int
+        default: 0
+        description: >-
+          Opt-in. A whole number of days from 1 to 90 writes a journald drop-in that keeps an
+          entry for at most that long; 0, the default, writes nothing and leaves the journal
+          as the host has it. 90 is the ceiling the website's privacy notice states for server
+          logs.
+      host_baseline_journal_max_use:
+        type: str
+        default: 500M
+        description: >-
+          The size the journal is capped at when the retention above is on, as a number and M
+          or G, such as 500M or 2G. Ignored when the retention is 0.

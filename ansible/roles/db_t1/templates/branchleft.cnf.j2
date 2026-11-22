@@ -3,14 +3,17 @@
 # restart, which the role never triggers.
 #
 # The settings are the ones the isolation proof ran with, plus five for this host:
-# the loopback bind, the explicit socket, the X protocol off, the server id, and
-# GTID mode from the first start (it cannot be turned on later without a staged
+# the private-address bind, the explicit socket, the X protocol off, the server id,
+# and GTID mode from the first start (it cannot be turned on later without a staged
 # procedure). Anything else would be a guess about a database nobody has measured.
 [mysqld]
-# Loopback only. Nothing on the tenants network can reach this server. Opening it
-# to the application host is a separate change that adds the host firewall in the
-# same step, because the cloud firewall does not filter the private network.
-bind-address = 127.0.0.1
+# The host's private address only, never a wildcard and never loopback. The cloud
+# firewall does not filter the private network, so the application host is the one
+# source admitted, by the host firewall rule the same role loads before the server
+# starts (branchleft-dbt1-listener-rule: TCP {{ db_t1_port }} from {{ db_t1_client_address }},
+# every other source dropped). This file and that rule are delivered in one run.
+bind-address = {{ db_t1_private_address }}
+port = {{ db_t1_port }}
 # The X protocol listens on every address whatever bind-address says, so it is off.
 mysqlx = OFF
 socket = /var/run/mysqld/mysqld.sock

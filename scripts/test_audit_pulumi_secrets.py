@@ -986,7 +986,8 @@ class ShippedInventoryLiveStateTests(unittest.TestCase):
 class WorkspaceStackDiscoveryTests(unittest.TestCase):
     """Regression guard: every stack-owning repo's Pulumi.yaml needs an entry.
 
-    Skips when the sibling repos are absent, as in this repo's own CI.
+    The shared-infra half always runs. The sibling half skips when the sibling
+    repos are absent, as in this repo's own CI.
     Narrative: scripts/test_audit_pulumi_secrets.md.
     """
 
@@ -1019,20 +1020,35 @@ class WorkspaceStackDiscoveryTests(unittest.TestCase):
                 found.append((pathlib.Path(dirpath) / "Pulumi.yaml").relative_to(repo_dir).as_posix())
         return found
 
-    def test_every_pulumi_project_in_a_stack_owning_repo_is_in_the_inventory(self):
+    @staticmethod
+    def _known_inventory_entries():
+        inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
+        return {(entry.get("repo"), entry.get("project_path")) for entry in inventory["stacks"]}
+
+    def test_every_pulumi_project_in_this_repo_is_in_the_inventory(self):
+        known = self._known_inventory_entries()
+
+        missing = []
+        for path in self._pulumi_projects(audit.REPO_ROOT):
+            if (audit.THIS_REPO, path) not in known:
+                missing.append(f"{audit.THIS_REPO}/{path}")
+
+        self.assertEqual(
+            missing,
+            [],
+            f"Pulumi.yaml with no matching entry in {audit.DEFAULT_INVENTORY.name}: {missing}",
+        )
+
+    def test_every_pulumi_project_in_a_sibling_repo_is_in_the_inventory(self):
         root = self._find_workspace_root()
         if root is None:
             self.skipTest(
                 "sibling repos not found above this checkout -- this check "
                 "only runs with the full multi-repo workspace present"
             )
-        inventory = audit.load_inventory(audit.DEFAULT_INVENTORY)
-        known = {(entry.get("repo"), entry.get("project_path")) for entry in inventory["stacks"]}
+        known = self._known_inventory_entries()
 
         missing = []
-        for path in self._pulumi_projects(audit.REPO_ROOT):
-            if (audit.THIS_REPO, path) not in known:
-                missing.append(f"{audit.THIS_REPO}/{path}")
         for repo in self.STACK_OWNING_REPOS:
             for path in self._pulumi_projects(root / repo):
                 if (repo, path) not in known:

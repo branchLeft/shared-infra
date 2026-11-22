@@ -144,6 +144,23 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: true,
     tenantScoped: false,
   },
+  {
+    id: 'abuse-report',
+    name: 'A report to the abuse mailbox',
+    reason:
+      'Dormant: a report of abusive or harmful material must reach the owner within ' +
+      'minutes, not on the digest. The arrival producer on mx1 is an owner-authorised ' +
+      'patch, so the entry stays dormant until that patch lands. Flip `dormant` to false ' +
+      'in the same change that lands the producer.',
+    alertName: 'AbuseReportReceived',
+    deliveryPath: 'alertmanager',
+    dormant: true,
+    tenantScoped: false,
+    ruleExemption:
+      'Raised on mx1 when a message reaches the abuse role mailbox, not by a Prometheus ' +
+      'rule: this stack scrapes no metric for a mailbox arrival, so the rendered rules ' +
+      'carry no rule for it and cannot.',
+  },
 ] as const;
 
 /** The receiver Alertmanager route-tree tests and CI's `amtool` step verify

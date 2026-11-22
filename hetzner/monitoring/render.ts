@@ -1,4 +1,4 @@
-import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
+import { APP_HOST_IPS, HOST_IPS, TENANTS_HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite } from '../../siteTypes';
 import {
@@ -24,8 +24,9 @@ const GENERATED_BANNER = [
 
 /**
  * The estate hosts this stack watches, and whether each node_exporter target
- * is expected to answer today -- all four are, so every node target contributes
- * to `HostOrServiceDown` below. A host's membership and `expectedUp` flip are
+ * is expected to answer today -- the first four are, so those node targets
+ * contribute to `HostOrServiceDown` below; the tenant hosts that follow are
+ * not yet. A host's membership and `expectedUp` flip are
  * reviewed, never hand-edited; see
  * render.md#monitoredhost--monitored_node_hosts for why, and why the
  * membership below is reviewed rather than derived from `HOST_IPS` whole.
@@ -41,6 +42,13 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'app1', address: APP_HOST_IPS.app1, expectedUp: true },
   { name: 'db1', address: HOST_IPS.db1, expectedUp: true },
   { name: 'ops1', address: HOST_IPS.ops1, expectedUp: true },
+  // The tenants project's three hosts, quiet until each is enrolled. Their
+  // addresses are the tenants network's, which reuses the estate's range, so
+  // nothing here is reachable from this stack until a scrape path across the
+  // two projects exists; see render.md#the-tenant-hosts-node-targets.
+  { name: 'db-t1', address: TENANTS_HOST_IPS.dbT1, expectedUp: false },
+  { name: 'app-t1', address: TENANTS_HOST_IPS.appT1, expectedUp: false },
+  { name: 'edge-t', address: TENANTS_HOST_IPS.edgeT, expectedUp: false },
 ];
 
 /**
@@ -270,7 +278,13 @@ function nodeTarget(host: MonitoredHost): string {
  * hostnames and its redirect sources, since a redirect is still a public
  * endpoint someone can hit and expect a 2xx-after-redirect chain from. */
 export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
-  return sites.flatMap((site) => site.hostnames).map((hostname) => `https://${hostname}`);
+  return sites.flatMap((site) =>
+    // A signed object gateway answers 404 at `/` by design; its health path is
+    // the one the edge forwards for a probe.
+    site.hostnames.map((hostname) =>
+      site.signedObjectGateway === true ? `https://${hostname}/healthz` : `https://${hostname}`
+    )
+  );
 }
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
@@ -589,13 +603,13 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // decides the vCPU count, and the rule covers every node_exporter host.
     // Busy and steal are one alert: either one sustained is the same ceiling.
     '      - alert: HostCPUSaturated',
-    '        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
+    '        expr: (1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance, host) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
     '        for: 30m',
     '        labels:',
     '          severity: warning',
     '          owner_action: "true"',
     '        annotations:',
-    '          summary: "{{ $labels.instance }} has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
+    '          summary: "{{ $labels.host }} ({{ $labels.instance }}) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
     '          description: "Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores."',
     '',
     '      - alert: HostDiskSpaceLow',

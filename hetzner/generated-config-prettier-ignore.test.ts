@@ -26,6 +26,7 @@ const GENERATED_FILES = [
   'hetzner/edge/validation/Caddyfile.enforcing',
   'hetzner/edge/validation/Caddyfile.authoring',
   'hetzner/edge/validation/Caddyfile.webhook',
+  'hetzner/edge/validation/Caddyfile.state-gateway',
 ];
 
 describe('generated config stays off Prettier and the pre-commit whitespace hooks', () => {

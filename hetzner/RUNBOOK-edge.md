@@ -321,8 +321,7 @@ handler chain as a public site and answers 204.
 **Both directions matter.** Checks (a) and (b) are a matched pair: (a) proves
 the general throttle is present and trips, (b) proves the magic-link throttle is
 present and trips on its own, tighter budget. Both expect a `429`, so neither
-passes if the whole `rate_limit` module has silently failed to load
-(`branchLeft/workspace#209`).
+passes if the whole `rate_limit` module has silently failed to load.
 
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering this section independently — every check below
@@ -651,8 +650,7 @@ _config hash_ moved. The **contents** of a bind-mounted file or directory are no
 hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
 `--wait` passes because the unchanged containers are already healthy, and Caddy
 goes on serving the configuration it loaded at container start. This was
-observed on the monitoring stack the same day it landed
-(branchLeft/workspace#666) and again here.
+observed on the monitoring stack the same day it landed and again here.
 
 The `edge` instance is deliberately **not** given the blanket
 `--force-recreate` that the monitoring instance gets: recreating this stack

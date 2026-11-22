@@ -5,7 +5,7 @@
 # nothing. The renderer is put back at the end.
 - name: Put the renderer in the state
   ansible.builtin.file:
-    path: '{{ verify_renderer_path }}'
+    path: '{{ monitoring_stack_verify_renderer_path }}'
     state: '{{ monitoring_stack_verify_renderer.state }}'
     mode: '{{ monitoring_stack_verify_renderer.mode }}'
     owner: '{{ monitoring_stack_verify_renderer.owner }}'
@@ -21,7 +21,7 @@
       ansible.builtin.include_role:
         name: branchleft.monitoring_stack
       vars:
-        monitoring_stack_smtp_password: '{{ verify_rot_f }}'
+        monitoring_stack_smtp_password: '{{ monitoring_stack_verify_rot_f }}'
     - name: Note that the role did not refuse
       ansible.builtin.set_fact:
         monitoring_stack_verify_failed_run: false
@@ -50,7 +50,7 @@
 - name: Put the renderer back
   ansible.builtin.copy:
     content: "# test stand-in: a changed renderer\n"
-    dest: '{{ verify_renderer_path }}'
+    dest: '{{ monitoring_stack_verify_renderer_path }}'
     owner: root
     group: root
     mode: '0644'

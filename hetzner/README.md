@@ -60,8 +60,7 @@ project buys is billable-resource and server-cap containment, the same as
 dns and demo-dns. Object Storage's own default is that an S3 key reaches
 _every bucket in its project_, so the real reason the backup bucket wants its
 own project is to keep every other project's S3 key from reaching it — a
-different boundary, proven by a different credential, owed by [ISSUE
-branchLeft/workspace#1203](https://github.com/branchLeft/workspace/issues/1203),
+different boundary, proven by a different credential, owed by the separate bucket-provisioning story,
 which provisions the bucket. Nothing here provisions it or proves that.
 
 For dns, demo-dns and backup alike, a Read & Write Cloud API token can still

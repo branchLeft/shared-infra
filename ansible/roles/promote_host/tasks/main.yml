@@ -1,0 +1,192 @@
+---
+# The role installs the host applier on a host that already has the deploy wrapper: the program,
+# its slot map, its one trusted signer, an environment file of public values, a service unit and a
+# timer. It starts nothing until it is given both a ledger URL and a signer: with either empty the
+# timer is held disabled and stopped, and the signer file is absent, which the program reads as
+# "trust nothing" and refuses.
+#
+# It touches only its own paths (vars/main.yml): /etc/branchleft/promote, /var/lib/branchleft/promote,
+# the program and its two unit files. It asserts its parents and never changes them. Which host may
+# apply it is the owner's list (checks/host_roles/, R9); an in-role host test would be no control,
+# because under the pull inventory the host's name is localhost.
+#
+# Check mode (ANS-10). Every task runs in check mode. On a fresh host the directories do not exist
+# yet, so the plan shows the files as "would create", and the timer task is skipped until the unit
+# file exists (the stat that gates it); the first plan therefore shows less than the first apply.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it and accepts an empty string, so
+# these reject both. Each input has its own task, so a refusal names the one input at fault.
+- name: Refuse a ledger URL that is set and is not an https URL with no credential
+  ansible.builtin.assert:
+    that:
+      - promote_host_ledger_url is string
+      - promote_host_ledger_url | length == 0 or promote_host_ledger_url is match(promote_host_url_pattern)
+    quiet: true
+    fail_msg: promote_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+
+- name: Refuse a signer key that is set and is not one ed25519 public key line
+  ansible.builtin.assert:
+    that:
+      - promote_host_signer_key is string
+      - promote_host_signer_key | length == 0 or promote_host_signer_key is match(promote_host_key_pattern)
+    quiet: true
+    fail_msg: promote_host_signer_key must be empty or one OpenSSH ed25519 public key line with no comment.
+
+# A URL with no signer would fetch a ledger nothing can check, and a signer with no URL has nothing
+# to check. The input that is missing is named.
+- name: Refuse a ledger URL with no signer key
+  ansible.builtin.assert:
+    that: promote_host_ledger_url | length == 0 or promote_host_signer_key | length > 0
+    quiet: true
+    fail_msg: promote_host_signer_key is empty while promote_host_ledger_url is set.
+
+- name: Refuse a signer key with no ledger URL
+  ansible.builtin.assert:
+    that: promote_host_signer_key | length == 0 or promote_host_ledger_url | length > 0
+    quiet: true
+    fail_msg: promote_host_ledger_url is empty while promote_host_signer_key is set.
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ promote_host_parents }}'
+  register: promote_host_parent_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ promote_host_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# The program checks a ledger's signature with this tool and refuses every ledger without it, so a
+# configured host that lacks it would tick, fail and say so only in the journal. Read only, so it
+# runs in check mode.
+- name: Look at the signature tool
+  ansible.builtin.stat:
+    path: '{{ promote_host_signature_tool }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: promote_host_tool_stat
+
+- name: Require the signature tool once the role is given its inputs
+  ansible.builtin.assert:
+    that:
+      - promote_host_tool_stat.stat.exists
+      - promote_host_tool_stat.stat.isreg
+      - promote_host_tool_stat.stat.xusr
+    quiet: true
+    fail_msg: The signature tool (ssh-keygen) is missing from the host or is not an executable file. Install the OpenSSH client first.
+  when: promote_host_ledger_url | length > 0
+
+# --- Directories. The config directory is root's and world-readable: it holds public text. The
+# state directory is root's alone, because the program refuses a state directory that anyone but
+# its owner can write, and its replay protection lives there.
+- name: Make the config directory
+  ansible.builtin.file:
+    path: '{{ promote_host_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make the state directory, closed to everyone but root
+  ansible.builtin.file:
+    path: '{{ promote_host_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# --- The program, the slot map and the one trusted signer.
+- name: Install the applier
+  ansible.builtin.copy:
+    src: '{{ promote_host_programs_dir }}/{{ promote_host_program_source }}'
+    dest: '{{ promote_host_program_path }}'
+    owner: root
+    group: root
+    mode: '{{ promote_host_program_mode }}'
+
+- name: Write the slot map
+  ansible.builtin.template:
+    src: slots.json.j2
+    dest: '{{ promote_host_slots_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# The one key the applier trusts. Absent, the applier trusts nothing. Clearing the input removes a
+# key that was placed, so the host does not go on trusting a signer the owner took away.
+- name: Write the signer file
+  ansible.builtin.template:
+    src: allowed_signers.j2
+    dest: '{{ promote_host_allowed_signers_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: promote_host_signer_key | length > 0
+
+- name: Remove the signer file when no signer is set
+  ansible.builtin.file:
+    path: '{{ promote_host_allowed_signers_path }}'
+    state: absent
+  when: promote_host_signer_key | length == 0
+
+# --- The units and the environment file. The units are static files, never templated.
+- name: Write the environment file of public values
+  ansible.builtin.template:
+    src: promote.env.j2
+    dest: '{{ promote_host_env_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install the units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ promote_host_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ promote_host_units }}'
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the timer task below would meet a
+# unit systemd has not read.
+- name: Load the units before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Look at the installed timer
+  ansible.builtin.stat:
+    path: '{{ promote_host_unit_dir }}/{{ promote_host_timer_unit }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: promote_host_timer_stat
+
+# The one step that turns the applier on is the pair of inputs, and with either empty the timer is
+# held disabled and stopped: the role owns this unit, so it converges it either way. A fresh host
+# in check mode has no unit file yet and is skipped (ANS-10).
+- name: Hold the timer to the state the inputs ask for
+  ansible.builtin.systemd_service:
+    name: '{{ promote_host_timer_unit }}'
+    enabled: '{{ promote_host_ledger_url | length > 0 }}'
+    state: "{{ 'started' if promote_host_ledger_url | length > 0 else 'stopped' }}"
+  when: promote_host_timer_stat.stat.exists
