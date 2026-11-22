@@ -12,8 +12,9 @@ node_exporter_public_account: prometheus
 node_exporter_public_defaults_file: /etc/default/prometheus-node-exporter
 node_exporter_public_port: 9100
 
-# The three files the owner places, root-only, before the role installs anything. The role ships
-# none of them and makes none: where the keys come from is the owner's decision.
+# The three files the host_tls_identity role leaves, root-only, before this role installs anything:
+# the server key and certificate, and the pinned client certificate (ca.crt, trusted as the client
+# CA file: it is the one client certificate, not an authority). This role ships and makes none.
 node_exporter_public_tls_dir: /etc/branchleft/node-exporter-tls
 node_exporter_public_ca_file: /etc/branchleft/node-exporter-tls/ca.crt
 node_exporter_public_cert_file: /etc/branchleft/node-exporter-tls/server.crt
