@@ -1,6 +1,6 @@
 # The control-plane Compose stack, deployed as `control-plane` under
 # /opt/branchleft/control-plane on `ops1`: the sign-in service (Zitadel), its
-# PostgreSQL, the tenant portal and the owner console.
+# PostgreSQL, the tenant portal, the owner console and the provisioning API.
 #
 # A separate Compose project from `nextcloud1`, on purpose. Nothing here names a
 # Nextcloud service, volume or network, so deploying, restarting or removing
@@ -171,7 +171,14 @@ services:
       PORTAL_OUTPUTS_FILE: /run/secrets/identity-outputs
       PORTAL_DATABASE_URL_FILE: /run/secrets/portal-database-url
       PORTAL_TRUSTED_PROXIES: *edge_private_address
+      # The provisioning API, off until /opt/branchleft/control-plane/.env sets these (the
+      # control_plane role writes it when the owner enables the API): both empty is no demo
+      # screen and no request screens. The tenant credentials are the one directory below.
+      PORTAL_PROVISIONING_URL: ${PORTAL_PROVISIONING_URL:-}
+      PORTAL_PROVISIONING_CREDENTIALS_FILE: ${PORTAL_PROVISIONING_CREDENTIALS_FILE:-}
       NODE_OPTIONS: --max-old-space-size=192
+    volumes:
+      - /etc/branchleft/control-plane/provisioning/tenant:/run/provisioning/tenant:ro
     secrets:
       - identity-outputs
       - portal-database-url
@@ -212,7 +219,13 @@ services:
       CONSOLE_OUTPUTS_FILE: /run/secrets/identity-outputs
       CONSOLE_DATABASE_URL_FILE: /run/secrets/console-database-url
       CONSOLE_TRUSTED_PROXIES: *edge_private_address
+      # The provisioning API and the owner credential, off until .env sets both (as for the
+      # portal). The console is given the owner's directory and never the tenants'.
+      CONSOLE_PROVISIONING_URL: ${CONSOLE_PROVISIONING_URL:-}
+      CONSOLE_PROVISIONING_CREDENTIAL_FILE: ${CONSOLE_PROVISIONING_CREDENTIAL_FILE:-}
       NODE_OPTIONS: --max-old-space-size=192
+    volumes:
+      - /etc/branchleft/control-plane/provisioning/owner:/run/provisioning/owner:ro
     secrets:
       - identity-outputs
       - console-database-url
@@ -233,6 +246,54 @@ services:
     oom_score_adj: 500
     mem_limit: 256m
     cpu_shares: 256
+
+  # The provisioning API (services/provisioning-controller in ghost-platform), the contract the
+  # portal's Ask and the console's Approve call. It publishes nothing: the portal and the
+  # console reach it as http://provisioning:8095 on this project's own network, and the edge
+  # routes nothing to it. It holds no database login and no secret in its environment: its
+  # credentials are three read-only directories of files the owner places, and its state is one
+  # host directory it alone writes. Its scale is 0 until the control_plane role writes
+  # PROVISIONING_SCALE=1 into .env, so a host that has not enabled it runs the stack as before
+  # and an image that does not carry the service is never asked to start it.
+  provisioning:
+    image: ${IMAGE}
+    profiles: [apps]
+    scale: ${PROVISIONING_SCALE:-0}
+    restart: unless-stopped
+    command: ['node', '/app/services/provisioning-controller/dist/src/service/main.js']
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: '8095'
+      LISTEN_HOST: 0.0.0.0
+      PROVISIONING_OWNER_CREDENTIAL_FILE: /run/provisioning/owner/credential
+      PROVISIONING_TENANT_CREDENTIALS_FILE: /run/provisioning/tenant/credentials
+      PROVISIONING_DEMOS_FILE: /run/provisioning/demos/demos.json
+      PROVISIONING_STATE_DIR: /var/lib/provisioning
+      NODE_OPTIONS: --max-old-space-size=96
+    volumes:
+      - /etc/branchleft/control-plane/provisioning/tenant:/run/provisioning/tenant:ro
+      - /etc/branchleft/control-plane/provisioning/owner:/run/provisioning/owner:ro
+      - /etc/branchleft/control-plane/provisioning/demos:/run/provisioning/demos:ro
+      - /var/lib/branchleft/control-plane/provisioning:/var/lib/provisioning
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8095/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # Raised so a host-wide out-of-memory kill takes this stack's containers
+    # before Nextcloud's, whose data is not rebuildable from configuration.
+    oom_score_adj: 500
+    mem_limit: 128m
+    cpu_shares: 128
 
 # Placed on the host by the runbook, root-owned, mode 0600 through 0640 as it
 # states; never committed. The two database URLs are for logins that are

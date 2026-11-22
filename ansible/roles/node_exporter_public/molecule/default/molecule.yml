@@ -1,0 +1,35 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can only
+# remove this run's container. When the variable is unset the name falls back to one the
+# Docker daemon rejects, so the run fails at create instead of sharing a name.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # The same systemd test base as monitoring_stack, on Debian 13, trusted by digest. The
+    # role installs and starts a systemd service, so the platform runs systemd as PID 1, a
+    # platform the author justifies here, per ANS-15.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The host cgroup namespace is a stated
+    # exception (ANS-15): on a cgroup v2 host a private namespace over the read-write cgroup
+    # mount makes systemd exit at once. The host namespace is the least privilege that works.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible

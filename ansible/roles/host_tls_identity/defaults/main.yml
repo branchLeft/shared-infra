@@ -1,0 +1,4 @@
+---
+# The one value the owner supplies, from the host's file in ansible/owner_vars/: the peer's public
+# certificate, as PEM text. Empty until the owner has read it off the peer's host. Public data.
+host_tls_identity_peer_cert: ''

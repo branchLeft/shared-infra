@@ -42,6 +42,7 @@ included below.
 | `branchleft-hetzner-network/production`                              | `shared-infra`      | `hetzner/Pulumi.yaml` / `Pulumi.production.yaml`          | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-hetzner-estate/production`                               | `shared-infra`      | `hetzner/estate/Pulumi.yaml` / `Pulumi.production.yaml`   | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-hetzner-dns/production`                                  | `shared-infra`      | `hetzner/dns/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
+| `branchleft-hetzner-tenants/production`                              | `shared-infra`      | `hetzner/tenants/Pulumi.yaml` / `Pulumi.production.yaml`  | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-ghost-platform-hosts` (project name; stack `production`) | `ghost-platform`    | `infra/hosts/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 
 **Verified two ways:**
@@ -72,7 +73,7 @@ rather than assuming a role from its name.
 | `ghost-tenant-blog`              | `.github/workflows/infra-ci.yml`                           | preview/deploy jobs                       | `gs://$PULUMI_STATE_BUCKET` = `gs://branchleft-blog-pulumi-state`                     |
 
 `mail-plan`/`mail-apply`, `hetzner-network-plan`/`-apply`,
-`hetzner-estate-plan`/`-apply`, `hetzner-dns-plan`/`-apply` and the `hosts` plan/apply jobs run **no**
+`hetzner-estate-plan`/`-apply`, `hetzner-dns-plan`/`-apply`, `hetzner-tenants-plan`/`-apply` and the `hosts` plan/apply jobs run **no**
 `pulumi login` step — see §2.2.
 
 ### 2.2 Pinned `backend.url` in a committed `Pulumi.yaml` (no login step needed)
@@ -219,6 +220,7 @@ finding.
 | `branchleft-hetzner-network/production` | Yes                        | `hetzner-network-plan`/`-apply`, `shared-infra/.github/workflows/ci.yml`                      |
 | `branchleft-hetzner-estate/production`  | Yes                        | `hetzner-estate-plan`/`-apply`, same file                                                     |
 | `branchleft-hetzner-dns/production`     | Yes                        | `hetzner-dns-plan`/`-apply`, same file; plan in `dns-plan`, apply in `production-dns`         |
+| `branchleft-hetzner-tenants/production` | Yes                        | `hetzner-tenants-plan`/`-apply`, same file; apply in `production`, after the estate apply     |
 | `branchleft-ghost-platform-hosts`       | Yes                        | `Apply (hosts, pulumi up)`, `ghost-platform/.github/workflows/infra-hosts-ci.yml`             |
 
 ### 4.1 The one stack with no CI apply path anywhere: `branchleft-ghost-provisioning/blog`
