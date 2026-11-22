@@ -11,6 +11,7 @@
       vars:
         tenant_entry_key: '{{ refused_key | default(scenario_entry_public) }}'
         tenant_entry_from: '{{ refused_from | default(scenario_from) }}'
+        tenant_entry_bind_address: '{{ refused_bind_address | default(scenario_bind_address) }}'
 
     - name: Record that the role accepted the input
       ansible.builtin.set_fact:
