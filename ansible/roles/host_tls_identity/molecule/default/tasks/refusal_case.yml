@@ -1,0 +1,48 @@
+---
+# One refused value. The role is applied for the case's host with the value, and must fail naming the
+# code. Then the trust file must be exactly what it was: a refused value never replaces it.
+- name: Forget the last case's result
+  ansible.builtin.set_fact:
+    host_tls_identity_refusal_message: ''
+    host_tls_identity_refusal_row: >-
+      {{ host_tls_identity_verify_rows
+         | selectattr('host', 'equalto', host_tls_identity_case.host) | list | first | default({}) }}
+
+- name: Apply the role with the value
+  block:
+    - name: Apply the role as {{ host_tls_identity_case.host }}
+      ansible.builtin.include_role:
+        name: branchleft.host_tls_identity
+      vars:
+        enrolled_host: '{{ host_tls_identity_case.host }}'
+        host_tls_identity_peer_cert: '{{ host_tls_identity_case.cert }}'
+        # The role's own window, unless the case moves it to make a fresh certificate look old.
+        host_tls_identity_renew_days: '{{ host_tls_identity_case.renew_days | default(60) }}'
+
+    - name: Fail, because the role accepted a value it must refuse
+      ansible.builtin.fail:
+        msg: ACCEPTED
+  rescue:
+    - name: Keep the refusal's message
+      ansible.builtin.set_fact:
+        host_tls_identity_refusal_message: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Assert the refusal names the code
+  ansible.builtin.assert:
+    that:
+      - ('host_tls_identity[' ~ host_tls_identity_case.code ~ ']') in host_tls_identity_refusal_message
+    fail_msg: 'case {{ host_tls_identity_case.name }} gave: {{ host_tls_identity_refusal_message }}'
+    quiet: true
+
+- name: Read the trust file of the host the case is for
+  ansible.builtin.slurp:
+    src: '{{ host_tls_identity_refusal_row.dir }}/ca.crt'
+  register: host_tls_identity_refusal_pin
+  when: host_tls_identity_refusal_row | length > 0
+
+- name: Assert the trust file is unchanged
+  ansible.builtin.assert:
+    that:
+      - (host_tls_identity_refusal_pin.content | b64decode | trim) == (host_tls_identity_verify_pem[host_tls_identity_refusal_row.pin] | trim)
+    quiet: true
+  when: host_tls_identity_refusal_row | length > 0
