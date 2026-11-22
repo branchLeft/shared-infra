@@ -657,9 +657,11 @@ class Mutations(unittest.TestCase):
     def test_a_task_that_shows_the_content_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/tasks/main.yml",
-            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n"
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) "
+            "if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n"
             "      no_log: true\n",
-            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n",
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) "
+            "if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n",
         )
         self._expect("'Parse the file (no value is shown)' must have no_log: true")
 
