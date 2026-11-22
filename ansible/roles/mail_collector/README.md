@@ -19,16 +19,22 @@ The role:
 2. If the owner's credentials file is already on the host, checks that it is a regular file, root's
    and mode `0600`, and stops the run if it is not. It reads its owner and mode only, never its
    content and never a checksum of it.
-3. Makes the system account `mail-collector` (no login, no home) and its group.
-4. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory and the record
+   A link, a directory or a pipe at that path is refused, because the look does not follow links
+   and the assert wants a regular file.
+3. Checks that the descriptor directory and the record directory, if they are there, are real
+   directories and not links, and stops the run before anything changes if one is a link: `file`
+   with `state: directory` follows a link at its path, so a planted link would send the role's
+   descriptors and record into the link's target. Planting one takes root.
+4. Makes the system account `mail-collector` (no login, no home) and its group.
+5. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory and the record
    directory inside it (both root's, `0755`) and `/var/lib/branchleft/mail-collector` (the account's, `0700`, which holds
    the collector's persistent state) with its `pins` directory (the account's, `0700`).
-5. Writes one descriptor into the descriptor directory for each host in `mail_collector_hosts`, and
+6. Writes one descriptor into the descriptor directory for each host in `mail_collector_hosts`, and
    removes only a descriptor it wrote itself (see The drain list).
-6. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
+7. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
    run, `collector.env` (the sending target and the drain surface's scheme and port). Both hold
    public values only.
-7. Installs the unit `mail-collector.service` as a static file, then holds it enabled and started
+8. Installs the unit `mail-collector.service` as a static file, then holds it enabled and started
    when the collector is meant to run and disabled and stopped when it is not.
 
 The collector is **meant to run** only when `mail_collector_image` is a real digest (the default is
@@ -234,14 +240,19 @@ They hold the unit to its flags, mounts, start conditions and restart policy (an
 able to find each way the unit could be loosened), render both environment files and hold them to the
 names the collector reads, hold the run rule (a real image and a sending host, or off), the order of
 refusal before change, that the credentials file is never written, and the shapes of the image and
-host. A second suite, `tests/unit/test_descriptors.py`, runs the role's own drain-list tasks with
+host. `tests/unit/test_credentials_check.py` runs the role's two credentials tasks with Ansible
+against a scratch file and holds that a good file passes and that a link to a good file (the look
+must not follow links), a directory and a pipe of mode `0600` (the assert must want a regular file),
+a link to nothing and a file others can read are refused. A second suite, `tests/unit/test_descriptors.py`, runs the role's own drain-list tasks with
 Ansible on the machine that runs the tests, against a scratch directory (no host), and reads the
 directory the way the collector reads it. It holds that a host missing from the list is missing from
 the drain list until it is listed, that a host removed from the list leaves the drain list, that a
 file the role did not write survives every apply (a hand-placed `.json`, a dot-file, a link), that a
 run killed at each step still lets the next one remove what an earlier run wrote, that a second run
 changes nothing, that a plan writes and removes nothing, that a refused list leaves the directory as
-it was, and that a demo host with no demo mail domain stops the run. The Molecule `default` scenario
+it was, that a demo host with no demo mail domain stops the run, and that a link (to a directory,
+or to nothing) at the descriptor directory or the record directory stops the run, in a plan too,
+with nothing written through it. The Molecule `default` scenario
 converges twice with the inputs set, against stand-ins for `docker` and a made-up credentials file,
 with two hosts listed and a hand-placed descriptor and a note already in the directory, and checks
 the files, owners and modes, the two descriptors and the record, that both hand-placed files are
@@ -283,6 +294,24 @@ unit and leaves the collector off.
   the package is private the unit fails to start and the cause is the pull, not the role.
 - **A condition is not an alarm.** A unit whose settings, descriptor or credentials are missing stays
   inactive without failing, so nothing pages on it from here. The heartbeat's silence does.
+- **The credentials file's mode is checked at apply time only (accepted limit).** A later `chmod`
+  on the host is not noticed until the next gated apply, which then stops before it changes
+  anything. A start-time check would need a program in the unit (the unit is a static file with no
+  shell, and the role reads no content of the file), and a change to the unit is a deep review and
+  the owner's merge. Loosening the mode takes root, who can read the file anyway. Owner's
+  acceptance: asked on the pull request that recorded this.
+- **The credentials file can override the public settings (accepted limit).** The unit passes
+  `collector.env` and then `credentials.env` to `--env-file`, and the later file wins, so a name the
+  owner puts in the credentials file beats the same name in the public one. Refusing the names
+  would mean reading the file, which this role never does, and reversing the order would only cover
+  the names `collector.env` sets and would change the unit. The file is root's, `0600`, placed by the
+  owner, and whoever can write it can already edit the unit, so it grants nothing new. It holds the
+  four names in the table above and no other. Owner's acceptance: asked on the pull request that
+  recorded this.
+- **A link is refused at two directories, not at every path.** The descriptor and record directories
+  are checked because the role fills them with files it later removes. The configuration, state and
+  pin directories are made with `file`, which follows a link, and are not checked; their parents
+  are asserted, and planting a link takes root.
 - **The test platform is a container with stand-ins.** It proves files, owners, modes and that the
   unit runs a command with the right arguments; it does not prove the collector drains or sends.
 - **The state is not backed up by this role.** It lives in the state directory.

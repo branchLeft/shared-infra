@@ -41,7 +41,8 @@
     mode: '0755'
     validate: /usr/bin/python3 -I %s --check
 
-- name: Install the service and timer units
+# The failure unit is first, so the service never names a unit that is not yet there.
+- name: Install the service, the failure unit and the timer units
   ansible.builtin.copy:
     src: '{{ item }}'
     dest: '{{ control_plane_backup_unit_dir }}/{{ item }}'
@@ -49,6 +50,7 @@
     group: root
     mode: '0644'
   loop:
+    - '{{ control_plane_backup_failed_unit }}'
     - '{{ control_plane_backup_service_unit }}'
     - '{{ control_plane_backup_timer_unit }}'
   notify: Reload systemd manager

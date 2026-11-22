@@ -78,8 +78,11 @@ pulumi stack init production \
 ```
 
 This writes `mail/Pulumi.production.yaml` with a freshly KMS-wrapped data
-key for this stack — commit it (it is ciphertext, safe in a private repo
-engineered to public hygiene, same as the root stack's file).
+key for this stack — commit it. It is ciphertext only: unwrapping the key
+needs IAM access to the KMS key, which is not public, so it is safe to publish
+in this public repo. The rule that governs what this file may hold is
+`branchLeft/standards` PUL-12: it must never carry an `encryptionsalt`. Do not
+add one by hand.
 
 ## 2. Set the Hetzner token
 

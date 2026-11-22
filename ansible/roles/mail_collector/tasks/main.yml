@@ -199,6 +199,35 @@
     fail_msg: The credentials file is not a regular file, is not root's or is not mode 0600. The role does not change it.
   when: mail_collector_credentials_stat.stat.exists
 
+# --- The two directories the role fills with files it later removes. file state=directory follows a
+# link at its path, so a link planted there (it takes root) would have the role write its
+# descriptors and its record into the link's target. They are looked at without following a link,
+# and each must be a real directory or not yet there. Like the parents, they are asserted, and the
+# run stops before anything changes. A plan also stops here.
+- name: Look at the descriptor directory and the record directory
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ mail_collector_descriptor_dir }}'
+    - '{{ mail_collector_descriptor_record_dir }}'
+  register: mail_collector_directory_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require the descriptor directory and the record directory to be directories, never links
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or item.stat.isdir
+    quiet: true
+    fail_msg: The descriptor directory or the record directory is a link or is not a directory. The role does not follow it or change it.
+  loop: '{{ mail_collector_directory_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
 # --- The account. System, no login, no home: it owns the state directory and nothing else.
 - name: Create the collector group
   ansible.builtin.group:

@@ -44,6 +44,7 @@ WRAPPER_ROLES = frozenset(
         "publicpress_website_app1",
         "db_t1",
         "tenant_compose",
+        "promote_host",
     }
 )
 
