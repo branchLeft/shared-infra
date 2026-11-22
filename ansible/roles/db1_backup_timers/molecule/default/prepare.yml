@@ -1,8 +1,36 @@
 ---
-# No scaffolding. The units name /etc/branchleft/db.env and the compose unit
-# branchleft-compose@db.service; the role does not start a service, and a timer
-# starts its service only on its calendar, so neither needs to exist here.
+# Test scaffolding, not role tasks. The units name /etc/branchleft/db.env, which the
+# role does not write, so it stays absent. The binlog-ship service requires the shared
+# Compose unit template's instance, branchleft-compose@db.service, which is part of the
+# host baseline and not of this role. Without a unit of that name systemd cannot queue
+# the service when its timer first elapses (OnBootSec=5min): the timer goes to failed
+# with Result=resources, so a run that lasts past five minutes saw an inactive timer
+# and a second converge restarted it as a change. This placeholder lets the service
+# be queued, so it fails on the missing env file as it would on an unconfigured host
+# and the timer stays active however long the run takes. Nothing here proves the
+# database stack starts.
 - name: Prepare
   hosts: all
   gather_facts: false
-  tasks: []
+  tasks:
+    # A oneshot that runs /bin/true, with the [Install] section the real template
+    # has. Nothing starts an instance except the service's own Requires.
+    - name: Install a placeholder for the shared Compose unit template
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER Compose stack %i
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the placeholder
+      ansible.builtin.systemd_service:
+        daemon_reload: true

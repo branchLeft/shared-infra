@@ -1,0 +1,61 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot change these.
+tenant_entry_user: tenant-entry
+# sudo ignores a file whose name holds a dot or ends in a tilde; this one holds neither.
+tenant_entry_sudoers_name: tenant-entry
+tenant_entry_shell: /bin/bash
+# The program this role installs, and the one argument the forced command and the sudoers grant
+# both carry. The program refuses any other argument list. Held equal to the program's own
+# constants by tests/unit/test_branchleft_tenant_entry.py.
+tenant_entry_program: /usr/local/sbin/branchleft-tenant-entry
+tenant_entry_serve_flag: --from-ssh
+# The register of tenants this entry point has claimed: root-owned, mode 0700.
+tenant_entry_register_dir: /etc/branchleft/tenant-entry
+# The app host's private address, kept for the stack verb in a file beside the register (the
+# program's own BIND_ADDRESS_FILE, held equal by a test). A private IPv4 address and no other:
+# a stack never publishes a tenant's ports on a public or a wildcard address.
+tenant_entry_bind_address_file: '{{ tenant_entry_register_dir }}/bind-address'
+tenant_entry_private_address_pattern: |-
+  (?x)^(
+    10(\.{{ tenant_entry_octet }}){3}
+    |172\.(1[6-9]|2[0-9]|3[01])(\.{{ tenant_entry_octet }}){2}
+    |192\.168(\.{{ tenant_entry_octet }}){2}
+  )\Z
+
+# The tenant compose judge, a byte-identical copy of tenant_compose's library/tenant_compose_check.py
+# (held equal by a test), and the python3 the program's first line names, which must be able to
+# import PyYAML. The program loads the judge from this path and refuses one that is not root's.
+tenant_entry_judge_dir: /usr/local/lib/branchleft-tenant-entry
+tenant_entry_judge: '{{ tenant_entry_judge_dir }}/tenant_compose_check.py'
+tenant_entry_python: /usr/bin/python3
+
+# Exactly two lines: the one that keeps the request text through sudo, and one grant of one
+# argument list. sudo matches a command with arguments exactly, so no other argument passes.
+tenant_entry_sudoers_lines:
+  - 'Defaults!{{ tenant_entry_program }} env_keep += "SSH_ORIGINAL_COMMAND"'
+  - '{{ tenant_entry_user }} ALL=(root) NOPASSWD: {{ tenant_entry_program }} {{ tenant_entry_serve_flag }}'
+
+# restrict switches off forwarding, a terminal, the agent and the user rc file.
+tenant_entry_key_options: restrict
+
+# The ed25519 shape of the sudoers_and_keys pattern, held equal to its entry there by a test.
+tenant_entry_key_shape: 'ssh-ed25519 [A-Za-z0-9+/]{68}'
+# One public key on one line: the type, a body of its length, an optional comment of printable
+# ASCII, and nothing in front. \Z, not $, so a trailing line break does not pass.
+tenant_entry_key_pattern: '^({{ tenant_entry_key_shape }})( [ -~]*)?\Z'
+
+# One source address: a dotted IPv4 address, or a range of at least 256 addresses (a /24 to
+# a /32). No wildcard, no negation, no name and no wider range. \Z, not $.
+tenant_entry_octet: '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+tenant_entry_address_pattern: '^{{ tenant_entry_octet }}(\.{{ tenant_entry_octet }}){3}(/(2[4-9]|3[0-2]))?\Z'
+
+# The secrets program is fetched, never copied into this role: its one home is ghost-platform.
+# It is fetched at one full 40-character commit, checked against the digest below, and put
+# beside the volume program it imports (tenant_onboarding installs that one). A bump moves
+# both pins together, and the volume program at the new commit must still be the one
+# tenant_onboarding pins.
+tenant_entry_program_dir: /root/platform-provision
+tenant_entry_secrets_program: /root/platform-provision/render_tenant_secrets.py
+tenant_entry_ghost_commit: b664d265708e91fb6c3be8f512c7f34e81fccc54
+tenant_entry_ghost_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ tenant_entry_ghost_commit }}'
+tenant_entry_secrets_program_sha256: 1d67b290515ba642aa507b7bbe1ef6e489b845c9feb09419c6fd489233d8580f

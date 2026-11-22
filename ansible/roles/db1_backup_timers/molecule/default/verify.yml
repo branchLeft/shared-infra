@@ -45,13 +45,20 @@
       loop: '{{ db1_backup_timers_timers }}'
       register: db1_backup_timers_verify_timers
 
-    - name: Assert each timer is enabled and active
+    # None of these reads the clock: the schedule is the unit file, compared byte for
+    # byte above, and a timer that failed when it first elapsed (Result=resources,
+    # which the binlog-ship timer does five minutes after boot when its service
+    # cannot be queued) is not active however long the run took.
+    - name: Assert each timer is loaded, enabled, active, not failed, and triggers its service
       ansible.builtin.assert:
         that:
+          - item.status.LoadState == 'loaded'
           - item.status.UnitFileState == 'enabled'
           - item.status.ActiveState == 'active'
+          - item.status.Result == 'success'
+          - item.status.Triggers == (item.item | regex_replace('[.]timer$', '.service'))
         quiet: true
-        fail_msg: '{{ item.item }} is not enabled and active.'
+        fail_msg: '{{ item.item }} is not loaded, enabled and active, or has failed, or does not trigger its service.'
       loop: '{{ db1_backup_timers_verify_timers.results }}'
       loop_control:
         label: '{{ item.item }}'

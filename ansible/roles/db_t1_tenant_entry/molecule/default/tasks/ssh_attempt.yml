@@ -1,0 +1,170 @@
+---
+# One connection to the container's own sshd with one key, and what the forced command did.
+# Inputs: attempt_key, the key pair's name (controller or other); attempt_command, the remote
+# command (sent after a double dash), left out when the case asks for none; attempt_options,
+# more ssh options; attempt_expect, one of created (status 0 and the three output lines),
+# refused (the program ran and refused, with attempt_status and attempt_reason), blocked
+# (the connection failed and nothing was created or returned), or denied (the key did not
+# authenticate, nothing ran). The marker file below is what every hostile command
+# tries to make. The result is left in db_t1_tenant_entry_scenario_attempt for the caller, which
+# is why a case that sends the password back hides it with attempt_hide.
+- name: Clear the marker and note how much the stand-in has recorded
+  ansible.builtin.file:
+    path: /tmp/EXAMPLE_MARKER
+    state: absent
+
+- name: Read the creates the stand-in has recorded so far
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/creates.log'
+  register: db_t1_tenant_entry_scenario_creates_before
+  check_mode: false
+
+- name: Look at what the test SSH server had logged before the connection
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: db_t1_tenant_entry_scenario_log_before
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
+
+- name: Connect with the key
+  ansible.builtin.command:
+    argv: '{{ attempt_base + (attempt_options | default([])) + ["tenantdb@127.0.0.1"] + attempt_remote }}'
+    stdin: ''
+  vars:
+    # timeout turns a client that waits for ever into a failure (124, or 137 once killed)
+    # that the assertion below names.
+    attempt_base:
+      - timeout
+      - --kill-after=5
+      - '60'
+      - ssh
+      - -o
+      - ConnectTimeout=10
+      - -i
+      - '{{ scenario_key_dir }}/{{ attempt_key }}'
+      - -p
+      - '{{ scenario_ssh_port }}'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - LogLevel=ERROR
+    attempt_remote: '{{ ["--", attempt_command] if attempt_command is defined else [] }}'
+  register: db_t1_tenant_entry_scenario_attempt
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: '{{ attempt_hide | default(false) | bool }}'
+
+- name: Look for the marker a hostile command would make
+  ansible.builtin.stat:
+    path: /tmp/EXAMPLE_MARKER
+  register: db_t1_tenant_entry_scenario_marker
+  check_mode: false
+
+- name: Read the creates the stand-in has recorded now
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/creates.log'
+  register: db_t1_tenant_entry_scenario_creates_after
+  check_mode: false
+
+- name: Look at what the test SSH server has logged since
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: db_t1_tenant_entry_scenario_log_after
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
+
+- name: Assert the client was not left waiting
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_scenario_attempt.rc not in [124, 137]
+    fail_msg: 'The client hung and was killed: {{ attempt_key }} {{ attempt_command | default("") }}'
+    quiet: true
+
+- name: Assert nothing the client asked for ran
+  ansible.builtin.assert:
+    that:
+      - not db_t1_tenant_entry_scenario_marker.stat.exists
+    fail_msg: 'A command the client asked for ran: {{ attempt_key }} {{ attempt_command | default("") }}'
+    quiet: true
+
+- name: Assert the request made one tenant and printed its three lines
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_scenario_attempt.rc == 0
+      - >-
+        (db_t1_tenant_entry_scenario_creates_after.content | b64decode).splitlines() | length
+        == (db_t1_tenant_entry_scenario_creates_before.content | b64decode).splitlines() | length + 1
+      - db_t1_tenant_entry_scenario_attempt.stdout_lines | length == 3
+      - db_t1_tenant_entry_scenario_attempt.stdout_lines[0] == 'database=ghost_' + (attempt_command.split(' ')[1] | replace('-', '_'))
+      - db_t1_tenant_entry_scenario_attempt.stdout_lines[1] == 'user=ghost_' + (attempt_command.split(' ')[1] | replace('-', '_')) + '@10.20.1.201'
+      - db_t1_tenant_entry_scenario_attempt.stdout_lines[2] is match('^password=[A-Za-z0-9_-]{43}$')
+      - db_t1_tenant_entry_scenario_attempt.stderr == ''
+    fail_msg: 'The request was not served as one creation.'
+    quiet: true
+  when: attempt_expect == 'created'
+
+- name: Assert the program ran, refused the request and changed nothing
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_scenario_attempt.rc == (attempt_status | default(2)) | int
+      - db_t1_tenant_entry_scenario_creates_after.content == db_t1_tenant_entry_scenario_creates_before.content
+      - db_t1_tenant_entry_scenario_attempt.stdout == ''
+      - >-
+        ('branchleft-tenant-db-entry: refused reason=' + attempt_reason)
+        in db_t1_tenant_entry_scenario_attempt.stderr_lines
+    fail_msg: >-
+      The request was not refused as {{ attempt_reason | default('') }}: it ended
+      {{ db_t1_tenant_entry_scenario_attempt.rc }} with {{ db_t1_tenant_entry_scenario_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'refused'
+
+# A request sshd refuses itself, or one the forced command refuses without a reason line:
+# the connection fails, nothing is created and nothing comes back.
+- name: Assert the request ended without a creation and without any output
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_scenario_attempt.rc != 0
+      - db_t1_tenant_entry_scenario_creates_after.content == db_t1_tenant_entry_scenario_creates_before.content
+      - "'SSH-2.0-' not in db_t1_tenant_entry_scenario_attempt.stdout"
+      - "'password=' not in db_t1_tenant_entry_scenario_attempt.stdout"
+    fail_msg: 'The request was served for {{ attempt_key }}.'
+    quiet: true
+  when: attempt_expect == 'blocked'
+
+- name: Assert a key that is not authorised was turned away before anything ran
+  ansible.builtin.assert:
+    that:
+      - db_t1_tenant_entry_scenario_attempt.rc != 0
+      - db_t1_tenant_entry_scenario_creates_after.content == db_t1_tenant_entry_scenario_creates_before.content
+      - "'branchleft-tenant-db-entry' not in db_t1_tenant_entry_scenario_attempt.stderr"
+      - db_t1_tenant_entry_scenario_attempt.stdout == ''
+    fail_msg: 'The key {{ attempt_key }} was not turned away.'
+    quiet: true
+  when: attempt_expect == 'denied'
+
+- name: Assert the client was told what it asked for was refused
+  ansible.builtin.assert:
+    that:
+      - attempt_stderr_contains in db_t1_tenant_entry_scenario_attempt.stderr
+    fail_msg: 'The client was not told: {{ attempt_stderr_contains }}. It was told: {{ db_t1_tenant_entry_scenario_attempt.stderr }}'
+    quiet: true
+  when: attempt_stderr_contains is defined
+
+# split leaves one more piece than the line occurs, so more pieces after than before means
+# the line was logged during this connection.
+- name: Assert the test SSH server logged the refusal during this connection
+  ansible.builtin.assert:
+    that:
+      - >-
+        (db_t1_tenant_entry_scenario_log_after.content | b64decode).split(attempt_sshd_log_contains) | length
+        > (db_t1_tenant_entry_scenario_log_before.content | b64decode).split(attempt_sshd_log_contains) | length
+    fail_msg: 'The test SSH server did not log: {{ attempt_sshd_log_contains }}'
+    quiet: true
+  when: attempt_sshd_log_contains is defined

@@ -13,8 +13,6 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
-from ansible.module_utils.basic import AnsibleModule
-
 DOCUMENTATION = r"""
 module: tenant_compose_check
 short_description: Judge rendered tenant compose text before it is delivered
@@ -27,6 +25,10 @@ description:
   - The rules are a deliberately smaller list than the renderer's own. They are the ones that
     make delivering the file unsafe, not a second copy of the renderer's posture checks.
   - Compares a tenant's uid with the claims the volume program lists, when they are given.
+  - For a C(tenant), refuses a stack whose verdict host end (the service that mounts the slot's
+    verdict volume writable) does not run as the slot's own uid and gid and is not given the same
+    in C(VERDICT_HOST_SOCKET_UID) and C(VERDICT_HOST_SOCKET_GID), and any service that mounts
+    another slot's verdict volume.
   - Reads the firewall rules of the spool's drain bridge, when they are given, and refuses a
     host on which the bridge is not fenced in.
   - Opens no file, runs no command and changes nothing. A refusal never contains a value.
@@ -162,6 +164,10 @@ WILDCARD_ADDRESSES = frozenset({"", "0.0.0.0", "::", "0:0:0:0:0:0:0:0"})  # noqa
 TOP_LEVEL_KEYS = frozenset({"name", "services", "networks", "volumes"})
 FORBIDDEN_SERVICE_KEYS = ("build", "extends", "network_mode", "cap_add", "devices")
 DOCKER_SOCKET = "docker.sock"
+# A verdict volume is one slot's channel to its host end; the name is the renderer's.
+VERDICT_VOLUME_PATTERN = re.compile(r"ghost-[a-z0-9-]+-verdict")
+SOCKET_UID_KEY = "VERDICT_HOST_SOCKET_UID"
+SOCKET_GID_KEY = "VERDICT_HOST_SOCKET_GID"
 BRIDGE_NAME_OPTION = "com.docker.network.bridge.name"
 CONNTRACK_STATES = "(?:ESTABLISHED,RELATED|RELATED,ESTABLISHED)"
 
@@ -301,6 +307,77 @@ def _service_refusals(name: str, service: object, profile: str) -> list[str]:
     return refusals
 
 
+def _verdict_mounts(service: Mapping[object, object]) -> list[tuple[str, bool]]:
+    """Return the source and read-only flag of each mount that names a verdict volume.
+
+    The source is matched anywhere in the text, so a bind of the volume's path on the host is
+    found too. A mount is read-only only when it says so and does not also say ``rw``.
+    """
+    volumes = service.get("volumes", [])
+    if not isinstance(volumes, list):
+        return []
+    mounts: list[tuple[str, bool]] = []
+    for entry in volumes:
+        source: object
+        if isinstance(entry, str):
+            parts = entry.split(":")
+            source = parts[0]
+            options = parts[2].split(",") if len(parts) > 2 else []  # noqa: PLR2004
+            read_only = "ro" in options and "rw" not in options
+        elif isinstance(entry, Mapping):
+            source, read_only = entry.get("source"), entry.get("read_only") is True
+        else:
+            continue
+        if isinstance(source, str) and VERDICT_VOLUME_PATTERN.search(source):
+            mounts.append((source, read_only))
+    return mounts
+
+
+def _environment_value(service: Mapping[object, object], key: str) -> str | None:
+    """Return what the service's ``environment`` sets for ``key``, as text, or None."""
+    environment = service.get("environment")
+    if isinstance(environment, Mapping):
+        value = environment.get(key)
+        return None if value is None else str(value)
+    if isinstance(environment, list):
+        for entry in environment:
+            name, separator, value = str(entry).partition("=")
+            if separator and name == key:
+                return value
+    return None
+
+
+def _verdict_refusals(name: str, service: object, slug: str, uid: int | None) -> list[str]:
+    """Return the rules a service breaks about the slot's verdict socket.
+
+    A service that mounts the slot's verdict volume writable is its host end, and the host end
+    makes the socket as itself. So it must run as the slot's own uid and gid, and be told the
+    same ones, which it checks against what it runs as and against the file it made. Read-only is
+    Ghost's own mount. No service mounts another slot's verdict volume, in any mode.
+    """
+    if not isinstance(service, Mapping) or uid is None:
+        return []
+    own = f"ghost-{slug}-verdict"
+    refusals: list[str] = []
+    mounts = _verdict_mounts(service)
+    if any(source != own for source, _ in mounts):
+        refusals.append(f"service {name} mounts a verdict volume that is not this slot's own")
+    if any(not read_only for _, read_only in mounts):
+        wanted = f"{uid}:{uid}"
+        if service.get("user") != wanted:
+            refusals.append(
+                f"service {name} writes the verdict volume and does not run as user {wanted}"
+            )
+        if any(
+            _environment_value(service, key) != str(uid) for key in (SOCKET_UID_KEY, SOCKET_GID_KEY)
+        ):
+            refusals.append(
+                f"service {name} writes the verdict volume and is not given"
+                f" {SOCKET_UID_KEY} and _GID of {uid}"
+            )
+    return refusals
+
+
 def _network_refusals(networks: object, profile: str) -> list[str]:
     """Return the rules the top-level networks break."""
     if networks is None:
@@ -396,6 +473,8 @@ def _compose_refusals(params: Params, document: object) -> list[str]:
         return [*refusals, "compose has no services"]
     for name, service in services.items():
         refusals.extend(_service_refusals(str(name), service, params.profile))
+        if params.profile == TENANT:
+            refusals.extend(_verdict_refusals(str(name), service, params.slug, params.uid))
     refusals.extend(_network_refusals(document.get("networks"), params.profile))
     refusals.extend(_volume_refusals(document.get("volumes")))
     if params.profile == SPOOL:
@@ -583,6 +662,11 @@ def params_from_mapping(values: Mapping[str, object]) -> Params:
 
 def main() -> None:
     """Run as an Ansible module."""
+    # Imported here, not at the top, so that the judge can be loaded by a program that runs on a
+    # python3 with no Ansible (the tenant entry point keeps a byte-identical copy and calls
+    # `judge`). Ansible's own packaging finds an import wherever it sits in the file.
+    from ansible.module_utils.basic import AnsibleModule  # noqa: PLC0415
+
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     params = params_from_mapping(module.params)
     try:

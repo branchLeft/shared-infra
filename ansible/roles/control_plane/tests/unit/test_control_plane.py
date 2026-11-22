@@ -15,6 +15,7 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 
+from jinja2 import Environment, StrictUndefined
 from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
@@ -33,10 +34,19 @@ FIRST_WRITE = "Create the host configuration directories of the control plane"
 INPUT_REFUSALS = (
     "Refuse an absent or empty environment file when no content was given",
     "Refuse an absent or empty master key when no content was given",
+    "Refuse a record with more than one IMAGE line",
+    "Refuse a record whose digest differs from the digest the portal container runs",
     "Refuse a run with no image to deploy",
     "Refuse an image that is not pinned by digest",
 )
-REFUSAL_CODES = ("env-missing", "masterkey-missing", "image-missing", "image-not-pinned")
+REFUSAL_CODES = (
+    "env-missing",
+    "masterkey-missing",
+    "image-record-duplicate",
+    "image-drift",
+    "image-missing",
+    "image-not-pinned",
+)
 DOCKER_READS = (
     "Look for the portal container of the stack",
     "Read the image the portal container was created from",
@@ -210,6 +220,128 @@ class InputTests(unittest.TestCase):
             self.assertNotIn(
                 "control_plane_app_image", used, f"{task.get('name')!r} uses the image as given"
             )
+
+
+RECORD_FACT = "Take the recorded image if it is pinned by digest"
+DUPLICATE_REFUSAL = "Refuse a record with more than one IMAGE line"
+DRIFT_REFUSAL = "Refuse a record whose digest differs from the digest the portal container runs"
+NO_IMAGE_REFUSAL = "Refuse a run with no image to deploy"
+IMAGE_PATTERN = r"\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z"
+DIGEST_A = "example.invalid/app@sha256:" + "a" * 64
+DIGEST_B = "example.invalid/app@sha256:" + "b" * 64
+
+
+def _expression_environment() -> Environment:
+    """Return a Jinja environment with the three Ansible names the image conditions use."""
+    environment = Environment(undefined=StrictUndefined)  # noqa: S701 (conditions, not HTML)
+    environment.filters["ansible.builtin.bool"] = lambda value: str(value).lower() in {"true", "1"}
+    environment.filters["ansible.builtin.regex_replace"] = lambda value, pattern, replacement: (
+        re.sub(pattern, replacement, str(value))
+    )
+    environment.tests["ansible.builtin.match"] = lambda value, pattern: bool(
+        re.match(pattern, str(value))
+    )
+    return environment
+
+
+def _drift_conditions() -> list[str]:
+    """Return the `that` conditions of the drift refusal, as the role writes them.
+
+    Raises:
+        TypeError: the conditions are not a list.
+    """
+    task = {str(item.get("name")): item for item in _tasks()}[DRIFT_REFUSAL]
+    conditions = _section(task, "ansible.builtin.assert")["that"]
+    if not isinstance(conditions, list):
+        message = "the drift refusal's that is not a list"
+        raise TypeError(message)
+    return [str(condition) for condition in conditions]
+
+
+class ImageDriftTests(unittest.TestCase):
+    """The record and the running portal container must agree before either is used."""
+
+    def setUp(self) -> None:
+        self.names = [name for name, _ in task_lines(TASKS)]
+        self.environment = _expression_environment()
+
+    def _holds(self, *, given: bool, recorded: str, running: str) -> bool:
+        """Evaluate the drift refusal's conditions for one situation: True means no refusal."""
+        values = {
+            "control_plane_image_given": given,
+            "control_plane_recorded_image": recorded,
+            "control_plane_running_image": running,
+            "control_plane_image_pattern": IMAGE_PATTERN,
+        }
+        return all(
+            bool(self.environment.compile_expression(condition)(**values))
+            for condition in _drift_conditions()
+        )
+
+    def test_a_record_and_a_running_digest_that_differ_are_refused(self) -> None:
+        self.assertFalse(self._holds(given=False, recorded=DIGEST_A, running=DIGEST_B))
+
+    def test_a_record_and_a_running_digest_that_agree_pass(self) -> None:
+        self.assertTrue(self._holds(given=False, recorded=DIGEST_A, running=DIGEST_A))
+
+    def test_only_the_digest_is_compared_so_another_name_for_the_same_bytes_passes(self) -> None:
+        renamed = "registry.invalid/other@sha256:" + "a" * 64
+        self.assertTrue(self._holds(given=False, recorded=DIGEST_A, running=renamed))
+
+    def test_a_pin_given_skips_the_check(self) -> None:
+        self.assertTrue(self._holds(given=True, recorded=DIGEST_A, running=DIGEST_B))
+
+    def test_no_record_and_no_running_container_pass(self) -> None:
+        self.assertTrue(self._holds(given=False, recorded="", running=DIGEST_B))
+        self.assertTrue(self._holds(given=False, recorded=DIGEST_A, running=""))
+
+    def test_a_running_image_that_is_a_tag_is_not_a_digest_to_differ_from(self) -> None:
+        self.assertTrue(
+            self._holds(given=False, recorded=DIGEST_A, running="example.invalid/app:latest")
+        )
+
+    def test_the_refusal_names_both_images_and_no_other_value(self) -> None:
+        task = {str(item.get("name")): item for item in _tasks()}[DRIFT_REFUSAL]
+        message = str(_section(task, "ansible.builtin.assert")["fail_msg"])
+        self.assertIn("control_plane[image-drift]", message)
+        self.assertIn("control_plane_recorded_image }}", message)
+        self.assertIn("control_plane_running_image }}", message)
+        self.assertNotIn("control_plane_env_content", message)
+        self.assertNotIn("control_plane_masterkey", message)
+
+    def test_the_drift_refusal_sits_after_both_reads_and_before_the_image_is_used(self) -> None:
+        position = self.names.index(DRIFT_REFUSAL)
+        self.assertGreater(position, self.names.index(RECORD_FACT))
+        self.assertGreater(
+            position, self.names.index("Read the image the portal container was created from")
+        )
+        self.assertLess(position, self.names.index(NO_IMAGE_REFUSAL))
+
+    def test_the_duplicate_refusal_sits_before_the_reads_of_docker(self) -> None:
+        position = self.names.index(DUPLICATE_REFUSAL)
+        self.assertGreater(position, self.names.index(RECORD_FACT))
+        self.assertLess(position, self.names.index("Look for the portal container of the stack"))
+
+    def test_the_duplicate_refusal_counts_every_image_line_not_only_digests(self) -> None:
+        by_name = {str(task.get("name")): task for task in _tasks()}
+        counted = str(_section(by_name[RECORD_FACT], "ansible.builtin.set_fact"))
+        self.assertIn("control_plane_record_image_lines", counted)
+        self.assertIn("'^IMAGE='", counted)
+        conditions = _section(by_name[DUPLICATE_REFUSAL], "ansible.builtin.assert")["that"]
+        self.assertEqual(conditions, ["control_plane_record_image_lines | int <= 1"])
+
+    def test_docker_is_read_whenever_no_pin_is_given(self) -> None:
+        template = str(_vars()["control_plane_reads_docker"])
+        for given in (True, False):
+            for switches in (True, False):
+                rendered = self.environment.from_string(template).render(
+                    control_plane_bring_up=switches,
+                    control_plane_start_units=switches,
+                    control_plane_image_given=given,
+                    control_plane_recorded_image=DIGEST_A,
+                )
+                expected = switches or not given
+                self.assertEqual(rendered.strip() == "True", expected, (given, switches))
 
 
 WRAPPER = "Start the stack through the deploy wrapper with the pinned image"
