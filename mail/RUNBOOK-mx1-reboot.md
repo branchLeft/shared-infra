@@ -1,6 +1,6 @@
 # Runbook — reboot mx1 to restore `docker exec`
 
-Runs the fix for branchLeft/workspace#433. The issue closes by hand on the
+Runs the fix for the mx1 reboot issue. The issue closes by hand on the
 Step 3 output, not on this merge — the reboot is executed here, not by CI.
 
 The `mx1_stack` role (`ansible/roles/mx1_stack`, not wired into a playbook yet) reads the Caddyfile

@@ -1362,7 +1362,7 @@ class WriteTests(unittest.TestCase):
         self.assertFalse(rig.dest.exists())
 
     def test_an_unknown_host_is_refused(self) -> None:
-        for host in ("db1", "demo1"):
+        for host in ("db1",):
             rig = Rig(self)
             self.assertEqual(1, rig.run("--host", host), host)
             self.assertFalse(rig.dest.exists())

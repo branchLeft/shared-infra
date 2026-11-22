@@ -1,0 +1,10 @@
+# Rendered by the db_t1 role of branchLeft/shared-infra. A change made on the host is
+# overwritten by the next run.
+#
+# Docker starts only with the database port rule loaded: it is ordered after the rule's unit and
+# requires it, so a host where the rule failed runs no database container (a container with
+# `restart: unless-stopped` is started by the daemon itself, not by the stack's unit). The
+# role never restarts the rule's unit, because a restart would restart Docker.
+[Unit]
+Requires={{ db_t1_rule_unit_name }}
+After={{ db_t1_rule_unit_name }}

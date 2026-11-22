@@ -87,6 +87,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ci_jump_user",
     ),
     "edget": ("ci_jump_user",),
+    "demo1": ("broker_deploy_owner_due_diligence_email",),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -211,6 +212,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     # pager's server config must list it. It has no live file the role does not itself write.
     "ntfy_pager_mx1_token": (Source(TYPED, ""),),
     "mx1_abuse_page_token": (Source(TYPED, ""),),
+    "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.

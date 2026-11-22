@@ -328,10 +328,11 @@ class RealTree(unittest.TestCase):
                     "deploy_slot_keys_slots",
                 ],
                 "mx1": ["mx1_abuse_page_token"],
+                "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
 
-    def test_the_optional_inputs_are_the_jump_account_and_the_two_ends_of_the_abuse_token(
+    def test_the_optional_inputs_are_pinned_per_host(
         self,
     ) -> None:
         # Pinned: an input the file may leave out is a role that runs without it, so each
@@ -342,6 +343,7 @@ class RealTree(unittest.TestCase):
                 "edge1": ["ntfy_pager_mx1_token", "ci_jump_user"],
                 "edget": ["ci_jump_user"],
                 "mx1": ["mx1_abuse_page_token"],
+                "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
 
@@ -350,8 +352,9 @@ class RealTree(unittest.TestCase):
         # the slots the slot-keys role requires, so both must follow it, and all must follow the
         # two pull roles (check_enrolment R11). The host baseline installs Docker, which the
         # website role needs, so it too sits before the role. The deploy tooling goes before the
-        # slot keys: the slot program needs the wrapper the tooling installs. The export bundler
-        # follows, then the node exporter, last of all.
+        # slot keys: the slot program needs the wrapper the tooling installs. The host applier
+        # (promote_host) follows the slot keys, because it hands each move to that wrapper. The
+        # export bundler follows, then the node exporter, last of all.
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
         self.assertEqual(
@@ -367,6 +370,7 @@ class RealTree(unittest.TestCase):
                 "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "promote_host",
                 "tenant_onboarding",
                 "export_bundler",
                 "node_exporter",
@@ -400,12 +404,13 @@ class Mutations(unittest.TestCase):
             "backup_worker",
             "backup_restore",
             "mx1_abuse_page",
+            "broker_deploy",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "edget", "ops1", "mx1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1", "mx1", "demo1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -480,9 +485,9 @@ class Mutations(unittest.TestCase):
         self._edit(
             "roles/host_inputs/vars/main.yml",
             "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
-            "  mx1:\n    - mx1_abuse_page_token\n  demo1:\n    - ci_jump_user\n\n# A value",
+            "  mx1:\n    - mx1_abuse_page_token\n  appt1:\n    - ci_jump_user\n\n# A value",
         )
-        self._expect("optional demo1: the host has no row")
+        self._expect("optional appt1: the host has no row")
 
     def test_an_optional_name_that_a_role_requires_is_found(self) -> None:
         # An optional input absent from the file leaves the argument unset; a role that requires

@@ -19,9 +19,10 @@
 # (checks/test_ci_jump_hosts.py); only owner_vars/edget.yml and the host's private input
 # ci_jump_user differ.
 #
+# The host's metrics exporter (node_exporter) is last, so a disk refusal holds nothing back.
+#
 # Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline account on
-# edge-t belongs to the edge-t server's own ticket, ws#2898), the edge stack (Caddy) and the
-# monitoring roles.
+# edge-t belongs to the edge-t server's own ticket, ws#2898) and the edge stack (Caddy).
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files: the
@@ -34,6 +35,9 @@
   vars:
     enrolled_host: edget
     egress_nat_gateway_enabled: true
+    # The host's journal keeps an entry for at most 30 days, inside the 90 days the
+    # website's privacy notice states for server logs. Pinned by checks/test_tenant_host_monitoring.py.
+    host_baseline_journal_retention_days: 30
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edget.yml'
@@ -54,3 +58,4 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
+    - role: ../roles/node_exporter # noqa: role-name[path]

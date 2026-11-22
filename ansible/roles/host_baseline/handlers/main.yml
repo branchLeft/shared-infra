@@ -14,3 +14,10 @@
 - name: Reload systemd manager
   ansible.builtin.systemd_service:
     daemon_reload: true
+
+# journald reads its drop-ins at start, so a changed bound takes effect on a restart. A restart
+# loses nothing: the journal is on disk and the service reopens it.
+- name: Restart journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted

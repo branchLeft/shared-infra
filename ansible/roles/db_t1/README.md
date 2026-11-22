@@ -16,8 +16,11 @@ It does, in order:
    hex digits (or empty), and refuses a project directory that holds a second compose
    file or a compose environment file.
 2. Creates the stack's directories, renders the compose file and the MySQL
-   configuration, and enables the stack's unit without starting it.
-3. When an image is given and the host has no image pin: checks the shape of the
+   configuration (which binds the host's private address), and installs the database port
+   rule: a program, its boot unit and a drop-in that makes Docker follow and require that
+   unit, then loads the rule and reads it back (see "The listener rule").
+3. Enables the stack's unit without starting it.
+4. When an image is given and the host has no image pin: checks the shape of the
    owner-placed root file, then runs `branchleft-deploy dbt1 <image>`, which verifies
    the image's attestation, writes the pin and starts the stack and waits for its health
    check.
@@ -29,10 +32,11 @@ It does not:
   that holds data restarts it for every tenant and may upgrade the data in place.
 - write the image pin or the root file, or read the root value. The pin is the deploy
   program's. The root file is the owner's.
-- create a database, an account, a grant, a backup, a replica or a firewall rule. Those
-  are other roles and other steps.
-- open any port. The server listens on loopback only and the compose file publishes
-  nothing (see "What it changes on a host").
+- create a database, an account, a grant, a backup or a replica. Those are other roles and
+  other steps. The one firewall rule it creates is the database port's (below).
+- open any port to any host but one. The server listens on the private address and only the
+  application host's address is admitted to it, the exporter listens on loopback, and the
+  compose file publishes nothing (see "The listener rule").
 - register the image with the deploy program. The register is by image name, in
   `hetzner/provision/branchleft_deploy.py`: the deploy program verifies the attestation
   of a registered name against its workflow, and pins a name that is not registered
@@ -59,6 +63,10 @@ and this value in one pull request, so a reviewer reads both together.
 
 - ansible-core as pinned in `ansible/requirements.txt`; no collection beyond
   `ansible.builtin`.
+- `iptables` and `iptables-restore`, which the role does not install (the same package the
+  `egress_nat` role needs, from the host baseline), and systemd. The program refuses to run
+  without them and names the role that installs them. Docker's unit `docker.service` is the
+  one the drop-in orders.
 - Debian 13 with Docker and Compose, `branchleft-compose@.service` and
   `/usr/local/sbin/branchleft-deploy`, all installed by other roles earlier in the
   host's play (the host baseline and `deploy_tooling`, class `internal`). The verifier
@@ -72,20 +80,29 @@ and this value in one pull request, so a reviewer reads both together.
   directory `/opt/branchleft/dbt1` with `conf.d` and `run`, and the socket directory
   `run/mysqld`, owned by the numeric user the image runs as (`1001`) so mysqld can create
   its socket there.
-- `/opt/branchleft/dbt1/compose.yml` and `conf.d/branchleft.cnf` (root, `0644`).
+- `/opt/branchleft/dbt1/compose.yml` and `conf.d/branchleft.cnf` (root, `0644`). The compose
+  file holds two services: the database and its MySQL metrics exporter.
 - The unit `branchleft-compose@dbt1.service`, enabled.
+- The database port rule: the program `/usr/local/sbin/branchleft-dbt1-listener-rule`
+  (root, `0755`), the unit `/etc/systemd/system/branchleft-dbt1-listener-rule.service`
+  (enabled and started), the drop-in
+  `/etc/systemd/system/docker.service.d/20-branchleft-dbt1-listener-rule.conf` (root, `0644`)
+  and, in the kernel's filter table, the chain `BRANCHLEFT-DBT1-IN` with one jump to it at
+  the top of `INPUT`. Nothing else of the firewall is written.
 - With an image, once: the pin `/etc/branchleft/dbt1.image.env` (written by the deploy
   program, root, `0600`), the container, and the Docker volume `dbt1_mysql-data` that
   holds the data on the host's root disk.
 
 Decisions a reviewer should know the reasons for:
 
-- **Loopback only.** `bind-address = 127.0.0.1`, host networking, nothing published, and
+- **The private address, one source.** `bind-address = 10.20.1.200` (db-t1's own address,
+  from `hetzner-host/addressPlan.ts`), `port = 3306`, host networking, nothing published, and
   the X protocol listener switched off (`mysqlx = OFF`), because it listens on every
   address whatever the bind address says. The cloud firewall does not filter the private
-  network, so the only reliable "no inbound" is a server that does not listen there.
-  Opening it to the application host is a later change that brings a host firewall in
-  the same step.
+  network, so the bind and the host firewall rule that admits only the application host
+  (`10.20.1.201`) are delivered in the same run, and the rule is loaded before a server can
+  start with the new configuration. Never a wildcard, never loopback: nothing local needs
+  TCP (the administrative accounts and the exporter use the socket).
 - **Root only on the socket.** The image's entrypoint creates root for every host unless
   `MYSQL_ROOT_HOST` is set. It is set to `localhost`. Read from the public image
   entrypoint source, not from the pinned image, which is why the compose file states it.
@@ -101,6 +118,24 @@ Decisions a reviewer should know the reasons for:
   and reads back the settings above. A configuration file that was not read fails it, and
   a failed health check rolls the deploy back or refuses it. The root value reaches the
   client through the container's environment, never through the compose file.
+- **The metrics exporter (ws#1810).** A second service, the same attested
+  `ghcr.io/branchleft/mysqld-exporter` image db1 runs, pinned by digest in `vars/main.yml`
+  (`db_t1_exporter_image`). It uses the host network and listens on `127.0.0.1:9104`, never on
+  the private address and never on a published port, because nothing on the tenants network
+  has a reason to read it directly (the database port rule covers port 3306 only): db1's replica
+  tunnel forwards its own port 9105 to this one, and Prometheus on edge1 reads it there
+  (`hetzner/monitoring/render.ts`, the `db_t1_replica` job). It reads the database over the
+  socket as the MySQL account `exporter`, with a credentials file the owner places (see "Owner
+  steps for the exporter"). The file is mounted by name with `create_host_path: false`, so a
+  missing file fails the start loudly instead of Docker creating a directory in its place. The
+  exporter starts only once the database is healthy, and its own health check is `mysql_up 1`,
+  not an HTTP 200, as on db1.
+- **A bounded log.** Both services use Docker's `json-file` driver with three files of 10 MB
+  each (`db_t1_log_max_size`, `db_t1_log_max_file`): at most 30 MB of container log per
+  service, rotated, whatever the age. Docker's default is one file that grows without bound.
+  The host's own journal is bounded by `host_baseline` (30 days; see that role's README). This
+  host's stated local log retention is therefore: system journal 30 days, container logs 30 MB
+  per container.
 - **Where the data lives.** A named Docker volume on the root disk, as on the other
   database host. A separate block volume would be spend, which is the owner's.
 - **Root file and secrets.** The role takes no secret as input. The owner places
@@ -116,6 +151,79 @@ Decisions a reviewer should know the reasons for:
   a pin that exists and differs from the input, and an initialised data directory with no
   pin.
 
+## The listener rule
+
+The database listens with host networking, so a connection to it reaches the host's `INPUT`
+chain. It does not reach `DOCKER-USER`, which sees only forwarded traffic (the
+`node_exporter` README says the same of its port). The cloud firewall does not filter the
+private network, so without a host rule every host on `10.20.1.0/24` could open a connection
+to port 3306 the moment mysqld binds the private address.
+
+The role installs `branchleft-dbt1-listener-rule` (`files/branchleft_dbt1_listener_rule.py`),
+run as root by its own unit. It owns one iptables chain, `BRANCHLEFT-DBT1-IN`, and one jump to
+it from `INPUT`:
+
+```text
+-A INPUT -j BRANCHLEFT-DBT1-IN
+-A BRANCHLEFT-DBT1-IN -s 10.20.1.201/32 -p tcp -m tcp --dport 3306 -j ACCEPT
+-A BRANCHLEFT-DBT1-IN -p tcp -m tcp --dport 3306 -j DROP
+```
+
+| Traffic                                 | Result                                                      |
+| --------------------------------------- | ----------------------------------------------------------- |
+| TCP to 3306 from `10.20.1.201` (app-t1) | Accepted by the chain; MySQL still needs TLS and an account |
+| TCP to 3306 from any other source       | Dropped, this host's own address included                   |
+| Any other port, SSH included            | Matches neither rule and falls back to `INPUT` unchanged    |
+| Every other chain, every policy         | Not read, not written                                       |
+
+The addresses are the role's variables (`db_t1_private_address`, `db_t1_client_address`),
+held by a test to `TENANTS_HOST_IPS` (`dbT1`, `appT1`) in `hetzner-host/addressPlan.ts`; no
+template writes one. Why iptables and why its own chain: the host already has `iptables` (the
+NAT unit of `egress_nat`, Docker and fail2ban use it), `patterns/firewall_nat_sysctl` is
+default-drop and takes over the whole ruleset (not adopted), and a chain of its own means the
+program can say exactly what it owns.
+
+How the program behaves:
+
+- The chain is made in one `iptables-restore --noflush` transaction that declares, empties and
+  refills it, so a reload never leaves it empty for a moment. No other chain is named.
+- The jump is inserted as rule 1 of `INPUT` when absent. When present it may sit under
+  fail2ban's own jumps (`-j f2b-*`, which fail2ban puts at the top whenever it starts) and
+  under nothing else; a jump under any other rule is a refusal, not a repair, because a rule
+  under an earlier accept is not a rule. Two copies of the jump are a refusal.
+- It reads the table again after the load and fails if it differs from what is wanted.
+- At boot it tries again, up to five attempts with a wait that grows (2, 4, 6 and 8 seconds,
+  `--retry-delay`), when a command fails or gives no answer: the xtables lock held longer than
+  its 10-second wait, or a restore that fails once. A failed unit means no Docker, and nothing
+  starts Docker again, so a transient failure is worth five tries. A refusal (a misplaced jump,
+  a missing tool, a load that did not take effect) is never retried, and neither is `--check`.
+  The unit's `TimeoutStartSec=300` bounds the whole run.
+- `--check` changes nothing, prints each difference (`+` to add, `-` to remove) and exits 3
+  when there is one, 0 when not. Any other status is a refusal. The role runs it in a plan
+  (`check_mode: false`, read only), so the plan shows whether the loaded rule would change and
+  what the difference is; an unreadable table fails the plan.
+- Every address and port is checked first (one IPv4 host address, not loopback or a wildcard;
+  a port from 1024 to 65535) and every command runs from an argument list under a timeout.
+
+Boot order, which is the part a firewall proof most often misses:
+
+- `branchleft-dbt1-listener-rule.service` is a `oneshot` with `RemainAfterExit` and
+  `Before=docker.service`. A drop-in (`docker.service.d/20-branchleft-dbt1-listener-rule.conf`)
+  gives Docker `Requires=` and `After=` that unit. The order has to bind the Docker daemon and
+  not only the stack's unit: a container with `restart: unless-stopped` is started by the
+  daemon itself, without the stack's unit. With the `Requires=`, a host where the rule failed
+  runs no database container at all.
+- The role reloads the unit (`ExecReload` runs the same program) and never restarts it,
+  because a restart of a required unit restarts the unit that requires it, which here is
+  Docker and with it the database. The unit has no `ExecStop`: stopping it leaves the rule in
+  place, but it does stop Docker, as any stop of a required unit does.
+- The read-back task asks systemd, after the load, that the unit is active and enabled and
+  that `docker.service` lists it under `Requires` and `After`.
+
+The rule is loaded in the same run that renders `branchleft.cnf`, and the configuration
+reaches the server only at a start the owner or the deploy chooses, so the server never binds
+the private address before the rule is in place.
+
 ## How to test it
 
 From the repository root, with the tools installed as `ansible/README.md` describes:
@@ -125,16 +233,25 @@ python3 ansible/harness/run_harness.py ansible/roles/db_t1
 ```
 
 The unit tests run without Docker: from `ansible/roles/db_t1`, run
-`python -m unittest discover -b -s tests/unit`. They hold the rendered files to the
-properties above and each task refusal to its condition.
+`PYTHONPATH=files python -m unittest discover -b -s tests/unit`. They hold the rendered files
+to the properties above and each task refusal to its condition.
+`test_listener_rule_program.py` runs the real program against a fake `iptables` and
+`iptables-restore` that keep a filter table in a file. `test_db_t1_behaviour.py` runs the
+rule's task file for real with `ansible-playbook` on localhost, against the same fakes: a plan
+before the rule is loaded, the apply, the plan and the second apply after it, and a loaded rule
+that admits another source.
 
 The Molecule scenarios run in a systemd container with no Docker and a stand-in deploy
 program (a Python program that records its arguments and writes the pin the way the real
-one does). `default` converges with an image and checks the files, modes, the unit and the
-single deploy call; the second converge must change nothing. `refusals` runs one case per
-refusal and checks each wrote nothing. They cannot prove the container, the first
-initialisation, the health check or the attestation check: those are proven only by the
-first live apply.
+one does). The container has `NET_ADMIN` and a real `iptables`, so the rule is loaded into
+the container's own network namespace, and a stand-in `docker.service` carries the drop-in.
+`default` converges with an image and checks the files, modes, the unit, the single deploy
+call, the loaded chain and the jump, and that systemd lists the rule unit in the stand-in
+Docker's `Requires` and `After`; the second converge must change nothing. `refusals` runs one
+case per refusal and checks each wrote nothing. They cannot prove the container, the first
+initialisation, the health check or the attestation check, and they do not reboot: those, and
+the boot order across a real boot, are proven only by the first live apply and a reboot drill
+on the host.
 
 ## How it is delivered
 
@@ -178,14 +295,44 @@ change that introduced the role.
    `defaults/main.yml`, and the test that holds them.
 2. Do not turn a refusal into a warning to make a run pass. The refusals are the only
    thing between an apply and a running tenant database.
-3. Never add a `ports` key, a second service, a literal image, or a bind address other
-   than loopback without adding the host firewall in the same change.
+3. Never add a `ports` key, another service beyond the database and its exporter, another
+   literal image, a bind address other than the private address, or a second admitted source
+   or port, without changing the rule program, the unit and the tests that hold them in the
+   same change. The exporter is the one literal image; its name must be in the deploy
+   program's register (`ATTESTED_IMAGES`), or the first deploy refuses the whole stack.
 4. The image the organisation derives must keep the contract this role relies on: mysqld
    runs as user `1001`, the option directory is `/etc/my.cnf.d`, and the entrypoint honours
    `MYSQL_ROOT_HOST`, `MYSQL_ROOT_PASSWORD` and `PERCONA_TELEMETRY_DISABLE`. If it does not,
    the health check fails loudly on the first start.
 5. A task that reads the root file keeps `no_log` and `diff: false`, and keeps checking the
    shape without printing a line. The file's value is never printed, copied or compared.
+
+## Owner steps for the exporter
+
+Before the first deploy (the stack refuses to start without the file), on db-t1, as the owner.
+Both steps read the password from the shell, never from a file or an argument, and it must be
+at least 20 characters of letters, digits and `._~-` (the exporter's parser reads any other
+character as syntax). Record it in the owner's password manager; nothing else reads it.
+
+1. Place the credentials file. It is owned by uid 65534, the user the exporter image runs as,
+   mode `0400`:
+
+   ```text
+   read -rs EXPORTER_PW; export EXPORTER_PW
+   printf '[client]\nuser = exporter\npassword = %s\nsocket = /var/run/mysqld/mysqld.sock\n' "$EXPORTER_PW" | sudo install -o 65534 -g 65534 -m 0400 /dev/stdin /etc/branchleft/dbt1-exporter.my.cnf
+   ```
+
+2. After the database is up, create the account the file names (`exporter`, socket-only, three
+   connections at most, the least the exporter needs). Good looks like `mysql_up 1` from
+   `curl -s http://127.0.0.1:9104/metrics | grep -x 'mysql_up 1'` on db-t1:
+
+   ```text
+   printf "CREATE USER 'exporter'@'localhost' IDENTIFIED BY '%s' WITH MAX_USER_CONNECTIONS 3;\nGRANT PROCESS, REPLICATION CLIENT ON *.* TO 'exporter'@'localhost';\nGRANT SELECT ON performance_schema.* TO 'exporter'@'localhost';\n" "$EXPORTER_PW" | sudo docker exec -i dbt1-mysql-1 sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot'
+   unset EXPORTER_PW
+   ```
+
+The deploy program refuses the stack while `ghcr.io/branchleft/mysqld-exporter` is not in its
+register (branchLeft/shared-infra#944, an owner merge), so that change lands first.
 
 ## Named limits
 
@@ -205,10 +352,36 @@ change that introduced the role.
 - The image's own defaults were read from its public build files, not from the pinned
   image, and not on a running server.
 - A change to the compose file or the configuration reaches the running database only at a
-  restart, which the owner chooses.
-- Backup, monitoring, replication and tenant provisioning are not here.
+  restart, which the owner chooses. The rule, by contrast, is live at the apply. On a host
+  whose database is already running on loopback, the apply loads the rule first and the new bind
+  comes at the owner's restart.
+- The rule trusts the source address. Another host on the private network could forge
+  app-t1's address; the database still needs TLS (`require_secure_transport`) and an account.
+- The rule is IPv4 only. The server binds one IPv4 address, so nothing listens on IPv6.
+- A client on db-t1 itself connecting to the private address is dropped (its source is this
+  host's own address); the socket is the local path.
+- The rule matches port 3306 only. The X protocol (33060) is off and nothing else is opened
+  by this role; a port another role opens is that role's to guard.
+- Docker requires the rule unit, so a failed rule unit means no Docker on db-t1. That is the
+  point: a host with no Docker also runs no database.
+- mysqld binds a specific address. If the private interface is not up when Docker starts,
+  mysqld fails to bind and its container restarts until the address is there; nothing is
+  exposed meanwhile, and the stack's unit waits for `network-online.target`.
+- fail2ban's jump may sit above ours. A rule another program puts above ours and that
+  accepts the database port makes the program refuse at the next run; it never moves it.
+- Not proven by a reboot: that the rule unit runs before Docker on a cold boot. The unit text
+  and the drop-in say it, a test holds them, and Molecule reads the drop-in's effect back from
+  systemd; the first reboot of the real host is the proof.
+- The role does not check the exporter's credentials file (its owner, its mode or its shape)
+  and does not create the exporter's account. A missing file fails the first start, loudly. A
+  file with the wrong content starts the exporter and reports `mysql_up 0`, which the exporter's
+  health check and the `ReplicaStatusMissing` alert both see.
+- The exporter reaches Prometheus only through db1's replica tunnel, which is for the
+  migration. When the tunnel is torn down, the path to this host's database metrics is a
+  separate change (ws#1810 follow-up).
+- Backup, replication and tenant provisioning are not here.
 
 ## Clauses this role exercises
 
-ANS-3 (modules before commands), ANS-9, ANS-10 (check mode), ANS-11 (idempotent), ANS-12
+ANS-3 (modules before commands; the rule program has no module), ANS-9, ANS-10 (check mode), ANS-11 (idempotent), ANS-12
 (no role imports another), ANS-14, ANS-15, ANS-16 (no secret reaches a log) and ANS-17.

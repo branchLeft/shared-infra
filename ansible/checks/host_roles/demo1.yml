@@ -1,6 +1,8 @@
 ---
-# broker_deploy first: demo1_build reads what it leaves behind. It refuses until a release is
+# host_inputs first (check_enrolment R11): it sets the owner's address that broker_deploy reads.
+# broker_deploy next: demo1_build reads what it leaves behind. It refuses until a release is
 # pinned. host_baseline and egress_nat stay off.
+- host_inputs
 - broker_deploy
 - demo1_build
 - demo1_egress_spool

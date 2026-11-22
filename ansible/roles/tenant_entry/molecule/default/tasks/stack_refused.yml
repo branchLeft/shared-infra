@@ -1,0 +1,16 @@
+---
+# One request that must be refused by name. The caller sets `request`, `request_stdin` and
+# `expect` (the word after `refused: `). The first line of stderr must be exactly that, stdout
+# must be empty and the exit code 1. Naming the word matters: a refusal for another reason
+# must not count as the refusal under test.
+- name: Make the request
+  ansible.builtin.include_tasks: request.yml
+
+- name: Assert it was refused by the word named, with nothing on stdout
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 1
+      - tenant_entry_request.stdout == ''
+      - "tenant_entry_request.stderr.splitlines() | first == 'refused: ' ~ expect"
+    fail_msg: 'Expected "refused: {{ expect }}", got rc {{ tenant_entry_request.rc }} and "{{ tenant_entry_request.stderr }}".'
+    quiet: true
