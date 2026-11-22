@@ -60,5 +60,5 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
-    - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
+    - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
