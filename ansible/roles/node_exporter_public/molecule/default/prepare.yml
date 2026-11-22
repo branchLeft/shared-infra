@@ -1,0 +1,112 @@
+---
+# Test setup only, never part of the role. It makes what host_tls_identity makes on the two hosts, with
+# the openssl program: a self-signed server certificate for the name demo1 (serverAuth only), the one
+# self-signed client certificate the exporter pins, and a second client certificate the exporter must
+# refuse. Every key is made here, in the container, and lives and dies with it. The three files
+# host_tls_identity leaves on a real host (the pinned client certificate as ca.crt, the server
+# certificate and its key) are put where the role reads them.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The base image ships no package lists. A check-mode run cannot refresh them (the role's own
+    # cache refresh is skipped there), so without this the check run finds no package to install.
+    - name: Refresh the package lists, as a real host's have been
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Make a directory for the throwaway keys, closed to everyone but root
+      ansible.builtin.file:
+        path: /root/pki
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Make the server certificate and the two client certificates, each self-signed with its own key
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -keyout
+          - '/root/pki/{{ item.name }}.key'
+          - -out
+          - '/root/pki/{{ item.name }}.crt'
+          - -subj
+          - '/CN={{ item.cn }}'
+          - -days
+          - '2'
+          - -addext
+          - basicConstraints=critical,CA:FALSE
+          - -addext
+          - keyUsage=critical,digitalSignature
+          - -addext
+          - 'extendedKeyUsage={{ item.usage }}'
+          - -addext
+          - 'subjectAltName={{ item.san }}'
+        creates: '/root/pki/{{ item.name }}.crt'
+      loop:
+        - name: server
+          cn: demo1
+          usage: serverAuth
+          san: 'DNS:demo1'
+        - name: client
+          cn: edge1
+          usage: clientAuth
+          san: 'DNS:edge1'
+        - name: rogue-client
+          cn: edge1
+          usage: clientAuth
+          san: 'DNS:edge1'
+      loop_control:
+        label: '{{ item.name }}'
+
+    # host_inputs makes this directory first on demo1, root-owned and mode 0755, so the exporter's
+    # account can pass through it to its certificate directory.
+    - name: Create the estate's configuration directory, as host_inputs does
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the directory the owner places the exporter's files in, closed to everyone but root
+      ansible.builtin.file:
+        path: /etc/branchleft/node-exporter-tls
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place the three files, as the owner does
+      ansible.builtin.copy:
+        src: '/root/pki/{{ item.src }}'
+        dest: '/etc/branchleft/node-exporter-tls/{{ item.dest }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        # The pin: the one client certificate the exporter accepts, as host_tls_identity writes it.
+        - src: client.crt
+          dest: ca.crt
+        - src: server.crt
+          dest: server.crt
+        - src: server.key
+          dest: server.key
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Make the name demo1 resolve to this container
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: 127.0.0.1 demo1
+        # A container's hosts file is a bind mount, so it is written in place.
+        unsafe_writes: true

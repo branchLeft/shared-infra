@@ -1,0 +1,93 @@
+---
+# The key is made here and never read off the host: no task returns it, copies it or prints it.
+# Reset what an earlier include of this file (the other host's row, in a test) left behind.
+- name: Forget what an earlier run of this file read
+  ansible.builtin.set_fact:
+    host_tls_identity_existing: {}
+
+- name: Read whether the certificate already exists
+  ansible.builtin.stat:
+    path: '{{ host_tls_identity_cert_file }}'
+    get_checksum: false
+  register: host_tls_identity_cert_stat
+
+- name: Read the existing certificate
+  community.crypto.x509_certificate_info:
+    path: '{{ host_tls_identity_cert_file }}'
+    valid_at:
+      now: '+0s'
+      horizon: '{{ host_tls_identity_horizon }}'
+  register: host_tls_identity_existing
+  when: host_tls_identity_cert_stat.stat.exists
+
+# A run that would let the certificate lapse stops, so the owner is told while there is time to
+# renew it and carry the new public certificate to the peer's host (README, "Owner steps").
+- name: Refuse an own certificate with less than the renewal window left
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_existing.valid_at.now
+      - host_tls_identity_existing.valid_at.horizon
+    fail_msg: >-
+      host_tls_identity[renew]: the certificate at {{ host_tls_identity_cert_file }} has under
+      {{ host_tls_identity_renew_days }} days left, or has lapsed. Renew it as the README says.
+    quiet: true
+  when: host_tls_identity_cert_stat.stat.exists
+
+# regenerate: never keeps a key that is already there, so a re-run, a renewal and a rebuilt
+# certificate all keep the host's key. The module returns a fingerprint of the public half only.
+- name: Make the private key, once, on this host
+  community.crypto.openssl_privatekey:
+    path: '{{ host_tls_identity_key_file }}'
+    type: ECC
+    curve: secp256r1
+    owner: root
+    group: '{{ host_tls_identity_profile.group | default(omit, true) }}'
+    mode: '0640'
+    regenerate: never
+  no_log: true
+  diff: false
+
+- name: Read whether the key exists
+  ansible.builtin.stat:
+    path: '{{ host_tls_identity_key_file }}'
+    get_checksum: false
+  register: host_tls_identity_key_stat
+
+# The request lives in memory and is handed straight to the certificate task. The module reports a
+# change on every run because it makes a new request each time, and it writes nothing, so the
+# change is not a change to the host.
+- name: Make the certificate request in memory
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: '{{ host_tls_identity_key_file }}'
+    subject:
+      commonName: '{{ host_tls_identity_profile.common_name }}'
+    subject_alt_name: "{{ host_tls_identity_profile.dns_names | map('regex_replace', '^', 'DNS:') | list | default(omit, true) }}"
+    key_usage:
+      - digitalSignature
+    key_usage_critical: true
+    extended_key_usage:
+      - '{{ host_tls_identity_profile.usage }}'
+    basic_constraints:
+      - 'CA:FALSE'
+    basic_constraints_critical: true
+    use_common_name_for_san: false
+  register: host_tls_identity_csr
+  changed_when: false
+  no_log: true
+  diff: false
+  when: host_tls_identity_key_stat.stat.exists
+
+- name: Issue the self-signed certificate
+  community.crypto.x509_certificate:
+    path: '{{ host_tls_identity_cert_file }}'
+    provider: selfsigned
+    csr_content: '{{ host_tls_identity_csr.csr }}'
+    privatekey_path: '{{ host_tls_identity_key_file }}'
+    selfsigned_not_before: '-1d'
+    selfsigned_not_after: '+{{ host_tls_identity_validity_days }}d'
+    owner: root
+    group: '{{ host_tls_identity_profile.group | default(omit, true) }}'
+    mode: '0640'
+  no_log: true
+  diff: false
+  when: host_tls_identity_key_stat.stat.exists
