@@ -822,3 +822,43 @@
     converge_case:
       plant: [tunnel]
       accepted: true
+
+# The scan reads symlinks and the widened roots: a link named like a key that points at one
+# outside the roots, a key under /srv and under a user's own .ansible (only root's is excluded),
+# and each content shape the holder list has no row for.
+- name: Case refused_secret_link, refuse a link named like a key that points at a key outside the roots
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [link]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_srv, refuse a private key under /srv
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [srv]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_home_ansible, refuse a private key under a user's .ansible
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [home_ansible]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_forms, refuse each content shape the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [forms]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# The CI key the pull trigger's route puts in root's authorized_keys is named by a holder row, and is
+# accepted; the control above proves an absent row is not an error, this proves the row accepts the file.
+- name: Accept the CI key in root's authorized_keys, which the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [ci]
+      accepted: true

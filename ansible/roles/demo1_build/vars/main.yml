@@ -376,34 +376,73 @@ demo1_build_secret_holders:
     owner: root
     mode: '0644'
 
+  # The pull trigger's CI keys. The pull trigger installs none itself (its README names root's
+  # authorised keys as the route, with the key written by the host's operator or the
+  # sudoers_and_keys pattern); each key runs one mode only, check, apply or step, by a forced command.
+  - name: Pull trigger CI keys in root's authorised keys
+    path_regex: '/root/\.ssh/authorized_keys'
+    reaches: 'the forced-command pull trigger: each key runs one mode only (check, apply or step); the public key only, its private half in the CI secret'
+    owner: root
+    mode: '0600'
+
 # The regex the scan's unlisted check reads: a found path that matches none of the rows is refused.
 demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(attribute='path_regex') | join('|')) ~ ')\\Z' }}"
 
-# The roots the content and name scans read. A root the host does not have is skipped.
-demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /var/lib/branchleft]
+# The roots the scan reads. A root the host does not have is skipped. /root is read by file list
+# (see tasks/_secret_holders.yml), not grep, so its own .ansible can be pruned and no other .ansible is.
+demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /srv, /var/backups, /var/lib]
+
+# Directories the scan never enters: the container runtime stores (images and their layers are
+# pinned by digest and are not host secrets), and Ansible's own run directory for root only.
+demo1_build_secret_pruned_dirs: [docker, containerd]
+demo1_build_secret_pruned_root_path: /root/.ansible
 
 # Every file in these directories is a secret, whatever its name or content.
 demo1_build_secret_holder_dirs:
   [/etc/branchleft/secrets, /var/lib/branchleft/broker-slots/admin-keys]
 
-# File names, matched against the basename: an authorised-keys file, a private key by its usual
-# name or extension, and a netrc.
-demo1_build_secret_name_patterns:
-  [
-    '^authorized_keys2?$',
-    '^id_[A-Za-z0-9_-]*[A-Za-z0-9]$',
-    '^.*\.(pem|key|p12|pfx|jks)$',
-    '^\.netrc$',
-  ]
+# File and link names, matched against the basename: an authorised-keys file, a private key by its
+# usual name or extension, and a netrc.
+# .pem is not a name rule: the CA bundle under /etc/ssl/certs is .pem files, most of them links, and a
+# PEM private key is caught by its header in the content scan.
+demo1_build_secret_name_core:
+  ['authorized_keys2?', 'id_[A-Za-z0-9_-]*[A-Za-z0-9]', '.*\.(key|p12|pfx|jks)', '\.netrc']
+demo1_build_secret_name_regex: "{{ '^(?:' ~ (demo1_build_secret_name_core | join('|')) ~ ')$' }}"
 
-# File content, matched case-insensitively and read only for a match, never printed: a PEM private
-# key header; a bare KEY=value line whose name holds a secret word; an AWS secret access key line;
-# a GitHub token; a Pulumi token; a registry auth entry. The scan joins them into one alternation.
-demo1_build_secret_content_patterns:
+# A link whose target is a holder directory's file, or a secret-named file anywhere, is a secret link.
+demo1_build_secret_link_dir_regex: "{{ '^(?:' ~ (demo1_build_secret_holder_dirs | join('|')) ~ ')/' }}"
+demo1_build_secret_link_name_regex: "{{ '(^|/)(?:' ~ (demo1_build_secret_name_core | join('|')) ~ ')$' }}"
+
+# Content, matched case-insensitively and read only for a match, never printed. The strict set
+# holds in any file: a PEM and a PGP private key header, a shell export of a secret name, a bare
+# KEY=value line whose name holds a secret word, an AWS secret access key, a GitHub, Pulumi or
+# registry token shape. The config set holds in config-named files only (see the includes below),
+# where a spaced, indented, YAML or JSON key with a secret name is a secret line.
+demo1_build_secret_content_strict:
   - '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'
-  - '^[A-Za-z_][A-Za-z0-9_]*(token|secret|passw(or)?d|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
+  - '-----BEGIN PGP PRIVATE KEY BLOCK-----'
+  - '^[[:space:]]*export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
+  - '^[A-Za-z_][A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
   - 'aws_secret_access_key[[:space:]]*=[[:space:]]*[^[:space:]]+'
   - 'gh[pousr]_[A-Za-z0-9]{36,}'
+  - 'github_pat_[A-Za-z0-9_]{22,}'
   - 'pul-[0-9a-f]{40}'
   - '"auth"[[:space:]]*:[[:space:]]*"[A-Za-z0-9+/=]{16,}"'
-demo1_build_secret_content_regex: "{{ demo1_build_secret_content_patterns | join('|') }}"
+demo1_build_secret_content_config:
+  - '^[[:space:]]*[A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*[^[:space:]]+'
+  - '^[[:space:]]*-?[[:space:]]*[A-Za-z0-9_-]*(token|secret|password|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*[[:space:]]*:[[:space:]]*[^[:space:]]+'
+  - '"[A-Za-z0-9_-]*(token|secret|password|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*"[[:space:]]*:[[:space:]]*"[^"]+"'
+demo1_build_secret_content_strict_regex: "{{ demo1_build_secret_content_strict | join('|') }}"
+demo1_build_secret_content_config_regex: "{{ demo1_build_secret_content_config | join('|') }}"
+
+# The config-named files the config set reads, as grep globs and as a regex for /root's file list.
+demo1_build_secret_config_includes:
+  - '--include=*.yml'
+  - '--include=*.yaml'
+  - '--include=*.json'
+  - '--include=*.env'
+  - '--include=*.conf'
+  - '--include=*.ini'
+  - '--include=*.cfg'
+  - '--include=*.toml'
+demo1_build_secret_config_name_regex: '\.(yml|yaml|json|env|conf|ini|cfg|toml)$'
