@@ -1,8 +1,8 @@
 # node_exporter_public
 
 This role installs the Debian archive's `prometheus-node-exporter` on a host that has no
-address in the estate subnet, and makes it answer only a client that presents a certificate the
-owner's CA signed. It is for `demo1`, which is in a Hetzner project of its own and shares no private
+address in the estate subnet, and makes it answer only a client that presents the one client
+certificate it is pinned to. It is for `demo1`, which is in a Hetzner project of its own and shares no private
 network with the monitoring host, so its exporter is scraped over its public address.
 
 This README is written for a maintainer who is new to the repository. It follows the order the
@@ -52,11 +52,13 @@ None. The paths, the port and the package name are in `vars/main.yml`. No variab
 
 ## What the role leaves out, and why
 
-- **Any certificate or key.** The role ships none and makes none. `ca.crt` is the CA that signs
-  the exporter's certificate and the one client certificate Prometheus presents. The server
-  certificate must carry the name Prometheus verifies (`demo1`, in `hetzner/monitoring/render.ts`)
-  as a DNS name and `serverAuth` only, so it cannot be used as a client certificate; the client
-  certificate carries `clientAuth`.
+- **Any certificate or key.** The role ships none and makes none. `host_tls_identity` makes demo1's
+  key and self-signed server certificate on the host, and writes `ca.crt`: not a certificate
+  authority but the one client certificate edge1's Prometheus presents (self-signed, `clientAuth`
+  only), which the owner supplies from the repository. `client_ca_file` names it, so the exporter
+  trusts that certificate and nothing else. The server certificate carries the name Prometheus
+  verifies (`demo1`, in `hetzner/monitoring/render.ts`) as a DNS name and `serverAuth` only, so it
+  cannot be used as a client certificate.
 - **The `expected_up` flip.** That is a change to the monitoring render, made once the exporter
   is read back answering live.
 
@@ -67,22 +69,22 @@ plain HTTP (the mask and ARGS-first order), if the client certificate check is w
 role fetches from the network, or if a PEM block is committed.
 
 The Molecule scenario runs the role in one systemd container on Debian 13 with throwaway keys made in
-the container. Its `verify.yml` reads the package version, the files and their modes, the arguments
+the container, as `host_tls_identity` makes them: self-signed, with the client certificate pinned as `ca.crt`. Its `verify.yml` reads the package version, the files and their modes, the arguments
 and the web config, and asks systemd that the exporter is active and enabled. It then scrapes
-port 9100 four ways: a certificate from the placed CA answers 200, and no certificate, a
-certificate from another CA, and plain HTTP do not.
+port 9100 four ways: the pinned client certificate answers 200, and no certificate, another
+self-signed client certificate, and plain HTTP do not.
 
 It does not prove that the real certificates, the firewall rule or Prometheus's scrape from edge1
 work together on demo1; the read-back after delivery does.
 
 ## Owner steps
 
-Before the first apply is expected to install anything: make the CA, the server certificate and
-key, and the client certificate and key, by whatever means the owner chooses. Place `ca.crt`,
-`server.crt` and `server.key` on the host, root-only, in `/etc/branchleft/node-exporter-tls/` (`/etc/branchleft` is
-made by `host_inputs`, which goes first on demo1: root's, mode 0755, so the exporter's account can
-reach the directory the role opens to it). Place
-`ca.crt`, `client.crt` and `client.key` on edge1 in `/etc/branchleft/demo1-metrics-tls/` before
-the monitoring config that names them is delivered (`hetzner/monitoring/render.md`, "demo1's
-node target"). What good looks like: the exporter's unit is active on the host, and a scrape
-with the client certificate answers 200 while one without it does not.
+None of its own. The files are made by `host_tls_identity`, which goes before this role on demo1
+(its README, "Owner steps", says how the owner carries each host's public certificate to the other).
+The role installs nothing until all three files are in `/etc/branchleft/node-exporter-tls/`: `server.key`
+and `server.crt`, which `host_tls_identity` makes on the first apply, and `ca.crt`, the pinned edge1
+client certificate, which it writes once the owner has put that certificate in demo1's `owner_vars`
+file. `/etc/branchleft` is made by `host_inputs`, which goes first on demo1: root's, mode 0755, so the
+exporter's account can reach the directory the role opens to it. What good looks like: the exporter's
+unit is active on the host, and a scrape with edge1's client certificate answers 200 while one without it
+does not.

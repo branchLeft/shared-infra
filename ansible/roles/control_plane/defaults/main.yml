@@ -4,3 +4,8 @@
 # the test container has no Docker daemon and no DOCKER-USER chain to apply to.
 control_plane_bring_up: true
 control_plane_start_units: true
+
+# Whether the provisioning API runs. Off, the stack is what it was and the portal and the console
+# show no provisioning screen. The owner turns it on in owner_vars/ops1.yml, in the same change
+# that pins the applications image that carries it (control_plane_app_image).
+control_plane_provisioning_enabled: false
