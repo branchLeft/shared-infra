@@ -112,6 +112,11 @@ class MonitoringSingleHomeTest(unittest.TestCase):
         self.assertEqual([], [f for f in self.files if not (STACK / f).is_file()])
         self.assertNotIn(RENDERER, self.files)
 
+    def test_the_demo_probe_template_is_delivered_for_the_host_to_render(self) -> None:
+        # The host renders prometheus/demo_tls_probe.yml from this template before
+        # every start; without the delivery the unit's ExecStartPre has nothing to render.
+        self.assertIn("prometheus/demo_tls_probe.yml.tmpl", self.files)
+
     def test_no_other_role_names_a_stack_file_or_the_monitoring_unit(self) -> None:
         found: dict[str, list[str]] = {}
         for role in sorted(ROLES.iterdir()):

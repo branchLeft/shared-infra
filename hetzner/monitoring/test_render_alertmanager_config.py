@@ -552,10 +552,8 @@ class HeartbeatRouteTests(unittest.TestCase):
 
 
 DEMO_TEMPLATE_PATH = MODULE_PATH.parent / "prometheus" / "demo_tls_probe.yml.tmpl"
-REPO_ROOT = MODULE_PATH.resolve().parents[3]
 COMPOSE_PATH = MODULE_PATH.parent / "compose.yml"
 PROMETHEUS_CONFIG_PATH = MODULE_PATH.parent / "prometheus" / "prometheus.yml"
-MONITORING_VARS_PATH = REPO_ROOT / "ansible" / "roles" / "monitoring_stack" / "vars" / "main.yml"
 
 
 class DemoTlsProbeTests(unittest.TestCase):
@@ -602,9 +600,6 @@ class DemoTlsProbeWiringTests(unittest.TestCase):
 
     def test_the_prometheus_config_names_the_mounted_file(self) -> None:
         self.assertIn("  - /etc/prometheus/demo_tls_probe.yml", PROMETHEUS_CONFIG_PATH.read_text())
-
-    def test_ansible_delivers_the_template_the_host_renders(self) -> None:
-        self.assertIn("  - prometheus/demo_tls_probe.yml.tmpl", MONITORING_VARS_PATH.read_text())
 
     def test_the_host_writes_the_file_and_a_bad_base_disables_rather_than_failing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
