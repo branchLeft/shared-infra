@@ -392,7 +392,7 @@ demo1_build_secret_holders:
     reaches: 'the forced-command pull trigger: each key runs one mode only (check or apply); the public key only, its private half in the CI secret'
     owner: ansible-ci
     mode: '0600'
-  # Root's own authorised keys (owner ruling on workspace#4048, 22 Nov: agents add this row). The file
+  # Root's own authorised keys (an owner-approved row). The file
   # holds public keys only; the scan names it so a root login key is an owner-reviewed entry, not a
   # silent one. Its reaches column is the login it grants root.
   - name: Root's authorised keys

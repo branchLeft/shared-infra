@@ -871,7 +871,7 @@
       plant: [binkey]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
-# Root's authorized_keys is named by a holder row (owner ruling, workspace#4048). Both key files are
+# Root's authorized_keys is named by a holder row (an owner-approved row). Both key files are
 # accepted by their rows; the control above proves the host as prepared is accepted.
 - name: Accept root's authorised_keys and the ansible-ci account's authorised_keys, both listed
   ansible.builtin.import_playbook: refused_secret.yml
