@@ -1,0 +1,37 @@
+# The weekly media backup. Triggered by branchleft-media-backup.timer; installed
+# by the media_backup role. The program refuses a run whose settings or files are
+# wrong, and ExecStartPre makes that refusal come before any request.
+[Unit]
+Description=branchLeft weekly media backup (every tenant's media, encrypted per tenant)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ media_backup_account }}
+Group={{ media_backup_account }}
+EnvironmentFile={{ media_backup_env_file }}
+Environment=MEDIA_BACKUP_MAX_REQUESTS_PER_SECOND={{ media_backup_max_requests_per_second }}
+Environment=MEDIA_BACKUP_MANIFEST_SIGNING_KEY_FILE={{ media_backup_signing_key_file }}
+ExecStartPre=/usr/bin/python3 {{ media_backup_program }} --check
+ExecStart=/usr/bin/python3 {{ media_backup_program }}
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+
+# A hard limit on the whole serial run. The report's duration_seconds says how
+# close the estate is to it.
+TimeoutStartSec=12h
+MemoryMax={{ media_backup_memory_max }}
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
