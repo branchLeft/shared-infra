@@ -782,3 +782,43 @@
   ansible.builtin.import_playbook: refused_template.yml
   vars:
     converge_case: {}
+
+# The host scan (_secret_holders.yml) refuses a secret-bearing file the holder list does not
+# name, by its content, its name or where it sits, and names the path, never a value. The
+# control is the host as prepared, which holds only what the list names, and is accepted.
+- name: Accept the host as prepared, which holds only the files the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Case refused_secret_key, refuse a private key the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [key]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_token, refuse a token line the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [token]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_dir, refuse a file in the secrets directory the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [secret_dir]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# The broker tunnel key is named by a holder row before the change that places it lands, and the row
+# accepts the file when it is there. Its control is the host as prepared, with the row present and
+# the file absent, which is accepted: an absent holder row or file is not an error.
+- name: Accept the broker tunnel key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tunnel]
+      accepted: true

@@ -20,6 +20,11 @@
 - name: Check what broker_deploy left behind and the directories root relies on
   ansible.builtin.include_tasks: _preconditions.yml
 
+# Before anything is staged or written: a host that holds a secret the holder list does not name
+# stops the run here, and names the path. Read-only, so a plan runs it too.
+- name: Refuse a host holding a secret-bearing file that the holder list does not name
+  ansible.builtin.include_tasks: _secret_holders.yml
+
 - name: Stage the pinned programs
   ansible.builtin.include_tasks: _release.yml
 

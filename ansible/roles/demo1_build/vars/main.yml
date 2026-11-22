@@ -329,3 +329,81 @@ demo1_build_installed_pins: |-
 
 # One upstream snippet per slot in the edge fragment.
 demo1_build_edge_snippet_pattern: '(?m)^\(slot[0-9]+-upstream\) \{$'
+
+# The host scan (tasks/_secret_holders.yml). demo1 holds only the secrets listed here. A row names
+# a file, by path_regex (no anchors; the scan adds them), what it reaches, and who holds it. A row
+# names where a secret is, never its value. A file the scan finds that no row names is refused.
+# The reaches column says what a holder can reach. It does not say the value is worthless off the
+# host: a token works from any host that holds it, so the control is that it is on this host only.
+demo1_build_secret_holders:
+  - name: DNS-01 token for the demo wildcard
+    path_regex: '/etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard'
+    reaches: "the DNS provider's API for the demo zone only (the demo DNS project)"
+    owner: root
+    mode: '0600'
+  - name: Mail spool drain token
+    path_regex: '/etc/branchleft/mail-spool\.env'
+    reaches: "the mail spool's drain port, which listens on this host's private address only"
+    owner: root
+    mode: '0600'
+  - name: Per-slot environment file of a colour unit
+    path_regex: '/etc/branchleft/demo-[0-9]+-[ab]\.env'
+    reaches: 'the EnvironmentFile of one colour unit (its own process); the contents are not read by this role, and the owner confirms them on the host'
+    owner: root
+    mode: "owner's input"
+  - name: Per-slot Ghost staff token (broker admin keys)
+    path_regex: '/var/lib/branchleft/broker-slots/admin-keys/.+'
+    reaches: "that demo's Ghost Admin API as its owner's staff account; deleted at a slot reset"
+    owner: broker
+    mode: '0600'
+  - name: Spool path account's authorised key
+    path_regex: '/etc/ssh/branchleft-spool-path/authorized_keys'
+    reaches: "the spool path account's login from ops1; the private half is on ops1 only"
+    owner: root
+    mode: '0644'
+  - name: This host's sshd host key
+    path_regex: '/etc/ssh/ssh_host_[a-z0-9]+_key'
+    reaches: "this host's own sshd identity; clients trust it through their known_hosts, and it authenticates nothing outward"
+    owner: root
+    mode: '0600'
+  # Arrives with the broker tunnel change, which is not on main yet. The row names the file so the
+  # scan accepts it when it lands. A row for a file not yet present is not an error: the scan refuses
+  # only a file it finds that no row names, so an absent file is simply not found (the control case
+  # of molecule/refusals/refused_secret.yml proves it with this row in place).
+  - name: Broker tunnel account's authorised key (arrives with the broker tunnel change)
+    path_regex: '/etc/ssh/branchleft-broker-tunnel/authorized_keys'
+    reaches: "the brokertunnel login from ops1, forwarding only to the broker's port here; ops1's public key, private half on ops1 only"
+    owner: root
+    mode: '0644'
+
+# The regex the scan's unlisted check reads: a found path that matches none of the rows is refused.
+demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(attribute='path_regex') | join('|')) ~ ')\\Z' }}"
+
+# The roots the content and name scans read. A root the host does not have is skipped.
+demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /var/lib/branchleft]
+
+# Every file in these directories is a secret, whatever its name or content.
+demo1_build_secret_holder_dirs:
+  [/etc/branchleft/secrets, /var/lib/branchleft/broker-slots/admin-keys]
+
+# File names, matched against the basename: an authorised-keys file, a private key by its usual
+# name or extension, and a netrc.
+demo1_build_secret_name_patterns:
+  [
+    '^authorized_keys2?$',
+    '^id_[A-Za-z0-9_-]*[A-Za-z0-9]$',
+    '^.*\.(pem|key|p12|pfx|jks)$',
+    '^\.netrc$',
+  ]
+
+# File content, matched case-insensitively and read only for a match, never printed: a PEM private
+# key header; a bare KEY=value line whose name holds a secret word; an AWS secret access key line;
+# a GitHub token; a Pulumi token; a registry auth entry. The scan joins them into one alternation.
+demo1_build_secret_content_patterns:
+  - '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'
+  - '^[A-Za-z_][A-Za-z0-9_]*(token|secret|passw(or)?d|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
+  - 'aws_secret_access_key[[:space:]]*=[[:space:]]*[^[:space:]]+'
+  - 'gh[pousr]_[A-Za-z0-9]{36,}'
+  - 'pul-[0-9a-f]{40}'
+  - '"auth"[[:space:]]*:[[:space:]]*"[A-Za-z0-9+/=]{16,}"'
+demo1_build_secret_content_regex: "{{ demo1_build_secret_content_patterns | join('|') }}"

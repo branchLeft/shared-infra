@@ -35,6 +35,16 @@ What the role does, in the order of `tasks/main.yml`:
    them); the broker's slots directory is `broker:broker` `0755`; and, when
    `broker.env` exists, it holds exactly one drain-flag line,
    `BROKER_DRAIN_FLAG_DIR=/var/lib/branchleft-broker/drain-flags`.
+   2a. **Refuses a secret the holder list does not name** (`_secret_holders.yml`), read-only
+   and before anything is staged or written. demo1 holds only the secrets listed in
+   `demo1_build_secret_holders` (`vars/main.yml`). The step finds secret-bearing files under
+   `/etc`, `/root`, `/home`, `/opt` and `/var/lib/branchleft` by name (an authorised-keys file,
+   a private key's usual name), by content (a PEM private key header, a bare `KEY=value` line
+   whose name holds a secret word, an AWS secret, a GitHub or Pulumi token, a registry auth
+   entry), and by place (every file in the secrets directory and in the broker's admin-key
+   directory). A found path that no row names refuses the run, naming the path and never a
+   value. A host the list covers is accepted and says how many files it found. A plan runs
+   the step too.
 3. **Stages the programs** (`_release.yml`): the ten programs, each copied with
    `copy` from the role's own `files/ghost-platform` (which step 1 has held to the
    pins), into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
