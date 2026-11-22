@@ -286,7 +286,55 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
   );
 }
 
-export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
+/**
+ * The fixed label the demo edge's outside TLS probe dials, under the demo
+ * wildcard base. The demo wildcard is one certificate for `*.<base>`, so
+ * `probe.<base>` is covered by it and resolves through the wildcard DNS
+ * record: no record of its own is needed.
+ */
+export const DEMO_PROBE_LABEL = 'probe';
+
+const DEMO_WILDCARD_BASE_PATTERN =
+  /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * The `blackbox_demo_tls` scrape job, or no lines at all when the base is
+ * unset or empty. The base is the same owner-held value as the demo host's
+ * `demo1_build_wildcard_base`: it is passed in, never read from a file here,
+ * and a committed render passes none, so no demo name is shipped in source.
+ * The job uses `tls_connect`, a verified handshake rather than a plain TCP
+ * connect, and is not in `blackboxTargets`: that list is `http_2xx`, which
+ * the demo edge would fail whenever no slot is leased.
+ */
+export function demoTlsProbeJob(base: string | undefined): string[] {
+  if (base === undefined || base === '') return [];
+  if (!DEMO_WILDCARD_BASE_PATTERN.test(base)) {
+    throw new Error(`demo wildcard base is not a lower-case domain of two or more labels: ${base}`);
+  }
+  return [
+    '  - job_name: blackbox_demo_tls',
+    '    metrics_path: /probe',
+    '    params:',
+    `      module: ['${BLACKBOX_MODULE_TLS_CONNECT}']`,
+    '    static_configs:',
+    '      - targets:',
+    `          - ${DEMO_PROBE_LABEL}.${base}:443`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
+    '    relabel_configs:',
+    '      - source_labels: [__address__]',
+    '        target_label: __param_target',
+    '      - source_labels: [__param_target]',
+    '        target_label: instance',
+    '      - target_label: __address__',
+    `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
+    '',
+  ];
+}
+
+export function renderPrometheusConfig(
+  sites: readonly EdgeSite[],
+  demoWildcardBase?: string
+): string {
   const targets = blackboxTargets(sites);
   const nodeTargets = MONITORED_NODE_HOSTS.map(nodeTarget).join('\n');
 
@@ -398,6 +446,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '      - target_label: __address__',
     `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
     '',
+    ...demoTlsProbeJob(demoWildcardBase),
     '  - job_name: stalwart',
     '    scheme: https',
     `    metrics_path: ${STALWART_METRICS_PATH}`,
