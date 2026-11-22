@@ -46,6 +46,31 @@ failure, refused connection, timeout) records only an error and leaves the statu
 HTTP, `[CONNECTED]` is true only when a status code above 0 came back. `render.test.ts` fails
 if any probe, the TEST target's own probe included, lacks the condition.
 
+## Post-mortems
+
+A post-mortem is a markdown file in `postmortems/`, written by a person and merged by pull
+request. No agent writes or edits one. The file name is lower-case words joined by `-`, ending
+`.md`, and it opens with a front-matter block:
+
+```text
+---
+title: One line of plain text, no [ ] ` < > or backslash
+resolved: 2026-12-01T10:42:00Z
+---
+```
+
+`postmortems.ts` reads the files committed at `HEAD` (`git ls-tree` and `git show`), never the
+working tree, so a file that is only written, only staged, or on a branch that has not landed
+does not appear. A file with no `resolved` line is a draft of an incident still open and is
+skipped. A file that cannot be read (bad name, no title, a `resolved` that is not a UTC time)
+fails `pnpm test`, so a mistake is loud, not a silent omission. Each remaining file becomes one
+archived `announcements:` entry of type `operational`, stamped with `resolved`, whose message
+links to the file on `main` of the public repository. With no file, the key is absent.
+
+Limit: Gatus gives its incident list no hook to attach a link to, so the link sits in the page's
+Past Announcements section at the time the incident resolved, not inside the component's own
+incident list.
+
 ## What is not set, on purpose
 
 - No `ui` block. Gatus defaults apply, so no wording is written here.

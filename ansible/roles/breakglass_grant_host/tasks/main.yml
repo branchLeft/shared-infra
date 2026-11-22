@@ -1,14 +1,16 @@
 ---
-# What this role does is plain, repeatable state: directories, six files fetched
+# What this role does is plain, repeatable state: directories, nine files fetched
 # at a pinned commit and each held to its sha256, one image pulled by digest and
-# read back, and a timer turned on. It never runs the grant tool, never opens or
+# read back, and two timers turned on. It never runs the grant tool, never opens or
 # closes a grant, and sets no run-time secret.
 #
 # Order matters. Inputs, Docker and its socket, directories, the image (probe,
 # pull, read back), the files, then the queued unit changes are loaded, and only
 # then the timer is enabled. The unit starts the image with --pull never, so a
 # host without the image would fail the unit every minute and no grant would
-# ever close: the image is therefore confirmed before anything that starts it.
+# ever close: the image is therefore confirmed before anything that starts it. The
+# textfile writer's timer is enabled after the expire timer, so a failure there never
+# leaves grants unclosed.
 - name: Refuse an input that is not a full commit or an image pinned by digest
   ansible.builtin.assert:
     that:
@@ -146,7 +148,7 @@
     path: '{{ breakglass_grant_host_tool_dir }}'
   register: breakglass_grant_host_tool_dir_stat
 
-- name: Download the tool, the wrapper and the units and hold each to its checksum
+- name: Download the tool, the wrappers and the units and hold each to its checksum
   ansible.builtin.get_url:
     url: '{{ breakglass_grant_host_source_base_url }}/{{ item.path }}'
     dest: '{{ item.dest }}'
@@ -178,3 +180,17 @@
     enabled: true
     state: started
   when: breakglass_grant_host_timer_stat.stat.exists
+
+# The writer's timer runs the read-only report once a minute and replaces one file in
+# the textfile directory. Same reason as above for the check-mode skip (ANS-10).
+- name: Look at the textfile writer's timer unit file
+  ansible.builtin.stat:
+    path: '{{ breakglass_grant_host_unit_dir }}/{{ breakglass_grant_host_textfile_timer_unit }}'
+  register: breakglass_grant_host_textfile_timer_stat
+
+- name: Enable and start the timer that writes the support-access textfile
+  ansible.builtin.systemd_service:
+    name: '{{ breakglass_grant_host_textfile_timer_unit }}'
+    enabled: true
+    state: started
+  when: breakglass_grant_host_textfile_timer_stat.stat.exists

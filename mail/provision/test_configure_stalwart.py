@@ -1439,6 +1439,9 @@ class RunReportsFailureAsOneLineTests(unittest.TestCase):
 
     def test_an_http_error_status_says_the_server_answered(self):
         exc = urllib.error.HTTPError(f"{UNREACHABLE_BASE_URL}/api/account", 401, "Unauthorized", {}, None)
+        # Close it here: an unclosed HTTPError warns when garbage collection finds it,
+        # which can land inside a later test's captured stderr.
+        self.addCleanup(exc.close)
 
         status, output = self._run_with_urlopen_raising(exc)
 

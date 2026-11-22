@@ -38,6 +38,8 @@ TASK_STARTS = (
     "Refuse a host entry",
     "Refuse two hosts",
     "Refuse a demo host",
+    "Look at the descriptor directory",
+    "Require the descriptor directory",
     "Make the descriptor directory",
     "Make the record directory",
     "Note the descriptor file names",
@@ -386,6 +388,34 @@ class DrainListTests(unittest.TestCase):
         (self.scratch.directory / "link.json").symlink_to(outside)
         self.assertFalse(self.scratch.run([]).failed)
         self.assertEqual(self.scratch.files(), ["link.json"])
+
+    def test_a_link_at_either_directory_stops_the_run_and_nothing_is_written_through_it(
+        self,
+    ) -> None:
+        # file state=directory follows a link, so without the check the role would fill the link's
+        # target. Red when the stat follows the link or the assert is gone; green as shipped.
+        for name in ("descriptors", "descriptors.owned"):
+            for dangling in (False, True):
+                with self.subTest(directory=name, dangling=dangling):
+                    scratch = Scratch(self)
+                    target = scratch.home / "elsewhere"
+                    if not dangling:
+                        target.mkdir()
+                    (scratch.home / name).symlink_to(target)
+                    for check in (False, True):
+                        result = scratch.run([DEMO, APP], DEMO_DOMAIN, check=check)
+                        self.assertTrue(result.failed, result.output)
+                        self.assertIn("is a link or is not a directory", result.output)
+                    self.assertEqual(list(target.iterdir()) if target.is_dir() else [], [])
+                    self.assertTrue((scratch.home / name).is_symlink())
+
+    def test_a_directory_that_is_not_there_or_is_there_is_not_refused(self) -> None:
+        # The other side of the check: a fresh host (no directory yet) and a settled one pass.
+        for _ in range(2):
+            result = self.scratch.run([APP])
+            self.assertFalse(result.failed, result.output)
+        self.assertTrue(self.scratch.directory.is_dir())
+        self.assertFalse(self.scratch.directory.is_symlink())
 
     def test_a_plan_on_a_fresh_host_runs_and_writes_nothing(self) -> None:
         result = self.scratch.run([DEMO, APP], DEMO_DOMAIN, check=True)

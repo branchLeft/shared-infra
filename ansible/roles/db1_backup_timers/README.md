@@ -13,7 +13,7 @@ the order the standard sets for a role README (ANS-14).
    pinned commit in `vars/main.yml`. Each is installed root-owned with mode 0644 at
    `/opt/branchleft/db/provision` or `/opt/branchleft/db/recovery`. Each fetch is
    checked against its pinned sha256 digest, and a file whose bytes differ fails.
-   The directory holds ten programs under `provision/`. One of them,
+   The directory holds eleven programs under `provision/`, `gtid_snapshot.py` among them, the module `extract_tenant_binlog.py` imports. One of them,
    `provision_tenant_db.py`, no unit of this role runs: the `db1_grants` role runs it
    and only consumes it, so this role is where it is delivered. The fetches are
    skipped in check mode (a check-mode run creates no directory), so the file
@@ -71,7 +71,13 @@ because the unit files fix the paths they run.
 - `molecule/default` runs the role in a systemd container (ANS-15). The programs are
   fetched over the network from raw.githubusercontent.com at the pinned commit, so
   the container needs that network. The verify play checks each program against its
-  pinned digest, and each unit byte for byte against the role's own copy.
+  pinned digest, and each unit byte for byte against the role's own copy. The verify
+  play reads no clock: each timer must be loaded, enabled, active, with `Result=success`,
+  and trigger its own service. `prepare.yml` installs a placeholder for the shared
+  Compose unit template, because without a unit of that name systemd cannot queue the
+  binlog-ship service when its timer first elapses (five minutes after boot) and the
+  timer fails with `Result=resources`, which made a run longer than five minutes fail
+  verify and report a change at idempotence.
 - `molecule/refusals` converges the same host, then runs three cases on
   `provision_tenant_db.py`, the program `db1_grants` runs. A: a wrong pinned digest
   (passed as an `include_role` parameter, which beats `vars/main.yml`) is refused by

@@ -1,0 +1,45 @@
+---
+# The refusal cases of the role (ANS-15): one bad state or bad input at a time, each required to
+# stop the role with its own message and leave the host as it found it. The platform is the default
+# scenario's, for the same reasons.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, trusted by digest (see the default scenario).
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    # The host cgroup namespace is the stated ANS-15 exception the default scenario explains.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # Every place the role writes. A case compares a listing of these before and after the
+        # role runs, so a refusal that changed anything shows.
+        scenario_snapshot_roots:
+          - /etc/branchleft
+          - /var/lib/branchleft
+          - /usr/local/sbin
+          - /etc/systemd/system/branchleft-promote.service
+          - /etc/systemd/system/branchleft-promote.timer
+        # Well-formed values for the inputs. The key is made of 32 repeated bytes and is no one's
+        # key; the URL is at a name that never resolves.
+        scenario_url: https://ledger.example.test/current.json
+        scenario_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH
+verifier:
+  name: ansible

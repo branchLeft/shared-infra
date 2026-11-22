@@ -13,9 +13,11 @@ second plain apply reports no change. On a **step request** it runs one program 
 `configure` runs `40`, `mailboxes` runs `50`, `mint` runs one of `60`, `61`, `62`, `64`, `66`
 and `68`, and `collector` runs `67 --dry-run` and then `67`.
 
-The programs hold the logic and its idempotence, so the role writes no marker and carries no
-API call and no secret. It decides whether a program may run, from what, and what is shown if
-it fails. It does not rotate or retire a credential, bootstrap or deploy anything, run the
+The programs hold the logic and its idempotence, so the role writes no marker and holds no
+secret. It decides whether a program may run, from what, and what is shown if it fails. It makes
+one API call of its own, a read: before `configure` it asks Stalwart whether it is still in
+bootstrap mode (see "The guard"). It runs that check from its own program,
+`files/check_stalwart_bootstrap_mode.py`, which is copied for the one run and placed nowhere. It does not rotate or retire a credential, bootstrap or deploy anything, run the
 sender-scope checks (they probe SMTP), place a file the stack role owns, or wire itself in.
 
 ## Interface
@@ -58,7 +60,22 @@ was not requested, runs nothing; two tags with one confirmed step run only that 
 Every step then checks the **preconditions** before any program runs: the install directory
 is root's with mode 0755, `/root/.stalwart-admin-credentials` exists, and that file and the
 other two credential files, if present, are regular files (not links) of root with mode 0600.
-The programs are told to read exactly these paths. `mint` takes one row of a closed table per
+The programs are told to read exactly these paths. The list of those files is itself checked, so
+an extra variable that names a shorter list (`-e mail_reconcilers_credential_files=[]`), a different
+order, or the administrator file as not required is refused by name before any file is looked at.
+`configure` then checks one thing more: **Stalwart is not in bootstrap mode**. The program
+`configure_stalwart.py` finishes the bootstrap when the credential file it reads holds the
+temporary account, for example after an interrupted bootstrap: it reads the temporary password
+from Stalwart's log, sets a permanent one, rewrites the credential file and restarts Stalwart.
+That is the owner's one-time step, so the role's check
+program makes one read, `GET /api/account` on loopback with the administrator credential file, and
+applies the program's own test (the account holds `sysBootstrapUpdate`). Only an answer that says
+Stalwart is not in bootstrap mode lets `configure` go on. Bootstrap mode, no answer, a credential
+file of the wrong shape and an answer of the wrong shape each stop the step with `REFUSED:`. The
+bootstrap-mode refusal names the owner's step (run the wrapper by hand as root on the mail host,
+in `mail/RUNBOOK-mx1-provision.md`, "How to re-run safely") and then no program ran. The check
+writes nothing, so it also runs in a check-mode request and a plan shows the refusal. It prints
+one fixed line and never the credential or Stalwart's answer. `mint` takes one row of a closed table per
 request, with an id pattern ending `\Z` so a trailing line break is refused; there is no row for
 a rotation, the administrator or the collector. `collector` runs the program's dry run first
 under `check_mode: false`, and starts the real run only if the dry run exited 0 and printed
@@ -79,8 +96,14 @@ From the repository root, with the tools installed as `ansible/README.md` descri
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/mail_reconcilers
 ```
 
-The first needs no Docker. The second runs a container with a stand-in for Stalwart's API
+The first needs no Docker; it runs from the role's directory with `files/` on the path
+(`ansible/checks/run_role_unit_tests.py` does that), and it type-checks and lints with the role's
+`pyproject.toml`. Each guard in the tests is run, not searched for: the preconditions are
+evaluated against files of every mode and owner, so a loosened check fails whatever its text.
+The second runs a container with a stand-in for Stalwart's API
 that logs every request, so a case can say a refusal made zero calls, and a stand-in `docker`.
+The stand-in reports bootstrap mode while its `bootstrap` file exists, so the refusal case runs
+`configure` against a server in that state and counts one call, the read of the account.
 Throwaway secrets are searched for in every request's output and in the whole run's log.
 
 ## How it is delivered
@@ -103,13 +126,18 @@ owner's merge of any change to this role. A run that touches mx1 is the owner's 
 
 ## Named limits
 
-- **Programs read and write credential files.** The role never reads, writes or passes a
-  secret; it hides the programs' output with `no_log`.
+- **Programs read and write credential files.** The role's tasks never read, write or pass a
+  secret; the programs do, and so does the bootstrap check, which reads the administrator file
+  and sends it only to Stalwart on loopback. The role hides every program's output with `no_log`.
 - **Minting `zitadel` through Ansible removes the show-once display.** The program prints that
   secret only at a terminal; run here it is recorded in the service credential file and shown
   nowhere, so delivery is a hand read of that file.
-- **The fresh-host bootstrap of Stalwart is the owner's.** `configure` refuses while the
-  administrator credential file is absent, so the role never takes the program's bootstrap path.
+- **The bootstrap of Stalwart is the owner's, by either route.** `configure_stalwart.py` finishes
+  the bootstrap when the administrator credential file is absent, and also when the file exists
+  but Stalwart still reports bootstrap mode. `configure` refuses the first (the preconditions) and
+  the second (the check above), so the role never takes the program's bootstrap path. The other
+  steps run programs that do not bootstrap. The check trusts what Stalwart answers on loopback
+  to the credential file: a Stalwart that does not answer is a refusal, never a pass.
 - **The stand-in proves the calls and the guards, not the reconcile.** The happy-path cases for
   `configure` and `mailboxes` are not in the container test; the first live run proves them.
 - **`mail_reconcilers_step` set in an inventory defeats the second key.**
