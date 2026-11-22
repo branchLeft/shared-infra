@@ -4,6 +4,9 @@
 - name: Install the tenant entry program and its register directory
   ansible.builtin.import_tasks: _program.yml
 
+- name: Install the tenant compose judge the stack verb runs
+  ansible.builtin.import_tasks: _judge.yml
+
 - name: Fetch the secrets program the entry program calls
   ansible.builtin.import_tasks: _secrets_program.yml
 
