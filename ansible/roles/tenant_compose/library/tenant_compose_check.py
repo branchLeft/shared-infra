@@ -13,8 +13,6 @@ import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
-from ansible.module_utils.basic import AnsibleModule
-
 DOCUMENTATION = r"""
 module: tenant_compose_check
 short_description: Judge rendered tenant compose text before it is delivered
@@ -664,6 +662,11 @@ def params_from_mapping(values: Mapping[str, object]) -> Params:
 
 def main() -> None:
     """Run as an Ansible module."""
+    # Imported here, not at the top, so that the judge can be loaded by a program that runs on a
+    # python3 with no Ansible (the tenant entry point keeps a byte-identical copy and calls
+    # `judge`). Ansible's own packaging finds an import wherever it sits in the file.
+    from ansible.module_utils.basic import AnsibleModule  # noqa: PLC0415
+
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     params = params_from_mapping(module.params)
     try:
