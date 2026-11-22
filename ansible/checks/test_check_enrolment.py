@@ -1129,14 +1129,18 @@ class Sabotage(unittest.TestCase):
 
     def test_r10_demo1_owner_vars_lacks_the_peer_certificate(self) -> None:
         self._write("owner_vars/demo1.yml", "---\n")
-        self._assert_one("R10 owner_vars/demo1.yml: must hold exactly ['host_tls_identity_peer_cert']")
+        self._assert_one(
+            "R10 owner_vars/demo1.yml: must hold exactly ['host_tls_identity_peer_cert']"
+        )
 
     def test_r10_demo1_owner_vars_peer_certificate_is_not_text(self) -> None:
         self._write("owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: 5\n")
         self._assert_one("R10 owner_vars/demo1.yml: host_tls_identity_peer_cert must be text")
 
     def test_r10_demo1_owner_vars_holds_an_extra_key(self) -> None:
-        self._write("owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: ''\nci_login_keys: []\n")
+        self._write(
+            "owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: ''\nci_login_keys: []\n"
+        )
         self._assert_one("R10 owner_vars/demo1.yml: must hold exactly")
 
     def test_r10_edge1_owner_vars_lacks_the_peer_certificate(self) -> None:
@@ -1144,17 +1148,24 @@ class Sabotage(unittest.TestCase):
         self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
 
     def test_r10_edge1_owner_vars_peer_certificate_is_not_text(self) -> None:
-        self._edit("owner_vars/edge1.yml", "host_tls_identity_peer_cert: ''", "host_tls_identity_peer_cert: 5")
+        self._edit(
+            "owner_vars/edge1.yml",
+            "host_tls_identity_peer_cert: ''",
+            "host_tls_identity_peer_cert: 5",
+        )
         self._assert_one("R10 owner_vars/edge1.yml: host_tls_identity_peer_cert must be text")
 
-    def test_r10_the_pin_key_is_allowed_for_the_hosts_that_apply_the_role_and_no_other(self) -> None:
+    def test_r10_the_pin_key_is_allowed_only_for_the_hosts_that_apply_the_role(self) -> None:
         for host, keys in OWNER_VARS_KEYS.items():
             self.assertEqual(HOST_TLS_KEY in keys, host in HOST_TLS_HOSTS, host)
 
     def test_r10_a_host_that_lists_host_tls_identity_is_in_host_tls_hosts(self) -> None:
-        self._edit("checks/host_roles/ops1.yml", "- host_inputs\n", "- host_inputs\n- host_tls_identity\n")
+        self._edit(
+            "checks/host_roles/ops1.yml", "- host_inputs\n", "- host_inputs\n- host_tls_identity\n"
+        )
         self._assert_one(
-            "R10 checks/host_roles/ops1.yml: ops1 lists host_tls_identity but is not in HOST_TLS_HOSTS"
+            "R10 checks/host_roles/ops1.yml: ops1 lists host_tls_identity "
+            "but is not in HOST_TLS_HOSTS"
         )
 
     def test_r10_a_host_tls_host_that_does_not_list_the_role(self) -> None:
