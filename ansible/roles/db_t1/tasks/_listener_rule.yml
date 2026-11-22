@@ -1,0 +1,213 @@
+---
+# The database port rule of db-t1. Included by tasks/main.yml after the files and before the pin,
+# so that the rule is loaded in the same run that renders the configuration which binds the
+# private address, and before the deploy can start a database.
+#
+# Installs the rule program and its boot unit, writes the drop-in that makes Docker require and
+# follow that unit, loads the rule, and reads the rule back from the kernel. The program builds
+# the rule; this role never writes a firewall rule itself. Nothing here reads from the network.
+#
+# The unit is reloaded, never restarted, when something changed: it is required by docker.service,
+# and a restart of a required unit restarts the unit that requires it (Docker, and the database).
+
+- name: Look for a running systemd before the listener rule is loaded
+  ansible.builtin.stat:
+    path: '{{ db_t1_systemd_running_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_rule_systemd_running
+
+# Mode 0755 and root ownership are load-bearing: systemd runs this file as root at every boot,
+# so a group- or world-writable copy is a root shell for whoever can write it. The program is on
+# disk before the unit that names it.
+- name: Install the database port rule program
+  ansible.builtin.copy:
+    src: '{{ db_t1_rule_program_src }}'
+    dest: '{{ db_t1_rule_program_dest }}'
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0755'
+  register: db_t1_rule_program
+
+- name: Install the database port rule unit
+  ansible.builtin.template:
+    src: branchleft-dbt1-listener-rule.service.j2
+    dest: '{{ db_t1_rule_unit_dest }}'
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0644'
+  register: db_t1_rule_unit_file
+
+- name: Create the directory of Docker's unit drop-ins
+  ansible.builtin.file:
+    path: '{{ db_t1_rule_docker_dropin_dir }}'
+    state: directory
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0755'
+
+# In check mode the directory above is not created, so the drop-in is gated on the stat that
+# follows it (ANS-10).
+- name: Look at the directory of Docker's unit drop-ins
+  ansible.builtin.stat:
+    path: '{{ db_t1_rule_docker_dropin_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_rule_dropin_dir_stat
+
+- name: Order Docker after the database port rule and require it
+  ansible.builtin.template:
+    src: branchleft-dbt1-listener-rule-docker.conf.j2
+    dest: '{{ db_t1_rule_docker_dropin_dest }}'
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0644'
+  when: db_t1_rule_dropin_dir_stat.stat.exists
+  register: db_t1_rule_dropin_file
+
+# Only when a unit file changed (ANS-11), and not in check mode, which wrote none.
+- name: Make systemd read the unit and the drop-in
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+    - db_t1_rule_unit_file.changed or (db_t1_rule_dropin_file.changed | default(false))
+
+- name: Enable the database port rule unit for boot
+  ansible.builtin.systemd_service:
+    name: '{{ db_t1_rule_unit_name }}'
+    enabled: true
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+
+# ----- What a plan can say -----
+
+# The program is not on disk in a plan on a fresh host, so the question below is asked only
+# when it is.
+- name: Look at the installed rule program
+  ansible.builtin.stat:
+    path: '{{ db_t1_rule_program_dest }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_rule_program_now
+
+# Reads the kernel and changes nothing, so it runs in check mode as in an apply (the program's
+# own --check, a stated reason, ANS-10). Exit 0 is as wanted, the differs status is a change the
+# apply would make and its output is the diff, anything else is a refusal that fails the plan.
+- name: Ask the rule program whether the loaded rule is the wanted one
+  ansible.builtin.command:
+    argv:
+      - '{{ db_t1_rule_program_dest }}'
+      - --allow-source
+      - '{{ db_t1_client_address }}'
+      - --port
+      - '{{ db_t1_port }}'
+      - --check
+  register: db_t1_rule_probe
+  changed_when: db_t1_rule_probe.rc == db_t1_rule_probe_differs_status
+  failed_when: db_t1_rule_probe.rc not in [0, db_t1_rule_probe_differs_status]
+  check_mode: false
+  when: db_t1_rule_program_now.stat.exists
+
+# A plan writes none of the files, so the program, the unit and the drop-in would be new, and
+# the rule would be loaded. Nothing is run: `true` only reports the change.
+- name: Report in check mode that the database port rule would be installed or reloaded
+  ansible.builtin.command:
+    argv:
+      - 'true'
+  changed_when: true
+  check_mode: false
+  when:
+    - ansible_check_mode
+    - >-
+      db_t1_rule_program.changed or db_t1_rule_unit_file.changed
+      or (db_t1_rule_dropin_file.changed | default(false))
+      or not db_t1_rule_program_now.stat.exists
+
+- name: Show the difference between the loaded rule and the wanted one
+  ansible.builtin.debug:
+    msg: '{{ db_t1_rule_probe.stdout_lines }}'
+  when:
+    - db_t1_rule_probe.rc is defined
+    - db_t1_rule_probe.rc == db_t1_rule_probe_differs_status
+
+# ----- Load it -----
+
+# reloaded starts a unit that is not active and reloads one that is, so one task covers a new
+# unit and a changed one. Never `restarted`: see the head of this file.
+- name: Load the database port rule when the files or the loaded rule changed
+  ansible.builtin.systemd_service:
+    name: '{{ db_t1_rule_unit_name }}'
+    state: reloaded
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+    - >-
+      db_t1_rule_program.changed or db_t1_rule_unit_file.changed
+      or (db_t1_rule_dropin_file.changed | default(false))
+      or (db_t1_rule_probe.rc | default(0)) == db_t1_rule_probe_differs_status
+
+# A unit that failed on an earlier run is not active and nothing above touched it; starting it
+# runs the program. On an active unit it does nothing.
+- name: Start the database port rule unit if it is not active
+  ansible.builtin.systemd_service:
+    name: '{{ db_t1_rule_unit_name }}'
+    state: started
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+
+# ----- Read it back -----
+
+# The kernel is asked again, by the same program, after the load: exit 0 or the run stops.
+- name: Read the loaded rule back from the kernel
+  ansible.builtin.command:
+    argv:
+      - '{{ db_t1_rule_program_dest }}'
+      - --allow-source
+      - '{{ db_t1_client_address }}'
+      - --port
+      - '{{ db_t1_port }}'
+      - --check
+  register: db_t1_rule_readback
+  changed_when: false
+  failed_when: false
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+
+- name: Ask systemd for the rule unit and for Docker
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+  loop:
+    - '{{ db_t1_rule_unit_name }}'
+    - '{{ db_t1_rule_docker_unit_name }}'
+  loop_control:
+    label: '{{ item }}'
+  register: db_t1_rule_units
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+
+- name: Refuse a database port rule that is not loaded, not active, not enabled or not required by Docker
+  ansible.builtin.assert:
+    that:
+      - db_t1_rule_readback.rc == 0
+      - db_t1_rule_units.results[0].status.ActiveState == 'active'
+      - db_t1_rule_units.results[0].status.UnitFileState == 'enabled'
+      - db_t1_rule_unit_name in db_t1_rule_units.results[1].status.Requires.split()
+      - db_t1_rule_unit_name in db_t1_rule_units.results[1].status.After.split()
+    quiet: true
+    fail_msg: >-
+      The database port rule is not in place. The loaded rule differs from the wanted one
+      ({{ db_t1_rule_readback.stdout_lines | default([]) }}), or the unit
+      {{ db_t1_rule_unit_name }} is not active and enabled, or {{ db_t1_rule_docker_unit_name }}
+      does not require and follow it. Without it the database port is open to the private network.
+  when:
+    - db_t1_rule_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode

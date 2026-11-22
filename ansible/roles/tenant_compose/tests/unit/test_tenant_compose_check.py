@@ -24,6 +24,8 @@ SECRET_TWO = "THROWAWAY_SECRET_TWO_0002"  # noqa: S105
 SECRETS = f"GHOST_DB_PASSWORD={SECRET_ONE}\nGHOST_MAIL_PASSWORD={SECRET_TWO}\n"
 SPOOL_IMAGE = f"example.invalid/spool@{DIGEST}"
 Document = dict[str, object]
+# The module imports AnsibleModule inside main(), so the stand-in replaces it where Ansible has it.
+ANSIBLE_MODULE = "ansible.module_utils.basic.AnsibleModule"
 
 
 def tenant_document(slug: str = "tenant-a", uid: int = 30901) -> Document:
@@ -863,7 +865,7 @@ class ModuleTests(unittest.TestCase):
         module.params = dict(params)
         module.check_mode = check_mode
         module.fail_json.side_effect = SystemExit
-        with mock.patch.object(check, "AnsibleModule", return_value=module):
+        with mock.patch(ANSIBLE_MODULE, return_value=module):
             with contextlib.suppress(SystemExit):
                 check.main()
         return module
@@ -894,7 +896,7 @@ class ModuleTests(unittest.TestCase):
         self.assertTrue(results[0]["ok"])
 
     def test_it_passes_the_spec_to_ansible_with_check_mode_supported(self) -> None:
-        with mock.patch.object(check, "AnsibleModule") as module_class:
+        with mock.patch(ANSIBLE_MODULE) as module_class:
             module_class.return_value.params = self.values()
             check.main()
         module_class.assert_called_once_with(

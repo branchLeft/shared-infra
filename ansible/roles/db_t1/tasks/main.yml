@@ -1,7 +1,9 @@
 ---
 # Order matters. The input and the compose-file checks come first and change nothing.
 # The directories, the compose file and the configuration are delivered next, because
-# the deploy program reads the compose file before it writes a pin. The pin, the
+# the deploy program reads the compose file before it writes a pin. The database port rule
+# (tasks/_listener_rule.yml) follows the configuration that binds the private address and
+# precedes the deploy. The pin, the
 # secret file checks and the deploy are in tasks/_pin.yml, last, so a refusal there
 # leaves the delivered files in place and nothing started.
 #
@@ -138,6 +140,13 @@
   when:
     - db_t1_project_directory_stat.stat.exists
     - db_t1_cnf_directory_stat.stat.exists
+
+# ----- The database port rule -----
+
+# After the configuration that binds the private address and before the deploy that can start
+# the server: the rule is loaded in this run, and Docker is ordered after it for every boot.
+- name: Load the rule that admits the application host to the database port and drops every other source
+  ansible.builtin.include_tasks: _listener_rule.yml
 
 # ----- The unit, the pin and the one deploy -----
 
