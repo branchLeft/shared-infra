@@ -60,22 +60,70 @@
       ansible.builtin.copy:
         content: |
           #!/usr/bin/python3 -I
+          import re
           import sys
 
           CLAIMS = "/var/tmp/stand-in-claims"
-          args = sys.argv[1:]
-          if args == ["--list-claims"]:
-              try:
-                  sys.stdout.write(open(CLAIMS, encoding="utf-8").read())
-              except FileNotFoundError:
-                  pass
-              sys.exit(0)
-          if len(args) == 3 and args[0] == "--uid":
-              with open(CLAIMS, "a", encoding="utf-8") as handle:
-                  handle.write(args[2] + "=" + args[1] + "\n")
-              sys.exit(0)
-          sys.exit(2)
+
+
+          # The two names the real secrets program imports from the real volume program.
+          class ProvisionError(Exception):
+              pass
+
+
+          def validate_slug(slug):
+              if re.fullmatch(r"[a-z][a-z0-9-]{0,24}[a-z0-9]", slug) is None:
+                  raise ProvisionError("slug")
+
+
+          def main(args):
+              if args == ["--list-claims"]:
+                  try:
+                      sys.stdout.write(open(CLAIMS, encoding="utf-8").read())
+                  except FileNotFoundError:
+                      pass
+                  return 0
+              if len(args) == 3 and args[0] == "--uid":
+                  with open(CLAIMS, "a", encoding="utf-8") as handle:
+                      handle.write(args[2] + "=" + args[1] + "\n")
+                  return 0
+              return 2
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1:]))
         dest: '{{ scenario_volume_program }}'
         owner: root
         group: root
         mode: '0755'
+
+    # What deploy_tooling leaves on an app host: the two directories a stack's files go in, and
+    # the template unit the `enable` verb enables. `systemctl enable` and `is-enabled` work on
+    # the unit files with no systemd running, so the real command is used, not a stand-in. The
+    # unit is a placeholder that starts nothing real.
+    - name: Make the directories deploy_tooling makes
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+
+    - name: Put a placeholder template unit where deploy_tooling puts the compose unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Placeholder compose unit for %i
+
+          [Service]
+          ExecStart=/bin/true
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
