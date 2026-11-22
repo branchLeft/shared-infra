@@ -385,7 +385,13 @@ passwords — that's `rotate_admin_credential.py`'s model, not this one's) and
 each role's script is left alone once its content matches and it's active,
 corrected otherwise (content drift, not just presence, is checked — the
 script's content is downloaded and compared, not assumed from existence
-alone). Run twice against a fully-reconciled box:
+alone). Run twice against a fully-reconciled box. The transcript below is a
+**historical capture**. It is not regenerated and does not describe the current
+mailbox set. The run it records had five mailboxes (`rob`, `contact`, `info`,
+`sales`, `complaints`); that run predates the commit that first recorded this
+transcript (`1509de5e`, 17 Aug 2026), where `MAILBOXES` already held seven. The
+current set is `MAILBOXES` in `mail/provision/provision_mailboxes.py`, which has
+since grown. Read the transcript for its shape, not as the count to expect today:
 
 ```console
 $ ssh root@<mail-host> /root/mail-provision/50-provision-mailboxes.sh
@@ -417,7 +423,9 @@ re-run hits.)
 > idempotency transcript above. It covers the four forwarding pairs that existed
 > then, not the current forwarding set.
 
-Forwarding is proven rather than assumed: send a real message to each role
+Forwarding is proven rather than assumed (captured on or before 17 Aug 2026,
+for the four role addresses that existed then; the table below is a historical
+record, not the current role set in `ROLE_ADDRESSES`): send a real message to each role
 address and confirm it lands both there and in `rob@`. Done via
 authenticated SMTP submission against
 `127.0.0.1:465` on mx1 (the same listener external clients would use — see

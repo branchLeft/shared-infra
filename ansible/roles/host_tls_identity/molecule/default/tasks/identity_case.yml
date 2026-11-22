@@ -1,0 +1,66 @@
+---
+# One host's row: the files, their owner and modes, and what the certificate says.
+- name: Read the directory and the three files of {{ host_tls_identity_row.host }}
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ host_tls_identity_row.dir }}'
+    - '{{ host_tls_identity_row.dir }}/{{ host_tls_identity_row.key }}'
+    - '{{ host_tls_identity_row.dir }}/{{ host_tls_identity_row.cert }}'
+    - '{{ host_tls_identity_row.dir }}/ca.crt'
+  register: host_tls_identity_identity_stats
+
+- name: Assert the directory is root's and closed, and each file is root-only readable by its group
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_identity_stats.results[0].stat.isdir
+      - host_tls_identity_identity_stats.results[0].stat.mode == '0750'
+      - host_tls_identity_identity_stats.results[0].stat.pw_name == 'root'
+      - host_tls_identity_identity_stats.results[0].stat.gid == host_tls_identity_row.gid
+      - host_tls_identity_identity_stats.results[1:] | map(attribute='stat.mode') | unique | list == ['0640']
+      - host_tls_identity_identity_stats.results[1:] | map(attribute='stat.pw_name') | unique | list == ['root']
+      - host_tls_identity_identity_stats.results[1:] | map(attribute='stat.gid') | unique | list == [host_tls_identity_row.gid]
+      - host_tls_identity_identity_stats.results[1:] | map(attribute='stat.isreg') | unique | list == [true]
+    quiet: true
+
+- name: Read the key's public facts
+  community.crypto.openssl_privatekey_info:
+    path: '{{ host_tls_identity_row.dir }}/{{ host_tls_identity_row.key }}'
+  register: host_tls_identity_identity_key
+  no_log: true
+
+- name: Read the certificate
+  community.crypto.x509_certificate_info:
+    path: '{{ host_tls_identity_row.dir }}/{{ host_tls_identity_row.cert }}'
+    valid_at:
+      before_end: '+729d'
+      after_end: '+731d'
+  register: host_tls_identity_identity_cert
+
+- name: Assert the key is an ECC P-256 key and the certificate is the key's own, self-signed, narrow and two years long
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_identity_key.type == 'ECC'
+      - host_tls_identity_identity_key.public_data.curve == 'secp256r1'
+      - host_tls_identity_identity_cert.public_key_fingerprints.sha256 == host_tls_identity_identity_key.public_key_fingerprints.sha256
+      - "host_tls_identity_identity_cert.subject == {'commonName': host_tls_identity_row.cn}"
+      - host_tls_identity_identity_cert.issuer == host_tls_identity_identity_cert.subject
+      - (host_tls_identity_identity_cert.subject_alt_name | default([], true)) == host_tls_identity_row.san
+      - host_tls_identity_identity_cert.extended_key_usage == [host_tls_identity_row.usage]
+      - host_tls_identity_identity_cert.basic_constraints == ['CA:FALSE']
+      - host_tls_identity_identity_cert.key_usage == ['Digital Signature']
+      - host_tls_identity_identity_cert.valid_at.before_end
+      - not host_tls_identity_identity_cert.valid_at.after_end
+    quiet: true
+
+- name: Read the trust file
+  ansible.builtin.slurp:
+    src: '{{ host_tls_identity_row.dir }}/ca.crt'
+  register: host_tls_identity_identity_pin
+
+- name: Assert the trust file is exactly the certificate the peer supplied
+  ansible.builtin.assert:
+    that:
+      - (host_tls_identity_identity_pin.content | b64decode | trim) == (host_tls_identity_verify_pem[host_tls_identity_row.pin] | trim)
+    quiet: true

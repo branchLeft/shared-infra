@@ -69,6 +69,15 @@ secrets (`HCLOUD_TOKEN_DNS`, `PULUMI_PASSPHRASE_HETZNER_DNS`,
 at repository level. Both plan jobs start on a push to `main` only, so a pull
 request or merge-queue run skips them and no branch can read those secrets.
 
+The tenants stack (`hetzner/tenants/`, `hetzner-tenants-plan` and
+`hetzner-tenants-apply`) is planned after the estate, whose outputs it reads, and
+its apply always waits in `production`: it is never routed to `production-free`,
+so the owner reads every tenants plan. Its credential scope is the tenants
+project's own token and this stack's own passphrase, two repository
+secrets (`HCLOUD_TOKEN_TENANTS`, `PULUMI_PASSPHRASE_HETZNER_TENANTS`)
+that no other job reads (the stack's salt is read from its state at run
+time), plus the state bucket's Object Storage key it shares with the estate.
+
 ```bash
 pnpm install --frozen-lockfile
 pnpm exec tsc --noEmit                        # what CI type-checks with
