@@ -160,6 +160,7 @@ APPLIED_ON_MAIN = {
         "demo1_build",
         "demo1_egress_spool",
         "spool_path_account",
+        "node_exporter_public",
     ],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
@@ -611,6 +612,7 @@ class HostRoleLists(unittest.TestCase):
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "node_exporter_public",
             ],
         )
         # The account's read-back of the drain port needs the spool running, so it follows the role
