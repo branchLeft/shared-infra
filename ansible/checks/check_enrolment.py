@@ -85,11 +85,11 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 STEP_LOGIN_KEY = "ci_step_login_key"
 STEP_LOGIN_FROM = "ci_step_login_from"
 STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
-# The one input of the host_tls_identity role: the peer's public certificate, as PEM text, empty until
-# the owner has read it off the peer's host. It is public data. The role holds every shape check (one
-# certificate, self-signed, the use, the name, the lifetime), so only the type is read here. The hosts
-# that apply the role are exactly HOST_TLS_HOSTS, so a host cannot gain the role without its value, nor
-# the value without the role (_check_host_tls_hosts).
+# The one input of the host_tls_identity role: the peer's public certificate, as PEM text, empty
+# until the owner has read it off the peer's host. It is public data. The role holds every shape
+# check (one certificate, self-signed, the use, the name, the lifetime), so only the type is read
+# here. The hosts that apply the role are exactly HOST_TLS_HOSTS, so a host cannot gain the role
+# without its value, nor the value without the role (_check_host_tls_hosts).
 HOST_TLS_KEY = "host_tls_identity_peer_cert"
 HOST_TLS_ROLE = "host_tls_identity"
 HOST_TLS_HOSTS = frozenset(("demo1",))
@@ -951,15 +951,17 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
 
 
 def _check_host_tls_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
-    """R10: the hosts that list the host_tls_identity role are exactly HOST_TLS_HOSTS, the hosts whose
-    owner_vars file holds the peer's certificate it pins."""
+    """R10: the hosts that list the host_tls_identity role are exactly HOST_TLS_HOSTS, the hosts
+    whose owner_vars file holds the peer's certificate it pins."""
     applying = {host for host, roles in host_roles.items() if HOST_TLS_ROLE in roles}
     findings.extend(
-        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {HOST_TLS_ROLE} but is not in HOST_TLS_HOSTS"
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {HOST_TLS_ROLE} "
+        "but is not in HOST_TLS_HOSTS"
         for host in sorted(applying - HOST_TLS_HOSTS)
     )
     findings.extend(
-        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in HOST_TLS_HOSTS but does not list {HOST_TLS_ROLE}"
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in HOST_TLS_HOSTS "
+        f"but does not list {HOST_TLS_ROLE}"
         for host in sorted(HOST_TLS_HOSTS - applying)
     )
 
