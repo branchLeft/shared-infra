@@ -221,6 +221,12 @@ class TableTests(unittest.TestCase):
         for host, keys in tool.HOSTS.items():
             self.assertEqual(len(keys), len(set(keys)), host)
 
+    def test_a_set_only_key_is_an_optional_input_of_every_row_that_holds_it(self) -> None:
+        optional = mapping_of(self.loader["host_inputs_optional_by_host"])
+        for host, keys in tool.HOSTS.items():
+            for key in tool.SET_ONLY.intersection(keys):
+                self.assertIn(key, [str(k) for k in list_of(optional.get(host, []))], host)
+
     def test_a_new_loader_key_without_a_tool_mapping_is_found(self) -> None:
         rows = {host: [*keys] for host, keys in self.rows.items()}
         rows["edge1"].append("monitoring_stack_a_new_input")

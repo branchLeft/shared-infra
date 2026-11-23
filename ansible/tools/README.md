@@ -113,6 +113,10 @@ step that adds the twelfth key, as root on the host:
 `python3 -I seed_host_inputs.py --host edge1 --set ci_jump_user`. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
 the fill reads the live files, which still hold the old value.
 
+The broker tunnel's two ops1 inputs (`broker_tunnel_client_demo1_address`,
+`broker_tunnel_client_demo1_host_key`) are optional and set-only: the fill never asks for them,
+and the owner adds each once with `--host ops1 --set KEY` when the tunnel is turned on.
+
 `--set tenant_compose_stacks`, on a host whose row holds the key (none does yet, so today it is
 refused as `bad-key`), is the one `--set` that asks nothing: it reads the stacks from the
 live files exactly as the fill does, and changes that key only. Every other key of the existing

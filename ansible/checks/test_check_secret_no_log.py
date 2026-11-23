@@ -322,8 +322,8 @@ class SecretNoLogTest(unittest.TestCase):
         # The parse task: a parse error of Ansible's own echoes the text it could not parse.
         root = self._mutate(
             HOST_INPUTS,
-            "from_json }}'\n      no_log: true\n      diff: false\n",
-            "from_json }}'\n      diff: false\n",
+            "else {} }}'\n      no_log: true\n      diff: false\n",
+            "else {} }}'\n      diff: false\n",
         )
         self._assert_red(
             self._findings(root),

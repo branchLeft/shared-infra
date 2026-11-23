@@ -8,6 +8,7 @@
     "ansible/roles/deploy_tooling (chains_parents)",
     "ansible/roles/deploy_tooling (retry)",
     "ansible/roles/deploy_tooling (sudoers)",
+    "ansible/roles/edge_firewall",
     "ansible/roles/egress_nat",
     "ansible/roles/host_baseline",
     "ansible/roles/host_baseline (check-fresh)",

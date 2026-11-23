@@ -1,0 +1,58 @@
+---
+# Test scaffolding, not role tasks. The pinned test image has no OpenSSH server, so
+# this installs a stand-in sshd and a stand-in ssh.service (files/sshd-stub), then
+# places ops1's tunnel key the way the owner does: one root-only file in a root-only
+# directory. The key is a fixed test key, the one the golden files were rendered with.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the stand-in sshd the role checks and reads back
+      ansible.builtin.copy:
+        src: sshd-stub
+        dest: /usr/local/sbin/sshd
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the sshd drop-in directory the OpenSSH package would ship
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the stand-in ssh.service the role reloads
+      ansible.builtin.copy:
+        src: ssh.service
+        dest: /etc/systemd/system/ssh.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd so the stand-in unit is known
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Start the stand-in ssh.service
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: started
+        enabled: true
+
+    - name: Create the root-only inputs directory
+      ansible.builtin.file:
+        path: /etc/branchleft/broker-tunnel
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place ops1's test tunnel key
+      ansible.builtin.copy:
+        content: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f ops1-broker-tunnel\n"
+        dest: /etc/branchleft/broker-tunnel/ops1_public_key
+        owner: root
+        group: root
+        mode: '0600'

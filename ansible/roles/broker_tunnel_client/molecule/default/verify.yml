@@ -1,0 +1,127 @@
+---
+# Reads the host back: the directory, the configuration with its one forward, the
+# pinned host key and the unit. Then the refusal cases. First of all, before verify
+# itself handles the test address, it scans the log of every earlier Ansible run of
+# the scenario (converge, idempotence and the check runs with --diff) for it (ANS-16).
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    test_address: 203.0.113.80
+    test_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
+  tasks:
+    - name: Read the scenario's log so far
+      ansible.builtin.set_fact:
+        broker_tunnel_client_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+      no_log: true
+
+    # The scan counts only if the log holds what it should: the task that renders the
+    # address, by name, and the pinned host key the role writes in the clear.
+    - name: Assert the log holds the role's runs and never demo1's address
+      ansible.builtin.assert:
+        that:
+          - "'Write the ssh client configuration of the broker tunnel' in broker_tunnel_client_log"
+          - "'Pin demo1' in broker_tunnel_client_log"
+          - test_address not in broker_tunnel_client_log
+        quiet: true
+        fail_msg: The scenario's log does not hold the role's runs, or it holds demo1's address.
+      no_log: true
+
+    - name: Look at the broker tunnel's directory and files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+      loop:
+        - /etc/branchleft/broker-tunnel
+        - /etc/branchleft/broker-tunnel/demo1.conf
+        - /etc/branchleft/broker-tunnel/known_hosts
+        - /etc/systemd/system/branchleft-broker-tunnel.service
+      register: broker_tunnel_client_stats
+
+    - name: Assert the owner and mode of each
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.0.stat.pw_name == 'root'
+          - item.0.stat.gr_name == 'root'
+          - item.0.stat.mode == item.1
+      loop: "{{ broker_tunnel_client_stats.results | zip(['0700', '0600', '0644', '0644']) | list }}"
+      loop_control:
+        label: '{{ item.0.item }}'
+
+    - name: Read the configuration and the pinned key
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/branchleft/broker-tunnel/demo1.conf
+        - /etc/branchleft/broker-tunnel/known_hosts
+      register: broker_tunnel_client_files
+      no_log: true
+
+    - name: Assert the configuration forwards to the broker and nowhere else
+      ansible.builtin.assert:
+        that:
+          - >-
+            (broker_tunnel_client_files.results[0].content | b64decode).split('\n')
+            | select('match', '^ *(Local|Remote|Dynamic)Forward') | map('trim') | list
+            == ['LocalForward 127.0.0.1:18090 127.0.0.1:8090']
+          - ('    HostName ' ~ test_address) in (broker_tunnel_client_files.results[0].content | b64decode).split('\n')
+          - "'    User brokertunnel' in (broker_tunnel_client_files.results[0].content | b64decode).split('\n')"
+          - "'    StrictHostKeyChecking yes' in (broker_tunnel_client_files.results[0].content | b64decode).split('\n')"
+          - "'    IdentityFile /etc/branchleft/broker-tunnel/id_ed25519' in (broker_tunnel_client_files.results[0].content | b64decode).split('\n')"
+          - ('demo1 ' ~ test_host_key) in (broker_tunnel_client_files.results[1].content | b64decode).split('\n')
+        quiet: true
+        fail_msg: The broker tunnel's configuration or pinned key is not what the role should write.
+      no_log: true
+
+    - name: Read the unit's state
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - branchleft-broker-tunnel.service
+          - --property=UnitFileState
+          - --property=ActiveState
+          - --property=LoadState
+      register: broker_tunnel_client_show
+      changed_when: false
+
+    # The owner's key is not placed, so the unit is enabled and loaded, and not started.
+    - name: Assert the unit is enabled, loaded and inactive without the owner's key
+      ansible.builtin.assert:
+        that:
+          - "'UnitFileState=enabled' in broker_tunnel_client_show.stdout_lines"
+          - "'LoadState=loaded' in broker_tunnel_client_show.stdout_lines"
+          - "'ActiveState=inactive' in broker_tunnel_client_show.stdout_lines"
+
+    - name: Run each refusal case
+      ansible.builtin.include_tasks: tasks/refused.yml
+      loop:
+        - name: an address without a host key
+          address: 203.0.113.80
+          host_key: ''
+          expect: set together or not at all
+        - name: a host key without an address
+          address: ''
+          host_key: '{{ test_host_key }}'
+          expect: set together or not at all
+        - name: a private address
+          address: 10.20.1.5
+          host_key: '{{ test_host_key }}'
+          expect: public IPv4 address
+        - name: an address with a second line
+          address: "203.0.113.80\n10.0.0.1"
+          host_key: '{{ test_host_key }}'
+          expect: public IPv4 address
+        - name: a host key with a comment
+          address: 203.0.113.80
+          host_key: '{{ test_host_key }} root@demo1'
+          expect: one line, no comment
+        - name: an RSA host key
+          address: 203.0.113.80
+          host_key: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ
+          expect: one line, no comment
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'

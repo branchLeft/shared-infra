@@ -36,6 +36,17 @@ overrides:
         - stdout: DUMMY_generated_1
         - stdout: DUMMY_generated_2
         - stdout: DUMMY_generated_3
+  # The broker tunnel: demo1's address and host key on ops1 as the role holds them after reading its
+  # two host_inputs keys, and ops1's public key on demo1, read from the owner's file at run time.
+  broker_tunnel_client_address_in:
+    type: str
+    value: 192.0.2.40
+  broker_tunnel_client_host_key_in:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10
+  demo1_build_tunnel_ops1_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
   tunnel_account_db1_source_address:
     type: str
     value: 10.0.0.5

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from probe_checks import TITLES, Probe, Target
+from probe_preflight import PreflightError, Send, check_role_read, urllib_send
 from probe_report import (
     EXPECTED_CODES,
     CheckResult,
@@ -35,10 +36,20 @@ from probe_report import (
     scrub,
 )
 from probe_s3 import BotoOps, Ops
-from probe_stack import STACK, ProbeStack, PulumiError, Runner, run_command
+from probe_stack import (
+    STACK,
+    ProbeStack,
+    PulumiError,
+    Runner,
+    StackResource,
+    run_command,
+)
 
 RW_USER = "zz-probe-rw"
 ADMIN_USER = "zz-probe-admin"
+BUCKET_A_PREFIX = "zz-probe-a"
+BUCKET_A_LOGICAL = f"bucket-{BUCKET_A_PREFIX}"
+BUCKET_KIND = "ovh:CloudStorageObjectBucket"
 REGION = "uk"
 DESTROY_ATTEMPTS = 3
 DESTROY_PAUSE = 20.0
@@ -90,6 +101,7 @@ class Context:
     run: Runner = run_command
     connect: Connect = BotoOps.connect
     fetch: Fetch = fetch_json
+    send: Send = urllib_send
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], datetime.datetime] = lambda: datetime.datetime.now(datetime.UTC)
 
@@ -207,6 +219,13 @@ def up(ctx: Context) -> int:
     except ValueError as exc:
         ctx.out(f"::error::{exc}")
         return 1
+    # Before any marker or stack: a refused read creates nothing, so destroy
+    # correctly reports that the probe never started.
+    try:
+        check_role_read(ctx.send, ctx.environ)
+    except PreflightError as exc:
+        ctx.out(f"::error::{exc}")
+        return 1
     ctx.workdir.mkdir(parents=True, exist_ok=True)
     # The marker goes down before anything can be created, so destroy knows to look.
     _write_phase(ctx, suffix, PHASE_STARTED)
@@ -286,14 +305,32 @@ def check(ctx: Context) -> int:
 # ---------------------------------------------------------------- destroy
 
 
+def _bucket_a_in_state(items: list[StackResource], bucket: str) -> bool:
+    return any(
+        BUCKET_KIND in item.kind
+        and (item.name == BUCKET_A_LOGICAL or item.cloud_name == bucket)
+        for item in items
+    )
+
+
 def _purge(ctx: Context, stack: ProbeStack, suffix: str) -> list[str]:
-    """Empties bucket A, which is the only bucket anything is ever written to."""
+    """Empties bucket A, which is the only bucket anything is ever written to.
+
+    Bucket A is looked up in the stack's state first. A failed first `up` writes
+    no outputs, so a bucket that was never created must not be read through them.
+    """
+    bucket = f"{BUCKET_A_PREFIX}-{suffix}"
+    try:
+        in_state = _bucket_a_in_state(stack.resources(), bucket)
+    except (PulumiError, ValueError):
+        return ["the stack's resources could not be listed, so bucket A was not checked"]
+    if not in_state:
+        return []
     notes: list[str] = []
     try:
         outputs = stack.outputs()
         key, secret = _credentials(outputs, RW_USER)
         ctx.mask(key, secret)
-        bucket = f"zz-probe-a-{suffix}"
         ops = ctx.connect(str(outputs["s3Endpoints"][bucket]), REGION, key, secret)
         for item in ops.list_versions(bucket):
             try:
@@ -303,7 +340,9 @@ def _purge(ctx: Context, stack: ProbeStack, suffix: str) -> list[str]:
                     f"could not remove a version from bucket A: {type(exc).__name__}"
                 )
     except Exception as exc:  # noqa: BLE001 - noted; destroy goes on without it
-        notes.append(f"bucket A was not emptied first: {type(exc).__name__}")
+        notes.append(
+            f"bucket A is in the stack but was not emptied first: {type(exc).__name__}"
+        )
     return notes
 
 
@@ -372,6 +411,9 @@ def destroy(ctx: Context) -> int:
     if leftovers:
         names = ", ".join(item.name for item in leftovers)
         ctx.out(f"::error::probe resources remain and must be deleted by hand: {names}")
+        return 1
+    if notes:
+        ctx.out("::error::the probe cleanup reported a problem; see the cleanup summary")
         return 1
     return 0
 

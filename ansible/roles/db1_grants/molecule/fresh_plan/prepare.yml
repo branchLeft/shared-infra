@@ -1,0 +1,18 @@
+---
+# The host the default scenario starts from, then put back as db1 is before the role
+# that delivers the programs has run on it: the directory under which the programs are
+# delivered is not there, and so no program is. That is the state a first plan meets.
+# The scaffolding has one home, the default's.
+- name: Prepare the host as the default scenario does
+  ansible.builtin.import_playbook: ../default/prepare.yml
+
+- name: Take away what the delivering role has not placed yet
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../default/vars/test.yml
+  tasks:
+    - name: Remove the program directory and the programs in it
+      ansible.builtin.file:
+        path: '{{ db1_grants_scenario_provision_dir }}'
+        state: absent

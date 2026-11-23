@@ -24,8 +24,7 @@ LIST_SHARDS = ROOT / "ansible" / "harness" / "list_shards.py"
 # The lock-out roles: the ones whose break can cut the operator or the pipeline off a host.
 # Their shards are blocking and stay blocking. Taking one off the list is a decision for the
 # owner, so it needs an owner-approved edit to THIS test as well as to the list. A shard of
-# one of these paths (a new scenario included) must be on the list. `edge_firewall` is named
-# here before its role is merged; the day its directory exists, its shards must be listed.
+# one of these paths (a new scenario included) must be on the list.
 LOCKOUT_PATHS = (
     "ansible/roles/pull_trigger",
     "ansible/roles/ci_jump",
@@ -36,8 +35,9 @@ LOCKOUT_PATHS = (
     "ansible/roles/egress_nat",
     "ansible/roles/deploy_tooling",
 )
-# The lock-out paths that have no directory in this tree yet, and may be absent.
-NOT_MERGED_YET = ("ansible/roles/edge_firewall",)
+# The lock-out paths that have no directory in this tree yet, and may be absent. None now: every
+# lock-out role is merged, so a path that goes missing is a failure.
+NOT_MERGED_YET: tuple[str, ...] = ()
 
 FULL_RUN_EVENTS = ("schedule", "workflow_dispatch")
 EVENTS = ("pull_request", "merge_group", *FULL_RUN_EVENTS)
@@ -131,11 +131,11 @@ class TheListTest(unittest.TestCase):
                         "as to the list",
                     )
 
-    def test_the_lockout_roles_that_exist_here_are_most_of_the_eight(self) -> None:
+    def test_every_one_of_the_eight_lockout_roles_exists_here(self) -> None:
         # A control: an emptied LOCKOUT_PATHS, or a tree read that found nothing, would pass
         # the test above.
         present = {shard["path"] for shard in self.shards} & set(LOCKOUT_PATHS)
-        self.assertEqual(7, len(present))
+        self.assertEqual(8, len(present))
         self.assertEqual(8, len(LOCKOUT_PATHS))
 
     def test_the_list_is_not_the_whole_tree(self) -> None:

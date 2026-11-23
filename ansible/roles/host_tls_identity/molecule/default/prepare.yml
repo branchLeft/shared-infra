@@ -1,0 +1,59 @@
+---
+# Test setup only, never part of the role. It makes the certificates the owner might supply, with
+# the openssl program, and leaves the library the role installs absent, so check-fresh meets a host
+# as the first plan does.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/fixtures.yml
+  tasks:
+    # The base image ships no package lists. A check-mode run cannot refresh them (the role's own
+    # cache refresh is skipped there), so without this the check run finds no package to install.
+    - name: Refresh the package lists, as a real host's have been
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Make a directory for the fixtures, closed to everyone but root
+      ansible.builtin.file:
+        path: /root/fixtures
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Make each self-signed fixture certificate and its key
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes
+          -keyout /root/fixtures/{{ item.name }}.key -out /root/fixtures/{{ item.name }}.crt
+          -subj /CN={{ item.cn }} -days {{ item.days }}
+          {% for extension in item.ext.split(';') %} -addext {{ extension }}{% endfor %}
+        creates: '/root/fixtures/{{ item.name }}.crt'
+      loop: '{{ host_tls_identity_prepare_fixtures }}'
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Make a leaf key and request for a certificate another authority signs
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes
+          -keyout /root/fixtures/signed-client.key -out /root/fixtures/signed-client.csr
+          -subj /CN=edge1-fixture
+        creates: /root/fixtures/signed-client.csr
+
+    - name: Say what the signed certificate is for
+      ansible.builtin.copy:
+        content: "basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n"
+        dest: /root/fixtures/signed-client.ext
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Sign it with the fixture authority
+      ansible.builtin.command:
+        cmd: >-
+          openssl x509 -req -in /root/fixtures/signed-client.csr
+          -CA /root/fixtures/issuing-ca.crt -CAkey /root/fixtures/issuing-ca.key -CAcreateserial
+          -out /root/fixtures/signed-client.crt -days 800 -extfile /root/fixtures/signed-client.ext
+        creates: /root/fixtures/signed-client.crt

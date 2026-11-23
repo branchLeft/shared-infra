@@ -47,6 +47,29 @@
         loop_var: case
         label: '{{ case.name }}'
 
+    # ---- A missing file where every input is optional -----------------------------
+    # demo1's one input is optional, so with no file the run goes on and sets nothing. edge1 (a
+    # required input) is refused without a file, which the case "file missing" above proves.
+    - name: Remove the host inputs file for demo1's missing-file run
+      ansible.builtin.include_tasks: tasks/place_absent.yml
+
+    - name: Run the role on demo1 with no file
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: demo1
+
+    - name: Assert the run went on with no file and set no input
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_owner_due_diligence_email is not defined
+          - db1_stack_exporter_password is not defined
+        fail_msg: A host whose inputs are all optional did not go on without its file, or set an input.
+        quiet: true
+
+    - name: Put the good file back after demo1's run
+      ansible.builtin.include_tasks: tasks/restore.yml
+
     # ---- The accepted file ------------------------------------------------------
     - name: Run the role on the good file
       ansible.builtin.include_role:
