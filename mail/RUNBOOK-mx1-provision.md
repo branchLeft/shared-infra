@@ -385,7 +385,13 @@ passwords — that's `rotate_admin_credential.py`'s model, not this one's) and
 each role's script is left alone once its content matches and it's active,
 corrected otherwise (content drift, not just presence, is checked — the
 script's content is downloaded and compared, not assumed from existence
-alone). Run twice against a fully-reconciled box:
+alone). Run twice against a fully-reconciled box. The transcript below is a
+**historical capture**. It is not regenerated and does not describe the current
+mailbox set. The run it records had five mailboxes (`rob`, `contact`, `info`,
+`sales`, `complaints`); that run predates the commit that first recorded this
+transcript (`1509de5e`, 17 Aug 2026), where `MAILBOXES` already held seven. The
+current set is `MAILBOXES` in `mail/provision/provision_mailboxes.py`, which has
+since grown. Read the transcript for its shape, not as the count to expect today:
 
 ```console
 $ ssh root@<mail-host> /root/mail-provision/50-provision-mailboxes.sh
@@ -417,7 +423,9 @@ re-run hits.)
 > idempotency transcript above. It covers the four forwarding pairs that existed
 > then, not the current forwarding set.
 
-Forwarding is proven rather than assumed: send a real message to each role
+Forwarding is proven rather than assumed (captured on or before 17 Aug 2026,
+for the four role addresses that existed then; the table below is a historical
+record, not the current role set in `ROLE_ADDRESSES`): send a real message to each role
 address and confirm it lands both there and in `rob@`. Done via
 authenticated SMTP submission against
 `127.0.0.1:465` on mx1 (the same listener external clients would use — see
@@ -945,6 +953,38 @@ delivered.
 real alert and confirm it arrives at `ALERT_RECIPIENT_EMAIL`. Alertmanager's
 API reporting a notification as dispatched does not prove delivery, and neither
 does this script exiting 0.
+
+## Portal support submission credential
+
+`69-provision-portal-submission-credential.py` is the `portal` row of the
+`mail_reconcilers` mint table (`ansible/roles/mail_reconcilers`). It runs the
+same `provision_website_submission_credential.py` as `60-...sh`, with
+`SEND_AS_LOCAL=sales`, `CREDENTIAL_LABEL=portal-support-smtp` and
+`APP_PASSWORD_DESCRIPTION=portal-support-transactional-submission`. It is the
+Professional enquiry mail of the tenant portal on ops1: the portal sends as
+`sales@branchleft.co.uk` to the same mailbox, which the owner replies from.
+Everything in "Website submission credential" applies, substituting
+`sales@branchleft.co.uk` for `info@branchleft.co.uk`. The program is not in
+`run-all.sh`; the role's mint step is the only route to it.
+
+The credential reaches the portal only through the owner's secret store on
+ops1 (`host_inputs`, key `control_plane_portal_support_smtp_password`), never a
+repository. Mint and record it with the owner's steps:
+
+1. Request the `mint` step with credential `portal` through the host's step
+   allow-list, as "Step requests" in `ansible/roles/pull_trigger/README.md`
+   describes. The role's guard runs it once, and the value is recorded in
+   `/root/.stalwart-service-credentials` under `portal-support-smtp`, and is
+   printed to nothing.
+
+2. Copy the value into the secret store without printing it. The pipe puts the
+   value on the workstation clipboard only, and the store entry is the one named
+   in the PR body:
+
+       ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk "sed -n 's/^portal-support-smtp://p' /root/.stalwart-service-credentials" | pbcopy
+
+If step 1 reports an orphaned credential (see "If the create response is lost"
+above), the secret is gone; destroy that credential and mint again.
 
 ## DNSBL blocklist monitoring
 

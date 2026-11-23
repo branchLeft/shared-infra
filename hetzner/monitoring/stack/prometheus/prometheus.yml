@@ -12,6 +12,11 @@ alerting:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# The demo wildcard TLS probe: rendered on the host from monitoring.env, see
+# stack/render_alertmanager_config.py. An empty list until its base is set.
+scrape_config_files:
+  - /etc/prometheus/demo_tls_probe.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:
@@ -53,14 +58,27 @@ scrape_configs:
         labels: {host: db1, expected_up: 'true'}
       - targets: ['10.20.1.50:9100']
         labels: {host: ops1, expected_up: 'true'}
-      - targets: ['10.20.1.200:9100']
-        labels: {host: db-t1, expected_up: 'false'}
-      - targets: ['10.20.1.201:9100']
-        labels: {host: app-t1, expected_up: 'false'}
-      - targets: ['10.20.1.210:9100']
-        labels: {host: edge-t, expected_up: 'false'}
       - targets: ['2.28.114.186:9100']
         labels: {host: demo1, expected_up: 'false', __scheme__: https}
+      - targets: ['10.20.1.10:19100']
+        labels: {host: db-t1, expected_up: 'false'}
+      - targets: ['10.20.1.10:19101']
+        labels: {host: app-t1, expected_up: 'false'}
+      - targets: ['10.20.1.10:19102']
+        labels: {host: edge-t, expected_up: 'false'}
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19100'
+        target_label: instance
+        replacement: '10.20.1.200:9100'
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19101'
+        target_label: instance
+        replacement: '10.20.1.201:9100'
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19102'
+        target_label: instance
+        replacement: '10.20.1.210:9100'
 
   - job_name: mysqld
     static_configs:

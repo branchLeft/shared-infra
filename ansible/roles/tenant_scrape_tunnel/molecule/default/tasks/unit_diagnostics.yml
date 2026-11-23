@@ -1,0 +1,60 @@
+---
+# Fails the play with what the host says about the tunnel, so a unit that does not come up shows
+# its cause in the log of the failed run and not only the symptom. It is only ever included from a
+# rescue, so a run that passes prints none of it. Input: diagnose_reason, one sentence naming what
+# was being waited for. Nothing here prints a file of the role: the unit's status and journal and
+# the test sshd's last lines hold addresses, a key's fingerprint and ssh's own errors, never a key.
+- name: Read the unit's status
+  ansible.builtin.command:
+    argv: [systemctl, status, '{{ scenario_unit_name }}', --no-pager]
+  register: tenant_scrape_tunnel_diagnose_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the unit's journal
+  ansible.builtin.command:
+    argv:
+      [
+        journalctl,
+        --unit,
+        '{{ scenario_unit_name }}',
+        --no-pager,
+        --lines,
+        '60',
+        --output,
+        short-precise,
+      ]
+  register: tenant_scrape_tunnel_diagnose_unit_journal
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the test sshd's journal
+  ansible.builtin.command:
+    argv: [journalctl, --unit, ssh, --no-pager, --lines, '40', --output, short-precise]
+  register: tenant_scrape_tunnel_diagnose_sshd_journal
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read which addresses listen
+  ansible.builtin.command:
+    argv: [ss, --listening, --tcp, --numeric]
+  register: tenant_scrape_tunnel_diagnose_listeners
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fail with what the host reports
+  ansible.builtin.fail:
+    msg: |-
+      {{ diagnose_reason }}
+      ---- systemctl status {{ scenario_unit_name }}
+      {{ tenant_scrape_tunnel_diagnose_status.stdout }}
+      ---- journalctl --unit {{ scenario_unit_name }} (last 60 lines)
+      {{ tenant_scrape_tunnel_diagnose_unit_journal.stdout }}
+      ---- journalctl --unit ssh (last 40 lines)
+      {{ tenant_scrape_tunnel_diagnose_sshd_journal.stdout }}
+      ---- listening TCP sockets
+      {{ tenant_scrape_tunnel_diagnose_listeners.stdout }}

@@ -1,0 +1,121 @@
+---
+# The package's own postinst starts the service as soon as it is installed, on every address and
+# in plain HTTP. So the unit is held masked (the symlink to /dev/null that `systemctl mask` makes)
+# across the install, the exporter's arguments are written first, and the unit is released only
+# after the web config that makes it serve TLS is in place. The binary's presence says whether the
+# package is already installed, so a host that has it is never masked again.
+- name: Read whether the package is already installed
+  ansible.builtin.stat:
+    path: '{{ node_exporter_public_binary }}'
+  register: node_exporter_public_binary_stat
+
+- name: Hold the unit masked while the package installs, so its postinst starts nothing
+  ansible.builtin.file:
+    src: /dev/null
+    dest: '{{ node_exporter_public_mask_path }}'
+    state: link
+  when: not node_exporter_public_binary_stat.stat.exists
+
+# Written before the package, so the package's own copy of this file never replaces it (the apt
+# module keeps an existing configuration file). The listen address is every address of the host,
+# because it holds no estate-subnet one; the web config is what makes that safe.
+- name: Write the arguments the exporter starts with
+  ansible.builtin.copy:
+    content: |
+      ARGS="--web.listen-address=:{{ node_exporter_public_port }} --web.config.file={{ node_exporter_public_web_config_path }}"
+    dest: '{{ node_exporter_public_defaults_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart node_exporter
+
+- name: Install the Debian node_exporter package
+  ansible.builtin.apt:
+    name: '{{ node_exporter_public_package }}'
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# The package makes the account the exporter runs as. Check mode installs nothing, so on a host
+# that has not run the role the group these two tasks name does not exist yet, and the file module
+# fails to look it up. They are skipped there with this stated reason (ANS-10); a real run never
+# skips them.
+- name: Give the certificate directory to the exporter's group, closed to every other account
+  ansible.builtin.file:
+    path: '{{ node_exporter_public_tls_dir }}'
+    state: directory
+    owner: root
+    group: '{{ node_exporter_public_account }}'
+    mode: '0750'
+  when: not ansible_check_mode
+
+- name: Let the exporter's group read each certificate file, and no other account
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: file
+    owner: root
+    group: '{{ node_exporter_public_account }}'
+    mode: '0640'
+  loop:
+    - '{{ node_exporter_public_ca_file }}'
+    - '{{ node_exporter_public_cert_file }}'
+    - '{{ node_exporter_public_key_file }}'
+  when: not ansible_check_mode
+
+- name: Create the directory of the exporter's web config
+  ansible.builtin.file:
+    path: '{{ node_exporter_public_web_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Paths only: the file carries no key and no secret.
+- name: Write the web config that requires a verified client certificate
+  ansible.builtin.copy:
+    content: |
+      tls_server_config:
+        cert_file: {{ node_exporter_public_cert_file }}
+        key_file: {{ node_exporter_public_key_file }}
+        client_ca_file: {{ node_exporter_public_ca_file }}
+        client_auth_type: RequireAndVerifyClientCert
+        min_version: TLS13
+    dest: '{{ node_exporter_public_web_config_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart node_exporter
+
+# Release the unit only now. Only a link to /dev/null is removed: a unit file an operator put at
+# this path is never touched.
+- name: Read whether the unit is still held masked
+  ansible.builtin.stat:
+    path: '{{ node_exporter_public_mask_path }}'
+    follow: false
+  register: node_exporter_public_mask_stat
+
+- name: Release the unit, now that the web config is in place
+  ansible.builtin.file:
+    path: '{{ node_exporter_public_mask_path }}'
+    state: absent
+  when:
+    - node_exporter_public_mask_stat.stat.islnk | default(false)
+    - node_exporter_public_mask_stat.stat.lnk_source | default('') == '/dev/null'
+  notify: Reload systemd manager
+
+# Queued handlers run here, so the enable and start below see the unit as it now is on disk.
+- name: Load queued changes and restart the exporter before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode installs no package on a fresh host, so there is no unit for systemd to enable.
+- name: Read back the unit file the package installs
+  ansible.builtin.stat:
+    path: '{{ node_exporter_public_unit_path }}'
+  register: node_exporter_public_unit_stat
+
+- name: Enable and start the exporter
+  ansible.builtin.systemd_service:
+    name: '{{ node_exporter_public_service }}'
+    enabled: true
+    state: started
+  when: node_exporter_public_unit_stat.stat.exists

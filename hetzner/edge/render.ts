@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
-import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
+import type { EdgeSite, HostRedirect, SiteMedia, StaticSite } from '../../siteTypes';
 import {
   BAN_LADDER_MINUTES,
   BAN_LADDER_WINDOW,
@@ -385,9 +385,23 @@ const LOG_ROLL_AT = '00:00';
 const LOG_ROLL_SIZE = '100MiB';
 const LOG_ROLL_KEEP = 31;
 
-function logDirective(path: string): string[] {
+/**
+ * The encoder every edge log shares: Caddy's JSON, with the break-glass parameter's
+ * value replaced in the fields the token can reach. Unindented, so each caller
+ * nests it at its own depth.
+ */
+function redactingFormat(): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
+  return [
+    'format filter {',
+    '\twrap json',
+    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t${field} regexp "${pattern}" "$1=REDACTED"`),
+    '}',
+  ];
+}
+
+function logDirective(path: string): string[] {
   return [
     'log {',
     `\toutput file ${path} {`,
@@ -396,12 +410,23 @@ function logDirective(path: string): string[] {
     `\t\troll_keep_for ${LOG_RETENTION}`,
     `\t\troll_at ${LOG_ROLL_AT}`,
     '\t}',
-    '\tformat filter {',
-    '\t\twrap json',
-    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),
-    '\t}',
+    ...redactingFormat().map((line) => `\t${line}`),
     '}',
   ];
+}
+
+/**
+ * Caddy's default logger, set in the global options. Two lines reach it that no
+ * site's `log` block sees: the `http.log.error` line written when a handler fails
+ * (a 502 from a refused upstream), which carries the whole request including its
+ * URI and headers, and the line for a request whose Host matches no site block.
+ * Left alone it writes both to stderr, and so to the container log, with a
+ * break-glass token in clear. Same encoder and fields as `logDirective`, so no log
+ * path the token can reach is left unfiltered. See render.md
+ * §"defaultLogDirective: the error and no-site lines".
+ */
+function defaultLogDirective(): string[] {
+  return ['log {', '\toutput stderr', ...redactingFormat().map((line) => `\t${line}`), '}'];
 }
 
 function tlsDirective(): string[] {
@@ -568,6 +593,111 @@ function widgetAssets(): string[] {
     `header @widget_assets Cache-Control "${WIDGET_ASSET_CACHE_CONTROL}"`,
     'file_server @widget_assets {',
     `\troot ${WIDGET_ASSET_ROOT}`,
+    '}',
+  ];
+}
+
+/**
+ * A Ghost tenant's uploads (`/content/images/`, `/content/media/`,
+ * `/content/files/`) answered from the tenant's own hostname by fetching them
+ * from its object-storage bucket, so a reader's browser contacts no storage
+ * host. Ghost's S3 adapter answers these paths with a 301 to the bucket; this
+ * route answers first, and a bucket object is read exactly as Ghost would have
+ * linked it (path-style, key = the request path). Only `GET` and `HEAD`, never
+ * a client query string (an S3 query selects a version or a sub-resource), never
+ * a cookie or credential, and none of the bucket's own response headers. A
+ * missing object is a 404 here; a missing resized copy (`/content/images/size/`)
+ * is first asked of Ghost, which makes it, and then read again from the bucket,
+ * once. Why each line: `render.md`, "Tenant media".
+ */
+const MEDIA_PATHS = ['/content/images/*', '/content/media/*', '/content/files/*'];
+const MEDIA_RESIZE_PATH = '/content/images/size/*';
+const MEDIA_BUCKET = /^branchleft-media-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const MEDIA_STRIPPED_RESPONSE_HEADERS = [
+  'x-amz-request-id',
+  'x-amz-version-id',
+  'x-amz-expiration',
+  'x-amz-storage-class',
+  'x-rgw-object-type',
+  'Strict-Transport-Security',
+];
+/**
+ * Three reads of the one request, because the bucket path is built from the
+ * decoded one (`{http.request.uri.path}`) and Caddy's `path` matcher cleans
+ * its own copy, so no single read sees every form. The URI as received: a
+ * `..` segment, plain or percent-encoded, after a slash plain or encoded.
+ * The decoded path: a `..` segment, however the separators and dots were
+ * written. The decoded path again: an escape left in it (`%2e`, `%2f`, `%25`)
+ * was escaped twice, and the edge's own rewrites (to the bucket after a Ghost
+ * round, to Ghost on a missing resized copy) read it a second time into a
+ * dot segment. Ghost writes no `%` into an upload's name.
+ */
+const MEDIA_TRAVERSAL_EXPRESSION = [
+  "{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')",
+  "{http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)')",
+  "{http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')",
+].join(' || ');
+
+function mediaBucketProxy(media: SiteMedia, suffix: string, onMiss: string[]): string[] {
+  return [
+    `rewrite * /${media.bucket}{http.request.uri.path}?`,
+    `reverse_proxy https://${media.host} {`,
+    '\theader_up Host {upstream_hostport}',
+    '\theader_up -Cookie',
+    '\theader_up -Authorization',
+    ...MEDIA_STRIPPED_RESPONSE_HEADERS.map((name) => `\theader_down -${name}`),
+    `\t@media_hit_${suffix} status 2xx 304 416`,
+    `\thandle_response @media_hit_${suffix} {`,
+    `\t\theader Cache-Control "${MEDIA_CACHE_CONTROL}"`,
+    '\t\tcopy_response',
+    '\t}',
+    `\t@media_miss_${suffix} status 403 404`,
+    `\thandle_response @media_miss_${suffix} {`,
+    ...onMiss.map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+}
+
+function tenantMedia(media: SiteMedia, ghostAddress: string): string[] {
+  if (!HOSTNAME.test(media.host)) {
+    throw new Error(`media host "${media.host}" is not a plain hostname`);
+  }
+  if (!MEDIA_BUCKET.test(media.bucket)) {
+    throw new Error(
+      `media bucket "${media.bucket}" must be a tenant media bucket name, "branchleft-media-" ` +
+        'followed by the tenant slug: the edge reads no other bucket'
+    );
+  }
+  const resizeMiss = [
+    'rewrite * {http.request.orig_uri.path}',
+    `reverse_proxy ${ghostAddress} {`,
+    '\t@media_bounce status 301 302 307 308',
+    '\thandle_response @media_bounce {',
+    ...mediaBucketProxy(media, 'retry', ['respond 404']).map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+  return [
+    '@tenant_media_traversal {',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    `\texpression \`${MEDIA_TRAVERSAL_EXPRESSION}\``,
+    '}',
+    'respond @tenant_media_traversal 404',
+    '@tenant_media_resize {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_RESIZE_PATH}`,
+    '}',
+    '@tenant_media {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    '}',
+    'route @tenant_media_resize {',
+    ...mediaBucketProxy(media, 'resize', resizeMiss).map((line) => `\t${line}`),
+    '}',
+    'route @tenant_media {',
+    ...mediaBucketProxy(media, 'plain', ['respond 404']).map((line) => `\t${line}`),
     '}',
   ];
 }
@@ -1057,6 +1187,9 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     `\t${ghostSetupRefusal()}`,
     ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
     ...(isGhost ? widgetAssets().map((line) => `\t${line}`) : []),
+    ...(isGhost && site.media !== undefined
+      ? tenantMedia(site.media, address).map((line) => `\t${line}`)
+      : []),
     `\treverse_proxy ${address}`,
     '}'
   );
@@ -1256,6 +1389,7 @@ function globalOptions(): string[] {
     '\t\tprotocols h1 h2',
     '\t\tmetrics',
     '\t}',
+    ...defaultLogDirective().map((line) => `\t${line}`),
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
     '\t\tapi_key {env.CROWDSEC_BOUNCER_KEY}',
@@ -1268,6 +1402,14 @@ function globalOptions(): string[] {
     // so a CrowdSec restart would answer 500 for every request on every site,
     // including in the posture that is supposed to be unable to affect one.
     '\t\tappsec_fail_open',
+    // A bare flag. Without it the bouncer counts nothing: its own counters of
+    // AppSec calls and failed calls (`crowdsec_appsec_lapi_requests_total`,
+    // `crowdsec_appsec_lapi_requests_failures_total`) are only registered in
+    // Caddy's registry, and so served by the `metrics` listener, when it is on.
+    // The failure counter is the one signal of a request that was let through
+    // uninspected, and it is what AppSecFailOpenSustained in
+    // hetzner/monitoring/render.ts reads.
+    '\t\tenable_caddy_metrics',
     '\t}',
     '}',
   ];

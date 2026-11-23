@@ -1,0 +1,10 @@
+[Unit]
+Description=Minute trigger for branchleft-abuse-page.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

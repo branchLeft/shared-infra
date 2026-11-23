@@ -32,9 +32,16 @@ APPLY_JOBS = {
     "hetzner-network-apply": routed("hetzner-network-plan"),
     "hetzner-estate-apply": routed("hetzner-estate-plan"),
     "hetzner-dns-apply": "production-dns",
+    "hetzner-tenants-apply": "production",
 }
 ROUTED_APPLY_JOBS = ("hetzner-network-apply", "hetzner-estate-apply")
-PLAN_JOBS = ["mail-plan", "hetzner-network-plan", "hetzner-estate-plan", "hetzner-dns-plan"]
+PLAN_JOBS = [
+    "mail-plan",
+    "hetzner-network-plan",
+    "hetzner-estate-plan",
+    "hetzner-dns-plan",
+    "hetzner-tenants-plan",
+]
 ROUTED_PLAN_JOBS = ("hetzner-network-plan", "hetzner-estate-plan")
 # The two stacks whose applies each have an environment of their own, never
 # routed by the spend gate.
@@ -44,6 +51,21 @@ OWN_ENVIRONMENT_APPLIES = {
 }
 DNS_APPLY = "hetzner-dns-apply"
 DNS_PLAN = "hetzner-dns-plan"
+# The tenants stack's pair. Its apply is in the literal `production`, never
+# routed to `production-free`, and its plan has no environment (it reads its
+# credentials from repository secrets, as the estate plan does).
+TENANTS_APPLY = "hetzner-tenants-apply"
+TENANTS_PLAN = "hetzner-tenants-plan"
+TENANTS_SECRETS = (
+    "HCLOUD_TOKEN_TENANTS",
+    "PULUMI_PASSPHRASE_HETZNER_TENANTS",
+)
+# The stack's encryption salt is read from its own state at run time (the
+# state's secrets provider is rewrapped under a new passphrase, which mints a
+# new salt), so no job may name a repository secret for it.
+TENANTS_SALT_SECRET = "PULUMI_SALT_HETZNER_TENANTS"
+SALT_STEP = "Restore the stack's encryption salt"
+SALT_FROM_STATE = "pulumi stack export --stack production"
 # The plan jobs that read their credentials from an environment of their own:
 # main-only, no reviewer (issue #2195 for mail; the DNS plan mirrors it).
 PLAN_ENVIRONMENTS = {"mail-plan": "mail-plan", DNS_PLAN: "dns-plan"}
@@ -241,7 +263,7 @@ class StructureTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(environment_of(job_block(self.text, job)), expected)
 
-    def test_only_the_four_applies_and_the_mail_and_dns_plans_declare_an_environment(self):
+    def test_only_the_five_applies_and_the_mail_and_dns_plans_declare_an_environment(self):
         # mail-plan has its own environment since #2195 (no reviewer, main only);
         # the DNS plan mirrors it with `dns-plan`.
         declared = re.findall(r"^    environment: (.+?)[ \t]*$", self.text, re.M)
@@ -253,7 +275,7 @@ class StructureTests(unittest.TestCase):
         for job, expected in PLAN_ENVIRONMENTS.items():
             with self.subTest(job=job):
                 self.assertEqual(environment_of(job_block(self.text, job)), expected)
-        for job in ROUTED_PLAN_JOBS:
+        for job in (*ROUTED_PLAN_JOBS, TENANTS_PLAN):
             with self.subTest(job=job):
                 self.assertIsNone(environment_of(job_block(self.text, job)))
 
@@ -285,7 +307,7 @@ class StructureTests(unittest.TestCase):
             "production-mail must belong to the mail apply alone",
         )
         self.assertIn("environment: production-mail", job_block(self.text, "mail-apply"))
-        for job in ("hetzner-network-apply", "hetzner-estate-apply", DNS_APPLY):
+        for job in ("hetzner-network-apply", "hetzner-estate-apply", DNS_APPLY, TENANTS_APPLY):
             self.assertNotEqual(
                 environment_of(job_block(self.text, job)), "production-mail"
             )
@@ -400,6 +422,17 @@ class StructureTests(unittest.TestCase):
                     body,
                 )
 
+    def test_the_tenants_gate_reads_production_and_accepts_either_rule(self):
+        body = run_script(step(job_block(self.text, TENANTS_APPLY), GATE_NAME))
+        self.assertIn('environments/production"', body)
+        self.assertNotIn("production-free", body)
+        self.assertIn("required_reviewers", body)
+        self.assertIn("deployment_protection_rules", body)
+        self.assertIn(
+            "neither a required-reviewer rule nor an enabled custom deployment protection rule",
+            body,
+        )
+
     def test_mail_apply_otherwise_unchanged_guard_steps_present(self):
         job = job_block(self.text, "mail-apply")
         names = [n for n, _ in step_blocks(job)]
@@ -428,6 +461,7 @@ class GateBehaviourTests(unittest.TestCase):
             step(job_block(text, "hetzner-estate-apply"), GATE_NAME)
         )
         self.dns = run_script(step(job_block(text, DNS_APPLY), GATE_NAME))
+        self.tenants = run_script(step(job_block(text, TENANTS_APPLY), GATE_NAME))
         self.stub = StubGh(self)
 
     @staticmethod
@@ -474,6 +508,39 @@ class GateBehaviourTests(unittest.TestCase):
             self.stub.put("rules.json", self.rules(True))
             result = self.stub.run(script)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tenants_accepts_a_reviewer_rule_or_an_enabled_app_rule_alone(self):
+        self.stub.put("environment.json", environment_object(reviewers=True))
+        self.stub.put("rules.json", self.rules())
+        self.assertEqual(self.stub.run(self.tenants).returncode, 0)
+        self.stub.put("environment.json", environment_object(reviewers=False))
+        self.stub.put("rules.json", self.rules(True))
+        result = self.stub.run(self.tenants)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tenants_reads_production_whatever_the_apply_environment_variable_says(self):
+        # The tenants apply is never routed: its gate reads the literal
+        # `production`, so a stray APPLY_ENVIRONMENT cannot move it.
+        self.stub.put("environment.json", environment_object(reviewers=True))
+        self.stub.put("rules.json", self.rules())
+        result = self.stub.run(self.tenants, APPLY_ENVIRONMENT="production-free")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.stub.calls()
+        self.assertIn("GET repos/ORG/REPO/environments/production", calls)
+        self.assertFalse(any("production-free" in c for c in calls), calls)
+
+    def test_tenants_refuses_with_no_rule_a_disabled_rule_or_another_apps_rule(self):
+        for rules in (self.rules(), self.rules(False), self.rules(True, app_id=1)):
+            self.stub.put("environment.json", environment_object(reviewers=False))
+            self.stub.put("rules.json", rules)
+            result = self.stub.run(self.tenants)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("neither a required-reviewer rule", result.stderr)
+
+    def test_tenants_fails_closed_when_the_environment_or_rules_cannot_be_read(self):
+        self.assertNotEqual(self.stub.run(self.tenants).returncode, 0)
+        self.stub.put("environment.json", environment_object(reviewers=False))
+        self.assertEqual(self.stub.run(self.tenants).returncode, 1)
 
     def test_production_refuses_with_no_rule_at_all(self):
         self.stub.put("environment.json", environment_object(reviewers=False))
@@ -580,16 +647,18 @@ class CancelStepStructureTests(unittest.TestCase):
                 names = [n for n, _ in step_blocks(block)]
                 self.assertEqual(names[names.index("Checkout") + 1], CANCEL_NAME)
                 bodies.append(step(block, CANCEL_NAME))
-        self.assertEqual(len(bodies), 4)
-        self.assertEqual(len(set(bodies)), 1, "the four copies must not drift")
+        self.assertEqual(len(bodies), 5)
+        self.assertEqual(len(set(bodies)), 1, "the five copies must not drift")
         self.assertIn("PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}", bodies[0])
         self.assertIn('--dns "${PLANS_DNS}"', bodies[0])
+        self.assertIn("PLANS_TENANTS: ${{ needs.changes.outputs.hetzner_tenants }}", bodies[0])
+        self.assertIn('--tenants "${PLANS_TENANTS}"', bodies[0])
 
     def test_cancel_step_cannot_fail_the_plan(self):
         body = step(job_block(self.text, "mail-plan"), CANCEL_NAME)
         self.assertIn("continue-on-error: true", body)
 
-    def test_actions_write_is_on_the_four_plan_jobs_only(self):
+    def test_actions_write_is_on_the_five_plan_jobs_only(self):
         header = self.text.split("\njobs:\n", 1)[0]
         self.assertNotIn("actions:", header)
         current, granted = None, []
@@ -661,7 +730,9 @@ class CancelBehaviourTests(unittest.TestCase):
         self.script = run_script(step(job_block(text, "mail-plan"), CANCEL_NAME))
         self.stub = StubGh(self)
 
-    def run_with(self, runs, jobs_by_run, plans=("true", "true", "true", "true")):
+    def run_with(self, runs, jobs_by_run, plans=("true", "true", "true", "true", "true")):
+        # A four-value tuple predates the tenants stack: it plans tenants.
+        plans = (*plans, "true") if len(plans) == 4 else plans
         self.stub.put("runs.json", {"workflow_runs": runs})
         for run_id, jobs in jobs_by_run.items():
             self.stub.put(f"jobs-{run_id}.json", {"jobs": jobs})
@@ -674,6 +745,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_NETWORK=plans[1],
             PLANS_ESTATE=plans[2],
             PLANS_DNS=plans[3],
+            PLANS_TENANTS=plans[4],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return [c for c in self.stub.calls() if c.startswith("POST ")]
@@ -696,6 +768,7 @@ class CancelBehaviourTests(unittest.TestCase):
     NETWORK = "Apply (hetzner network, pulumi up)"
     ESTATE = "Apply (hetzner estate, pulumi up)"
     DNS = "Apply (hetzner dns, pulumi up)"
+    TENANTS = "Apply (hetzner tenants, pulumi up)"
 
     def test_cancels_an_older_run_waiting_on_stacks_this_run_plans(self):
         posts = self.run_with(
@@ -826,6 +899,18 @@ class CancelBehaviourTests(unittest.TestCase):
         )
         self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
 
+    def test_a_waiting_tenants_apply_is_cancelled_only_when_this_push_planned_tenants(self):
+        jobs = [self.job(self.TENANTS, "waiting")]
+        kept = self.run_with(
+            [self.run_row(101)], {101: jobs}, plans=("true", "true", "true", "true", "false")
+        )
+        self.assertEqual(kept, [])
+        self.stub.log.write_text("", encoding="utf-8")
+        cancelled = self.run_with(
+            [self.run_row(101)], {101: jobs}, plans=("false", "false", "false", "false", "true")
+        )
+        self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
     def run_outside_repo(self, script):
         """Run the step from an empty directory with no scripts/ in it."""
         elsewhere = pathlib.Path(tempfile.mkdtemp(prefix="cancel-elsewhere-"))
@@ -841,6 +926,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
             PLANS_DNS="true",
+            PLANS_TENANTS="true",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return [c for c in self.stub.calls() if c.startswith("POST ")]
@@ -870,6 +956,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
             PLANS_DNS="true",
+            PLANS_TENANTS="true",
         )
         # The step itself goes red (it is continue-on-error, so the plan
         # still runs); the point is that nothing is cancelled on a bad read.
@@ -882,6 +969,7 @@ PLAN_OF_APPLY = {
     "hetzner-network-apply": "hetzner-network-plan",
     "hetzner-estate-apply": "hetzner-estate-plan",
     DNS_APPLY: DNS_PLAN,
+    TENANTS_APPLY: TENANTS_PLAN,
 }
 
 
@@ -937,7 +1025,7 @@ def and_operands(condition: str) -> list[str]:
 
 
 def needs_of(job: str) -> list[str]:
-    match = re.search(r"^    needs: \[([^\]]*)\]", job, re.M)
+    match = re.search(r"^    needs:\s*\[([^\]]*)\]", job, re.M)
     if not match:
         return []
     return [n.strip() for n in match.group(1).split(",") if n.strip()]
@@ -947,8 +1035,8 @@ class NoOpGateStructureTests(unittest.TestCase):
     def setUp(self):
         self.text = workflow_text()
 
-    def test_the_gated_apply_jobs_are_the_four_known_ones(self):
-        # A fifth gated apply must be added to APPLY_JOBS and PLAN_OF_APPLY
+    def test_the_gated_apply_jobs_are_the_five_known_ones(self):
+        # A sixth gated apply must be added to APPLY_JOBS and PLAN_OF_APPLY
         # here, so it cannot arrive without the no-op condition below.
         self.assertEqual(sorted(gated_apply_jobs(self.text)), sorted(APPLY_JOBS))
 
@@ -1037,7 +1125,7 @@ class RouteStructureTests(unittest.TestCase):
                 self.assertEqual(job_env_value(block, "APPLY_ENVIRONMENT"), environment_of(block))
 
     def test_the_mail_and_dns_jobs_are_never_routed(self):
-        for job in ("mail-plan", "mail-apply", DNS_PLAN, DNS_APPLY):
+        for job in ("mail-plan", "mail-apply", DNS_PLAN, DNS_APPLY, TENANTS_PLAN, TENANTS_APPLY):
             with self.subTest(job=job):
                 block = job_block(self.text, job)
                 self.assertNotIn("production-free", block)
@@ -1348,6 +1436,7 @@ GATE_ALLOWANCES = {
     DNS_APPLY: {"environment": "production-dns", "custom_rule": False, "bare_eq_ok": False},
     "hetzner-network-apply": {"environment": None, "custom_rule": True, "bare_eq_ok": False},
     "hetzner-estate-apply": {"environment": None, "custom_rule": True, "bare_eq_ok": False},
+    TENANTS_APPLY: {"environment": "production", "custom_rule": True, "bare_eq_ok": False},
 }
 
 
@@ -1808,6 +1897,481 @@ class SplitOutWorkflowTests(unittest.TestCase):
     def test_a_job_key_is_in_one_file_only(self):
         keys = [key for name in CHECK_WORKFLOWS for key in job_names((CI_YML.parent / name).read_text(encoding="utf-8"))]
         self.assertEqual(sorted(keys), sorted(set(keys)))
+
+
+# ---------------------------------------------------------------------------
+# The tenants stack's plan and apply, and the lint that keeps them gated.
+#
+# The tenants apply runs in the literal `production`, so the owner reads every
+# tenants plan: it is never routed to `production-free`, which the reviewer App
+# answers alone. It waits behind the estate apply because the tenants program
+# reads the estate stack's outputs. Nothing but these two jobs may hold the
+# tenants project's token, passphrase or salt.
+# ---------------------------------------------------------------------------
+
+# Every job the tenants plan must wait on: the network pair, because a failed
+# network plan leaves both estate jobs skipped, and the estate pair, because the
+# tenants program reads the estate stack's outputs.
+TENANTS_PLAN_NEEDS = {
+    "changes",
+    "hetzner-typecheck",
+    "hetzner-host-typecheck",
+    "hetzner-provision-checks",
+    "scripts-tests",
+    "pulumi-inventory-audit",
+    "hetzner-network-plan",
+    "hetzner-network-apply",
+    "hetzner-estate-plan",
+    "hetzner-estate-apply",
+}
+# What a tenants job may read from `secrets`: the tenants project's own three,
+# the state bucket's Object Storage key (one backend, shared with the estate)
+# and the run's own token.
+TENANTS_ALLOWED_SECRETS = {
+    *TENANTS_SECRETS,
+    "HETZNER_S3_ACCESS_KEY_ID",
+    "HETZNER_S3_SECRET_ACCESS_KEY",
+    "GITHUB_TOKEN",
+}
+TENANTS_DELETE_GUARD_PLAN = "Refuse a plan that destroys the tenants estate"
+TENANTS_DELETE_GUARD_APPLY = "Refuse to apply a plan that destroys the tenants estate"
+
+
+def tenants_violations(text: str) -> list[str]:
+    """Everything wrong with the tenants pair in `text`, as readable lines."""
+    found: list[str] = []
+    try:
+        plan, apply = job_block(text, TENANTS_PLAN), job_block(text, TENANTS_APPLY)
+    except AssertionError as error:
+        return [str(error)]
+
+    # Environments: the apply is the literal `production`, never routed.
+    own = environment_of(apply)
+    if own != "production":
+        found.append(f"{TENANTS_APPLY}: the environment must be the literal production, not {own!r}")
+    if environment_of(plan) is not None:
+        found.append(f"{TENANTS_PLAN}: the plan must have no environment of its own")
+    for name, block in ((TENANTS_PLAN, plan), (TENANTS_APPLY, apply)):
+        for word in ("production-free", "apply_environment", "APPLY_ENVIRONMENT", "spend-gate"):
+            if word in block:
+                found.append(f"{name}: routes by the spend gate ({word} appears)")
+
+    # Order: the apply waits for its own plan alone; the plan waits for the
+    # network and estate pairs and does not start on a failed or cancelled run.
+    if needs_of(apply) != [TENANTS_PLAN]:
+        found.append(f"{TENANTS_APPLY}: must need {TENANTS_PLAN} alone, needs {needs_of(apply)}")
+    missing = sorted(TENANTS_PLAN_NEEDS - set(needs_of(plan)))
+    if missing:
+        found.append(f"{TENANTS_PLAN}: does not wait for {', '.join(missing)}")
+    plan_if = and_operands(job_if(plan))
+    for required in (
+        "github.event_name == 'push'",
+        "github.ref == 'refs/heads/main'",
+        "needs.changes.outputs.hetzner_tenants == 'true'",
+        "!failure()",
+        "!cancelled()",
+    ):
+        if required not in plan_if:
+            found.append(f"{TENANTS_PLAN}: the condition lacks {required}")
+    apply_if = and_operands(job_if(apply))
+    for required in (
+        "github.event_name == 'push'",
+        "github.ref == 'refs/heads/main'",
+        "needs.hetzner-tenants-plan.outputs.has_changes != 'false'",
+    ):
+        if required not in apply_if:
+            found.append(f"{TENANTS_APPLY}: the condition lacks {required}")
+
+    # Concurrency: one apply at a time, never cancelled part-way.
+    if "      group: pulumi-hetzner-tenants-deploy\n" not in apply:
+        found.append(f"{TENANTS_APPLY}: its own concurrency group is missing")
+    if "      cancel-in-progress: false\n" not in apply:
+        found.append(f"{TENANTS_APPLY}: the apply must never cancel in progress")
+
+    # Guards: the gate first, the delete guard immediately before `Apply`, and
+    # neither skippable.
+    names = [n for n, _ in step_blocks(apply)]
+    expected = [
+        GATE_NAME,
+        "Verify the deploy secrets are present",
+        SALT_STEP,
+        "Preview the plan",
+        TENANTS_DELETE_GUARD_APPLY,
+        "Apply",
+    ]
+    if any(n not in names for n in expected):
+        found.append(f"{TENANTS_APPLY}: a guard step is missing: {[n for n in expected if n not in names]}")
+    else:
+        positions = [names.index(n) for n in expected]
+        if names[0] != GATE_NAME:
+            found.append(f"{TENANTS_APPLY}: the environment gate must be the first step")
+        if positions != sorted(positions) or positions[4] + 1 != positions[5]:
+            found.append(f"{TENANTS_APPLY}: guard steps are out of order or something sits before Apply")
+        guard = step(apply, TENANTS_DELETE_GUARD_APPLY)
+        if re.search(r"^        if:", guard, re.M) or "continue-on-error" in guard:
+            found.append(f"{TENANTS_APPLY}: the delete guard must not be skippable")
+        body = run_script(guard)
+        for command in (
+            "assert-no-hetzner-deletes.py --self-test",
+            "assert-no-hetzner-deletes.py --verify-coverage ..",
+            "assert-no-hetzner-deletes.py preview.json",
+        ):
+            if command not in body:
+                found.append(f"{TENANTS_APPLY}: the delete guard does not run {command}")
+        if "pulumi up --stack production --yes" not in step(apply, "Apply"):
+            found.append(f"{TENANTS_APPLY}: Apply is not `pulumi up --stack production --yes`")
+    plan_names = [n for n, _ in step_blocks(plan)]
+    plan_order = [
+        SALT_STEP,
+        "Preview the plan",
+        TENANTS_DELETE_GUARD_PLAN,
+        "Decide whether the plan changes anything",
+        "Write the plan to the job summary",
+    ]
+    if any(n not in plan_names for n in plan_order):
+        found.append(f"{TENANTS_PLAN}: a step is missing: {[n for n in plan_order if n not in plan_names]}")
+    else:
+        positions = [plan_names.index(n) for n in plan_order]
+        if positions != sorted(positions):
+            found.append(f"{TENANTS_PLAN}: the delete guard must run before the verdict and summary")
+        if re.search(r"^        if:", step(plan, TENANTS_DELETE_GUARD_PLAN), re.M):
+            found.append(f"{TENANTS_PLAN}: the delete guard must not be skippable")
+
+    # Credential scope: both jobs read the tenants secrets and nothing outside
+    # the allowed set; no other job reads the tenants secrets.
+    for name, block in ((TENANTS_PLAN, plan), (TENANTS_APPLY, apply)):
+        read = set(re.findall(r"secrets\.([A-Z0-9_]+)", block))
+        for secret in sorted(set(TENANTS_SECRETS) - read):
+            found.append(f"{name}: does not read {secret}")
+        for secret in sorted(read - TENANTS_ALLOWED_SECRETS):
+            found.append(f"{name}: reads {secret}, outside the tenants credential scope")
+        # The salt is read from the state, never from a repository secret: not
+        # as `secrets.X`, not as an env name, not in a comment.
+        if TENANTS_SALT_SECRET in block:
+            found.append(f"{name}: references {TENANTS_SALT_SECRET}; the salt is read from the state")
+        if SALT_STEP not in [n for n, _ in step_blocks(block)]:
+            found.append(f"{name}: the step {SALT_STEP!r} is missing")
+        else:
+            body = run_script(step(block, SALT_STEP))
+            if SALT_FROM_STATE not in body:
+                found.append(f"{name}: the salt step does not read the state ({SALT_FROM_STATE})")
+            if ">> Pulumi.production.yaml" not in body:
+                found.append(f"{name}: the salt step does not write the salt into Pulumi.production.yaml")
+            if "::add-mask::" not in body:
+                found.append(f"{name}: the salt step does not mask the salt")
+    for job in all_jobs(text):
+        if job in (TENANTS_PLAN, TENANTS_APPLY):
+            continue
+        for secret in (*TENANTS_SECRETS, TENANTS_SALT_SECRET):
+            if secret in job_block(text, job):
+                found.append(f"{job}: names the tenants secret {secret}")
+
+    # The gate itself, against the tenants allowance.
+    found += apply_gate_violations(text, TENANTS_APPLY)
+    return found
+
+
+class TenantsStructureTests(unittest.TestCase):
+    def setUp(self):
+        self.text = workflow_text()
+
+    def test_the_tenants_pair_is_clean_on_the_real_workflow(self):
+        self.assertEqual(tenants_violations(self.text), [])
+
+    def test_the_tenants_apply_is_the_literal_production(self):
+        self.assertEqual(environment_of(job_block(self.text, TENANTS_APPLY)), "production")
+
+    def test_the_shared_no_op_gate_check_covers_the_tenants_pair(self):
+        # scripts-tests runs the shared action's contract check over every
+        # plan/apply pair; a pair left out of its list is a pair never checked.
+        check = step(job_block(self.text, "scripts-tests"), "Check the no-op gate contract")
+        pairs = re.search(r"^          pairs: (.+)$", check, re.M).group(1).split()
+        self.assertEqual(
+            sorted(pairs), sorted(f"{PLAN_OF_APPLY[a]}:{a}" for a in APPLY_JOBS)
+        )
+
+    def test_the_tenants_plan_publishes_has_changes_and_no_route(self):
+        plan = job_block(self.text, TENANTS_PLAN)
+        self.assertIn("      has_changes: ${{ steps.noop.outputs.has_changes }}\n", plan)
+        self.assertNotIn("apply_environment", plan)
+
+    def test_the_tenants_plan_preview_runs_in_the_stack_directory(self):
+        plan, apply = job_block(self.text, TENANTS_PLAN), job_block(self.text, TENANTS_APPLY)
+        for block in (plan, apply):
+            self.assertIn("      run:\n        working-directory: hetzner/tenants\n", block)
+        self.assertIn("working-directory: hetzner/tenants\n", step(plan, "Decide whether the plan changes anything"))
+        self.assertEqual(job_env_value(plan, "HCLOUD_TOKEN"), "${{ secrets.HCLOUD_TOKEN_TENANTS }}")
+        self.assertEqual(job_env_value(apply, "HCLOUD_TOKEN"), "${{ secrets.HCLOUD_TOKEN_TENANTS }}")
+
+    def test_the_tenants_jobs_install_from_the_shared_package_root(self):
+        # The tenants project's `main` is ../tenants.ts, so its dependencies are
+        # hetzner/'s, as the estate's are.
+        for job in (TENANTS_PLAN, TENANTS_APPLY):
+            with self.subTest(job=job):
+                install = step(job_block(self.text, job), "Install dependencies")
+                self.assertIn("working-directory: hetzner\n", install)
+                self.assertIn("pnpm install --frozen-lockfile", install)
+
+    def test_the_stack_pins_its_own_state_backend_and_main(self):
+        yaml = (ROOT / "hetzner/tenants/Pulumi.yaml").read_text(encoding="utf-8")
+        self.assertRegex(yaml, r"(?m)^main: \.\./tenants\.ts$")
+        self.assertIn("name: branchleft-hetzner-tenants", yaml)
+        # The state backend is pinned in the project file, so a workstation's
+        # `pulumi login` cannot point CI's stack at another store.
+        self.assertRegex(yaml, r"(?m)^backend:\n  url: ")
+
+
+class TenantsFilterTests(unittest.TestCase):
+    """A wrong path filter skips a plan with no red anywhere, so the tenants
+    filter is pinned against the program's real import graph."""
+
+    @staticmethod
+    def missing(text: str) -> list[str]:
+        patterns = filter_patterns(text, "hetzner_tenants")
+        main = re.search(r"^main:\s*(\S+)", (ROOT / "hetzner/tenants/Pulumi.yaml").read_text(), re.M)
+        entry = str((ROOT / "hetzner/tenants" / main.group(1)).resolve().relative_to(ROOT))
+        graph = import_graph([entry])
+        files = sorted(graph)
+        files += [
+            "hetzner/tenants/Pulumi.yaml",
+            "hetzner/tenants/Pulumi.production.yaml",
+            "hetzner/package.json",
+            "hetzner/pnpm-lock.yaml",
+            "hetzner/.nvmrc",
+            "hetzner/tsconfig.json",
+            "scripts/assert-no-hetzner-deletes.py",
+            ".github/workflows/ci.yml",
+        ]
+        if any("@branchleft/hetzner-host" in source for source in graph.values()):
+            files.append("hetzner-host/host.ts")
+        # The program reads the estate stack's outputs by StackReference. That
+        # is not an import, so the estate's own inputs are named by hand: an
+        # estate change that moves edge1's address must re-plan this stack.
+        if "branchleft-hetzner-estate" in graph[entry]:
+            files += [
+                "hetzner/estate.ts",
+                "hetzner/estate/Pulumi.yaml",
+                "hetzner/estate/Pulumi.production.yaml",
+            ]
+        return [rel for rel in files if not filter_matches(patterns, rel)]
+
+    def setUp(self):
+        self.text = workflow_text()
+
+    def test_the_changes_job_publishes_the_tenants_output(self):
+        self.assertIn(
+            "      hetzner_tenants: ${{ steps.filter.outputs.hetzner_tenants }}\n",
+            job_block(self.text, "changes"),
+        )
+
+    def test_the_filter_covers_the_tenants_import_graph_and_the_estate_reference(self):
+        self.assertEqual(self.missing(self.text), [])
+
+    def test_every_listed_path_exists(self):
+        for pattern in filter_patterns(self.text, "hetzner_tenants"):
+            with self.subTest(pattern=pattern):
+                target = pattern[:-3] if pattern.endswith("/**") else pattern
+                self.assertTrue((ROOT / target).exists(), f"{pattern} names nothing")
+
+    def test_a_tenants_runbook_edit_plans_nothing(self):
+        patterns = filter_patterns(self.text, "hetzner_tenants")
+        for rel in (
+            "hetzner/tenants/RUNBOOK-adopt-console-servers.md",
+            "hetzner/tenants/RUNBOOK-edget-gateway-proof.md",
+        ):
+            with self.subTest(file=rel):
+                self.assertFalse(filter_matches(patterns, rel))
+
+    def test_the_other_stacks_filters_do_not_fire_on_a_tenants_only_change(self):
+        for stack in ("mail", "hetzner_network", "hetzner_estate", "hetzner_dns"):
+            patterns = filter_patterns(self.text, stack)
+            for rel in ("hetzner/tenants.ts", "hetzner/tenants/Pulumi.production.yaml"):
+                with self.subTest(stack=stack, file=rel):
+                    self.assertFalse(filter_matches(patterns, rel))
+
+    def test_the_mail_dns_and_other_stacks_alone_do_not_fire_the_tenants_filter(self):
+        patterns = filter_patterns(self.text, "hetzner_tenants")
+        for rel in ("hetzner/dns.ts", "hetzner/network.ts", "mail/server.ts", "hetzner/dns/zone.json"):
+            with self.subTest(file=rel):
+                self.assertFalse(filter_matches(patterns, rel))
+
+
+class TenantsSabotageTests(unittest.TestCase):
+    """THE SABOTAGE TEST for the tenants gate. Each case breaks one control that
+    keeps a tenants apply behind the owner's approval, on the real ci.yml text in
+    memory, and must be flagged (red); the unmutated text must be clean (green)."""
+
+    def setUp(self):
+        self.text = workflow_text()
+
+    @staticmethod
+    def problems(text: str) -> list[str]:
+        found = tenants_violations(text)
+        found += TenantsFilterTests.missing(text)
+        found += environment_isolation_violations(text)
+        found += plan_environment_violations(text)
+        return found
+
+    @staticmethod
+    def mutate(text: str, job: str, old: str, new: str) -> str:
+        block = job_block(text, job)
+        if old not in block:
+            raise AssertionError(f"mutation target not found in {job}: {old!r}")
+        if text.count(block) != 1:
+            raise AssertionError(f"job block of {job} is not unique in ci.yml")
+        return text.replace(block, block.replace(old, new, 1))
+
+    def mutations(self) -> dict[str, str]:
+        text = self.text
+        apply = job_block(text, TENANTS_APPLY)
+        guard = step(apply, TENANTS_DELETE_GUARD_APPLY)
+        gate = step(apply, GATE_NAME)
+        network_gate = step(job_block(text, "hetzner-network-apply"), GATE_NAME)
+        filter_line = "              - 'hetzner/egress.ts'\n"
+        # The network filter lists egress.ts too, so cut it from the tenants
+        # filter alone.
+        tenants_start = text.index("            hetzner_tenants:\n")
+        mutated_changes = (
+            text[:tenants_start]
+            + text[tenants_start:].replace(filter_line, "", 1)
+        )
+        return {
+            "(1) the tenants apply is routed to the free environment": self.mutate(
+                text,
+                TENANTS_APPLY,
+                "    environment: production\n",
+                f"    environment: {routed(TENANTS_PLAN)}\n",
+            ),
+            "(2) the tenants apply names no environment": self.mutate(
+                text, TENANTS_APPLY, "    environment: production\n", ""
+            ),
+            "(3) the tenants apply is moved into the mail environment": self.mutate(
+                text, TENANTS_APPLY, "    environment: production\n", "    environment: production-mail\n"
+            ),
+            "(4) the tenants gate is swapped for one that reads another environment": self.mutate(
+                text, TENANTS_APPLY, 'environments/production"', 'environments/production-dns"'
+            ),
+            "(5) the tenants gate loses its reviewer-rule lookup": self.mutate(
+                text, TENANTS_APPLY, "select(.type == \"required_reviewers\")", "select(.type == \"wait_timer\")"
+            ),
+            "(6) the tenants gate loses its numeric sanitising": self.mutate(
+                self.mutate(
+                    text,
+                    TENANTS_APPLY,
+                    """          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac\n""",
+                    "",
+                ),
+                TENANTS_APPLY,
+                """          case "${custom}" in '' | *[!0-9]*) custom=0 ;; esac\n""",
+                "",
+            ),
+            "(7) the tenants delete guard is skippable": self.mutate(
+                text,
+                TENANTS_APPLY,
+                f"      - name: {TENANTS_DELETE_GUARD_APPLY}\n",
+                f"      - name: {TENANTS_DELETE_GUARD_APPLY}\n        if: always()\n",
+            ),
+            "(8) the tenants delete guard no longer checks the plan": self.mutate(
+                text,
+                TENANTS_APPLY,
+                "if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then",
+                "if ! true; then",
+            ),
+            "(9) the tenants delete guard is removed from the apply": self.mutate(
+                text, TENANTS_APPLY, guard, ""
+            ),
+            "(10) the tenants apply no longer waits for its plan alone": self.mutate(
+                text, TENANTS_APPLY, "    needs: [hetzner-tenants-plan]\n", "    needs: []\n"
+            ),
+            "(11) the tenants plan stops waiting for the estate apply": self.mutate(
+                text, TENANTS_PLAN, "        hetzner-estate-apply,\n", ""
+            ),
+            "(12) the tenants plan stops waiting for the network apply": self.mutate(
+                text, TENANTS_PLAN, "        hetzner-network-apply,\n", ""
+            ),
+            "(13) the tenants plan may start on a branch": self.mutate(
+                text,
+                TENANTS_PLAN,
+                "github.event_name == 'push' && github.ref == 'refs/heads/main' &&\n",
+                "github.event_name == 'push' &&\n",
+            ),
+            "(14) the tenants apply may start on a branch": self.mutate(
+                text,
+                TENANTS_APPLY,
+                "github.event_name == 'push' && github.ref == 'refs/heads/main' &&\n",
+                "github.event_name == 'push' &&\n",
+            ),
+            "(15) the tenants apply can be cancelled part-way": self.mutate(
+                text, TENANTS_APPLY, "      cancel-in-progress: false\n", "      cancel-in-progress: true\n"
+            ),
+            "(16) the tenants apply shares the estate's concurrency group": self.mutate(
+                text,
+                TENANTS_APPLY,
+                "      group: pulumi-hetzner-tenants-deploy\n",
+                "      group: pulumi-hetzner-estate-deploy\n",
+            ),
+            "(17) the tenants plan reads the estate token": self.mutate(
+                text, TENANTS_PLAN, "secrets.HCLOUD_TOKEN_TENANTS", "secrets.HCLOUD_TOKEN_ESTATE"
+            ),
+            "(18) the estate plan reads the tenants token": self.mutate(
+                text, "hetzner-estate-plan", "secrets.HCLOUD_TOKEN_ESTATE", "secrets.HCLOUD_TOKEN_TENANTS"
+            ),
+            "(19) the tenants apply is run behind a spend-gate route": self.mutate(
+                text,
+                TENANTS_APPLY,
+                "    environment: production\n",
+                "    environment: production\n    # routed by spend-gate\n",
+            ),
+            "(20) the tenants filter stops listing egress.ts": mutated_changes,
+            "(21) the tenants plan reads the salt from a repository secret": self.mutate(
+                text,
+                TENANTS_PLAN,
+                "      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}\n",
+                "      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_TENANTS }}\n"
+                f"      SALT: ${{{{ secrets.{TENANTS_SALT_SECRET} }}}}\n",
+            ),
+            "(22) the tenants apply names the salt secret in a comment": self.mutate(
+                text,
+                TENANTS_APPLY,
+                f"      - name: {SALT_STEP}\n",
+                f"      # was {TENANTS_SALT_SECRET}\n      - name: {SALT_STEP}\n",
+            ),
+            "(23) the tenants plan no longer restores the salt": self.mutate(
+                text, TENANTS_PLAN, step(job_block(text, TENANTS_PLAN), SALT_STEP), ""
+            ),
+            "(24) the tenants apply no longer restores the salt": self.mutate(
+                text, TENANTS_APPLY, step(job_block(text, TENANTS_APPLY), SALT_STEP), ""
+            ),
+            "(25) the tenants plan restores the salt from nowhere": self.mutate(
+                text, TENANTS_PLAN, SALT_FROM_STATE, "printf ''"
+            ),
+        }
+
+    def test_the_real_workflow_is_clean_and_every_sabotage_is_flagged(self):
+        # GREEN: the real workflow is clean.
+        self.assertEqual(self.problems(self.text), [])
+        # RED: every mutation is flagged.
+        for name, mutated in self.mutations().items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, self.text, "the mutation changed nothing")
+                self.assertTrue(self.problems(mutated), f"not flagged: {name}")
+
+    def test_the_gate_sabotage_is_caught_by_the_gate_lint(self):
+        mutations = self.mutations()
+        for name in (
+            "(4) the tenants gate is swapped for one that reads another environment",
+            "(5) the tenants gate loses its reviewer-rule lookup",
+            "(6) the tenants gate loses its numeric sanitising",
+        ):
+            with self.subTest(mutation=name):
+                self.assertTrue(apply_gate_violations(mutations[name], TENANTS_APPLY))
+
+    def test_the_network_gate_is_not_the_tenants_gate(self):
+        # The tenants gate reads the literal environment: the routed gate, which
+        # reads ${APPLY_ENVIRONMENT}, is flagged under the tenants allowance.
+        routed_gate = step(job_block(self.text, "hetzner-network-apply"), GATE_NAME)
+        swapped = self.mutate(self.text, TENANTS_APPLY, step(job_block(self.text, TENANTS_APPLY), GATE_NAME), routed_gate)
+        self.assertTrue(apply_gate_violations(swapped, TENANTS_APPLY))
 
 
 if __name__ == "__main__":

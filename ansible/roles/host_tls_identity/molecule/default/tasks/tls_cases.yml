@@ -1,0 +1,72 @@
+---
+# demo1's exporter is stood in for by the openssl program's server, given demo1's own files and its
+# trust file. Prometheus is stood in for by its client, given edge1's files and its trust file. A
+# server takes one connection and ends, so each case is one server and one client.
+- name: Read edge1's own client certificate, as the owner would
+  ansible.builtin.slurp:
+    src: /etc/branchleft/demo1-metrics-tls/client.crt
+  register: host_tls_identity_tls_edge1_cert
+
+- name: The pinned client is served, and demo1's certificate verifies by name
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19443
+    host_tls_identity_probe_client_cert: /root/fixtures/client-pin.crt
+    host_tls_identity_probe_client_key: /root/fixtures/client-pin.key
+    host_tls_identity_probe_expect_ok: true
+
+- name: Another self-signed client is refused
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19444
+    host_tls_identity_probe_client_cert: /root/fixtures/rogue-client.crt
+    host_tls_identity_probe_client_key: /root/fixtures/rogue-client.key
+    host_tls_identity_probe_expect_ok: false
+
+- name: Edge1's real client, which is not what demo1 pins, is refused
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19445
+    host_tls_identity_probe_client_cert: /etc/branchleft/demo1-metrics-tls/client.crt
+    host_tls_identity_probe_client_key: /etc/branchleft/demo1-metrics-tls/client.key
+    host_tls_identity_probe_expect_ok: false
+
+- name: No client certificate is refused
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19446
+    host_tls_identity_probe_client_cert: ''
+    host_tls_identity_probe_client_key: ''
+    host_tls_identity_probe_expect_ok: false
+
+- name: A client that verifies another name refuses demo1's certificate
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19447
+    host_tls_identity_probe_client_cert: /root/fixtures/client-pin.crt
+    host_tls_identity_probe_client_key: /root/fixtures/client-pin.key
+    host_tls_identity_probe_name: other
+    host_tls_identity_probe_expect_ok: false
+
+- name: Pin edge1's real client certificate on demo1, as the owner does after reading it
+  ansible.builtin.include_role:
+    name: branchleft.host_tls_identity
+  vars:
+    enrolled_host: demo1
+    host_tls_identity_peer_cert: '{{ host_tls_identity_tls_edge1_cert.content | b64decode }}'
+
+- name: Now edge1's real client is served
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19448
+    host_tls_identity_probe_client_cert: /etc/branchleft/demo1-metrics-tls/client.crt
+    host_tls_identity_probe_client_key: /etc/branchleft/demo1-metrics-tls/client.key
+    host_tls_identity_probe_expect_ok: true
+
+- name: And the fixture client, no longer the pin, is refused
+  ansible.builtin.include_tasks: tasks/probe.yml
+  vars:
+    host_tls_identity_probe_port: 19449
+    host_tls_identity_probe_client_cert: /root/fixtures/client-pin.crt
+    host_tls_identity_probe_client_key: /root/fixtures/client-pin.key
+    host_tls_identity_probe_expect_ok: false

@@ -1,0 +1,34 @@
+---
+# One token, given in mx1_abuse_page_verify_try, that the role's input check must refuse. The role
+# must fail, and the token file must still hold the converge's one line, with nothing added.
+- name: Apply the role with one value that must be refused
+  no_log: true
+  block:
+    - name: Apply the role with the value
+      ansible.builtin.include_role:
+        name: branchleft.mx1_abuse_page
+      vars:
+        mx1_abuse_page_token: '{{ mx1_abuse_page_verify_try.token }}'
+    - name: Note that the role did not refuse the value
+      ansible.builtin.set_fact:
+        mx1_abuse_page_verify_refused: false
+  rescue:
+    - name: Note that the role refused the value
+      ansible.builtin.set_fact:
+        mx1_abuse_page_verify_refused: true
+
+- name: Read the token file after the value
+  ansible.builtin.slurp:
+    src: /etc/branchleft/mx1-abuse-page.env
+  register: mx1_abuse_page_verify_after
+  no_log: true
+
+- name: Assert the value was refused and the file holds the converge's one line
+  ansible.builtin.assert:
+    that:
+      - mx1_abuse_page_verify_refused
+      - (mx1_abuse_page_verify_after.content | b64decode) == 'NTFY_MX1_TOKEN=test-sentinel-mx1-page-token-0001\n'
+    quiet: true
+    fail_msg: >-
+      The input check did not refuse {{ mx1_abuse_page_verify_try.name }}, or the token file changed.
+  no_log: true

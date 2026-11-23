@@ -1,0 +1,6 @@
+# The owner's value for the roles demo1 applies. check_enrolment.py (R10) allows exactly the key below
+# and no other. It is the public certificate edge1's Prometheus presents, the one client certificate
+# demo1's exporter trusts (the host_tls_identity role checks it and writes it as the exporter's
+# ca.crt). Empty until the owner has read it off edge1; roles/host_tls_identity/README.md, "Owner
+# steps", says how. It is public data, never a key.
+host_tls_identity_peer_cert: ''

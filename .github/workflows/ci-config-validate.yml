@@ -217,65 +217,29 @@ jobs:
       # layout below has to mirror hetzner/monitoring/'s own directory shape.
       - name: Test the alert rules with promtool
         if: steps.skip.outputs.run != 'false'
-        # Bounded, because a `docker run` here has been seen to stall with no
-        # output until the job's own timeout cancelled it. Each invocation has
-        # its own cap and one retry, taken only when it timed out (124 or 137
-        # after the kill): a real promtool failure exits 1 and fails at once.
-        # The rules invocation healthy takes 5.2 to 6.4 min on main, and ran
-        # past 8 min twice in merge-group run 44828584958, so it gets 10 min;
-        # the deadline invocation takes about 3 s, so it gets 2 min. The step
-        # limit covers 2 x 10 min + 2 x 2 min, plus margin.
-        timeout-minutes: 26
+        # promtool_shards.py runs each file's test groups as four concurrent
+        # promtool processes in the pinned image. The serial run took 11 min
+        # locally; sharded it takes about 3 min, bounded by the one slowest
+        # group. Each file is its own process, so the deadline file's 1000h
+        # evaluation interval never reaches the other two, as before. The
+        # script refuses to run unless the shards hold every group of each
+        # file exactly once, and prints the group and case counts.
+        # The 10 min cap is the limit a stalled `docker run` gets before the
+        # step fails, instead of hanging to the job's timeout.
+        timeout-minutes: 12
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
             hetzner/monitoring/alert_rules_memory_test.yml \
+            hetzner/monitoring/alert_rules_reporting_clock_test.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
-          run_promtool() {
-            local cap="$1"
-            local name="$2"
-            shift 2
-            local attempt
-            for attempt in 1 2; do
-              docker rm -f "$name" >/dev/null 2>&1 || true
-              if timeout --kill-after=10 "$cap" docker run --name "$name" --rm "$@"; then
-                return 0
-              else
-                local rc=$?
-              fi
-              if [ "$rc" -ne 124 ] && [ "$rc" -ne 137 ]; then
-                return "$rc"
-              fi
-              echo "promtool $name attempt $attempt timed out; retrying" >&2
-            done
-            return "$rc"
-          }
-          run_promtool 600 promtool-rules-test \
-            -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
-            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
-            --workdir /etc/prometheus-tests \
-            --entrypoint /bin/promtool \
-            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
-            test rules alert_rules_test.yml
-          # Its own invocation: promtool carries the first file's evaluation
-          # interval into the rest, and this file needs 1000h to reach a real
-          # calendar date without hundreds of millions of evaluations.
-          run_promtool 120 promtool-deadline-test \
-            -v "$PWD/hetzner/monitoring/alert_rules_deadline_test.yml:/etc/prometheus-tests/alert_rules_deadline_test.yml:ro" \
-            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
-            --workdir /etc/prometheus-tests \
-            --entrypoint /bin/promtool \
-            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
-            test rules alert_rules_deadline_test.yml
-          # Its own invocation for the same reason: the memory rule holds for 24h,
-          # so this file evaluates every 5m to reach it in a few hundred steps.
-          docker run --rm \
-            -v "$PWD/hetzner/monitoring/alert_rules_memory_test.yml:/etc/prometheus-tests/alert_rules_memory_test.yml:ro" \
-            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
-            --workdir /etc/prometheus-tests \
-            --entrypoint /bin/promtool \
-            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
-            test rules alert_rules_memory_test.yml
+          timeout --kill-after=10 600 python3 hetzner/monitoring/promtool_shards.py \
+            --image docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            --shards 4 --jobs 4 \
+            hetzner/monitoring/alert_rules_test.yml \
+            hetzner/monitoring/alert_rules_deadline_test.yml \
+            hetzner/monitoring/alert_rules_memory_test.yml \
+            hetzner/monitoring/alert_rules_reporting_clock_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
         if: steps.skip.outputs.run != 'false'
