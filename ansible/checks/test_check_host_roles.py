@@ -73,9 +73,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's node_exporter and tenant_scrape_tunnel (after the edge
-# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring roles
-# (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then sweego_receiver
-# (last of all: it refuses to run until its secret files exist), app1's host_inputs,
+# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring
+# roles (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then
+# sweego_receiver (last of all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
