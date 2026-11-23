@@ -18,7 +18,6 @@
 #   4  the control: with another address on the list the same connection goes through, so the
 #      refusal in phase 1 is the configuration's doing; then the list is put back and it is
 #      refused again
-#   4b a key with a list of its own reaches that list and nothing else (the comment at its phase)
 #   5  the report, run over the converged host: it names no account
 #   6  the role applied once more in check mode, then the log of every run (the check run of a host
 #      that still had the hand-made layout, the converge, the idempotence run and that check run)
