@@ -491,3 +491,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+_SABOTAGE: int = "not an int"
