@@ -150,6 +150,12 @@ _BARE_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
 # expected value and its own message, instead of folding into whichever
 # subnet check happens to run over the same file.
 _HOST_SLASH_32_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/32\b")
+# The subnet edge1's playbook hands the edge_firewall role: a YAML line at the start of a line
+# (a comment is not matched), with the value optionally quoted. Only the value is captured.
+_EDGE_FIREWALL_SOURCE_RE = re.compile(
+    r"^[ \t]*edge_firewall_nat_source:[ \t]*['\"]?(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})['\"]?[ \t]*$",
+    re.M,
+)
 
 
 def _within(literal: str, network: ipaddress.IPv4Network) -> bool:
@@ -274,6 +280,13 @@ def check(root: pathlib.Path) -> list[str]:
     failures += _check_literals(
         root / "ansible" / "roles" / "egress_nat" / "files" / "branchleft_nat.py",
         _CIDR_RE,
+        plan.subnet_cidr,
+        "SUBNET_CIDR",
+        plan,
+    )
+    failures += _check_literals(
+        root / "ansible" / "playbooks" / "edge1.yml",
+        _EDGE_FIREWALL_SOURCE_RE,
         plan.subnet_cidr,
         "SUBNET_CIDR",
         plan,

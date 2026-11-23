@@ -1,0 +1,1 @@
+restrict,port-forwarding,permitopen="127.0.0.1:8090" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f ops1-broker-tunnel

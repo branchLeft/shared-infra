@@ -1,0 +1,30 @@
+---
+# The broker tunnel account: ops1 dials demo1 over SSH and holds one -L forward to
+# the broker on 127.0.0.1:8090 (owner ruling control=a). The account has no shell,
+# and its one key and an sshd Match block each allow that one forward and nothing
+# else. The grant is ghost-platform's demo-host/provision/render_broker_tunnel.py;
+# the templates render what it renders (README, "The broker tunnel").
+#
+# The one input is ops1's public key, which the owner places. Without it nothing is
+# installed and the run says so in a visible line: a stated skip (ANS-10), so a host
+# whose key is not yet placed still delivers the rest of the role.
+- name: Look at the broker tunnel's key input
+  ansible.builtin.stat:
+    path: '{{ demo1_build_tunnel_key_input }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: demo1_build_tunnel_input_stat
+  check_mode: false
+
+- name: Say that the broker tunnel is NOT installed while ops1's key is not placed
+  ansible.builtin.debug:
+    msg: >-
+      Broker tunnel NOT installed: no ops1 public key at {{ demo1_build_tunnel_key_input }}.
+      This is a stated skip, not a pass.
+  when: not demo1_build_tunnel_input_stat.stat.exists
+
+- name: Install the broker tunnel account
+  ansible.builtin.include_tasks: _broker_tunnel_install.yml
+  when: demo1_build_tunnel_input_stat.stat.exists
