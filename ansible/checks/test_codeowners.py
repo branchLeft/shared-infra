@@ -288,6 +288,8 @@ BOOTSTRAP_GUARD_PATHS = [
 
 # promote_host places the one key the host applier trusts to sign what it moves, and installs the
 # root timer that acts on it, so the whole role is the owner's as well.
+# provisioning_controller_host likewise generates an ssh key on ops1 as root and hands it to a
+# service account through a unit, so it is the owner's whole.
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
@@ -320,6 +322,17 @@ KEY_ROLE_PATHS = [
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_record_key.py",
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
     "ansible/roles/ring_controller_host/molecule/default/verify.yml",
+    "ansible/roles/provisioning_controller_host/tasks/main.yml",
+    "ansible/roles/provisioning_controller_host/vars/main.yml",
+    "ansible/roles/provisioning_controller_host/meta/argument_specs.yml",
+    "ansible/roles/provisioning_controller_host/library/provisioning_controller_host_ssh_key.py",
+    "ansible/roles/provisioning_controller_host/files/provisioning-controller.service",
+    "ansible/roles/provisioning_controller_host/files/provisioning-controller.timer",
+    "ansible/roles/provisioning_controller_host/files/provisioning-controller.path",
+    "ansible/roles/provisioning_controller_host/templates/ssh_config.j2",
+    "ansible/roles/provisioning_controller_host/tests/unit/test_provisioning_controller_host_ssh_key.py",
+    "ansible/roles/provisioning_controller_host/tests/unit/test_provisioning_controller_host_units.py",
+    "ansible/roles/provisioning_controller_host/molecule/default/verify.yml",
     "ansible/roles/safety_service/tasks/main.yml",
     "ansible/roles/safety_service/vars/main.yml",
     "ansible/roles/safety_service/meta/argument_specs.yml",
@@ -391,6 +404,7 @@ ACCOUNT_TASK_PATHS = [
     "ansible/roles/ci_login/tasks/_account.yml",
     "ansible/roles/ci_step_login/tasks/_account.yml",
     "ansible/roles/ring_controller_host/tasks/main.yml",
+    "ansible/roles/provisioning_controller_host/tasks/main.yml",
     "ansible/roles/safety_service/tasks/main.yml",
     "ansible/roles/tunnel_account/tasks/_account.yml",
     "ansible/roles/tunnel_account/tasks/teardown.yml",
