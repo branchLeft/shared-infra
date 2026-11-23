@@ -1,10 +1,12 @@
 # Rendered into server.yml by render_alertmanager_config.py before every
 # start. This file is never read directly: its __TOKENS__ are secrets.
 #
-# The one pager for the owner's phone. Anonymous access is denied, there is
-# one topic, and two machine publishers (Alertmanager and the scheduled
-# upstream-release watcher) may write to it but not read it back; only the
-# owner's login may read it.
+# The pager for the owner's phone. Anonymous access is denied. The page topic
+# has two machine publishers (Alertmanager and the scheduled upstream-release
+# watcher) that may write to it but not read it back. The mail host has a
+# third machine user whose one grant is publish-only on a topic of its own, the
+# abuse-report topic, so a report that reaches abuse@ pages the phone without
+# going through Alertmanager. Only the owner's login may read either topic.
 base-url: https://ntfy.branchleft.co.uk
 listen-http: ':80'
 
@@ -22,20 +24,24 @@ auth-file: /var/lib/ntfy/user.db
 auth-default-access: deny-all
 enable-login: true
 enable-signup: false
-# The two machine users authenticate by token only. ntfy insists every user
+# The three machine users authenticate by token only. ntfy insists every user
 # carry a password hash, so they share the hash of a random password nobody
 # ever kept.
 auth-users:
   - 'owner:__NTFY_OWNER_PASSWORD_HASH__:user'
   - 'alertmanager:__NTFY_MACHINE_PASSWORD_HASH__:user'
   - 'watcher:__NTFY_MACHINE_PASSWORD_HASH__:user'
+  - 'mx1:__NTFY_MACHINE_PASSWORD_HASH__:user'
 auth-access:
   - 'owner:branchleft-pages:read-only'
   - 'alertmanager:branchleft-pages:write-only'
   - 'watcher:branchleft-pages:write-only'
+  - 'owner:branchleft-abuse:read-only'
+  - 'mx1:branchleft-abuse:write-only'
 auth-tokens:
   - 'alertmanager:__NTFY_PAGER_TOKEN__:alertmanager'
   - 'watcher:__NTFY_WATCHER_TOKEN__:release-watcher'
+  - 'mx1:__NTFY_MX1_TOKEN__:mx1-abuse-report'
 
 # Deliberately absent: upstream-base-url. Setting it would forward a poll
 # request for every message to a third-party server (ntfy.sh) for iOS push.

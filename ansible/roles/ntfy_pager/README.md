@@ -18,7 +18,10 @@ follows the order the standard sets for a role README (ANS-14).
    are absent, closed to `root:root` mode `0600` before any value is written,
    and then writes one line per key, `NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
    `NTFY_OWNER_PASSWORD_HASH` and `NTFY_MACHINE_PASSWORD_HASH`, with the values
-   the caller gives. Any other line in the file is left in place. The file is
+   the caller gives. A fifth line, `NTFY_MX1_TOKEN`, is the mail host's
+   publish-only token: it is written when the optional input
+   `ntfy_pager_mx1_token` is given and removed when it is not, so a token that is
+   no longer supplied stops being a grant. Any other line in the file is left in place. The file is
    this role's alone: `/etc/branchleft/monitoring.env` is written by
    `monitoring_stack`, and no two roles write one path
    (`ansible/checks/check_role_paths.py`). The monitoring unit's drop-in loads
@@ -71,14 +74,15 @@ playbooks):
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables. The
-role has four inputs and no default:
+role has four required inputs, which have no default, and one optional input:
 
-| Variable                           | Default        | Meaning                                              |
-| ---------------------------------- | -------------- | ---------------------------------------------------- |
-| `ntfy_pager_pager_token`           | none, required | The value of `NTFY_PAGER_TOKEN` (`no_log`)           |
-| `ntfy_pager_watcher_token`         | none, required | The value of `NTFY_WATCHER_TOKEN` (`no_log`)         |
-| `ntfy_pager_owner_password_hash`   | none, required | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)   |
-| `ntfy_pager_machine_password_hash` | none, required | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`) |
+| Variable                           | Default        | Meaning                                                                |
+| ---------------------------------- | -------------- | ---------------------------------------------------------------------- |
+| `ntfy_pager_pager_token`           | none, required | The value of `NTFY_PAGER_TOKEN` (`no_log`)                             |
+| `ntfy_pager_watcher_token`         | none, required | The value of `NTFY_WATCHER_TOKEN` (`no_log`)                           |
+| `ntfy_pager_owner_password_hash`   | none, required | The value of `NTFY_OWNER_PASSWORD_HASH` (`no_log`)                     |
+| `ntfy_pager_machine_password_hash` | none, required | The value of `NTFY_MACHINE_PASSWORD_HASH` (`no_log`)                   |
+| `ntfy_pager_mx1_token`             | none, optional | The value of `NTFY_MX1_TOKEN` (`no_log`), or none or empty for no line |
 
 `vars/main.yml` holds the constants: the one file the role delivers, the project
 directory it goes into (`ntfy_pager_project_dir`, `/opt/branchleft/monitoring`),

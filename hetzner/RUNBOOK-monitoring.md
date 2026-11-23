@@ -1231,6 +1231,8 @@ two. The sixth -- a stopped drain worker -- pages through its own
 Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
+A seventh, the abuse report, is posted by the mail host itself straight to
+the pager (`deliveryPath: 'ntfy_direct'`) and renders no route either.
 
 **The receiver is `ntfy-page`: a webhook to the self-hosted ntfy in this
 stack.** Alertmanager publishes over the stack's own network to
@@ -1252,6 +1254,17 @@ email and the rest of monitoring keep running, and page alerts reach nobody
 until the variables are fixed and the unit restarted. The install and phone
 steps, with the test page and its read-back, are in the ghost-platform-docs
 page `ntfy-pager-install-runbook.md`.
+
+**A report to abuse@ pages the phone through its own grant.** The mail host posts straight to
+the pager, not through Alertmanager. The server config gives the `mx1` machine user one
+publish-only grant on its own topic, `branchleft-abuse`, which the owner's login can read; the
+mail host cannot read it back, cannot write the page topic and has no other access. Its token
+is a fifth, optional line of the same file, `NTFY_MX1_TOKEN`, written by the `ntfy_pager` role
+from the optional input `ntfy_pager_mx1_token`; with none, or a malformed or reused one, the
+renderer drops that one token line, warns by name, and the pager and every other grant go on
+unchanged. On the mail host the `mx1_abuse_page` role polls abuse@ and posts one fixed notice
+(no sender, no message text, no tenant). The steps that make it live, and what good looks like at
+each, are the owner's and are in the pull request that added it.
 
 **Every `severity=critical` alert also pages the phone** (the owner's ruling:
 critical alerts only, over self-hosted ntfy). A critical alert goes to

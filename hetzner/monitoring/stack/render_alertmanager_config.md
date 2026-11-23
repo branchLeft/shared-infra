@@ -72,3 +72,13 @@ on the host, including the CI deploy account.
 Only when running as root -- which is how the systemd ExecStartPre invokes
 this. Under CI, or a local render, there is no container to read the file and
 no privilege to chown with.
+
+## The mail host's publish token is optional
+
+`NTFY_MX1_TOKEN` fills `__NTFY_MX1_TOKEN__` in the ntfy server config, the token of the `mx1`
+machine user, whose only grant is write-only on the abuse topic. Unlike the four credentials
+above it never disables the pager: absent, malformed (not `tk_` plus 29 lowercase letters or
+digits) or equal to the pager's or the watcher's token, the renderer removes that one line from
+the rendered config, names the variable on stderr, and everything else renders as it would have.
+The mail host then holds no token, so it can publish nothing. With the pager itself disabled the
+locked config has no token line at all.
