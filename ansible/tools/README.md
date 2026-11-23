@@ -45,10 +45,10 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1) and dbt1 (db-t1). appt1 and dbt1 have only
+seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1), dbt1 (db-t1) and mx1. appt1 and dbt1 have only
 typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
 space-separated) and for dbt1 its address. edget has one input, `ci_jump_user`, typed because it
-exists nowhere on the host. db1 already has its file and no live file to read; a test names it, so
+exists nowhere on the host. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:
@@ -93,7 +93,10 @@ What it does, in this order:
    or no terminal, leaves the key missing. edge1's `ci_jump_user`, the CI jump account's name, is
    typed in the same way: it exists on no live file, and it is held out of the repository and of
    every log, so the prompt is hidden and the name is never printed (a fill asks for it last; on
-   a host whose file already exists, add it once with `--set ci_jump_user`, see below). A
+   a host whose file already exists, add it once with `--set ci_jump_user`, see below). The
+   mail host's publish-only token is typed twice, once on each host and with the same value: as
+   `ntfy_pager_mx1_token` on edge1 (it becomes a token of the ntfy server) and as
+   `mx1_abuse_page_token` on mx1 (it is what the mail host presents). It is optional on both. A
    tenant stack is never asked for: `tenant_compose_stacks` that cannot be read live stays
    missing.
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
@@ -148,8 +151,8 @@ and claim rules equal its module's.
 
 Usage, on the host as root:
 
-    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1 [--replace]
-    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 --set KEY
 
 The one seed command per host that this change adds, run as root on that host:
 

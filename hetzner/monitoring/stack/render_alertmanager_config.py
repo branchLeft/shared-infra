@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Writes the monitoring stack's secret-bearing files from
 `/etc/branchleft/monitoring.env` and `/etc/branchleft/ntfy-pager.env` (the unit's
-drop-in loads both; the second holds the four `NTFY_` keys): `alertmanager.yml`,
+drop-in loads both; the second holds the four `NTFY_` keys and the optional
+`NTFY_MX1_TOKEN`): `alertmanager.yml`,
 `ntfy/server.yml` and `prometheus/mx1-metrics-password`. Why it is a plain string replace, and why its
 name is wider than its remit, is in `render_alertmanager_config.md`.
 """
@@ -34,6 +35,13 @@ NTFY_PLACEHOLDERS: dict[str, str] = {
     "__NTFY_MACHINE_PASSWORD_HASH__": "NTFY_MACHINE_PASSWORD_HASH",
 }
 NTFY_DISABLED_VALUE = "ntfy-not-configured"
+
+# The mail host's publish-only token is optional, unlike the four above: an absent
+# or unusable one leaves the pager and every other grant as they were and only
+# removes the mail host's token line, so the host can publish nothing. See
+# `mx1_token_problems`.
+NTFY_MX1_PLACEHOLDER = "__NTFY_MX1_TOKEN__"
+NTFY_MX1_VAR = "NTFY_MX1_TOKEN"
 
 # ntfy refuses a token that is not `tk_` plus 29 lowercase alphanumerics, and a
 # password slot holding anything but a bcrypt hash would put a plaintext
@@ -78,7 +86,38 @@ def render(template: str, env: dict[str, str]) -> str:
         rendered = rendered.replace(placeholder, env[var])
     for placeholder, value in ntfy_values.items():
         rendered = rendered.replace(placeholder, value)
+    if not problems and env.get(NTFY_MX1_VAR) and not mx1_token_problems(env):
+        rendered = rendered.replace(NTFY_MX1_PLACEHOLDER, env[NTFY_MX1_VAR])
+    else:
+        rendered = drop_mx1_token(rendered)
     return rendered
+
+
+def mx1_token_problems(env: dict[str, str]) -> list[str]:
+    """Why the mail host's publish token cannot be configured, or an empty list.
+
+    An absent token is not a problem: the grant is optional. A present one must
+    be shaped as ntfy requires and must differ from the other two tokens, so a
+    paste of the wrong one fails here and not as a mail host that can publish on
+    the page topic's credentials. Values are never echoed.
+    """
+    token = env.get(NTFY_MX1_VAR)
+    if not token:
+        return []
+    problems: list[str] = []
+    if not NTFY_TOKEN_PATTERN.fullmatch(token):
+        problems.append(
+            f"{NTFY_MX1_VAR} is malformed (a token is tk_ plus 29 lowercase letters or digits)"
+        )
+    for other in NTFY_TOKEN_VARS:
+        if token == env.get(other):
+            problems.append(f"{NTFY_MX1_VAR} and {other} must differ")
+    return problems
+
+
+def drop_mx1_token(text: str) -> str:
+    """The text without the line that holds the mail host's token placeholder."""
+    return "\n".join(line for line in text.split("\n") if NTFY_MX1_PLACEHOLDER not in line)
 
 
 def ntfy_problems(env: dict[str, str]) -> list[str]:
@@ -225,6 +264,15 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         ntfy_template = lock_ntfy_config(ntfy_template)
+    if not problems:
+        mx1_problems = mx1_token_problems(dict(os.environ))
+        if mx1_problems:
+            print(
+                "render_alertmanager_config: WARNING the mail host's abuse-report grant is "
+                "left without a token, so it can publish nothing (the pager is unaffected): "
+                + "; ".join(mx1_problems),
+                file=sys.stderr,
+            )
     ntfy_rendered = render(ntfy_template, dict(os.environ))
     ntfy_output = ntfy_dir / NTFY_OUTPUT_NAME
     # An unrendered start leaves Docker's empty directory at a bind-mount

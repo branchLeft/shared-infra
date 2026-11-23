@@ -1174,8 +1174,8 @@ class Sabotage(unittest.TestCase):
     def test_a_jump_host_whose_name_is_required_by_the_loader_is_red(self) -> None:
         self._red_then_green(
             HOMES[3],
-            "  edge1:\n    - ci_jump_user\n  edget:",
-            "  edget:",
+            "  edge1:\n    - ntfy_pager_mx1_token\n    - ci_jump_user\n  edget:",
+            "  edge1:\n    - ntfy_pager_mx1_token\n  edget:",
             "ci_jump_user is not optional in its host_inputs row",
         )
 
