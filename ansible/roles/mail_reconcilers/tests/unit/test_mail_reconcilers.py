@@ -30,6 +30,7 @@ ROWS = {
     "alerting": "64-provision-alerting-submission-credential.sh",
     "nextcloud": "66-provision-nextcloud-submission-credential.sh",
     "zitadel": "68-provision-zitadel-submission-credential.sh",
+    "portal": "69-provision-portal-submission-credential.py",
 }
 INSTALLED = (
     "configure_stalwart.py",
@@ -174,7 +175,7 @@ class GuardTests(unittest.TestCase):
 
 
 class CredentialTableTests(unittest.TestCase):
-    def test_the_table_is_exactly_the_six_credentials_and_every_wrapper_exists(self) -> None:
+    def test_the_table_is_exactly_the_seven_credentials_and_every_wrapper_exists(self) -> None:
         table = cast(dict[str, str], _vars()["mail_reconcilers_credential_rows"])
         self.assertEqual(table, ROWS)
         for wrapper in table.values():
@@ -477,10 +478,10 @@ class InstallListTests(unittest.TestCase):
     def _installed(self) -> list[dict[str, str]]:
         return cast(list[dict[str, str]], _vars()["mail_reconcilers_installed"])
 
-    def test_the_install_list_is_exactly_the_nineteen_programs_each_0755(self) -> None:
+    def test_the_install_list_is_exactly_the_twenty_programs_each_0755(self) -> None:
         self.assertEqual(sorted(e["program"] for e in self._installed()), sorted(INSTALLED))
         self.assertEqual({e["mode"] for e in self._installed()}, {"0755"})
-        self.assertEqual(len(set(INSTALLED)), 19)
+        self.assertEqual(len(set(INSTALLED)), 20)
 
     def test_the_install_list_holds_no_file_the_host_stack_role_owns(self) -> None:
         names = {e["program"] for e in self._installed()}

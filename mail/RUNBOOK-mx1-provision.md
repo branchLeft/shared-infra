@@ -954,6 +954,38 @@ real alert and confirm it arrives at `ALERT_RECIPIENT_EMAIL`. Alertmanager's
 API reporting a notification as dispatched does not prove delivery, and neither
 does this script exiting 0.
 
+## Portal support submission credential
+
+`69-provision-portal-submission-credential.py` is the `portal` row of the
+`mail_reconcilers` mint table (`ansible/roles/mail_reconcilers`). It runs the
+same `provision_website_submission_credential.py` as `60-...sh`, with
+`SEND_AS_LOCAL=sales`, `CREDENTIAL_LABEL=portal-support-smtp` and
+`APP_PASSWORD_DESCRIPTION=portal-support-transactional-submission`. It is the
+Professional enquiry mail of the tenant portal on ops1: the portal sends as
+`sales@branchleft.co.uk` to the same mailbox, which the owner replies from.
+Everything in "Website submission credential" applies, substituting
+`sales@branchleft.co.uk` for `info@branchleft.co.uk`. The program is not in
+`run-all.sh`; the role's mint step is the only route to it.
+
+The credential reaches the portal only through the owner's secret store on
+ops1 (`host_inputs`, key `control_plane_portal_support_smtp_password`), never a
+repository. Mint and record it with the owner's steps:
+
+1. Request the `mint` step with credential `portal` through the host's step
+   allow-list, as "Step requests" in `ansible/roles/pull_trigger/README.md`
+   describes. The role's guard runs it once, and the value is recorded in
+   `/root/.stalwart-service-credentials` under `portal-support-smtp`, and is
+   printed to nothing.
+
+2. Copy the value into the secret store without printing it. The pipe puts the
+   value on the workstation clipboard only, and the store entry is the one named
+   in the PR body:
+
+       ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk "sed -n 's/^portal-support-smtp://p' /root/.stalwart-service-credentials" | pbcopy
+
+If step 1 reports an orphaned credential (see "If the create response is lost"
+above), the secret is gone; destroy that credential and mint again.
+
 ## DNSBL blocklist monitoring
 
 A listed IP silently kills deliverability for everyone sending through this

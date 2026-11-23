@@ -164,6 +164,105 @@ class NtfyCredentialTests(unittest.TestCase):
         self.assertNotIn("upstream-base-url", active)
 
 
+class Mx1TokenTests(unittest.TestCase):
+    """The mail host's publish-only grant is optional and independent of the pager.
+
+    The real ntfy template is rendered, so a change to the grant's lines in it
+    is what these tests see.
+    """
+
+    TOKEN = "tk_" + "m" * 29
+
+    @staticmethod
+    def _template() -> str:
+        return (pathlib.Path(MODULE_PATH).parent / "ntfy" / "server.yml.tmpl").read_text(
+            encoding="utf-8"
+        )
+
+    def _active(self, env: dict[str, str]) -> str:
+        rendered = render(self._template(), env)
+        return "\n".join(l for l in rendered.split("\n") if not l.lstrip().startswith("#"))
+
+    def test_the_template_grants_the_mail_host_write_only_on_its_own_topic(self) -> None:
+        active = "\n".join(
+            l for l in self._template().split("\n") if not l.lstrip().startswith("#")
+        )
+        self.assertIn("'mx1:branchleft-abuse:write-only'", active)
+        self.assertIn("'owner:branchleft-abuse:read-only'", active)
+        mx1_grants = [l for l in active.split("\n") if l.strip().startswith("- 'mx1:")]
+        self.assertEqual(
+            len(mx1_grants), 3, msg="one user, one grant and one token for the mail host"
+        )
+        for line in mx1_grants:
+            self.assertNotIn("branchleft-pages", line)
+            self.assertNotIn("read", line.replace("branchleft-abuse", ""))
+
+    def test_a_token_is_placed_on_the_mail_host_user_only(self) -> None:
+        env = dict(FULL_ENV, NTFY_MX1_TOKEN=self.TOKEN)
+        active = self._active(env)
+        self.assertIn(f"'mx1:{self.TOKEN}:mx1-abuse-report'", active)
+        self.assertEqual(active.count(self.TOKEN), 1)
+        self.assertNotIn("__NTFY_", active)
+
+    def test_no_token_drops_only_the_mail_hosts_token_line(self) -> None:
+        active = self._active(FULL_ENV)
+        self.assertNotIn("mx1-abuse-report", active)
+        self.assertNotIn("__NTFY_", active)
+        self.assertIn(f"'alertmanager:{FULL_ENV['NTFY_PAGER_TOKEN']}:alertmanager'", active)
+        self.assertIn(f"'watcher:{FULL_ENV['NTFY_WATCHER_TOKEN']}:release-watcher'", active)
+        self.assertEqual(render_alertmanager_config.mx1_token_problems(FULL_ENV), [])
+
+    def test_a_malformed_or_reused_token_is_dropped_and_never_echoed(self) -> None:
+        for bad in ("tk_short", "tk_" + "M" * 29, "plain-text-secret", FULL_ENV["NTFY_PAGER_TOKEN"],
+                    FULL_ENV["NTFY_WATCHER_TOKEN"]):
+            env = dict(FULL_ENV, NTFY_MX1_TOKEN=bad)
+            problems = render_alertmanager_config.mx1_token_problems(env)
+            self.assertTrue(problems, msg=bad)
+            self.assertNotIn(bad, " ".join(problems))
+            active = self._active(env)
+            self.assertNotIn("mx1-abuse-report", active)
+            # The pager's own tokens are still in place, once each.
+            self.assertEqual(active.count(FULL_ENV["NTFY_PAGER_TOKEN"]), 1)
+            self.assertEqual(active.count(FULL_ENV["NTFY_WATCHER_TOKEN"]), 1)
+
+    def test_a_disabled_pager_leaves_no_token_behind(self) -> None:
+        env = {k: v for k, v in FULL_ENV.items() if k != "NTFY_PAGER_TOKEN"}
+        env["NTFY_MX1_TOKEN"] = self.TOKEN
+        locked = render_alertmanager_config.lock_ntfy_config(self._template())
+        self.assertNotIn(self.TOKEN, render(locked, env))
+        self.assertNotIn(self.TOKEN, render(self._template(), env))
+
+    def test_main_warns_for_a_bad_mail_host_token_without_disabling_the_pager(self) -> None:
+        template = self._template()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            (directory / "alertmanager").mkdir()
+            (directory / "alertmanager" / render_alertmanager_config.TEMPLATE_NAME).write_text(
+                TEMPLATE, encoding="utf-8"
+            )
+            (directory / "ntfy").mkdir()
+            (directory / "ntfy" / render_alertmanager_config.NTFY_TEMPLATE_NAME).write_text(
+                template, encoding="utf-8"
+            )
+            env = dict(FULL_ENV, NTFY_MX1_TOKEN="tk_short")
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    render_alertmanager_config, "__file__", str(directory / "render.py")
+                ),
+                mock.patch.dict(os.environ, env, clear=True),
+                contextlib.redirect_stderr(stderr),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(render_alertmanager_config.main([]), 0)
+            self.assertIn("NTFY_MX1_TOKEN is malformed", stderr.getvalue())
+            self.assertNotIn("tk_short", stderr.getvalue())
+            self.assertNotIn("pager is DISABLED", stderr.getvalue())
+            written = (directory / "ntfy" / "server.yml").read_text(encoding="utf-8")
+            self.assertIn(FULL_ENV["NTFY_PAGER_TOKEN"], written)
+            self.assertNotIn("mx1-abuse-report", written)
+
+
 class NtfyOutputTests(unittest.TestCase):
     def test_writes_server_yml_0600_beside_its_template_with_no_chown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -552,6 +651,92 @@ class HeartbeatRouteTests(unittest.TestCase):
         self.assertNotIn("hc-ping.com", rendered)
 
 
+DEMO_TEMPLATE_PATH = MODULE_PATH.parent / "prometheus" / "demo_tls_probe.yml.tmpl"
+COMPOSE_PATH = MODULE_PATH.parent / "compose.yml"
+PROMETHEUS_CONFIG_PATH = MODULE_PATH.parent / "prometheus" / "prometheus.yml"
+
+
+class DemoTlsProbeTests(unittest.TestCase):
+    """The demo wildcard probe is rendered on the host from the monitoring env.
+
+    The base never reaches a committed file: an unset or empty base writes an
+    empty scrape file, and a set one fills the template's token.
+    """
+
+    def setUp(self) -> None:
+        self.template = DEMO_TEMPLATE_PATH.read_text()
+        self.render = render_alertmanager_config.render_demo_tls_probe
+
+    def test_an_unset_or_empty_base_renders_no_scrape_config(self) -> None:
+        self.assertEqual("scrape_configs: []\n", self.render(self.template, None))
+        self.assertEqual("scrape_configs: []\n", self.render(self.template, ""))
+
+    def test_a_set_base_probes_the_fixed_label_under_it_over_tls(self) -> None:
+        rendered = self.render(self.template, "example.test")
+        self.assertIn("job_name: blackbox_demo_tls", rendered)
+        self.assertIn("- probe.example.test:443", rendered)
+        self.assertIn("module: ['tls_connect']", rendered)
+        self.assertNotIn("__DEMO_WILDCARD_BASE__", rendered)
+
+    def test_a_base_that_is_not_a_lower_case_domain_is_refused(self) -> None:
+        for bad in ("*.example.test", "Example.test", "localhost", "a b.test", "example.test."):
+            with self.subTest(base=bad), self.assertRaises(ValueError):
+                self.render(self.template, bad)
+
+    def test_the_committed_template_is_the_tls_probe_with_a_token_for_the_base(self) -> None:
+        self.assertIn("job_name: blackbox_demo_tls", self.template)
+        self.assertIn("module: ['tls_connect']", self.template)
+        self.assertIn("__DEMO_WILDCARD_BASE__", self.template)
+
+
+class DemoTlsProbeWiringTests(unittest.TestCase):
+    """Each link in the chain from monitoring.env to the running Prometheus."""
+
+    def test_the_rendered_file_is_mounted_read_only_where_prometheus_reads_it(self) -> None:
+        compose = COMPOSE_PATH.read_text()
+        self.assertIn(
+            "./prometheus/demo_tls_probe.yml:/etc/prometheus/demo_tls_probe.yml:ro", compose
+        )
+
+    def test_the_prometheus_config_names_the_mounted_file(self) -> None:
+        self.assertIn("  - /etc/prometheus/demo_tls_probe.yml", PROMETHEUS_CONFIG_PATH.read_text())
+
+    def test_the_host_writes_the_file_and_a_bad_base_disables_rather_than_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stack_dir = pathlib.Path(tmp)
+            (stack_dir / "prometheus").mkdir()
+            (stack_dir / "prometheus" / "demo_tls_probe.yml.tmpl").write_text(
+                DEMO_TEMPLATE_PATH.read_text()
+            )
+            output = stack_dir / "prometheus" / "demo_tls_probe.yml"
+            with contextlib.redirect_stdout(io.StringIO()):
+                render_alertmanager_config.write_demo_tls_probe(
+                    stack_dir, {"DEMO_WILDCARD_BASE": "example.test"}
+                )
+            self.assertIn("- probe.example.test:443", output.read_text())
+            self.assertEqual(0o644, stat.S_IMODE(output.stat().st_mode))
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                render_alertmanager_config.write_demo_tls_probe(
+                    stack_dir, {"DEMO_WILDCARD_BASE": "*.bad"}
+                )
+            self.assertEqual("scrape_configs: []\n", output.read_text())
+            self.assertIn("DEMO_WILDCARD_BASE", err.getvalue())
+
+    def test_a_directory_left_at_the_output_path_is_cleared_and_the_probe_renders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stack_dir = pathlib.Path(tmp)
+            (stack_dir / "prometheus").mkdir()
+            (stack_dir / "prometheus" / "demo_tls_probe.yml.tmpl").write_text(
+                DEMO_TEMPLATE_PATH.read_text()
+            )
+            (stack_dir / "prometheus" / "demo_tls_probe.yml").mkdir()
+            with contextlib.redirect_stdout(io.StringIO()):
+                render_alertmanager_config.write_demo_tls_probe(stack_dir, {})
+            output = stack_dir / "prometheus" / "demo_tls_probe.yml"
+            self.assertTrue(output.is_file())
+            self.assertEqual("scrape_configs: []\n", output.read_text())
 @dataclasses.dataclass(frozen=True)
 class _Delivery:
     """One route an alert reached: where it goes and how its group is kept."""

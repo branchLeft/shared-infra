@@ -43,3 +43,4 @@ package-lock.json
 /hetzner/monitoring/stack/alertmanager/alertmanager.yml
 /hetzner/monitoring/stack/ntfy/server.yml
 /hetzner/monitoring/stack/prometheus/mx1-metrics-password
+/hetzner/monitoring/stack/prometheus/demo_tls_probe.yml

@@ -18,6 +18,8 @@ import yaml  # type: ignore[import-untyped]
 from check_enrolment import (
     _BASE_LOADER,
     _PARSED,
+    HOST_TLS_HOSTS,
+    HOST_TLS_KEY,
     JUMP_HOSTS,
     JUMP_VARS,
     MAIL_COLLECTOR_KEYS,
@@ -1118,10 +1120,46 @@ class Sabotage(unittest.TestCase):
         self._write("owner_vars/mx9.yml", "---\nci_login_keys: []\n")
         self._assert_one("R10 owner_vars/mx9.yml: has no enrolled playbook")
 
-    # R10: demo1's roles take no owner keys, so it may have no file either.
-    def test_r10_owner_vars_file_for_demo1(self) -> None:
-        self._write("owner_vars/demo1.yml", "---\nci_login_keys: []\n")
-        self._assert_one("R10 owner_vars/demo1.yml: this host has no owner_vars keys")
+    # R10 for the host_tls_identity pin: each host that applies the role holds exactly one key, the
+    # peer's public certificate, and it must be text. The role holds every other shape rule.
+    def test_r10_the_real_demo1_owner_vars_file_passes(self) -> None:
+        self.assertEqual(check(self.root), [])
+        self.assertEqual(OWNER_VARS_KEYS["demo1"], frozenset((HOST_TLS_KEY,)))
+
+    def test_r10_demo1_owner_vars_lacks_the_peer_certificate(self) -> None:
+        self._write("owner_vars/demo1.yml", "---\n")
+        self._assert_one(
+            "R10 owner_vars/demo1.yml: must hold exactly ['host_tls_identity_peer_cert']"
+        )
+
+    def test_r10_demo1_owner_vars_peer_certificate_is_not_text(self) -> None:
+        self._write("owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: 5\n")
+        self._assert_one("R10 owner_vars/demo1.yml: host_tls_identity_peer_cert must be text")
+
+    def test_r10_demo1_owner_vars_holds_an_extra_key(self) -> None:
+        self._write(
+            "owner_vars/demo1.yml", "---\nhost_tls_identity_peer_cert: ''\nci_login_keys: []\n"
+        )
+        self._assert_one("R10 owner_vars/demo1.yml: must hold exactly")
+
+    def test_r10_the_pin_key_is_allowed_only_for_the_hosts_that_apply_the_role(self) -> None:
+        for host, keys in OWNER_VARS_KEYS.items():
+            self.assertEqual(HOST_TLS_KEY in keys, host in HOST_TLS_HOSTS, host)
+
+    def test_r10_a_host_that_lists_host_tls_identity_is_in_host_tls_hosts(self) -> None:
+        self._edit(
+            "checks/host_roles/ops1.yml", "- host_inputs\n", "- host_inputs\n- host_tls_identity\n"
+        )
+        self._assert_one(
+            "R10 checks/host_roles/ops1.yml: ops1 lists host_tls_identity "
+            "but is not in HOST_TLS_HOSTS"
+        )
+
+    def test_r10_a_host_tls_host_that_does_not_list_the_role(self) -> None:
+        self._edit("checks/host_roles/demo1.yml", "- host_tls_identity\n", "")
+        self._assert_one(
+            "R10 checks/host_roles/demo1.yml: demo1 is in HOST_TLS_HOSTS but does not list"
+        )
 
     # R10 and R2: an enrolled host that has no owner_vars keys may have no file, and its
     # playbook, which does not load it, disagrees with the file.

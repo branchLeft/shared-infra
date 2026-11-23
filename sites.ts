@@ -62,6 +62,10 @@ export const sites: EdgeSite[] = [
     // Ghost serves its uploads from its own origin: see `sites.md`, "What the
     // site runs".
     backend: 'ghost',
+    // The tenant's media bucket (`branchleft-media-<slug>`, endpoint from the
+    // tenant stack's `mediaEndpoint`): the edge reads uploads from it and
+    // answers them on this hostname.
+    media: { host: 'hel1.your-objectstorage.com', bucket: 'branchleft-media-blog' },
     // A signed-in Ghost staff session, verified with this Ghost, is never
     // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
     // sessions".

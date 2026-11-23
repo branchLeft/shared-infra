@@ -183,6 +183,18 @@
       "attestation": null
     },
     {
+      "project": "branchleft-hetzner-media",
+      "stack": "production",
+      "repo": "shared-infra",
+      "project_path": "hetzner/media/Pulumi.yaml",
+      "config_path": null,
+      "state_backend": "hetzner",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "never-kms",
+      "note": "Born on the passphrase provider, never KMS-wrapped, same as the other Hetzner stacks. Not yet initialised: created by a hand-gated first apply (hetzner/RUNBOOK-media-buckets.md) with the bucket-admin key, and never by CI until a CI job is added. Holds no committed config: the bucket-admin key and the three access-key identifiers are set with pulumi config, so config_path is null.",
+      "attestation": null
+    },
+    {
       "project": "branchleft-ovh-copy2",
       "stack": "probe",
       "repo": "shared-infra",
@@ -279,6 +291,12 @@
       "kind": "pinned",
       "backend": "hetzner",
       "note": "The tenants project's own Pulumi project. Pins the same backend as hetzner/estate/Pulumi.yaml, for the same reason: a stack that does not name its backend is operated against whichever one was last logged into."
+    },
+    {
+      "path": "hetzner/media/Pulumi.yaml",
+      "kind": "pinned",
+      "backend": "hetzner",
+      "note": "The media buckets project. Pins the same backend as the other Hetzner projects: a stack that does not name its backend is operated against whichever one was last logged into."
     }
   ],
   "external_backend_reference_sites": [

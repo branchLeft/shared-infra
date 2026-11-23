@@ -1,0 +1,106 @@
+---
+# The one input is a secret. Empty is allowed and means the page is off. A value of only spaces,
+# or one with a line break (which would write a second line, possibly another KEY=, into the file
+# the program reads), is refused before anything is written. The task names the key only, and
+# no_log hides it.
+- name: Check that the token, when given, is a single line and not only spaces
+  ansible.builtin.assert:
+    that:
+      - mx1_abuse_page_token_value | string | length == 0 or mx1_abuse_page_token_value | string | trim | length > 0
+      - mx1_abuse_page_token_value | string is not search('[\r\n]')
+    quiet: true
+    fail_msg: 'NTFY_MX1_TOKEN must be a single line, and not only spaces.'
+  no_log: true
+
+# The directories first, each explicit. /etc/branchleft and /var/lib/branchleft are also made by
+# other roles with these owners and modes, so whichever runs first makes them. The state
+# directory is root's alone: it holds the ids the last poll saw.
+- name: Create the shared directories the page uses
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ mx1_abuse_page_config_dir }}'
+    - '{{ mx1_abuse_page_lib_dir }}'
+    - '{{ mx1_abuse_page_program_dir }}'
+
+- name: Create the state directory, root only
+  ansible.builtin.file:
+    path: '{{ mx1_abuse_page_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The copy runs the program's own install-time check on a temporary file first, so a program that
+# does not load is never installed and the previous one stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ mx1_abuse_page_program_name }}'
+    dest: '{{ mx1_abuse_page_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+    validate: /usr/bin/python3 -I %s --check
+  # The program holds a path and a key name that read as a secret to the plan's scan, and no
+  # secret. The diff stays off so a plan never prints the file.
+  diff: false
+
+- name: Install the service and the timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ mx1_abuse_page_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - '{{ mx1_abuse_page_service_unit }}'
+    - '{{ mx1_abuse_page_timer_unit }}'
+  notify: Reload systemd manager
+
+# Queued handlers run here, so the timer task below meets the units as they now are.
+- name: Load queued unit changes before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# The token file holds one line, the token. The content is the secret, so the task hides its
+# result and its diff (ANS-16): the copy result carries a digest of the content. The file is
+# written whole, with the owner and mode set in the same task that creates it. No other role
+# writes this path.
+- name: Write the token file when a token is given
+  ansible.builtin.copy:
+    content: "{{ mx1_abuse_page_env_key }}={{ mx1_abuse_page_token_value }}\n"
+    dest: '{{ mx1_abuse_page_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  when: mx1_abuse_page_token_value | string | length > 0
+
+# Revocation: a host that is no longer given a token has no file, so nothing can post.
+- name: Remove the token file when no token is given
+  ansible.builtin.file:
+    path: '{{ mx1_abuse_page_env_file }}'
+    state: absent
+  when: mx1_abuse_page_token_value | string | length == 0
+
+# Check mode writes no unit, so on a fresh host there is nothing for systemd to enable. The stat
+# runs in check mode as it does in a real run.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: '{{ mx1_abuse_page_unit_dir }}/{{ mx1_abuse_page_timer_unit }}'
+    get_checksum: false
+  register: mx1_abuse_page_timer_stat
+
+# The timer follows the token: on when the host has one, off when it has none.
+- name: Hold the timer to the state the token asks for
+  ansible.builtin.systemd_service:
+    name: '{{ mx1_abuse_page_timer_unit }}'
+    enabled: '{{ mx1_abuse_page_token_value | string | length > 0 }}'
+    state: "{{ 'started' if mx1_abuse_page_token_value | string | length > 0 else 'stopped' }}"
+  when: mx1_abuse_page_timer_stat.stat.exists
+  no_log: true
+  diff: false

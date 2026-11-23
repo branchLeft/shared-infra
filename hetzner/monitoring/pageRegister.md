@@ -62,23 +62,14 @@ ntfy with the rendered URL, so a value ntfy refuses fails there.
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of
-`pageAlertNames`, so it cannot page. Three entries are dormant today:
-appeal latency, until a target is set for how long an appeal may wait, the
-abuse report (below), and
+`pageAlertNames`, so it cannot page. Two entries are dormant today:
+appeal latency, until a target is set for how long an appeal may wait, and
 the stopped demo reaper (`stopped-demo-reaper`, alertname
 `StoppedDemoReaper`), until the reaper that ends a demo at the close of its
 lease exists and the threshold for how long it may stay silent is set. The
 reaper entry is not tenant-scoped: a stopped reaper is an estate-wide
 condition, so its page carries no `tenant` label of its own and groups with
 the other estate-wide alerts.
-
-The abuse-report entry (`abuse-report`, alertname `AbuseReportReceived`) is
-dormant until its producer lands. The producer is mx1's arrival path for the
-abuse role mailbox, an owner-authorised patch, so no Prometheus rule raises it
-and its entry carries a `ruleExemption` saying so. The page names only that a
-report arrived: its labels carry no sender, no message text and no tenant, and
-the entry is not tenant-scoped. Flipping `dormant` to false belongs in the same
-change that lands the producer.
 
 Registering the reaper first is deliberate -- the register is the reviewed
 list of what may page, so the owner's decision that a stopped reaper pages
@@ -130,3 +121,15 @@ match and the failed-unsafe tenant have no producer yet: the platform is planned
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.
+
+## A page that never becomes an alert: the abuse report
+
+The `abuse-report` entry has `deliveryPath: 'ntfy_direct'` and no alertname. The mail host posts
+it straight to the pager with a publish-only grant on a topic of its own (`NTFY_ABUSE_TOPIC`),
+so it renders no Alertmanager route, no rule raises it, and neither direction of the
+rule-and-register check applies to it, as for the Healthchecks-delivered entry. It is listed so
+the register still names every path that can reach the phone. Its contract is the page's content:
+it says only that an abuse report arrived, with no sender, no message text and no tenant. The
+register has no label schema, so no test can enforce that; the producer's own tests do
+(`ansible/roles/mx1_abuse_page`), and `pageRegister.test.ts` pins that the server config gives the
+mail host one grant, write-only, on this topic and none on the page topic.

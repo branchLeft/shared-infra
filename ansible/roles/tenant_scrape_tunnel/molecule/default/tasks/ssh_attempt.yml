@@ -1,0 +1,212 @@
+---
+# One connection to the container's own sshd as the tunnel account, with one key, and what came of
+# it. The sshd is the real one and the key line and the drop-in are the role's, so what it does
+# with the connection is the configuration's doing. Inputs: attempt_key, the path of the private
+# key; attempt_expect, one of
+#   allowed            a stdio forward (-W) to attempt_target was asked for and sshd did not deny
+#                      it. The destinations are addresses nothing in the container answers for, so
+#                      the connection behind the forward fails, which is not the key line's doing:
+#                      what proves it was allowed is a login accepted and no denial logged
+#   refused            the same forward was denied by sshd, and the client failed
+#   turned_away        the key did not authenticate
+#   no_remote_forward  sshd was asked to open a port of its own on its loopback (ssh -R to
+#                      attempt_target) and refused
+#   no_command         a remote command was asked for after a login that was accepted, and nothing ran
+# attempt_target is host:port; attempt_command is the remote command for no_command. The marker
+# file is what the hostile command tries to make.
+- name: Clear the marker a hostile command would make
+  ansible.builtin.file:
+    path: '{{ scenario_marker_file }}'
+    state: absent
+  check_mode: false
+
+# The test SSH server runs as ssh.service, so its log is the journal's. Only the two lines that
+# say how a connection ended are read.
+- name: Look at what the test SSH server had logged before the connection
+  ansible.builtin.command:
+    argv:
+      [
+        journalctl,
+        --unit,
+        ssh,
+        --output,
+        cat,
+        --no-pager,
+        --grep,
+        'but the request was denied|Accepted publickey for',
+      ]
+  register: tenant_scrape_tunnel_attempt_log_before
+  changed_when: false
+  failed_when: tenant_scrape_tunnel_attempt_log_before.rc not in [0, 1]
+  check_mode: false
+
+- name: Count the lines that were there
+  ansible.builtin.set_fact:
+    tenant_scrape_tunnel_attempt_denied_before: >-
+      {{ tenant_scrape_tunnel_attempt_log_before.stdout_lines | select('search', scenario_denied_pattern) | list | length }}
+    tenant_scrape_tunnel_attempt_accepted_before: >-
+      {{ tenant_scrape_tunnel_attempt_log_before.stdout_lines | select('search', scenario_accepted_pattern) | list | length }}
+
+- name: Connect with the key
+  ansible.builtin.command:
+    argv: '{{ attempt_base + attempt_tail }}'
+    stdin: "EXAMPLE\n"
+    stdin_add_newline: false
+  vars:
+    # timeout turns a client left waiting into a failure (124, or 137 once killed) that the
+    # assertions below name.
+    attempt_base:
+      - timeout
+      - --kill-after=5
+      - '{{ "20" if attempt_expect == "no_remote_forward" else "60" }}'
+      - ssh
+      - -b
+      - '{{ scenario_attempt_source }}'
+      - -o
+      - ConnectTimeout=10
+      - -i
+      - '{{ attempt_key }}'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - GlobalKnownHostsFile=/dev/null
+      - -o
+      - ForwardAgent=no
+      - -o
+      - LogLevel=ERROR
+    attempt_forward: ['-W', '{{ attempt_target | default("") }}', '{{ scenario_user }}@127.0.0.1']
+    # ssh -R asks sshd to listen on its own loopback and send what arrives to the target;
+    # ExitOnForwardFailure turns a refusal into a failed command, and -N runs no command.
+    attempt_reverse:
+      - -o
+      - ExitOnForwardFailure=yes
+      - -N
+      - -R
+      - '127.0.0.1:{{ scenario_remote_port }}:{{ attempt_target | default("") }}'
+      - '{{ scenario_user }}@127.0.0.1'
+    attempt_remote: ['{{ scenario_user }}@127.0.0.1', '--', '{{ attempt_command | default("") }}']
+    attempt_tail: >-
+      {{ attempt_reverse if attempt_expect == 'no_remote_forward'
+      else (attempt_remote if attempt_expect == 'no_command' else attempt_forward) }}
+  register: tenant_scrape_tunnel_attempt
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Look for the marker a hostile command would make
+  ansible.builtin.stat:
+    path: '{{ scenario_marker_file }}'
+    get_checksum: false
+  register: tenant_scrape_tunnel_attempt_marker
+  check_mode: false
+
+# The journal takes a moment to hold what sshd wrote, so a login that was accepted is waited for.
+# A key that is turned away has no such line to wait for.
+- name: Look at what the test SSH server has logged since
+  ansible.builtin.command:
+    argv:
+      [
+        journalctl,
+        --unit,
+        ssh,
+        --output,
+        cat,
+        --no-pager,
+        --grep,
+        'but the request was denied|Accepted publickey for',
+      ]
+  register: tenant_scrape_tunnel_attempt_log_after
+  changed_when: false
+  failed_when: tenant_scrape_tunnel_attempt_log_after.rc not in [0, 1]
+  check_mode: false
+  retries: 10
+  delay: 1
+  until: >-
+    attempt_expect == 'turned_away'
+    or ((tenant_scrape_tunnel_attempt_log_after.stdout_lines | default([]) | select('search', scenario_accepted_pattern) | list | length)
+    > (tenant_scrape_tunnel_attempt_accepted_before | int)
+    and (attempt_expect != 'refused'
+    or (tenant_scrape_tunnel_attempt_log_after.stdout_lines | default([]) | select('search', scenario_denied_pattern) | list | length)
+    > (tenant_scrape_tunnel_attempt_denied_before | int)))
+
+- name: Count the lines that are there now
+  ansible.builtin.set_fact:
+    tenant_scrape_tunnel_attempt_denied_after: >-
+      {{ tenant_scrape_tunnel_attempt_log_after.stdout_lines | select('search', scenario_denied_pattern) | list | length }}
+    tenant_scrape_tunnel_attempt_accepted_after: >-
+      {{ tenant_scrape_tunnel_attempt_log_after.stdout_lines | select('search', scenario_accepted_pattern) | list | length }}
+
+- name: Assert the client was not left waiting and nothing the client asked for ran
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt.rc not in [124, 137]
+      - not tenant_scrape_tunnel_attempt_marker.stat.exists
+    fail_msg: 'The client hung, or a command it asked for ran: {{ attempt_expect }} {{ attempt_target | default(attempt_command | default("")) }}'
+    quiet: true
+  when: attempt_expect != 'no_remote_forward'
+
+- name: Assert the forward was allowed by the key line and the drop-in
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt_accepted_after | int > tenant_scrape_tunnel_attempt_accepted_before | int
+      - tenant_scrape_tunnel_attempt_denied_after | int == tenant_scrape_tunnel_attempt_denied_before | int
+    fail_msg: >-
+      The forward to {{ attempt_target }} was not allowed: the client ended with
+      {{ tenant_scrape_tunnel_attempt.rc }} and said {{ tenant_scrape_tunnel_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'allowed'
+
+# More lines after than before means sshd logged during this connection that it denied a forward:
+# the configuration refused it, and not a login that failed or a destination that did not answer.
+- name: Assert the forward was refused by the configuration
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt.rc == 255
+      - "'stdio forwarding failed' in tenant_scrape_tunnel_attempt.stderr"
+      - tenant_scrape_tunnel_attempt_accepted_after | int > tenant_scrape_tunnel_attempt_accepted_before | int
+      - tenant_scrape_tunnel_attempt_denied_after | int > tenant_scrape_tunnel_attempt_denied_before | int
+    fail_msg: >-
+      The forward to {{ attempt_target }} was not refused: the client ended with
+      {{ tenant_scrape_tunnel_attempt.rc }} and said {{ tenant_scrape_tunnel_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'refused'
+
+- name: Assert the key was turned away
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt.rc == 255
+      - "'Permission denied' in tenant_scrape_tunnel_attempt.stderr"
+      - tenant_scrape_tunnel_attempt_accepted_after | int == tenant_scrape_tunnel_attempt_accepted_before | int
+    fail_msg: 'The key was not turned away: {{ tenant_scrape_tunnel_attempt.stderr }}'
+    quiet: true
+  when: attempt_expect == 'turned_away'
+
+# A remote forward that was made keeps the client waiting (-N), so the timeout kills it and it
+# ends 124 or 137; a refusal ends 255 with the client's own words.
+- name: Assert sshd refused to open a port of its own
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt.rc == 255
+      - "'remote port forwarding failed' in tenant_scrape_tunnel_attempt.stderr"
+      - tenant_scrape_tunnel_attempt_accepted_after | int > tenant_scrape_tunnel_attempt_accepted_before | int
+    fail_msg: >-
+      sshd did not refuse the remote forward: the client ended with
+      {{ tenant_scrape_tunnel_attempt.rc }} and said {{ tenant_scrape_tunnel_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'no_remote_forward'
+
+- name: Assert a remote command was not run after an accepted login
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_attempt.rc != 0
+      - "'EXAMPLE' not in tenant_scrape_tunnel_attempt.stdout"
+      - tenant_scrape_tunnel_attempt_accepted_after | int > tenant_scrape_tunnel_attempt_accepted_before | int
+    fail_msg: 'A remote command was served: {{ tenant_scrape_tunnel_attempt.stdout }}'
+    quiet: true
+  when: attempt_expect == 'no_command'

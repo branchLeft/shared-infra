@@ -1,0 +1,50 @@
+# Installed at /etc/systemd/system/branchleft-tenant-scrape.service on the host that runs
+# Prometheus. It dials out to the tenants base host and holds one local forward for each tenant
+# host's node exporter; nothing dials in. The role's README gives each option and the ports.
+[Unit]
+Description=Tunnel carrying the tenant hosts' node exporters to the Prometheus host
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/branchleft/tenant-scrape/target.env
+User=scrapetunnel
+Group=scrapetunnel
+NoNewPrivileges=yes
+ExecStart=/usr/bin/ssh -F none -N -T \
+    -i /etc/branchleft/tenant-scrape/id_ed25519 \
+    -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+    -o HostKeyAlias=edge-t \
+    -o UserKnownHostsFile=/etc/branchleft/tenant-scrape/known_hosts \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+    -o ForwardAgent=no -o ForwardX11=no -o PermitLocalCommand=no \
+    -o ControlMaster=no -o ControlPath=none \
+    -L 10.20.1.10:19100:10.20.1.200:9100 \
+    -L 10.20.1.10:19101:10.20.1.201:9100 \
+    -L 10.20.1.10:19102:10.20.1.210:9100 \
+    scrapetunnel@${TENANT_SCRAPE_EDGET_ENDPOINT}
+Restart=always
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=120
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

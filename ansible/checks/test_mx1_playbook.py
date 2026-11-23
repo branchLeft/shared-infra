@@ -1,14 +1,16 @@
-"""mx1's playbook applies the mail host's three roles in the order they depend on, and no further.
+"""mx1's playbook applies the mail host's five roles in the order they depend on, and no further.
 
 check_enrolment.py (R2, R9) holds a playbook to the host's list in host_roles/<host>.yml but
 leaves the order after the pull roles free. For the mail host the order carries meaning, so this
 file pins it, and pins what keeps the mail reconcilers' steps off:
 
-  * host_baseline first, because mx1_stack needs the Docker it installs;
+  * host_inputs first, because it sets the optional publish token the last role takes;
+  * host_baseline next, because mx1_stack needs the Docker it installs;
   * mx1_stack before mail_reconcilers, the order the mail host has always been provisioned in;
-  * the same three roles, in the same order, are mx1's file in host_roles/;
-  * mx1_stack and mail_reconcilers are on no other host's row, because both are written for the
-    mail host's paths and nothing else;
+  * mx1_abuse_page last, because it reads the mailbox through the Stalwart that mx1_stack runs;
+  * the same five roles, in the same order, are mx1's file in host_roles/;
+  * mx1_stack, mail_reconcilers and mx1_abuse_page are on no other host's row, because each is
+    written for the mail host and nothing else;
   * the host has no owner_vars file, so no step allow-list can reach mail_reconcilers through
     the pull.
 """
@@ -24,8 +26,8 @@ from check_enrolment import ROOT, read_host_roles_raw
 
 ANSIBLE = ROOT / "ansible"
 PULL_ROLES = 2
-MX1_ROLES = ["host_baseline", "mx1_stack", "mail_reconcilers"]
-MAIL_ONLY = ("mx1_stack", "mail_reconcilers")
+MX1_ROLES = ["host_inputs", "host_baseline", "mx1_stack", "mail_reconcilers", "mx1_abuse_page"]
+MAIL_ONLY = ("mx1_stack", "mail_reconcilers", "mx1_abuse_page")
 
 Rows = dict[str, list[str]]
 
@@ -46,10 +48,10 @@ def _host_roles() -> Rows:
 
 
 class Mx1Playbook(unittest.TestCase):
-    def test_the_playbook_applies_the_three_roles_in_order(self) -> None:
+    def test_the_playbook_applies_the_five_roles_in_order(self) -> None:
         self.assertEqual(_applied_after_the_pull_roles(), MX1_ROLES)
 
-    def test_host_roles_lists_the_same_three(self) -> None:
+    def test_host_roles_lists_the_same_five(self) -> None:
         self.assertEqual(_host_roles()["mx1"], MX1_ROLES)
 
     def test_the_two_mail_roles_are_on_no_other_hosts_row(self) -> None:
