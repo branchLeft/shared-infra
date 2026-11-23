@@ -1,8 +1,10 @@
 ---
-# Test setup only, never part of the role. It makes a throwaway CA, a server certificate for the
-# name demo1, a client certificate from that CA, and a second CA with a client certificate the
-# exporter must refuse. Every key is made here, in the container, and lives and dies with it.
-# The three files the owner places on a real host are put where the role reads them.
+# Test setup only, never part of the role. It makes what host_tls_identity makes on the two hosts, with
+# the openssl program: a self-signed server certificate for the name demo1 (serverAuth only), the one
+# self-signed client certificate the exporter pins, and a second client certificate the exporter must
+# refuse. Every key is made here, in the container, and lives and dies with it. The three files
+# host_tls_identity leaves on a real host (the pinned client certificate as ca.crt, the server
+# certificate and its key) are put where the role reads them.
 - name: Prepare
   hosts: all
   gather_facts: false
@@ -21,7 +23,7 @@
         group: root
         mode: '0700'
 
-    - name: Make the two throwaway CAs
+    - name: Make the server certificate and the two client certificates, each self-signed with its own key
       ansible.builtin.command:
         argv:
           - openssl
@@ -33,90 +35,35 @@
           - ec_paramgen_curve:prime256v1
           - -nodes
           - -keyout
-          - '/root/pki/{{ item }}-ca.key'
-          - -out
-          - '/root/pki/{{ item }}-ca.crt'
-          - -subj
-          - '/CN={{ item }}-ca'
-          # The scraping client verifies strictly: a CA must say it may sign certificates.
-          - -addext
-          - basicConstraints=critical,CA:TRUE
-          - -addext
-          - keyUsage=critical,keyCertSign,cRLSign
-          - -days
-          - '2'
-        creates: '/root/pki/{{ item }}-ca.crt'
-      loop:
-        - good
-        - rogue
-
-    - name: Make the server key and the two client keys, each with a certificate request
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - req
-          - -new
-          - -newkey
-          - ec
-          - -pkeyopt
-          - ec_paramgen_curve:prime256v1
-          - -nodes
-          - -keyout
-          - '/root/pki/{{ item }}.key'
-          - -out
-          - '/root/pki/{{ item }}.csr'
-          - -subj
-          - '/CN={{ item }}'
-        creates: '/root/pki/{{ item }}.csr'
-      loop:
-        - server
-        - client
-        - rogue-client
-
-    - name: Say what each certificate is for
-      ansible.builtin.copy:
-        content: '{{ item.content }}'
-        dest: '/root/pki/{{ item.name }}.ext'
-        owner: root
-        group: root
-        mode: '0600'
-      loop:
-        - name: server
-          content: "subjectAltName=DNS:demo1\nextendedKeyUsage=serverAuth\n"
-        - name: client
-          content: "extendedKeyUsage=clientAuth\n"
-        - name: rogue-client
-          content: "extendedKeyUsage=clientAuth\n"
-      loop_control:
-        label: '{{ item.name }}'
-
-    - name: Sign the server and client certificates with the good CA, and the rogue one with the rogue CA
-      ansible.builtin.command:
-        argv:
-          - openssl
-          - x509
-          - -req
-          - -in
-          - '/root/pki/{{ item.name }}.csr'
-          - -CA
-          - '/root/pki/{{ item.ca }}-ca.crt'
-          - -CAkey
-          - '/root/pki/{{ item.ca }}-ca.key'
-          - -CAcreateserial
+          - '/root/pki/{{ item.name }}.key'
           - -out
           - '/root/pki/{{ item.name }}.crt'
+          - -subj
+          - '/CN={{ item.cn }}'
           - -days
           - '2'
-          - -extfile
-          - '/root/pki/{{ item.name }}.ext'
+          - -addext
+          - basicConstraints=critical,CA:FALSE
+          - -addext
+          - keyUsage=critical,digitalSignature
+          - -addext
+          - 'extendedKeyUsage={{ item.usage }}'
+          - -addext
+          - 'subjectAltName={{ item.san }}'
         creates: '/root/pki/{{ item.name }}.crt'
       loop:
         - name: server
-          ca: good
+          cn: demo1
+          usage: serverAuth
+          san: 'DNS:demo1'
         - name: client
-          ca: good
+          cn: edge1
+          usage: clientAuth
+          san: 'DNS:edge1'
         - name: rogue-client
-          ca: rogue
+          cn: edge1
+          usage: clientAuth
+          san: 'DNS:edge1'
       loop_control:
         label: '{{ item.name }}'
 
@@ -147,7 +94,8 @@
         group: root
         mode: '0600'
       loop:
-        - src: good-ca.crt
+        # The pin: the one client certificate the exporter accepts, as host_tls_identity writes it.
+        - src: client.crt
           dest: ca.crt
         - src: server.crt
           dest: server.crt
