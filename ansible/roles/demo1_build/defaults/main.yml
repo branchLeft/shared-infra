@@ -7,7 +7,7 @@
 # that does not match stops the role before it writes. The commit must be at or after
 # 0a23634b652a37260d77e656ded3c37ff24d62ec, the commit that moved the drain flags to
 # /var/lib/branchleft-broker/drain-flags.
-demo1_build_source_sha: 5e20991adefcdb9edde4157c6a56d2796ec1da6c
+demo1_build_source_sha: 922fc9d997fc5780bec9fc9a4f30c2dc743fe85a
 
 # Every program the role carries, one path and one sha256 each, relative to the
 # repository root. This is the import closure of the programs the role runs
@@ -16,9 +16,9 @@ demo1_build_source_sha: 5e20991adefcdb9edde4157c6a56d2796ec1da6c
 # here: the role declares what they create with modules instead (README).
 demo1_build_release_files:
   - path: demo-host/provision/branchleft_slot.py
-    sha256: 8931ac8aad031d3ce7428ed9b404689bc58eb591530cea773f633fb358a74072
+    sha256: 612bcfc2edc1b358fe0d7b89b2d77313f734db3ffdd60ef20767902780bf5dc5
   - path: demo-host/provision/demo_go_live.py
-    sha256: deab5c8c780de0c23ad8ce4459ef33ae5ee5f6e577fe5b7311a77d045b332677
+    sha256: ef033f14770bb76c3de3759729bf7bd54e97e2b5db930b96a5f237e95c90ffcb
   - path: demo-host/provision/demo_sidecar.py
     sha256: 038dd55e6316b12a8c04c9c2dd3846c44668be401952aaa44c8576bbdca6c6c3
   - path: demo-host/provision/demo_uid_claims.py
@@ -30,7 +30,7 @@ demo1_build_release_files:
   - path: demo-host/provision/render_demo_edge.py
     sha256: 8b42f5de63114d201844539c449b1466d0b504422724821351a2e6c712d619b0
   - path: demo-host/provision/render_demo_site.py
-    sha256: fea01e3ca2c198865a04714ec459d432d22a641dbe8ec72977dd74db245745d7
+    sha256: 3061099001ad08f232e3341d332395936e1bde0288aaf15b4ed80d35bf7482ac
   - path: demo-host/provision/render_router_unit.py
     sha256: 3a0f71cc61e45e416f983ef86c02f1b419565a6c34511d1a60f35092454dab3a
   - path: demo-host/provision/render_slot_sudoers.py
