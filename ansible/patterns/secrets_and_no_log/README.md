@@ -436,7 +436,9 @@ wrong source. To add a secret option, add its row here.
 | `monitoring_stack`         | `monitoring_stack_smtp_password`          | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_smtp_username`          | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_snds_data_url`          | host_inputs: edge1        |
+| `mx1_abuse_page`           | `mx1_abuse_page_token`                    | host_inputs: mx1          |
 | `ntfy_pager`               | `ntfy_pager_machine_password_hash`        | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_mx1_token`                    | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_owner_password_hash`          | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_pager_token`                  | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_watcher_token`                | host_inputs: edge1        |

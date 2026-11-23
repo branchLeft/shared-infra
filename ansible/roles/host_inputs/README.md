@@ -57,8 +57,8 @@ starts with a code, so that a test can tell one from another:
 ### Optional inputs
 
 `host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
-file may leave out. Today that is `ci_jump_user`, on edge1 and edget, `ci_jump_spool_user`, on
-edget, and the two `broker_tunnel_client_demo1_*` inputs, on ops1, and nothing else. An
+file may leave out. Today that is `ci_jump_user` (edge1 and edget), `ntfy_pager_mx1_token` (edge1),
+`mx1_abuse_page_token` (mx1), `ci_jump_spool_user` (edget) and the two `broker_tunnel_client_demo1_*` inputs (ops1), and nothing else. An
 absent optional input is not set, which leaves its role's argument unset, and the play goes
 on. A host whose every input in its row is optional (demo1 today, and edget, whose two inputs are
 `ci_jump_user` and `ci_jump_spool_user`) runs without the file at all: no file loads as an empty set of inputs and the
@@ -120,14 +120,17 @@ this route. A slot is exactly the argument spec of `deploy_slot_keys`: `stack` a
 are required, and `adopt_existing` is a JSON boolean that must be `true` only for a stack the
 host already runs.
 
-For edge1 the file is one JSON object of twelve keys, each the name of a required argument
-of `monitoring_stack` (seven), `ntfy_pager` (four) or `ci_jump` (one, `ci_jump_user`, the CI
-jump account's name, which is held out of the repository and every log). The values must equal
+For edge1 the file is one JSON object of thirteen keys, each the name of an argument
+of `monitoring_stack` (seven), `ntfy_pager` (five) or `ci_jump` (one, `ci_jump_user`, the CI
+jump account's name, which is held out of the repository and every log). The fifth `ntfy_pager`
+key, `ntfy_pager_mx1_token`, is the publish-only token of the mail host; it is optional, and
+without it the ntfy server config carries no grant for the mail host. The values must equal
 what is live on the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env`
 with others. `ci_jump_user` is not read from a live file: the owner types it once, hidden, with
-`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`). It is an
-optional input (above): until it is seeded the file holds eleven keys, the plan and the apply
-go on, and the `ci_jump` role stays inert and says so. Seeded, the file is:
+`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`); the mail
+host's token is placed the same way with `--set ntfy_pager_mx1_token`. Both are optional
+inputs (above): until they are seeded the file holds eleven keys, the plan and the apply go on,
+and the roles stay inert. Seeded, the file is:
 
 ```text
 {
@@ -142,9 +145,16 @@ go on, and the `ci_jump` role stays inert and says so. Seeded, the file is:
   "ntfy_pager_watcher_token": "<string>",
   "ntfy_pager_owner_password_hash": "<string>",
   "ntfy_pager_machine_password_hash": "<string>",
+  "ntfy_pager_mx1_token": "<string>",
   "ci_jump_user": "<string>"
 }
 ```
+
+For mx1 the file is one JSON object of one key, `mx1_abuse_page_token`, the token that lets the
+mail host publish to the abuse topic of the pager and nothing else. It is an optional input: the
+file itself must exist (a run stops with `host_inputs[file-missing]` until the owner has seeded
+it, with `seed_host_inputs.py --host mx1`), but a file without the key lets the plan and the
+apply go on, and the `mx1_abuse_page` role leaves its timer off.
 
 For ops1 the file is one JSON object of twenty keys, each the name of a required argument of
 `backup_worker` (ten) or `backup_restore` (ten). `backup_worker_tenants` is a list; the rest
@@ -217,7 +227,7 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. The playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
+nothing else. The playbooks of edge1, edget, ops1, db1, app1 and mx1 apply it. On edget (edge-t)
 its two inputs are `ci_jump_user` and `ci_jump_spool_user`, the names of the two jump accounts of
 the `ci_jump` role, both optional. That makes edget's run go on whether or not the owner has placed
 `/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above), and the `ci_jump` role stays
@@ -235,7 +245,7 @@ command line or committed.
 The owner places the file once, on the host, as root: one JSON object whose keys are exactly
 the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
 directories only root can write. The role never writes it. For edge1, edget, ops1 and app1 the writer is
-`ansible/tools/seed_host_inputs.py --host edge1` (or `edget`, `ops1`, or `app1`), which:
+`ansible/tools/seed_host_inputs.py --host edge1` (or `edget`, `ops1`, `app1` or `mx1`), which:
 
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the

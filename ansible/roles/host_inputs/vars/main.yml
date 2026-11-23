@@ -45,6 +45,7 @@ host_inputs_required_by_host:
     - ntfy_pager_watcher_token
     - ntfy_pager_owner_password_hash
     - ntfy_pager_machine_password_hash
+    - ntfy_pager_mx1_token
     - ci_jump_user
   edget:
     - ci_jump_user
@@ -82,6 +83,8 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - deploy_slot_keys_slots
+  mx1:
+    - mx1_abuse_page_token
   demo1:
     - broker_deploy_owner_due_diligence_email
 
@@ -101,10 +104,13 @@ host_inputs_optional_by_host:
   demo1:
     - broker_deploy_owner_due_diligence_email
   edge1:
+    - ntfy_pager_mx1_token
     - ci_jump_user
   edget:
     - ci_jump_user
     - ci_jump_spool_user
+  mx1:
+    - mx1_abuse_page_token
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.
