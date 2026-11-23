@@ -1,11 +1,10 @@
 """Pins on the hosts that apply the ci_jump role: edge1 and edge-t (the logical host edget).
 
-The role is one: it writes the jump account's key options and the sshd Match block from the
-destination lists (the shared one, and the list a key may have of its own), and
-`molecule/default` proves over a real sshd that a destination not on the list is refused. That
-proof covers every host only if the role has no branch on the host and every jump host applies it
-as a plain role entry. This file holds both, and holds the two data rules the pipeline's route
-rests on (the 2 Nov ruling, ws#2894):
+The role is one: it writes the jump account's key options and the sshd Match block from one
+destination list, and `molecule/default` proves over a real sshd that a destination not on the list
+is refused. That proof covers every host only if the role has no branch on the host and every jump
+host applies it as a plain role entry. This file holds both, and holds the two data rules the
+pipeline's route rests on (the 2 Nov ruling, ws#2894):
 
 * edge1's list may hold edge-t's public address and never a tenants private address, so the runner
   cannot be sent from edge1 straight to a tenants host and must go on through edge-t;
