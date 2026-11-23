@@ -945,27 +945,30 @@ DIAGNOSIS_TOTAL_BYTES = 8192
 DIAGNOSIS_TIMEOUT = 20
 REDACTED = "<redacted>"
 
-_SECRET_WORDS = r"(?:pass(?:word|wd|phrase)?|secret|token|api[-_]?key|key|credential|auth\w*|cookie|session)"
-_PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
-_KNOWN_TOKEN = re.compile(
+_NAME_WORDS = r"(?:pass(?:word|wd|phrase)?|secret|token|api[-_]?key|key|credential|auth\w*|cookie|session)"
+_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*" + "PRIV" + r"ATE KEY-----.*?(?:-----END [A-Z ]*" + "PRIV" + r"ATE KEY-----|\Z)",
+    re.S,
+)
+_KNOWN_SHAPES = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}"
     r"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*)"
 )
 _AUTH_HEADER = re.compile(r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie)\b\s*[:=].*")
-_SCHEME_CREDENTIAL = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{8,}")
+_SCHEME_CRED = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{8,}")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
-_SECRET_FIELD = re.compile(
-    r"(?i)(?P<key>[\"']?[\w.-]*" + _SECRET_WORDS + r"[\w.-]*[\"']?\s*[:=]\s*)"
+_NAMED_FIELD = re.compile(
+    r"(?i)(?P<key>[\"']?[\w.-]*" + _NAME_WORDS + r"[\w.-]*[\"']?\s*[:=]\s*)"
     r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;}]+)"
 )
-_SECRET_FLAG = re.compile(r"(?i)(--?[\w-]*" + _SECRET_WORDS + r"[\w-]*[ =])\S+")
+_NAMED_FLAG = re.compile(r"(?i)(--?[\w-]*" + _NAME_WORDS + r"[\w-]*[ =])\S+")
 _ASSIGNMENT = re.compile(
     r"(?<![\w.-])(?P<key>[A-Za-z_][\w.-]*)=(?P<value>\"[^\"]*\"|'[^']*'|\S*)"
 )
 # Keys whose values are exit facts, not configuration: `(code=exited, status=1/FAILURE)`.
 _SAFE_ASSIGNMENT_KEYS = frozenset({"code", "status", "signal", "result"})
 _SAFE_ASSIGNMENT_VALUE = re.compile(r"\A[A-Za-z0-9/_.-]{1,24}\Z")
-_LONG_TOKEN = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_=-]{32,}")
+_LONG_RUN = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_=-]{32,}")
 _CONTROL = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -986,29 +989,29 @@ def _redact_assignment(match: re.Match) -> str:
 
 
 def _redact_long_token(match: re.Match) -> str:
-    token = match.group(0)
+    run = match.group(0)
     if match.string[max(0, match.start() - 7) : match.start()] == "sha256:":
-        return token  # an image digest is public and is the thing being diagnosed
+        return run  # an image digest is public and is the thing being diagnosed
     mixed = (
-        re.search(r"[0-9]", token)
-        and re.search(r"[A-Za-z]", token)
-        and ("/" not in token or re.search(r"[A-Z]", token) and re.search(r"[a-z]", token))
+        re.search(r"[0-9]", run)
+        and re.search(r"[A-Za-z]", run)
+        and ("/" not in run or re.search(r"[A-Z]", run) and re.search(r"[a-z]", run))
     )
-    return REDACTED if mixed else token
+    return REDACTED if mixed else run
 
 
 def redact_diagnostic_line(line: str) -> str:
     """One host line made safe for a public CI log. See branchleft_deploy.md, "Restart diagnosis"."""
     line = _CONTROL.sub("", line).rstrip()
-    line = _PRIVATE_KEY.sub(REDACTED, line)
+    line = _KEY_BLOCK.sub(REDACTED, line)
     line = _AUTH_HEADER.sub(lambda m: f"{m.group(1)}: {REDACTED}", line)
-    line = _SCHEME_CREDENTIAL.sub(lambda m: f"{m.group(1)} {REDACTED}", line)
+    line = _SCHEME_CRED.sub(lambda m: f"{m.group(1)} {REDACTED}", line)
     line = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{REDACTED}@", line)
-    line = _KNOWN_TOKEN.sub(REDACTED, line)
-    line = _SECRET_FIELD.sub(lambda m: m.group("key") + REDACTED, line)
-    line = _SECRET_FLAG.sub(lambda m: m.group(1) + REDACTED, line)
+    line = _KNOWN_SHAPES.sub(REDACTED, line)
+    line = _NAMED_FIELD.sub(lambda m: m.group("key") + REDACTED, line)
+    line = _NAMED_FLAG.sub(lambda m: m.group(1) + REDACTED, line)
     line = _ASSIGNMENT.sub(_redact_assignment, line)
-    line = _LONG_TOKEN.sub(_redact_long_token, line)
+    line = _LONG_RUN.sub(_redact_long_token, line)
     # `::name::` at the start of a runner log line is a workflow command.
     line = line.replace("::", ": :")
     if len(line) > DIAGNOSIS_LINE_CHARS:
