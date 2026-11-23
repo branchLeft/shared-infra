@@ -421,6 +421,8 @@ wrong source. To add a secret option, add its row here.
 | `backup_worker`            | `backup_worker_db_password`                  | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_access_key_id`             | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_secret_access_key`         | host_inputs: ops1         |
+| `binlog_pull`              | `binlog_pull_db_ca_pem`                      | none                      |
+| `binlog_pull`              | `binlog_pull_db_password`                    | none                      |
 | `broker_deploy`            | `broker_deploy_owner_due_diligence_email`    | host_inputs: demo1        |
 | `broker_tunnel_client`     | `broker_tunnel_client_demo1_address`         | host_inputs: ops1         |
 | `ci_jump`                  | `ci_jump_user`                               | host_inputs: edge1, edget |
@@ -436,7 +438,9 @@ wrong source. To add a secret option, add its row here.
 | `monitoring_stack`         | `monitoring_stack_smtp_password`             | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_smtp_username`             | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_snds_data_url`             | host_inputs: edge1        |
+| `mx1_abuse_page`           | `mx1_abuse_page_token`                       | host_inputs: mx1          |
 | `ntfy_pager`               | `ntfy_pager_machine_password_hash`           | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_mx1_token`                       | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_owner_password_hash`             | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_pager_token`                     | host_inputs: edge1        |
 | `ntfy_pager`               | `ntfy_pager_watcher_token`                   | host_inputs: edge1        |

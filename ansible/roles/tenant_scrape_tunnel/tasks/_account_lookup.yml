@@ -1,0 +1,22 @@
+---
+# Looks the tunnel account up and refuses one that has a login shell, for both halves and for
+# both ways in (making the account and removing it): one home for the lookup and its refusal.
+# It reads no input and changes nothing.
+- name: Look up the tunnel account
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ tenant_scrape_tunnel_user }}']
+  register: tenant_scrape_tunnel_passwd
+  changed_when: false
+  failed_when: tenant_scrape_tunnel_passwd.rc not in [0, 2]
+  check_mode: false
+
+# A shell the role did not give is never changed or removed silently: the role refuses,
+# and an operator fixes the account by hand.
+- name: Refuse an existing tunnel account that has a login shell
+  ansible.builtin.assert:
+    that:
+      - tenant_scrape_tunnel_passwd.rc == 2 or (tenant_scrape_tunnel_passwd.stdout.split(':') | last) == tenant_scrape_tunnel_nologin
+    quiet: true
+    fail_msg: >-
+      The tunnel account already exists with a login shell. The role does not
+      change or remove an existing account's shell; fix the account by hand first.

@@ -557,7 +557,7 @@ class NoGithubFetchTest(unittest.TestCase):
         found = get_url_findings_after("vars/main.yml", lambda _: text)
         self.assertEqual(1, len(found), found)
 
-    def test_the_playbook_applies_the_six_roles_the_check_reads(self) -> None:
+    def test_the_playbook_applies_the_seven_roles_the_check_reads(self) -> None:
         self.assertEqual(
             [
                 "ansible_runtime",
@@ -567,6 +567,8 @@ class NoGithubFetchTest(unittest.TestCase):
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "host_tls_identity",
+                "node_exporter_public",
             ],
             playbook_roles(ROOT),
         )

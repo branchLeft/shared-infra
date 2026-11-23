@@ -238,6 +238,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   probe_success: 'blackbox_exporter',
   probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
+  // The caddy-crowdsec-bouncer module inside the edge's Caddy (v0.15.0,
+  // internal/metrics); present only while the Caddyfile sets
+  // `enable_caddy_metrics`, which render.test.ts in hetzner/edge asserts.
+  crowdsec_appsec_lapi_requests_failures_total:
+    "the caddy-crowdsec-bouncer module in edge1's Caddy (the caddy scrape job)",
   // Its name, labels and that it leaves out simulated decisions are asserted
   // against a running CrowdSec by hetzner/edge/test_crowdsec_replay.py.
   cs_active_decisions: "CrowdSec's Local API, on edge1 (the crowdsec scrape job)",
@@ -273,6 +278,10 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // on db1 (lock gauges under tenant="db1-all-databases", and its own status gauges). None is a collector
   // this repo can scan; render.md, "The `backup` rule group", gives the hosts.
   state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
+  // PROPOSED contract, not yet exported: the safety service's per-incident reporting clock. One series per running clock,
+  // labelled with its tenant, present from the seal until a recorded report removes it. No producer on main yet.
+  scanning_storage_reporting_clock_started_timestamp_seconds:
+    'proposed: scanning-storage adapter in branchLeft/ghost-platform, once the clock is exported (no producer yet)',
   state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   backup_worker_lock_wait_seconds:
     'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
@@ -318,6 +327,16 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py), a textfile gauge on ops1",
   control_plane_backup_last_failure_timestamp_seconds:
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py mark-failed), a textfile gauge on ops1",
+  // The binary-log pull's textfile gauges, written on ops1 by the program the binlog_pull Ansible
+  // role installs (ansible/roles/binlog_pull/files): the success time and the counts the gap rule
+  // reads. The program lives outside this directory, so a unit test in the role pins these names to
+  // the expressions in alerts.yml.
+  binlog_pull_last_success_timestamp_seconds:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_gap_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_unshipped_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
   // The scanning storage adapter's textfile export, written by each tenant's
   // Ghost process on its app host. Names and label values are the contract in
   // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the

@@ -1,0 +1,24 @@
+# Hand-written, rendered on the host by render_alertmanager_config.py from
+# DEMO_WILDCARD_BASE in /etc/branchleft/monitoring.env, before every start. The
+# token below is replaced with the base; an unset base writes an empty scrape
+# list instead, so this job never reaches Prometheus with a placeholder name.
+#
+# The probe dials a fixed label under the demo wildcard by DNS name and checks a
+# verified TLS handshake (tls_connect), so an expired or missing wildcard
+# certificate, or a dead edge, reads as probe_success 0.
+scrape_configs:
+  - job_name: blackbox_demo_tls
+    metrics_path: /probe
+    params:
+      module: ['tls_connect']
+    static_configs:
+      - targets:
+          - probe.__DEMO_WILDCARD_BASE__:443
+        labels: {host: edge1, expected_up: 'true'}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'

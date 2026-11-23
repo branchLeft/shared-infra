@@ -107,6 +107,13 @@ def render_cleanup(
         lines.append(
             "Delete these by hand in the OVHcloud project before the next run."
         )
+    elif note:
+        lines.append(
+            f"**CLEANUP NEEDS A LOOK: {len(gone)} resource(s) removed, and the cleanup reported a problem below.**"
+        )
+        if gone:
+            lines.append("")
+            lines.append(", ".join(f"`{_cell(name)}`" for name in gone))
     else:
         lines.append(
             f"**Everything was destroyed: {len(gone)} resource(s) removed, none remain.**"

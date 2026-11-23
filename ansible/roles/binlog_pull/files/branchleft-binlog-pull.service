@@ -1,0 +1,29 @@
+# Pulls the tenant database host's closed binary logs, seals each to the estate recipient and
+# puts the ciphertext to backup copy 1. Triggered every 15 minutes by branchleft-binlog-pull.timer.
+# Installed by the binlog_pull role. The 15 minutes is what bounds the data lost on host loss.
+[Unit]
+Description=branchLeft binary-log pull (fetch closed logs, seal, ship ciphertext to copy 1)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/branchleft/binlog-pull/branchleft_binlog_pull.py pull
+UMask=0077
+# The fetched log is plaintext of every tenant: it lives only in this tmpfs directory, which
+# systemd makes at start and removes at stop, and which the program also empties after each log.
+RuntimeDirectory=branchleft-binlog-pull
+RuntimeDirectoryMode=0700
+# A fetch, a seal and two puts per log, bounded under the 15 minute period so a hung run cannot
+# pile up behind the next.
+TimeoutStartSec=10min
+MemoryMax=1G
+
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

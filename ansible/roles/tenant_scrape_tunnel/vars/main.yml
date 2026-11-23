@@ -1,0 +1,127 @@
+---
+# Constants of the tunnel, not inputs: role variables outrank every value a caller passes, so a
+# caller cannot change a port, an address or a path. The unit file in files/ carries literal copies
+# of the destinations, the bind address, the account, the paths and the alias; tasks/_edge1.yml
+# asserts each against the constants below, and a tripwire holds the file to its sha256.
+# ansible/checks/test_tenant_scrape_tunnel_pins.py holds the addresses and ports equal to the
+# address plan and to the Prometheus configuration's generator.
+#
+# The account's name is not a secret. No path below is made from it.
+tenant_scrape_tunnel_user: scrapetunnel
+tenant_scrape_tunnel_nologin: /usr/sbin/nologin
+
+# The two halves, chosen by the host's name in the play (enrolled_host).
+tenant_scrape_tunnel_scraper_host: edge1
+tenant_scrape_tunnel_target_host: edget
+
+tenant_scrape_tunnel_key_dir: /etc/branchleft/tenant-scrape
+tenant_scrape_tunnel_key_file: '{{ tenant_scrape_tunnel_key_dir }}/id_ed25519'
+tenant_scrape_tunnel_key_pub_file: '{{ tenant_scrape_tunnel_key_file }}.pub'
+tenant_scrape_tunnel_key_comment: tenant-scrape-tunnel
+tenant_scrape_tunnel_known_hosts_file: '{{ tenant_scrape_tunnel_key_dir }}/known_hosts'
+tenant_scrape_tunnel_target_env_file: '{{ tenant_scrape_tunnel_key_dir }}/target.env'
+tenant_scrape_tunnel_target_env_name: TENANT_SCRAPE_EDGET_ENDPOINT
+tenant_scrape_tunnel_host_key_alias: edge-t
+tenant_scrape_tunnel_unit_name: branchleft-tenant-scrape.service
+tenant_scrape_tunnel_unit_path: '/etc/systemd/system/{{ tenant_scrape_tunnel_unit_name }}'
+tenant_scrape_tunnel_sshd_service: ssh
+tenant_scrape_tunnel_sshd_config_dir: /etc/ssh/sshd_config.d
+tenant_scrape_tunnel_sshd_dropin: '{{ tenant_scrape_tunnel_sshd_config_dir }}/50-branchleft-tenant-scrape.conf'
+tenant_scrape_tunnel_authorized_keys_dir: /etc/ssh/branchleft-tenant-scrape
+tenant_scrape_tunnel_authorized_keys_file: '{{ tenant_scrape_tunnel_authorized_keys_dir }}/authorized_keys'
+tenant_scrape_tunnel_host_key_pub_file: /etc/ssh/ssh_host_ed25519_key.pub
+
+# The unit file ships in this role's files/ directory. The pin is a tripwire against an accidental
+# edit of that file, not a control on a deliberate change: a change to the role is reviewed in its
+# diff and lands as a signed commit.
+tenant_scrape_tunnel_unit_sha256: baadad619d282fb8def5ce8505070cd085813b31016e76651aadf3cd9b39186a
+
+# What the tunnel may reach: the node exporter of each tenant host, by its address on the tenants
+# network, and the local port the scraper host listens on for it. The key, the sshd drop-in and
+# the unit's -L options are all made from, or held equal to, this one list.
+tenant_scrape_tunnel_target_port: 9100
+tenant_scrape_tunnel_bind_address: 10.20.1.10
+tenant_scrape_tunnel_destinations:
+  - name: dbt1
+    address: 10.20.1.200
+    local_port: 19100
+  - name: appt1
+    address: 10.20.1.201
+    local_port: 19101
+  - name: edget
+    address: 10.20.1.210
+    local_port: 19102
+
+# What sshd must report for the account once the drop-in is in place: the `sshd -T` keyword and
+# its one value. The permitted destinations are read back apart from this table, as a set.
+tenant_scrape_tunnel_expected_effective:
+  authenticationmethods: publickey
+  authorizedkeysfile: '{{ tenant_scrape_tunnel_authorized_keys_file }}'
+  allowtcpforwarding: local
+  permitlisten: none
+  gatewayports: 'no'
+  allowagentforwarding: 'no'
+  allowstreamlocalforwarding: 'no'
+  x11forwarding: 'no'
+  permittty: 'no'
+  permittunnel: 'no'
+  permituserrc: 'no'
+  forcecommand: '{{ tenant_scrape_tunnel_nologin }}'
+
+# Shapes, matched with \Z so a trailing line break does not pass. An ed25519 key line: the type
+# and the 68 base64 characters of an ed25519 key (they always begin AAAAC3NzaC1lZDI1NTE5AAAAI),
+# with no comment: the role renders the first two fields only, so a comment is never carried.
+# The public file ssh-keygen writes has a comment; the owner's value may have one, hence the
+# optional trailing comment of the characters the ghost-platform program accepts.
+tenant_scrape_tunnel_ed25519_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}(?: [A-Za-z0-9@._-]{1,64})?\Z'
+# The endpoint of the target host: a DNS name or an IPv4 address, never a bracketed address, a
+# port, a user or a leading hyphen (it is one word of a command line and one line of a file).
+tenant_scrape_tunnel_endpoint_pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?){0,10}\Z'
+
+# The feature is on for a half only when every value that half needs is filled in (empty means off).
+# The scraper host needs the target's host key and endpoint; the target host needs the scraper's key.
+tenant_scrape_tunnel_is_scraper_enabled: >-
+  {{ (tenant_scrape_tunnel_target_host_key | length > 0) and (tenant_scrape_tunnel_target_endpoint | length > 0) }}
+tenant_scrape_tunnel_is_target_enabled: '{{ tenant_scrape_tunnel_scraper_public_key | length > 0 }}'
+
+# A half is torn down when its data is emptied after it was installed. The first apply also runs
+# with empty data, and it must make the key and print it, so the scraper host's trigger needs the
+# unit to be installed (it is only ever installed with data in); a half-filled pair is not a
+# removal and changes nothing. The target host's account and files exist only once its key was
+# filled in, so any of them is the sign that the half was installed. The two observed values are
+# set by the tasks from what is on the host.
+tenant_scrape_tunnel_is_scraper_teardown: >-
+  {{ (tenant_scrape_tunnel_target_host_key | length == 0)
+     and (tenant_scrape_tunnel_target_endpoint | length == 0)
+     and tenant_scrape_tunnel_is_unit_installed }}
+tenant_scrape_tunnel_is_target_teardown: >-
+  {{ (tenant_scrape_tunnel_scraper_public_key | length == 0)
+     and tenant_scrape_tunnel_is_target_installed }}
+
+# What the scraper host's teardown removes, in order: the unit first, the key pair last. The key
+# directory is removed after them, only when nothing else is in it.
+tenant_scrape_tunnel_scraper_files:
+  - '{{ tenant_scrape_tunnel_unit_path }}'
+  - '{{ tenant_scrape_tunnel_target_env_file }}'
+  - '{{ tenant_scrape_tunnel_known_hosts_file }}'
+  - '{{ tenant_scrape_tunnel_key_file }}'
+  - '{{ tenant_scrape_tunnel_key_pub_file }}'
+# Each of these must be in the unit file's text. The forwards are held to the destinations apart
+# from this list, one by one, and the options that open any other forward are refused by name.
+tenant_scrape_tunnel_unit_required_options:
+  - 'EnvironmentFile={{ tenant_scrape_tunnel_target_env_file }}'
+  - 'User={{ tenant_scrape_tunnel_user }}'
+  - 'Group={{ tenant_scrape_tunnel_user }}'
+  - '-i {{ tenant_scrape_tunnel_key_file }} '
+  - '-o IdentitiesOnly=yes '
+  - '-o BatchMode=yes '
+  - '-o StrictHostKeyChecking=yes '
+  - '-o UpdateHostKeys=no '
+  - '-o HostKeyAlias={{ tenant_scrape_tunnel_host_key_alias }} '
+  - '-o UserKnownHostsFile={{ tenant_scrape_tunnel_known_hosts_file }} '
+  - '-o GlobalKnownHostsFile=/dev/null '
+  - '-o ExitOnForwardFailure=yes '
+  - "{{ tenant_scrape_tunnel_user ~ '@${' ~ tenant_scrape_tunnel_target_env_name ~ '}' }}"
+  - 'Restart=always'
+# The only single-letter options the unit's ssh command may carry: no -R, -D, -W, -J or -g.
+tenant_scrape_tunnel_unit_allowed_flags: ['-F', '-N', '-T', '-i', '-o', '-L']

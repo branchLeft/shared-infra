@@ -13,7 +13,7 @@
 # of the role (files/check_stalwart_bootstrap_mode.py) that prints one fixed line and no
 # answer. It writes nothing, so it runs in a check-mode request too, and a plan shows the
 # refusal. It is copied for the one run and placed nowhere, so the plain apply still places
-# exactly nineteen programs. Exit 0 is the only status that lets the step go on: 3 is bootstrap mode, anything else is a
+# exactly twenty programs. Exit 0 is the only status that lets the step go on: 3 is bootstrap mode, anything else is a
 # mode that could not be told.
 - name: Ask Stalwart whether it is still in bootstrap mode
   ansible.builtin.script:

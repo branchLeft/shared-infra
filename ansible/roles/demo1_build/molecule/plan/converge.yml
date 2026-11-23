@@ -140,3 +140,59 @@
       loop_control:
         label: '{{ item.0.item }}'
       when: ansible_check_mode
+
+    # A plan must refuse a secret too, not only an apply. The planted key is made for real (check mode
+    # is off for these tasks, so the plan's own check run is what is tested), outside the watched paths
+    # above, and the role's scan runs in check mode. The check must refuse it, naming the path, with no
+    # value printed. Without the scan running in check mode the plan would accept this host.
+    - name: Refuse a secret in a plan, not only in an apply
+      when: ansible_check_mode
+      block:
+        - name: Make a directory outside the watched paths for the planted key
+          ansible.builtin.file:
+            path: /root/stray-plan
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          check_mode: false
+          changed_when: false
+
+        - name: Plant a private key the holder list does not name, for the plan to find
+          ansible.builtin.copy:
+            content: "-----BEGIN OPENSSH PRIVATE KEY-----\nSTAND-IN-PLAN-SECRET-NOT-A-CREDENTIAL\n-----END OPENSSH PRIVATE KEY-----\n"
+            dest: /root/stray-plan/key.txt
+            owner: root
+            group: root
+            mode: '0600'
+          check_mode: false
+          changed_when: false
+          no_log: true
+          diff: false
+
+        - name: Run the role's host scan in this plan
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _secret_holders.yml
+          register: demo1_build_plan_scan
+
+        - name: Fail if the plan accepted a host holding a secret it must refuse
+          ansible.builtin.fail:
+            msg: The plan accepted a host holding a secret-bearing file the holder list does not name.
+
+      rescue:
+        - name: Assert the plan refused the planted key by its path, and printed no value
+          ansible.builtin.assert:
+            that:
+              - "'/root/stray-plan/key.txt' in (ansible_failed_result.msg | default(''))"
+              - "'STAND-IN-PLAN-SECRET' not in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: 'The plan failed for a reason other than the planted key: {{ ansible_failed_result.msg | default("") }}'
+
+      always:
+        - name: Remove the planted key and its directory
+          ansible.builtin.file:
+            path: /root/stray-plan
+            state: absent
+          check_mode: false
+          changed_when: false
