@@ -162,3 +162,8 @@
         owner: root
         group: root
         mode: '0755'
+      # The stand-in holds the scenario's placeholder owner address, which the leak scan in
+      # verify reads as a secret value. Its diff would print that literal into this run's log,
+      # so the scan would fail on the stand-in and not on the role. The stand-in is test
+      # scaffolding; the address check still runs through its log at /var/tmp/stand-in-docker.log.
+      diff: false
