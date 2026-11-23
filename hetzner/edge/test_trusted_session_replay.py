@@ -219,7 +219,7 @@ def probes(host: str, session: str | None, **extra: str) -> list[Request]:
 # The in-band AppSec rule set refuses a request for a `.env` file.
 APPSEC_PROBE = "/ghost/.env"
 # The same on the public Content API of the authoring site: an anonymous client
-# gets no AppSec exemption there (branchLeft/workspace#4156).
+# gets no AppSec exemption there.
 APPSEC_API_PROBE = "/ghost/api/content/.env"
 
 

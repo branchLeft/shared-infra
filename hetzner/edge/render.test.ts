@@ -840,8 +840,8 @@ describe('the rendered Caddyfile', () => {
     expect(rendered).not.toContain('not path /ghost ');
   });
 
-  // Why: branchLeft/workspace#4156. The exemption once covered the whole
-  // `/ghost/api/` tree for every client, which includes the public Content API.
+  // Why: the exemption once covered the whole `/ghost/api/` tree for every
+  // client, which includes the public Content API.
   it.each([
     ['with no verified sessions', {}],
     [
