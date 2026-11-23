@@ -12,20 +12,35 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 ANSIBLE = Path(__file__).resolve().parents[1]
 ROLE = ANSIBLE / "roles" / "tenant_compose"
 GUARD_NAME = "Read an undefined tenant list as an empty one"
 
 
-def _spec() -> dict:
-    doc = yaml.safe_load((ROLE / "meta" / "argument_specs.yml").read_text(encoding="utf-8"))
-    return doc["argument_specs"]["main"]["options"]["tenant_compose_stacks"]
+def _load(path: Path) -> object:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _tasks() -> list[dict]:
-    return yaml.safe_load((ROLE / "tasks" / "main.yml").read_text(encoding="utf-8"))
+def _mapping(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return {}
+
+
+def _spec() -> dict[str, object]:
+    doc = _mapping(_load(ROLE / "meta" / "argument_specs.yml"))
+    main = _mapping(_mapping(doc.get("argument_specs")).get("main"))
+    options = _mapping(main.get("options"))
+    return _mapping(options.get("tenant_compose_stacks"))
+
+
+def _tasks() -> list[dict[str, object]]:
+    raw = _load(ROLE / "tasks" / "main.yml")
+    if not isinstance(raw, list):
+        return []
+    return [_mapping(entry) for entry in raw]
 
 
 class OptionalTenantList(unittest.TestCase):
@@ -43,11 +58,11 @@ class OptionalTenantList(unittest.TestCase):
         self.assertIs(guard["no_log"], True)
 
     def test_the_guard_runs_before_any_task_reads_the_list(self) -> None:
-        names = [t.get("name", "") for t in _tasks()]
+        tasks = _tasks()
+        names = [str(t.get("name", "")) for t in tasks]
         guard_at = names.index(GUARD_NAME)
-        for index, task in enumerate(_tasks()):
-            if index < guard_at:
-                self.assertNotIn("tenant_compose_stacks", yaml.safe_dump(task))
+        for task in tasks[:guard_at]:
+            self.assertNotIn("tenant_compose_stacks", yaml.safe_dump(task))
 
 
 if __name__ == "__main__":
