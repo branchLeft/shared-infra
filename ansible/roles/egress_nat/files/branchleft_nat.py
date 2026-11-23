@@ -11,6 +11,10 @@ host still the gateway".
 This is only the host half. The network half is the default route declared
 in the network stack; without it nothing is ever sent here to forward.
 
+Where the edge_firewall role's table (`ip branchleft_edge_nat`) holds a masquerade, the role owns
+the masquerade and the forwarding sysctl and this program inserts and writes neither; anywhere else
+it does both, as before. The README's "The masquerade's two homes" has the reasoning.
+
 The checks run in the order the shell program they replace ran them, with the
 same messages, and the rules are inserted in the same order. Every external
 command runs from an argument list, never through a shell, under a timeout. A
@@ -35,6 +39,8 @@ from typing import NoReturn
 DEFAULT_SUBNET = "10.20.1.0/24"
 DEFAULT_SYSCTL_CONF = "/etc/sysctl.d/99-branchleft-nat.conf"
 FORWARDING_LINE = "net.ipv4.ip_forward = 1\n"
+# The table the edge_firewall role loads. Its name is the role's (edge_firewall_nat_table).
+ROLE_NAT_TABLE = "branchleft_edge_nat"
 # The membership test below is a string prefix, which is only equivalent to a
 # subnet match at /24. Refusing anything else is deliberate: a widened range
 # would otherwise silently narrow the guard rather than fail.
@@ -229,6 +235,33 @@ def turn_forwarding_on() -> None:
         sys.exit(status_of(result))
 
 
+def role_masquerade_loaded() -> bool:
+    """Whether the edge_firewall role's nftables table holds a masquerade right now.
+
+    A host with no `nft`, a missing table, a table without the rule, or a read that does not
+    finish all answer no, and the program then keeps its own masquerade.
+    """
+    if shutil.which("nft") is None:
+        return False
+    result = run(["nft", "list", "table", "ip", ROLE_NAT_TABLE])
+    return succeeded(result) and result is not None and "masquerade" in result.stdout
+
+
+def require_forwarding_on() -> None:
+    """Refuse unless the running kernel forwards IPv4.
+
+    The edge_firewall role persists and sets forwarding on the host it owns. This program
+    reads it there, so a gateway whose kernel is not forwarding fails the unit and the apply
+    instead of carrying accepts for traffic the kernel drops.
+    """
+    result = learn(["sysctl", "-n", "net.ipv4.ip_forward"], "whether the kernel forwards")
+    if result.stdout.strip() != "1":
+        die(
+            "branchleft-nat: net.ipv4.ip_forward is not 1 and the edge_firewall role owns "
+            "forwarding on this host; apply that role first"
+        )
+
+
 def forward_chain() -> str:
     """The chain forwarded traffic is filtered in.
 
@@ -315,14 +348,21 @@ def main() -> None:
             "so nothing routed there reaches it"
         )
 
-    write_forwarding_drop_in(conf)
-    turn_forwarding_on()
+    role_owns_nat = role_masquerade_loaded()
+    if role_owns_nat:
+        require_forwarding_on()
+    else:
+        write_forwarding_drop_in(conf)
+        turn_forwarding_on()
     chain = forward_chain()
 
     # Scoped to the subnet as source and the uplink as output, so private-to-private
     # traffic is never rewritten and no other source can be laundered through this
-    # host's public address.
-    ensure_rule("nat", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE")
+    # host's public address. Skipped where the edge_firewall role's table holds it.
+    if role_owns_nat:
+        print(f"branchleft-nat: the masquerade is the edge_firewall table's ({ROLE_NAT_TABLE})")
+    else:
+        ensure_rule("nat", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE")
 
     # Directional on purpose. Outbound is accepted unconditionally; the return
     # direction is accepted only for a flow conntrack already knows, so forwarding

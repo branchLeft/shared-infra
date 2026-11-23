@@ -131,6 +131,126 @@
         quiet: true
         fail_msg: The restore-drill drop-in is missing, or does not set only DOCKER_CONFIG to the registry key directory.
 
+    # The failure alert. First the files and the unit systemd loaded, then a drill that really fails.
+    - name: Look at the failure unit and the on-failure drop-in
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/systemd/system/branchleft-restore-drill-failed.service
+        - /etc/systemd/system/branchleft-restore-drill.service.d/20-on-failure.conf
+      register: backup_restore_verify_failure_files
+
+    - name: Assert both are plain files, root:root 0644
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        quiet: true
+        fail_msg: The failure unit or the on-failure drop-in is missing, not a plain file, or not root:root 0644.
+      loop: '{{ backup_restore_verify_failure_files.results }}'
+      loop_control:
+        label: '{{ item.item | basename }}'
+
+    - name: Ask systemd what the restore-drill unit runs when it fails
+      ansible.builtin.systemd_service:
+        name: branchleft-restore-drill.service
+      register: backup_restore_verify_drill_unit
+
+    - name: Assert the drill unit names the failure unit in OnFailure=
+      ansible.builtin.assert:
+        that:
+          - backup_restore_verify_drill_unit.status.OnFailure | default('') == 'branchleft-restore-drill-failed.service'
+        quiet: true
+        fail_msg: The drill unit does not name the failure unit in OnFailure=.
+
+    # A drill that fails for real: the placeholder drill's start command is replaced by one that exits 1,
+    # for this one start. The mark must appear without anything else starting it. The always section
+    # removes the test drop-in and the mark, and clears the failed state, so what follows meets the
+    # configured state.
+    - name: Fail the drill once and look for the mark
+      block:
+        - name: Start with no mark
+          ansible.builtin.file:
+            path: /var/lib/branchleft/backup-worker-exporter/restore_drill_unit_failed.prom
+            state: absent
+          changed_when: false
+
+        - name: Make the drill's start command exit 1
+          ansible.builtin.copy:
+            content: "[Service]\nExecStart=\nExecStart=/bin/false\n"
+            dest: /etc/systemd/system/branchleft-restore-drill.service.d/99-test-fail.conf
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+
+        - name: Reload systemd and run the drill
+          ansible.builtin.systemd_service:
+            name: branchleft-restore-drill.service
+            daemon_reload: true
+            state: started
+          register: backup_restore_verify_failed_start
+          ignore_errors: true
+          changed_when: false
+
+        - name: Assert the drill failed, so the mark below is its OnFailure= and not an old file
+          ansible.builtin.assert:
+            that:
+              - backup_restore_verify_failed_start is failed
+            quiet: true
+            fail_msg: The test drill did not fail, so it proves nothing about OnFailure=.
+
+        - name: Wait for the mark
+          ansible.builtin.wait_for:
+            path: /var/lib/branchleft/backup-worker-exporter/restore_drill_unit_failed.prom
+            timeout: 30
+          register: backup_restore_verify_mark
+          failed_when: false
+
+        - name: Assert a failed drill left its mark in the textfile directory
+          ansible.builtin.assert:
+            that:
+              - backup_restore_verify_mark is not failed
+            quiet: true
+            fail_msg: A failed drill did not leave its mark in the textfile directory.
+
+        - name: Look at the mark
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/backup-worker-exporter/restore_drill_unit_failed.prom
+          register: backup_restore_verify_mark_stat
+
+        - name: Assert the mark is an empty plain file the exporter can read
+          ansible.builtin.assert:
+            that:
+              - backup_restore_verify_mark_stat.stat.isreg
+              - backup_restore_verify_mark_stat.stat.size == 0
+              - backup_restore_verify_mark_stat.stat.mode == '0644'
+              - backup_restore_verify_mark_stat.stat.pw_name == 'root'
+            quiet: true
+            fail_msg: The mark is not an empty root-owned 0644 plain file.
+      always:
+        - name: Remove the test drop-in and the mark
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /etc/systemd/system/branchleft-restore-drill.service.d/99-test-fail.conf
+            - /var/lib/branchleft/backup-worker-exporter/restore_drill_unit_failed.prom
+          changed_when: false
+
+        - name: Reload systemd now the test drop-in is gone
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+          changed_when: false
+
+        - name: Clear the failed state of the drill unit (the failure unit succeeded, so it has none)
+          ansible.builtin.command:
+            argv: [systemctl, reset-failed, branchleft-restore-drill.service]
+          changed_when: false
+
     - name: Assert the secrets directory is root:root 0700
       ansible.builtin.assert:
         that:
