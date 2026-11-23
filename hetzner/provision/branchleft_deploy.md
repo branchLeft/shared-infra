@@ -531,3 +531,31 @@ words as stderr). A caller that hides the wrapper's output, such as the `tenant_
 The line holds no secret: the error text names the image reference and the signing
 workflow, which are public. Logging is best effort and never changes the exit status, so a host
 with no `logger` still refuses the same way. A successful deploy and a usage error write no line.
+
+## Restart diagnosis
+
+When `systemctl restart branchleft-compose@<stack>` fails, the only account of why is the host
+journal, and CI receives only this script's stderr: a failed tenant deploy used to read "restart
+failed; rolled back" with no cause, and no agent can log in to read one. Straight after the failed
+restart, before the rollback restarts the unit and moves its status on, `restart_diagnosis` runs
+`systemctl status` and `journalctl -u <unit> -n 50` and prints them to stderr as one labelled block,
+which the deploy account's ssh session returns to the CI log.
+
+The log is public, so every line goes through `redact_diagnostic_line` first. It redacts, in order:
+private-key blocks, authorization and cookie headers, bearer/basic/token credentials, credentials in
+URLs, known token shapes (GitHub, AWS, Slack, JWT), any field or flag whose name says secret, password,
+token, key, auth or session, then every other `NAME=value` assignment (the unit's environment) except
+exit facts (`code`, `status`, `signal`, `result` with a short plain value), and finally any unbroken
+32-character token that mixes letters and digits. The inner text of docker's own logfmt `msg=` and
+`error=` fields is kept, with its assignments redacted, because that message is the diagnosis. An
+image digest after `sha256:` is kept: it is public and is the thing being diagnosed. A line starting
+`::` would be read by the runner as a workflow command, so `::` is broken up.
+
+The block is bounded: 30 status lines, 50 journal lines, 400 characters a line, 8 KiB in all, keeping
+the end, where the failure is. Reading is best effort: a missing `journalctl`, a timeout or an empty
+journal prints nothing and changes neither the exit status nor the rollback. A rollback that also
+fails is not diagnosed a second time; its lines follow the first in the same journal.
+
+The redaction is a deny list on a log that is read by strangers, so a new kind of secret-shaped line
+is added to `RedactionTests.SECRET_LINES`, which fails on a leak and, in
+`test_the_redaction_test_is_sensitive_to_the_redactor`, on a redactor that does nothing.

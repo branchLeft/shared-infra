@@ -31,7 +31,10 @@
                                     }
                                   }
                                 },
-                                { "handler": "request_body", "max_size": 10485760 }
+                                {
+                                  "handler": "request_body",
+                                  "max_size": 10485760
+                                }
                               ]
                             },
                             {
@@ -69,9 +72,17 @@
                                                 {
                                                   "handle_response": [
                                                     {
-                                                      "match": { "status_code": [2] },
+                                                      "match": {
+                                                        "status_code": [2]
+                                                      },
                                                       "routes": [
-                                                        { "handle": [{ "handler": "vars" }] }
+                                                        {
+                                                          "handle": [
+                                                            {
+                                                              "handler": "vars"
+                                                            }
+                                                          ]
+                                                        }
                                                       ]
                                                     }
                                                   ],
@@ -96,7 +107,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -112,7 +126,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -174,7 +191,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -202,10 +222,14 @@
                                                     }
                                                   },
                                                   "load_balancing": {
-                                                    "selection_policy": { "policy": "first" }
+                                                    "selection_policy": {
+                                                      "policy": "first"
+                                                    }
                                                   },
                                                   "upstreams": [
-                                                    { "dial": "127.0.0.1:9300" },
+                                                    {
+                                                      "dial": "127.0.0.1:9300"
+                                                    },
                                                     { "dial": "127.0.0.1:9301" }
                                                   ]
                                                 }
@@ -243,7 +267,10 @@
                                     }
                                   }
                                 },
-                                { "handler": "request_body", "max_size": 10485760 }
+                                {
+                                  "handler": "request_body",
+                                  "max_size": 10485760
+                                }
                               ]
                             },
                             {
@@ -281,9 +308,17 @@
                                                 {
                                                   "handle_response": [
                                                     {
-                                                      "match": { "status_code": [2] },
+                                                      "match": {
+                                                        "status_code": [2]
+                                                      },
                                                       "routes": [
-                                                        { "handle": [{ "handler": "vars" }] }
+                                                        {
+                                                          "handle": [
+                                                            {
+                                                              "handler": "vars"
+                                                            }
+                                                          ]
+                                                        }
                                                       ]
                                                     }
                                                   ],
@@ -308,7 +343,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -324,7 +362,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -386,7 +427,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -414,10 +458,14 @@
                                                     }
                                                   },
                                                   "load_balancing": {
-                                                    "selection_policy": { "policy": "first" }
+                                                    "selection_policy": {
+                                                      "policy": "first"
+                                                    }
                                                   },
                                                   "upstreams": [
-                                                    { "dial": "127.0.0.1:9302" },
+                                                    {
+                                                      "dial": "127.0.0.1:9302"
+                                                    },
                                                     { "dial": "127.0.0.1:9303" }
                                                   ]
                                                 }
@@ -444,7 +492,11 @@
                           "routes": [
                             {
                               "handle": [{ "body": "x", "handler": "static_response" }],
-                              "match": [{ "expression": "{http.request.uri.path} == '/x'" }]
+                              "match": [
+                                {
+                                  "expression": "{http.request.uri.path} == '/x'"
+                                }
+                              ]
                             }
                           ]
                         }
@@ -475,7 +527,9 @@
                                     "handler": "headers",
                                     "response": {
                                       "deferred": true,
-                                      "set": { "X-Content-Type-Options": ["nosniff"] }
+                                      "set": {
+                                        "X-Content-Type-Options": ["nosniff"]
+                                      }
                                     }
                                   }
                                 ]
