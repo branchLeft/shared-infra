@@ -837,6 +837,75 @@ function discardRouteResponses(): string[] {
   return ['header @discard Allow POST', 'respond @discard_post 204', 'respond @discard 405'];
 }
 
+/**
+ * A `.` or `..` segment in the path of the request as it arrived, written
+ * literally or percent-encoded, with the separator before or after it also
+ * literal or encoded (`%2F`). Wider than `GATEWAY_DOT_SEGMENT_REGEXP`, which
+ * reads only a literal separator: a path allow-list is judged on a path with its
+ * dot segments resolved while the upstream is sent the path as written, so a
+ * request that could resolve either way is refused outright. No sign-in request
+ * carries one. Matched on the original URI for the reason the gateway's is.
+ */
+const PUBLIC_PATH_DOT_SEGMENT_REGEXP =
+  '^[^?]*(?:/|%2[Ff])(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|%2[Ff]|[?]|$)';
+
+/**
+ * A path an allow-list entry may name: a literal path, or a literal prefix
+ * ending in `/*`. No other wildcard, no dot segment, nothing that is not a plain
+ * URL path character, so an entry can only ever widen by a whole segment tree.
+ */
+const PUBLIC_PATH_PATTERN = /^\/(?:[A-Za-z0-9_~.-]+\/)*[A-Za-z0-9_~.-]*$/;
+
+function assertPublicPath(site: EdgeSite, path: string): void {
+  const prefix = path.endsWith('/*') ? path.slice(0, -1) : path;
+  if (path === '/*' || !PUBLIC_PATH_PATTERN.test(prefix) || /(?:^|\/)\.\.?(?:\/|$)/.test(prefix)) {
+    throw new Error(
+      `site ${site.name} public path ${path} must be a literal path or a literal prefix ending in /*`
+    );
+  }
+}
+
+/**
+ * The matchers and answers of a site's public path allow-list
+ * (`EdgeSite.publicPaths`), or nothing for a site without one. The answers
+ * are placed before AppSec, after the throttle and the bouncer, so a request for
+ * a path that is not public is counted against its address and refused without
+ * reaching a WAF or the upstream. Why: `render.md`, "`siteBlock`: public path
+ * allow-list".
+ */
+function publicPathRefusal(site: EdgeSite): { matchers: string[]; responses: string[] } {
+  const readOnly = site.publicReadOnlyPaths ?? [];
+  if (site.publicPaths === undefined) {
+    if (readOnly.length > 0) {
+      throw new Error(`site ${site.name} sets publicReadOnlyPaths without publicPaths`);
+    }
+    return { matchers: [], responses: [] };
+  }
+  if (site.publicPaths.length === 0) {
+    throw new Error(`site ${site.name} sets an empty publicPaths, which would refuse every path`);
+  }
+  for (const path of [...site.publicPaths, ...readOnly]) {
+    assertPublicPath(site, path);
+  }
+  return {
+    matchers: [
+      '@not_public {',
+      `\tnot path ${site.publicPaths.join(' ')}`,
+      ...(readOnly.length === 0
+        ? []
+        : ['\tnot {', '\t\tmethod GET HEAD', `\t\tpath ${readOnly.join(' ')}`, '\t}']),
+      '}',
+      '@public_dot_segments {',
+      `\texpression \`{http.request.orig_uri}.matches('${PUBLIC_PATH_DOT_SEGMENT_REGEXP}')\``,
+      '}',
+    ],
+    // Dot segments first: Caddy matches `path` with them resolved but proxies
+    // the path as sent, so a request is refused outright rather than judged on
+    // a path the upstream might read differently.
+    responses: ['respond @public_dot_segments 400', 'respond @not_public 404'],
+  };
+}
+
 const WEBHOOK_METHOD = 'POST';
 
 /**
@@ -1020,6 +1089,14 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
   // Checked first, so a site that is both refuses to render instead of
   // silently becoming a webhook site.
+  if (
+    (site.signedObjectGateway === true || site.inboundWebhookPath !== undefined) &&
+    (site.publicPaths !== undefined || site.publicReadOnlyPaths !== undefined)
+  ) {
+    throw new Error(
+      `site ${site.name} is a webhook or signed object gateway, which already admits only its own paths, and cannot also declare publicPaths`
+    );
+  }
   if (site.signedObjectGateway === true) {
     return gatewaySiteBlock(site, hostnames, posture);
   }
@@ -1044,6 +1121,8 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   if (site.discardRoute !== undefined) {
     body.push(...discardRouteMatchers(site.discardRoute));
   }
+  const publicPaths = publicPathRefusal(site);
+  body.push(...publicPaths.matchers);
   // Defined for every site, not only Ghost tenants: the matcher only ever
   // matches Ghost's own path, so a non-Ghost site (e.g. the marketing site)
   // carries an inert matcher rather than needing a flag to opt in. That is
@@ -1076,7 +1155,10 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       ...(site.backend === 'nextcloud' ? { rateLimitEvents: NEXTCLOUD_RATE_LIMIT_EVENTS } : {}),
       membersMagicLink: true,
-      beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
+      beforeAppsec: [
+        ...(site.discardRoute === undefined ? [] : discardRouteResponses()),
+        ...publicPaths.responses,
+      ],
       ...(verification === undefined ? {} : { verification }),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,

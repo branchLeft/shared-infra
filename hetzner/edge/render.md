@@ -537,6 +537,53 @@ an S3 client sends as normal traffic. Each is for the first live inspection, and
 remedy for the first two is a deliberate change in this file and `posture.ts`, not a
 setting.
 
+## `siteBlock`: public path allow-list
+
+`EdgeSite.publicPaths` marks a site whose upstream serves a management surface on the same
+listener as its public one. The sign-in service (Zitadel) is the one entry: its
+administration console and its management, administration, system and v2 APIs share a
+listener with its OIDC endpoints and login pages, and only credentials stood between the
+internet and them (branchLeft/workspace#4155, from the code review under #1815). Set, the
+edge proxies a request only when its path is listed and answers 404 itself to every other
+path. A deny-list was rejected: the service adds endpoints with its releases, and a path
+nobody listed would be public until someone noticed.
+
+Entries are a plain literal path or a literal prefix ending in `/*`; the renderer refuses an
+empty list, a bare `/*`, any other wildcard, a dot segment, and a character that is not a
+URL path character (a brace would read as a Caddy placeholder). `publicReadOnlyPaths` lists
+prefixes on which only `GET` and `HEAD` are proxied, for a prefix that serves a public read
+and takes an authenticated write (the sign-in service's branding files); it needs
+`publicPaths`. A site cannot also be a webhook or a signed object gateway, which already
+admit only their own paths.
+
+The shipped list, for the sign-in service: the discovery document (`/.well-known/*`), the
+OIDC endpoints including the key set (`/oauth/v2/*`, `/oidc/v1/*`), the login pages with
+their static files (`/ui/login/*`), the two health probes (`/debug/healthz`, `/debug/ready`),
+and a read of the branding prefix (`/assets/v1/*`). Everything else is 404 from the edge,
+including `/`. The private listener on `ops1` is unchanged, so the identity reconciler,
+which reaches it on the loopback address, still sees every path.
+
+Placement: after the throttle and the CrowdSec bouncer, before AppSec and the upstream, so
+a probe of a refused path counts against its address (CrowdSec's admin-interface scenario
+reads a 404 on an admin-looking path) and never reaches a WAF or the service. Two answers, in this order: 400 for a
+`.` or `..` segment in the request as it arrived, written literally or percent-encoded,
+with the separator also literal or `%2F`; then 404 for an unlisted path. The dot-segment
+rule exists because Caddy matches `path` with dot segments resolved and proxies the path as
+sent (the gateway section above), so such a request could be judged on one path and read
+as another. No sign-in request carries a dot segment. The matchers were run in a stock Caddy 2 with a stand-in upstream and raw requests (an admin path, a case-changed one, a doubled slash, literal, encoded and `%2F`-joined dot segments, a listed path carrying an admin path in its query): every unlisted path got 404, every dot-segment form 400, every listed path was forwarded. Caddy's `path` matcher is
+case-insensitive; the upstream's router is not, so a differently cased listed path is
+forwarded and answered by the service as an unknown path.
+
+Because the root is refused, a site that sets `publicPaths` names a `probePath` that its own
+list lets through, and the uptime probe and the status page read that path instead of `/`.
+A registry test fails if the probe path is not listed. The status page still names the probe
+by hostname alone.
+
+What this does not do: it does not authenticate anything, and the listed paths are the
+service's own login surface, protected by the service and its policy (second factor and
+lockout: branchLeft/workspace#4154). A path an application newly needs is a deliberate
+addition to the list in `sites.ts`.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for

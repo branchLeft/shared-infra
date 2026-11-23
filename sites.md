@@ -62,6 +62,15 @@ soon as the block renders, and a failed HTTP-01 validation costs the account's f
 budget. Once set, the monitoring and status probes read `/healthz`, not the root, which the
 gateway answers 404 by design.
 
+## Public path allow-lists
+
+An entry with `publicPaths` is the sign-in service: its upstream also serves an
+administration console and management APIs, so the edge forwards only the listed paths
+(plus a read of `publicReadOnlyPaths`) and answers 404 to the rest. It names a `probePath`
+too, because its root is refused. What the block lets through, and why a list: `hetzner/edge/render.md`,
+"`siteBlock`: public path allow-list". When a new application needs another path of the
+service, add it to the list in the same change as the application.
+
 ## Copying a tenant's port and ceiling
 
 Both values on a tenant's entry belong to that tenant's own stack and neither

@@ -82,6 +82,32 @@ export interface EdgeSite {
    */
   discardRoute?: string;
   /**
+   * An allow-list of request paths for a site whose upstream also serves a
+   * management surface that must not be public (the sign-in service). Set, the
+   * edge proxies a request only when its path matches one of these, and answers
+   * 404 itself to every other path, after the throttle and CrowdSec and before
+   * AppSec and the upstream. Each entry is a plain literal path, or a literal
+   * prefix ending in `/*`. The private listener the entry names is untouched, so
+   * a client on the private network still reaches every path. Why a list and not
+   * a deny-list, and what it lets through: `hetzner/edge/render.md`, "`siteBlock`:
+   * public path allow-list".
+   */
+  publicPaths?: string[];
+  /**
+   * Like `publicPaths`, for paths that carry static or public content on a read
+   * and an authenticated write on the same prefix: only `GET` and `HEAD` are
+   * proxied on these, and any other method is answered 404 by the edge. Needs
+   * `publicPaths` to be set.
+   */
+  publicReadOnlyPaths?: string[];
+  /**
+   * The path the uptime probe requests on each of this site's hostnames, for a
+   * site that answers 404 at `/` by design. Absent, the probe requests the root
+   * (or `/healthz` for a signed object gateway). Must be a path the site's
+   * `publicPaths` lets through: a registry test fails for one it does not.
+   */
+  probePath?: string;
+  /**
    * One literal path of a site that exists only to receive signed callbacks
    * from an outside sender. Set, the edge proxies `POST` on that path alone,
    * answers 405 to any other method on it and 404 to every other path, and
