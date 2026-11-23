@@ -181,21 +181,6 @@
     - Restart the policy unit
   when: deploy_tooling_host_class == 'app'
 
-# The owner's ruling (22 Nov): the tenant list is the one place a tenant's
-# compose instance is enabled, and this role makes that enable. Enabled only, never started or
-# restarted: a start deploys a tenant's stack, and the deploy wrapper writes its first pin after this
-# role. tenant_compose starts each stack once it has a pin. An undefined list (a host with no tenant
-# yet) enables nothing. Tested by checks/test_deploy_tooling_tenant_enable.py.
-- name: Make the template unit known to systemd before any instance is enabled
-  ansible.builtin.meta: flush_handlers
-
-- name: Enable each listed tenant's compose unit, without starting it
-  ansible.builtin.systemd_service:
-    name: '{{ deploy_tooling_compose_unit_prefix }}@{{ item }}.service'
-    enabled: true
-  loop: '{{ tenant_compose_stacks | default([]) | map(attribute="slug") | list }}'
-  no_log: true
-
 # The watch: a program that reads the firewall chains, the checks it runs (the role's own
 # module file, so the watch and the read-back below apply the same test), its timer and its
 # service. Written here so the checks below cover them; the timer is enabled after the
@@ -395,3 +380,18 @@
 - name: Install the watch that reads the firewall chains between runs
   ansible.builtin.include_tasks: _watch.yml
   when: deploy_tooling_host_class == 'app'
+
+# The owner's ruling (22 Nov): the tenant list is the one place a tenant's
+# compose instance is enabled, and this role makes that enable. Enabled only, never started or
+# restarted: a start deploys a tenant's stack, and the deploy wrapper writes its first pin after this
+# role. tenant_compose starts each stack once it has a pin. An undefined list (a host with no tenant
+# yet) enables nothing. Tested by checks/test_deploy_tooling_tenant_enable.py.
+- name: Make the template unit known to systemd before any instance is enabled
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable each listed tenant's compose unit, without starting it
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_compose_unit_prefix }}@{{ item }}.service'
+    enabled: true
+  loop: '{{ tenant_compose_stacks | default([]) | map(attribute="slug") | list }}'
+  no_log: true
