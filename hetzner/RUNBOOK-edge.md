@@ -887,12 +887,27 @@ scenario reads them, and the throttle allows 1200 requests a minute
 and a desktop sync that must not ban, and attacks on the same hostname that
 must.
 
-**Every ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
-reaches the phone through ntfy within about two minutes of a ban, naming the
-scenario, and again every 30 minutes while that scenario's ban is still active.
-A further ban by a scenario that is already paging adds no new page until
-that repeat. It names no address: read it with the `cscli decisions list` command
-above, and clear a false alarm with the `cscli decisions delete --ip` command.
+**Only an owned ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
+reaches the phone through ntfy for each ban on an owned address, within about five
+minutes of the ban plus the scrape interval, naming the scenario. A repeat ban of
+the same scenario pages again. "Owned" includes every tenant's Ghost staff
+addresses, not only the owner's; the classifier keeps them in the root-only state
+file for at most 30 days. A ban on any other address raises `EdgeBanUnowned` and
+goes to email only. If the classifier is stale (no run for over 15 minutes), every
+ban pages at once. If it has reported and then goes quiet, every ban pages once its
+absence has lasted 10 minutes, so one lost scrape does not page; if it has never
+reported, every ban pages at once. `EdgeBanOwnerStale` pages after 5 minutes of
+staleness. The role ships disabled, so until it is turned on every ban pages at
+once, as before this change, and `EdgeBanOwnerStale` goes to the `discard` receiver
+instead of the phone (`hetzner/edge/render.md`, "Being told about a ban"). The page names no
+address: read it with the `cscli decisions list` command above, and clear a false
+alarm with the `cscli decisions delete --ip` command.
+
+To see why a ban was classified unowned, on edge1 run
+`systemctl status branchleft-edge-ban-owner.timer` and
+`journalctl -u branchleft-edge-ban-owner`. The addresses the classifier trusts
+are in `/var/lib/branchleft/edge-ban-owner/trusted.json`, root-only. Do not
+print that file into a ticket, a PR or a log: it holds addresses.
 
 ## 11. Adding a site to the edge
 

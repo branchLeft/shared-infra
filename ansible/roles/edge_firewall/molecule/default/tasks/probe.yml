@@ -1,0 +1,114 @@
+---
+# One attempt to apply a set that must not stay. The caller gives edge_firewall_probe_case:
+#   name       what the attempt is, for the messages
+#   expect     refused | rolled_back | restore_failed
+#   task       the name of the task that must be the one that stops the run
+#   source     the NAT source to apply (default: the estate subnet)
+#   template   the template of the rules to apply (default: the role's own)
+#   marker     text the loaded tables must hold when the check runs (rolled_back, restore_failed)
+#
+# The attempt is judged on facts the run leaves, not on the bare fact that the role failed: any
+# early failure leaves the ruleset unchanged, and a test that read "the role failed and nothing
+# changed" as "the guard rolled back" would stay green with the guard deleted. A rollback is
+# therefore proven by facts together: the set was accepted by every check made before the load,
+# the kernel held it when the connection check ran, that check is what failed, and the previous
+# ruleset is back afterwards. Every attempt also shows that Docker's stand-in rules were not
+# touched and that the legacy masquerade rule is still there: the estate's egress had a
+# masquerade for the whole attempt.
+- name: Reset the result facts, so that no value from an earlier attempt can satisfy an assertion
+  ansible.builtin.set_fact:
+    edge_firewall_rolled_back: false
+    edge_firewall_failed_task: ''
+    edge_firewall_rejected_listing: ''
+    edge_firewall_probe_accepted: false
+    edge_firewall_probe_failed_task: ''
+
+- name: Read what is on the host before the attempt
+  ansible.builtin.include_tasks: probe_state.yml
+
+- name: Keep the state before the attempt
+  ansible.builtin.set_fact:
+    edge_firewall_probe_before: '{{ edge_firewall_probe_state }}'
+
+- name: Apply the set
+  block:
+    - name: Run the role with the set
+      ansible.builtin.include_role:
+        name: branchleft.edge_firewall
+      vars:
+        edge_firewall_nat_source: '{{ edge_firewall_probe_case.source | default("10.20.1.0/24") }}'
+        edge_firewall_rules_template: '{{ edge_firewall_probe_case.template | default("rules.nft.j2") }}'
+
+    - name: Record that the role accepted the set
+      ansible.builtin.set_fact:
+        edge_firewall_probe_accepted: true
+  rescue:
+    - name: Record the task that stopped the run
+      ansible.builtin.set_fact:
+        edge_firewall_probe_failed_task: '{{ ansible_failed_task.name }}'
+
+- name: Read what is on the host after the attempt
+  ansible.builtin.include_tasks: probe_state.yml
+
+- name: Keep the state after the attempt
+  ansible.builtin.set_fact:
+    edge_firewall_probe_after: '{{ edge_firewall_probe_state }}'
+
+# No attempt may promote anything, touch Docker's rules or take the legacy masquerade away.
+- name: Assert the set was not accepted, nothing was promoted, and Docker's rules and the legacy rule are as they were
+  ansible.builtin.assert:
+    that:
+      - not edge_firewall_probe_accepted
+      - edge_firewall_probe_after.active_checksum == edge_firewall_probe_before.active_checksum
+      - edge_firewall_probe_after.docker == edge_firewall_probe_before.docker
+      - edge_firewall_probe_after.legacy_present == edge_firewall_probe_before.legacy_present
+    quiet: true
+    fail_msg: >-
+      The attempt "{{ edge_firewall_probe_case.name }}" was accepted, changed the active rules file, changed
+      Docker's stand-in rules, or removed the legacy masquerade rule.
+
+# A refusal comes before the package, the mask and the load: nothing on the host moved.
+- name: Assert the set was refused before anything changed
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_probe_failed_task == edge_firewall_probe_case.task
+      - not edge_firewall_rolled_back
+      - edge_firewall_probe_after.nft_present == edge_firewall_probe_before.nft_present
+      - edge_firewall_probe_after.mask_present == edge_firewall_probe_before.mask_present
+      - edge_firewall_probe_after.ruleset == edge_firewall_probe_before.ruleset
+    quiet: true
+    fail_msg: >-
+      The attempt "{{ edge_firewall_probe_case.name }}" was not refused by "{{ edge_firewall_probe_case.task }}": the run was
+      stopped by "{{ edge_firewall_probe_failed_task }}", or the package, the mask or the loaded ruleset changed.
+  when: edge_firewall_probe_case.expect == 'refused'
+
+- name: Assert the guard itself rolled the set back and the previous ruleset is back
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_rolled_back | bool
+      - edge_firewall_failed_task == edge_firewall_probe_case.task
+      - edge_firewall_probe_case.marker in edge_firewall_rejected_listing
+      - edge_firewall_probe_case.marker not in edge_firewall_probe_before.ours
+      - edge_firewall_probe_after.ours == edge_firewall_probe_before.ours
+      - edge_firewall_probe_after.ruleset == edge_firewall_probe_before.ruleset or not edge_firewall_probe_before.nft_present
+    quiet: true
+    fail_msg: >-
+      The attempt "{{ edge_firewall_probe_case.name }}" was not rolled back by the guard. The guard must have
+      recorded that it rolled back, the failing task must be "{{ edge_firewall_probe_case.task }}", the tables
+      the check ran against must hold "{{ edge_firewall_probe_case.marker }}", and the role's tables after must
+      equal the ones before. Rolled back: {{ edge_firewall_rolled_back }}. Failing task:
+      "{{ edge_firewall_failed_task }}".
+  when: edge_firewall_probe_case.expect == 'rolled_back'
+
+- name: Assert a failed restore leaves the set loaded and stops on the restore
+  ansible.builtin.assert:
+    that:
+      - not edge_firewall_rolled_back
+      - edge_firewall_failed_task == edge_firewall_probe_case.task
+      - edge_firewall_probe_failed_task == 'Restore the previous ruleset'
+      - edge_firewall_probe_case.marker in edge_firewall_probe_after.ours
+    quiet: true
+    fail_msg: >-
+      The attempt "{{ edge_firewall_probe_case.name }}" did not end on a failed restore with the set still
+      loaded. Stopped by "{{ edge_firewall_probe_failed_task }}".
+  when: edge_firewall_probe_case.expect == 'restore_failed'

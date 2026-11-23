@@ -11,6 +11,7 @@ import re
 import unittest
 from pathlib import Path
 
+import jinja2
 import yaml
 
 ROLE = Path(__file__).resolve().parents[2]
@@ -151,6 +152,50 @@ class DeliveryControlTests(unittest.TestCase):
         self.assertRegex(
             _mapping_under("db1_backup_timers_program_sha256")["provision_tenant_db.py"], r"^[0-9a-f]{64}$"
         )
+
+
+class CheckModePlanTests(unittest.TestCase):
+    """The fetches are skipped in check mode, so the plan must report what a real run would fetch.
+
+    Without it a plan of a fresh host shows no program, and the db1_grants plan that follows has
+    nothing to go on. The default scenario's converge runs that plan on a fresh host and requires
+    provision_tenant_db.py among the changes; these read the tasks that make the report.
+    """
+
+    TASKS = ROLE / "tasks" / "main.yml"
+
+    def _task(self, fragment: str) -> dict:
+        tasks = yaml.safe_load(self.TASKS.read_text(encoding="utf-8"))
+        found = [task for task in tasks if fragment in task["name"]]
+        self.assertEqual(len(found), 1, fragment)
+        return found[0]
+
+    def test_the_look_at_each_program_runs_only_in_check_mode_over_both_lists(self) -> None:
+        task = self._task("Look at each program a real run would fetch")
+        self.assertEqual(task.get("when"), "ansible_check_mode")
+        self.assertEqual(
+            task["loop"], "{{ db1_backup_timers_provision_files + db1_backup_timers_recovery_files }}"
+        )
+        self.assertEqual(task["ansible.builtin.stat"].get("checksum_algorithm"), "sha256")
+
+    def test_the_look_at_each_program_reads_the_directory_the_fetch_writes_to(self) -> None:
+        path = self._task("Look at each program a real run would fetch")["ansible.builtin.stat"]["path"]
+        self.assertIn("db1_backup_timers_provision_dir", path)
+        self.assertIn("db1_backup_timers_recovery_dir", path)
+
+    def test_the_report_is_a_change_for_a_missing_program_or_other_bytes_than_the_pinned_ones(self) -> None:
+        task = self._task("Report each program a real run would fetch")
+        self.assertEqual(task.get("when"), "ansible_check_mode")
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        changed = env.compile_expression(task["changed_when"])
+        pins = {"a.py": "1" * 64}
+
+        def decide(stat: dict) -> bool:
+            return bool(changed(item={"item": "a.py", "stat": stat}, db1_backup_timers_program_sha256=pins))
+
+        self.assertTrue(decide({"exists": False}), "a missing program is not reported as a change")
+        self.assertTrue(decide({"exists": True, "checksum": "2" * 64}), "other bytes are not reported as a change")
+        self.assertFalse(decide({"exists": True, "checksum": "1" * 64}), "the pinned bytes are reported as a change")
 
 
 class PinTests(unittest.TestCase):

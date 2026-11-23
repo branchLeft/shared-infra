@@ -274,8 +274,8 @@ Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owne
 
 `roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
 a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
-v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
-`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+v2.11.9 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.8 on a background timer). `roll_interval` exists in the
 same module but rolls only on the next write, so it would not bound a quiet edge, and it is
 not used.
 
@@ -973,16 +973,38 @@ known exploits on the same hostname, and requires each to ban.
 
 ## Being told about a ban
 
-Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
-reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
-scenario), which the monitoring stack already scrapes from edge1, and its page
-register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
-so the page names the scenario and never an address. A simulated decision is
-not in the gauge, so a watch-only scenario never pages; the replay asserts it.
+A ban pages the owner only when the banned address is owned. An address is
+owned when it made a verified Ghost staff request through the edge in the last
+30 days (the access log's `edge_trusted` is `1`), or when it sits inside a
+banned range that contains such an address. "Owned" covers every tenant's
+Ghost staff addresses (admins and editors who signed in through the edge), not
+only the owner's. `EdgeBanIssued` in `hetzner/monitoring/render.ts` pages for
+owned bans, through ntfy (page register entry `edge-ban`). Any other ban raises
+`EdgeBanUnowned`, a warning that goes to email only and never to ntfy.
 
-The page route notifies on a one-minute group interval and repeats a page that
-is still firing every 30 minutes (`monitoring/pageRegister.md`, "How fast a
-page goes"). A ban by a scenario that has not paged yet, or one made after an
-earlier ban has ended, pages within about two minutes. A further ban by a
-scenario whose first ban is still active changes only the count in the alert,
-so it pages at the next repeat, not at once.
+A systemd timer on edge1 (role `edge_ban_owner`) classifies every ban every 5
+minutes. It reads only the edge's own access log, through the Caddy container,
+and keeps the addresses only in the root-only state file
+`/var/lib/branchleft/edge-ban-owner/trusted.json` (mode 0600), for at most 30
+days, the edge's log retention. The metric and the alerts carry no address: each
+owned ban is its own alert, labelled with CrowdSec's integer decision id. So an
+owned ban pages up to about 5 minutes after it fires, plus the scrape interval.
+A repeat ban of the same scenario is a new decision id, so it also pages within
+about 5 minutes. Unowned bans are counted per scenario and go to email only.
+
+If the classifier is stale (no run for over 15 minutes), every ban pages at
+once. If it has reported and then goes missing (a lost scrape, or the node
+exporter restarting), every ban pages once its absence has lasted 10 minutes, so
+one lost scrape does not page. If it has never reported, every ban pages at once.
+A stale classifier also raises `EdgeBanOwnerStale`, a page of its own, once the
+staleness has lasted 5 minutes.
+
+The role ships disabled: `edge_ban_owner_enabled: false` in
+`ansible/roles/edge_ban_owner/defaults/main.yml`, with the matching constant
+`EDGE_BAN_OWNER_ENABLED` in `hetzner/monitoring/render.ts`. While it is off the
+role installs nothing on edge1, so no classifier ever reports: every ban pages at
+once through the fallback, as before this change, and `EdgeBanOwnerStale` goes to
+the `discard` receiver rather than the phone.
+Turning it on is one commit that sets both to `true` and re-renders. The simulated
+decisions of a watch-only scenario are not classified, so they never page; the
+replay asserts that the gauge leaves them out.

@@ -317,7 +317,13 @@ same parameters again succeed.
 - **A port assigned by hand inside the reserved range is not seen.** The program knows only the
   ports it gave out.
 - **A step that failed after its program changed the host is not undone.** `status` shows how far a
-  slug got, and a claim whose volume step failed after taking a uid keeps its marker.
+  slug got. A claim whose volume step failed, timed out, was terminated by SIGTERM or SIGHUP, or had
+  an unreadable listing afterwards keeps its marker. The next `claim` for that slug settles it: a
+  marker with a listed claim refuses `slug-in-use` (the claim stands; `status` reports
+  `volumes=yes`), and a marker with no claim is removed and the claim is made again.
+- **A marker is written whole or not at all.** The bytes go to a dot-named temporary file in the
+  register, are synced, and are linked into place; a failed write leaves no marker and the slug is
+  free for a retry.
 - **Rotation is not here.** A secrets file that exists with different content, and a slot that
   exists, are refused; each is a separate step.
 

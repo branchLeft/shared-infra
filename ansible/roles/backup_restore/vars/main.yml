@@ -42,6 +42,19 @@ backup_restore_registry_docker_config: /etc/branchleft/registry/docker
 backup_restore_drill_dropin_dir: /etc/systemd/system/branchleft-restore-drill.service.d
 backup_restore_drill_dropin_file: '{{ backup_restore_drill_dropin_dir }}/10-registry-key.conf'
 
+# The failure alert. The drill unit is the release's pinned file, so its OnFailure= reaches it through a second
+# drop-in, and the unit it names is this role's own. That unit does one thing: it touches a file in the textfile
+# directory the host's node_exporter reads, so node_exporter reports the file's mtime as
+# node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"} and the Prometheus rule
+# RestoreDrillUnitFailed (hetzner/monitoring/render.ts) turns it into the estate's alert. No credential is needed
+# on this host. The directory is a copy of node_exporter_textfile_dir (a role imports no role) and the file name
+# is the one the rule selects on: test_backup_restore_on_failure.py holds each to its other home.
+backup_restore_drill_failed_unit: branchleft-restore-drill-failed.service
+backup_restore_drill_failed_unit_file: '{{ backup_worker_unit_dir }}/{{ backup_restore_drill_failed_unit }}'
+backup_restore_drill_on_failure_dropin_file: '{{ backup_restore_drill_dropin_dir }}/20-on-failure.conf'
+backup_restore_textfile_dir: /var/lib/branchleft/backup-worker-exporter
+backup_restore_drill_failed_marker: '{{ backup_restore_textfile_dir }}/restore_drill_unit_failed.prom'
+
 # The directory the owner places each secret access key in: root only.
 backup_restore_secrets_dir: /etc/branchleft/secrets
 

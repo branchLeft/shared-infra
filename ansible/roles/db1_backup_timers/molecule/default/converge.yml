@@ -1,4 +1,47 @@
 ---
+# The plan comes first, so that a run of this scenario by itself proves what the plan
+# of a fresh host says, and does not rest on a step only the harness takes. A keyword
+# cannot make this play a check-mode one: the role's tasks read ansible_check_mode,
+# which only the command line's --check sets. So the controller runs this same
+# playbook with --check against the same fresh instance, and the nested run skips
+# this play because it is in check mode. The fetches are skipped in check mode, so the
+# plan must say by other means that the programs are still to be fetched: it has to
+# report provision_tenant_db.py as a change, which the db1_grants plan relies on.
+- name: Plan
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run this playbook in check mode against the same instance
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python | dirname }}/ansible-playbook'
+          - --check
+          - --inventory
+          - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+          - '{{ playbook_dir }}/converge.yml'
+      register: db1_backup_timers_plan
+      changed_when: false
+      when: not ansible_check_mode
+
+    # The result line of a looped task names its item: "changed: [host] => (item=NAME)". Each program
+    # is either reported as a change, or reported as on the host with the pinned bytes (the second
+    # converge of the harness, on a host the first one delivered to). Silence, or a program that is
+    # to be fetched and not reported as a change, is neither.
+    - name: Assert the plan reports each program it would fetch as a change
+      ansible.builtin.assert:
+        that:
+          - >-
+            db1_backup_timers_plan.stdout is regex('(?m)^changed: [[][^]]+[]] => [(]item=' ~ item ~ '[)]')
+            or db1_backup_timers_plan.stdout is regex(item ~ ': on the host with the pinned bytes')
+        fail_msg: >-
+          The check-mode plan does not report {{ item }} as a change, and does not say it is on the host
+          with the pinned bytes.
+        quiet: true
+      loop:
+        - provision_tenant_db[.]py
+        - restore_drained[.]py
+      when: not ansible_check_mode
+
 - name: Converge
   hosts: all
   gather_facts: false

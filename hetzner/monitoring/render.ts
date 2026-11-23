@@ -4,6 +4,10 @@ import type { EdgeSite } from '../../siteTypes';
 import {
   PAGE_RECEIVER_NAME,
   PAGE_REGISTER,
+  holdEdgeBanOwnerStale,
+  renderDiscardReceiverBlock,
+  renderEdgeBanOwnerStaleDiscardRoute,
+  renderOwnedEdgeBanRoute,
   renderPageReceiverBlock,
   renderPageRoute,
   renderPageTimingLines,
@@ -107,6 +111,29 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
 }
 
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
+
+// The classifier's two ways of going quiet: a last-run time more than 900
+// seconds old (three timer periods), or no such series at all. `max` drops
+// the series' own labels so both branches are the same unlabelled alert and a
+// series appearing or vanishing does not restart `for`. The stale alert
+// reads the series as absent at once (its `for` is the hold); the
+// page-everything fallback reads it as absent only when no sample has been
+// seen for ten minutes, so one lost scrape does not page every ban.
+const EDGE_BAN_CLASSIFIER_LAST_RUN = 'edge_ban_owner_last_run_timestamp_seconds';
+const EDGE_BAN_CLASSIFIER_OLD = `max(time() - ${EDGE_BAN_CLASSIFIER_LAST_RUN}) > 900`;
+const EDGE_BAN_CLASSIFIER_STALE = `(${EDGE_BAN_CLASSIFIER_OLD}) or absent(${EDGE_BAN_CLASSIFIER_LAST_RUN})`;
+const EDGE_BAN_CLASSIFIER_STALE_HELD = `(${EDGE_BAN_CLASSIFIER_OLD}) or absent_over_time(${EDGE_BAN_CLASSIFIER_LAST_RUN}[10m])`;
+
+/**
+ * Whether the edge_ban_owner role is installed on edge1: it must equal
+ * `edge_ban_owner_enabled` in `ansible/roles/edge_ban_owner/defaults/main.yml`,
+ * and `render.test.ts` fails when they differ. While false there is no
+ * classifier, so `EdgeBanOwnerStale` would fire for ever and the Alertmanager
+ * template discards it instead of paging; every ban still pages through the
+ * fallback. The rules are the same either way. Flip both in one commit and
+ * run `pnpm run render`.
+ */
+export const EDGE_BAN_OWNER_ENABLED = false;
 
 /**
  * db1's own backup freshness rules select on the `host` label its node
@@ -564,18 +591,15 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // Every ban the edge makes reaches the owner's phone, with the scenario
-    // that made it and never an address: CrowdSec's decision gauge carries no
-    // per-address label. A ban costs the person banned every site on the
-    // edge, the pager's own public name and the sign-in service included, so
-    // it cannot wait for the digest; the page route posts to ntfy over the
-    // stack's own network, not through the edge. One alert per scenario: a
-    // second ban by a scenario already firing raises the count in the next
-    // repeat, not a new page. Watch-only scenarios' simulated decisions are
-    // not in the gauge (test_crowdsec_replay.py asserts it), so a would-be
-    // ban never pages. Why: hetzner/edge/render.md, "Being told about a ban".
+    // An owned ban pages after the classifier's next run, up to ~5 minutes,
+    // and each owned ban is its own alert (decision_id), so a second ban of a
+    // scenario that is already paging is a new alert. Other bans go to email
+    // (EdgeBanUnowned). A stale classifier, or one missing for ten minutes,
+    // makes every ban page via the fallback branch; EdgeBanOwnerStale pages on
+    // its own. Text and labels never carry an address. Why, and the rest:
+    // hetzner/edge/render.md, "Being told about a ban".
     '      - alert: EdgeBanIssued',
-    '        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0',
+    `        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE_HELD}))`,
     '        labels:',
     '          severity: page',
     '        annotations:',
@@ -583,11 +607,49 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '          description: >-',
     '            A banned address gets 403 from every site on edge1 until the ban',
     '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
-    '            If it is you: from a network that is not banned, or over SSH to',
-    '            edge1, `cscli decisions list` shows the ban and',
+    '            This page means the address is one of yours: one that made a',
+    '            verified Ghost staff request through the edge in the last 30',
+    '            days, or a range holding one. A decision_id label, when there is',
+    '            one, is the CrowdSec decision ID, so each owned ban is its own',
+    '            alert. It also pages for every ban while the classifier is more',
+    '            than 15 minutes stale or has reported nothing for 10 minutes,',
+    '            when nothing says whose they are.',
+    '            From a network that is not banned, or over SSH to edge1,',
+    '            `cscli decisions list` shows the ban and',
     '            `cscli decisions delete --ip ADDRESS` lifts it. The reason is the',
     '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
     '            what each one reads.',
+    '',
+    // Not a page: a scanner the edge refused is the system working. Email
+    // reaches the off-host mailbox through the owner_action route and the
+    // on-host one through the warning route; neither is ntfy.
+    '      - alert: EdgeBanUnowned',
+    '        expr: sum by (reason) (edge_ban_owned{owned="false"}) > 0',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is banning {{ $value }} other address(es), by {{ $labels.reason }}."',
+    '          description: >-',
+    '            None of them is an address that made a verified Ghost staff',
+    '            request through the edge in the last 30 days, so this is email',
+    '            only. If one is yours, `cscli decisions list` on edge1 shows the',
+    '            ban and `cscli decisions delete --ip ADDRESS` lifts it. The',
+    '            reason is the CrowdSec scenario that decided.',
+    '',
+    '      - alert: EdgeBanOwnerStale',
+    `        expr: ${EDGE_BAN_CLASSIFIER_STALE}`,
+    '        for: 5m',
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "The edge ban classifier has not reported for over 15 minutes."',
+    '          description: >-',
+    '            Until it runs again every ban pages, owned or not. On edge1,',
+    '            `systemctl status branchleft-edge-ban-owner.timer` and',
+    '            `journalctl -u branchleft-edge-ban-owner` say why. A failed',
+    '            `cscli` query leaves the last file in place, so three missed',
+    '            runs raise this.',
     '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
@@ -802,6 +864,38 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            is 1.5x the nightly cadence, as for TenantBackupAgeHigh. Warning,',
     '            never page. The estate state has no other off-host copy until',
     '            this runs.',
+    '',
+    // The weekly restore drill's own failure, from the OnFailure= the backup_restore
+    // Ansible role gives the drill unit. systemd runs a small unit that touches
+    // restore_drill_unit_failed.prom in the textfile directory; node_exporter reports the
+    // file's mtime. The mark counts only while it is newer than the drill's own last-run
+    // time, so the next run that writes its metrics clears it, and a drill that has never
+    // written any (a crash before the first write) stays marked. Warning with no owner_action,
+    // like the rest of this group: the on-host mailbox is the route, and the exact owner_action
+    // list in render.test.ts is the owner's call to widen. See render.md#the-backup-rule-group.
+    '      - alert: RestoreDrillUnitFailed',
+    '        expr: >-',
+    '          node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"}',
+    '          unless on(instance)',
+    '          (restore_drill_last_run_timestamp_seconds >= on(instance) node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"})',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The weekly restore drill on {{ $labels.instance }} failed, and no later run has recorded its result."',
+    '          description: >-',
+    '            branchleft-restore-drill.service entered a failed state: a crash,',
+    '            a kill, the three-hour timeout, or an exit after a failed check.',
+    '            systemd then started branchleft-restore-drill-failed.service,',
+    '            which touched restore_drill_unit_failed.prom in the textfile',
+    '            directory. This rule holds while that file is newer than',
+    '            restore_drill_last_run_timestamp_seconds, or the drill has never',
+    '            written that series, so it also covers the crash that happens',
+    '            before the drill writes any metric. No for: the file is written',
+    '            once per failure and is flat otherwise. On ops1, read',
+    '            journalctl -u branchleft-restore-drill.service for the reason;',
+    '            the next run that records its result clears the alert, and a',
+    '            drill run by hand with systemctl start does the same. Until then',
+    '            nothing has shown that the latest backup restores.',
     '',
     // Not `notify: on-host`: unlike an SNDS or mail-deferral alert, nothing
     // about this signal depends on a route that avoids mx1.
@@ -1589,12 +1683,18 @@ export function renderAlertmanagerEmailTemplate(): string {
  * Alertmanager's config template, its placeholder tokens substituted by
  * `stack/render_alertmanager_config.py` on the host before every start.
  * See render.md#renderalertmanagertemplate for the token list and why
- * `register` defaults to the committed `PAGE_REGISTER`.
+ * `register` defaults to the committed `PAGE_REGISTER`. While the classifier
+ * is not installed (`edgeBanOwnerEnabled` false) the staleness alert is
+ * discarded rather than paged.
  */
 export function renderAlertmanagerTemplate(
-  register: readonly PageRegisterEntry[] = PAGE_REGISTER
+  register: readonly PageRegisterEntry[] = PAGE_REGISTER,
+  edgeBanOwnerEnabled: boolean = EDGE_BAN_OWNER_ENABLED
 ): string {
-  const pageRoute = renderPageRoute(register);
+  const routedRegister = edgeBanOwnerEnabled ? register : holdEdgeBanOwnerStale(register);
+  const pageRoute = renderPageRoute(routedRegister);
+  const ownedEdgeBanRoute = renderOwnedEdgeBanRoute(routedRegister);
+  const discardRoute = edgeBanOwnerEnabled ? '' : renderEdgeBanOwnerStaleDiscardRoute(register);
   return `${[
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
@@ -1701,6 +1801,13 @@ export function renderAlertmanagerTemplate(
     // `pageRegister.ts`. Empty when the register names no alertname to
     // route (every entry dormant or none delivered by Alertmanager), so no
     // stray route sits in the tree matching nothing.
+    // While the classifier is not installed its staleness alert is discarded
+    // here, before the generic route, which does not list it in that mode.
+    // The owned-ban child comes next and does not continue: the generic
+    // route below still lists EdgeBanIssued, so removing the child leaves
+    // the page in place with the old grouping rather than silencing it.
+    ...(discardRoute ? [discardRoute] : []),
+    ...(ownedEdgeBanRoute ? [ownedEdgeBanRoute] : []),
     ...(pageRoute ? [pageRoute] : []),
     '',
     // An alert whose cause is already firing adds nothing but another
@@ -1762,5 +1869,6 @@ export function renderAlertmanagerTemplate(
     // this stack sends, by design -- an operator clears it once the
     // underlying cause is fixed.
     '        send_resolved: false',
+    ...(discardRoute ? ['', renderDiscardReceiverBlock()] : []),
   ].join('\n')}\n`;
 }

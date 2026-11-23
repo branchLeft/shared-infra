@@ -1,0 +1,233 @@
+---
+# Inputs first, refused before any task changes anything. No message names a
+# value. The argument spec has already run; it coerces a wrong type rather than
+# rejecting it, so these reject it.
+- name: Refuse a setting that is the wrong shape
+  ansible.builtin.assert:
+    that:
+      - media_backup_timer_enabled is boolean
+      - media_backup_timer_may_disable is boolean
+      - media_backup_calendar is string
+      - media_backup_calendar is match(media_backup_calendar_pattern)
+      - media_backup_max_requests_per_second is integer
+      - media_backup_max_requests_per_second >= 1
+      - media_backup_max_requests_per_second <= media_backup_rate_max
+      - media_backup_memory_max is string
+      - media_backup_memory_max is match(media_backup_memory_pattern)
+    quiet: true
+    fail_msg: >-
+      A setting is the wrong shape: the timer switches are true or false, the
+      calendar is plain systemd calendar text, the request ceiling is a whole
+      number from 1 to 400, and the memory limit is a whole number then M or G.
+
+- name: Refuse a release that is not pinned to a commit and a checksum for every file
+  ansible.builtin.assert:
+    that:
+      - media_backup_source_sha is match(media_backup_sha_pattern)
+      - >-
+        media_backup_release_files | map(attribute='path') | select('match', media_backup_path_pattern) | list | length
+        == media_backup_release_files | length
+      - >-
+        media_backup_release_files | map(attribute='sha256') | select('match', media_backup_checksum_pattern) | list | length
+        == media_backup_release_files | length
+      - media_backup_release_files | map(attribute='path') | unique | list | length == media_backup_release_files | length
+      - media_backup_required_paths | difference(media_backup_release_files | map(attribute='path') | list) | length == 0
+    quiet: true
+    fail_msg: >-
+      The release needs a full 40-character commit, a 64-character sha256 for
+      every file, plain file paths with none twice, and must list the program and
+      the four files it imports.
+
+# The service account is the nightly worker's. This role does not make it: the
+# files below name it as a group, so it must exist before they are written.
+- name: Look for the service account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ media_backup_account }}'
+    fail_key: false
+
+- name: Refuse a host with no service account
+  ansible.builtin.assert:
+    that:
+      - getent_passwd[media_backup_account] is not none
+    quiet: true
+    fail_msg: >-
+      The service account does not exist. Apply backup_worker earlier in the same
+      play: it makes the account.
+
+- name: Create the directories above the releases
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ media_backup_base_dir }}'
+    - '{{ media_backup_releases_dir }}'
+    - '{{ media_backup_release_dir }}'
+
+- name: Create the directories of the release
+  ansible.builtin.file:
+    path: '{{ media_backup_release_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ media_backup_release_subdirs }}'
+
+# Each file comes from the one home of the programs, at the pinned commit, and
+# the download fails unless it has the pinned sha256. Root owns it and no one
+# else can write it, because the service runs it as another account. In check
+# mode the directories above do not exist yet on a fresh host, and get_url
+# refuses a destination whose directory is missing, so it is skipped there.
+- name: Look at the release directory
+  ansible.builtin.stat:
+    path: '{{ media_backup_release_dir }}/infra/provisioning/scripts'
+  register: media_backup_release_stat
+
+- name: Download the release files and hold each to its checksum
+  ansible.builtin.get_url:
+    url: '{{ media_backup_source_base_url }}/{{ item.path }}'
+    dest: '{{ media_backup_release_dir }}/{{ item.path }}'
+    checksum: 'sha256:{{ item.sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ media_backup_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: media_backup_release_stat.stat.exists
+
+- name: Point current at this release
+  ansible.builtin.file:
+    path: '{{ media_backup_current_link }}'
+    src: '{{ media_backup_release_dir }}'
+    state: link
+    owner: root
+    group: root
+  when: media_backup_release_stat.stat.exists
+
+- name: Install the service unit
+  ansible.builtin.template:
+    src: branchleft-media-backup.service.j2
+    dest: '{{ media_backup_unit_dir }}/{{ media_backup_service_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Install the timer unit
+  ansible.builtin.template:
+    src: branchleft-media-backup.timer.j2
+    dest: '{{ media_backup_unit_dir }}/{{ media_backup_timer_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the timer task
+# below would meet a unit systemd has not read.
+- name: Load the units before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# The two files the owner fills. Each is created empty when absent, with the
+# owner, group and mode it must have, and has those set again on every run, so a
+# value the owner places later never sits in a wider file. The role never writes
+# their content and never reads it. The tasks say no_log and diff: false because
+# the file holds settings and keys once the owner has placed them (ANS-16).
+- name: Create each owner-placed file empty when absent
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ item.path }}'
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+    force: false
+  loop: '{{ media_backup_private_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  no_log: true
+  diff: false
+
+# The stat comes first because check mode creates nothing, so a file still
+# absent there is skipped.
+- name: Look at each owner-placed file before its attributes are set
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ media_backup_private_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: media_backup_private_stat
+
+- name: Set the owner, group and mode of each owner-placed file on every run
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: file
+    owner: '{{ item.item.owner }}'
+    group: '{{ item.item.group }}'
+    mode: '{{ item.item.mode }}'
+  loop: '{{ media_backup_private_stat.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode or item.stat.exists
+
+# The timer is held off unless the variable turns it on, and turning it on is
+# refused until each file the program needs is in place. The role looks at the
+# files with stat and never reads them. The program's own --check, run first by
+# the unit, is the check of their content.
+- name: Look at the files the program needs
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ media_backup_env_file }}'
+    - '{{ media_backup_folders_file }}'
+    - '{{ media_backup_recipients_file }}'
+    - '{{ media_backup_signing_key_file }}'
+  register: media_backup_needed_stat
+  when: media_backup_timer_enabled | bool
+
+- name: Refuse the timer while a file the program needs is not placed
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.size > 0
+      - item.stat.pw_name == 'root'
+    quiet: true
+    fail_msg: >-
+      The timer cannot be enabled: a file the program needs is missing, empty,
+      not a plain file or not owned by root ({{ item.item }}). Place it as the
+      README says, then apply again.
+  loop: '{{ media_backup_needed_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: media_backup_timer_enabled | bool
+
+# The service account reads the signing key through its group, and no one else
+# may. A key the account cannot read fails every run at 05:00.
+- name: Refuse a signing key the service account cannot read or others can
+  ansible.builtin.assert:
+    that:
+      - (media_backup_needed_stat.results | selectattr('item', 'equalto', media_backup_signing_key_file) | first).stat.gr_name == media_backup_account
+      - (media_backup_needed_stat.results | selectattr('item', 'equalto', media_backup_signing_key_file) | first).stat.mode == '0640'
+    quiet: true
+    fail_msg: >-
+      The manifest signing key must be owned by root, group-owned by the service
+      account and mode 0640, so the account can read it and no one else can.
+  when: media_backup_timer_enabled | bool
+
+# A timer the host already has on is left alone unless media_backup_timer_may_disable
+# is true: with the defaults this task does nothing, so a first apply cannot stop
+# backups that were enabled by hand. The gate is the second variable, never a
+# change to the default.
+- name: Hold the weekly timer to the state the variable asks for
+  ansible.builtin.systemd_service:
+    name: '{{ media_backup_timer_unit }}'
+    enabled: '{{ media_backup_timer_enabled | bool }}'
+    state: "{{ 'started' if media_backup_timer_enabled | bool else 'stopped' }}"
+  when:
+    - media_backup_release_stat.stat.exists
+    - media_backup_timer_enabled | bool or media_backup_timer_may_disable | bool

@@ -1,0 +1,133 @@
+---
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Look at the current link
+      ansible.builtin.stat:
+        path: /opt/branchleft/media-backup/current
+      register: media_backup_verify_current
+
+    - name: Assert current is a link to a release directory named for the pinned commit
+      ansible.builtin.assert:
+        that:
+          - media_backup_verify_current.stat.islnk
+          - media_backup_verify_current.stat.lnk_source == '/opt/branchleft/media-backup/releases/73b4f54ae4455146a977016f1319e658fa3af645'
+        quiet: true
+        fail_msg: current is not a link to the release directory of the pinned commit.
+
+    - name: Look at each release file
+      ansible.builtin.stat:
+        path: '/opt/branchleft/media-backup/current/{{ item.path }}'
+        checksum_algorithm: sha256
+      loop: '{{ media_backup_release_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: media_backup_verify_files
+
+    - name: Assert each release file is the pinned bytes, owned by root and writable by no one else
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.checksum == item.item.sha256
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+        quiet: true
+        fail_msg: 'A release file is missing, is not the pinned bytes, or is not root:root 0644: {{ item.item.path }}'
+      loop: '{{ media_backup_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Read the service unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/branchleft-media-backup.service
+      register: media_backup_verify_service
+
+    - name: Read the timer unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/branchleft-media-backup.timer
+      register: media_backup_verify_timer_unit
+
+    - name: Work out the unit lines
+      ansible.builtin.set_fact:
+        media_backup_verify_program: /opt/branchleft/media-backup/current/infra/provisioning/scripts/media_backup_weekly.py
+        media_backup_verify_key: /etc/branchleft/media-backup-manifest-signing-key
+        media_backup_verify_service_lines: '{{ (media_backup_verify_service.content | b64decode).splitlines() }}'
+        media_backup_verify_timer_lines: '{{ (media_backup_verify_timer_unit.content | b64decode).splitlines() }}'
+
+    - name: Assert the service runs the program as the service account, hardened, with the ceiling set
+      ansible.builtin.assert:
+        that:
+          - "'User=backup-worker' in media_backup_verify_service_lines"
+          - "'EnvironmentFile=/etc/branchleft/media-backup.env' in media_backup_verify_service_lines"
+          - "'Environment=MEDIA_BACKUP_MAX_REQUESTS_PER_SECOND=25' in media_backup_verify_service_lines"
+          - "('Environment=MEDIA_BACKUP_MANIFEST_SIGNING_KEY_FILE=' ~ media_backup_verify_key) in media_backup_verify_service_lines"
+          - "('ExecStartPre=/usr/bin/python3 ' ~ media_backup_verify_program ~ ' --check') in media_backup_verify_service_lines"
+          - "('ExecStart=/usr/bin/python3 ' ~ media_backup_verify_program) in media_backup_verify_service_lines"
+          - "'NoNewPrivileges=yes' in media_backup_verify_service_lines"
+          - "'ProtectSystem=strict' in media_backup_verify_service_lines"
+          - "'MemoryMax=1G' in media_backup_verify_service_lines"
+          - "'TimeoutStartSec=12h' in media_backup_verify_service_lines"
+        quiet: true
+        fail_msg: The service unit is not as the role defines it.
+
+    - name: Assert the timer is weekly and persistent
+      ansible.builtin.assert:
+        that:
+          - "'OnCalendar=Sun *-*-* 05:00:00' in media_backup_verify_timer_lines"
+          - "'Persistent=true' in media_backup_verify_timer_lines"
+        quiet: true
+        fail_msg: The timer unit is not as the role defines it.
+
+    - name: Look at the two owner-placed files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft/media-backup.env
+        - /etc/branchleft/backup-worker-media-folders
+      register: media_backup_verify_private
+
+    - name: Assert the settings file is root only and the folders file is root and the service account
+      ansible.builtin.assert:
+        that:
+          - media_backup_verify_private.results[0].stat.pw_name == 'root'
+          - media_backup_verify_private.results[0].stat.gr_name == 'root'
+          - media_backup_verify_private.results[0].stat.mode == '0600'
+          - media_backup_verify_private.results[1].stat.pw_name == 'root'
+          - media_backup_verify_private.results[1].stat.gr_name == 'backup-worker'
+          - media_backup_verify_private.results[1].stat.mode == '0640'
+        quiet: true
+        fail_msg: An owner-placed file has the wrong owner, group or mode.
+
+    - name: Read the timer
+      ansible.builtin.systemd_service:
+        name: branchleft-media-backup.timer
+      register: media_backup_verify_timer
+      changed_when: false
+
+    - name: Assert the timer is enabled and active, as the last converge asked
+      ansible.builtin.assert:
+        that:
+          - media_backup_verify_timer.status.UnitFileState == 'enabled'
+          - media_backup_verify_timer.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The weekly timer is not enabled and active.
+
+    - name: Read the service unit's state
+      ansible.builtin.systemd_service:
+        name: branchleft-media-backup.service
+      register: media_backup_verify_service_state
+      changed_when: false
+
+    - name: Assert the service has not run
+      ansible.builtin.assert:
+        that:
+          - media_backup_verify_service_state.status.ActiveState == 'inactive'
+          - media_backup_verify_service_state.status.Result == 'success'
+        quiet: true
+        fail_msg: The service ran, or failed, during the test; the role must never start a run.

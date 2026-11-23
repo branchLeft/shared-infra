@@ -329,3 +329,45 @@ demo1_build_installed_pins: |-
 
 # One upstream snippet per slot in the edge fragment.
 demo1_build_edge_snippet_pattern: '(?m)^\(slot[0-9]+-upstream\) \{$'
+
+# The broker tunnel account (_broker_tunnel.yml). ops1 holds one ssh -L forward to
+# the broker through it (owner ruling control=a). Constants, not inputs: the grant is
+# ghost-platform's demo-host/provision/render_broker_tunnel.py, and the templates
+# render byte for byte what that program renders (molecule/broker_tunnel holds the
+# golden copies). A caller cannot widen the destination.
+demo1_build_tunnel_user: brokertunnel
+demo1_build_tunnel_nologin: /usr/sbin/nologin
+demo1_build_tunnel_broker_open: 127.0.0.1:8090
+demo1_build_tunnel_key_options: 'restrict,port-forwarding,permitopen="{{ demo1_build_tunnel_broker_open }}"'
+demo1_build_tunnel_authorized_keys_dir: /etc/ssh/branchleft-broker-tunnel
+demo1_build_tunnel_authorized_keys: '{{ demo1_build_tunnel_authorized_keys_dir }}/authorized_keys'
+demo1_build_tunnel_sshd_config_dir: /etc/ssh/sshd_config.d
+demo1_build_tunnel_sshd_dropin: '{{ demo1_build_tunnel_sshd_config_dir }}/50-branchleft-broker-tunnel.conf'
+demo1_build_tunnel_sshd_service: ssh
+# The one input: ops1's tunnel public key, placed by the owner. Public data, but a
+# file the owner places, so the role never chooses which key is let in. Absent, the
+# tunnel is not installed and the run says so (a stated skip, ANS-10).
+demo1_build_tunnel_inputs_dir: /etc/branchleft/broker-tunnel
+demo1_build_tunnel_key_input: '{{ demo1_build_tunnel_inputs_dir }}/ops1_public_key'
+# One ed25519 key line: the type, the 68 base64 characters of an ed25519 key and an
+# optional comment of the characters the ghost-platform program accepts. \Z, so a
+# second line (a second, unrestricted key) is refused.
+demo1_build_tunnel_ed25519_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}(?: [A-Za-z0-9@._-]{1,64})?\Z'
+# The sshd -T keyword and the one value sshd must apply to the account. The address
+# sshd is asked about is a documentation address (RFC 5737): the role does not know
+# edge1's, so a Match Address block for edge1 alone is not seen (README, Limits).
+demo1_build_tunnel_check_addr: 192.0.2.1
+demo1_build_tunnel_expected_effective:
+  authorizedkeysfile: '{{ demo1_build_tunnel_authorized_keys }}'
+  authenticationmethods: publickey
+  allowtcpforwarding: local
+  permitopen: '{{ demo1_build_tunnel_broker_open }}'
+  permitlisten: none
+  gatewayports: 'no'
+  allowagentforwarding: 'no'
+  allowstreamlocalforwarding: 'no'
+  x11forwarding: 'no'
+  permittty: 'no'
+  permittunnel: 'no'
+  permituserrc: 'no'
+  forcecommand: '{{ demo1_build_tunnel_nologin }}'
