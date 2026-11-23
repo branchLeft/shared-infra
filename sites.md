@@ -43,6 +43,25 @@ Setting both is a deliberate step: the upstream host is `edge1`, which the rende
 refuses except on the ports in `EDGE_HOST_ALLOWED_PORTS`, so the port must be added
 there in the same change.
 
+## Signed object gateway sites
+
+An entry with `signedObjectGateway` is the tenant-state gateway: an S3-compatible service
+whose clients sign their own requests. What the edge lets through for it is in
+`hetzner/edge/render.md`, "`siteBlock`: signed object gateway". Its hostname is ruled
+(`state.branchleft.co.uk`, in the zone file under `hetzner/dns/`), but the private address
+of the gateway host is not in this repository, so the entry names its upstream through two
+constants at the top of `sites.ts` that read `undefined` until the host exists. While
+either is unset the entry claims no hostname and has no `privateUpstream`, so it is skipped
+like any site with nowhere to proxy to: no block, no certificate request, no probe target.
+
+Setting both is one deliberate change with three parts: the gateway host's name and address
+in the estate address plan (`hetzner-host/addressPlan.ts`); the two constants; and, if the
+host is `edge1`, a port in `EDGE_HOST_ALLOWED_PORTS`. The `A` record for the hostname is
+already in the zone, and it must be applied before the entry is: Caddy requests a certificate as
+soon as the block renders, and a failed HTTP-01 validation costs the account's failure
+budget. Once set, the monitoring and status probes read `/healthz`, not the root, which the
+gateway answers 404 by design.
+
 ## Copying a tenant's port and ceiling
 
 Both values on a tenant's entry belong to that tenant's own stack and neither
@@ -157,3 +176,10 @@ does two things:
 
 Theme assets, the admin and `/content/public/` are untouched. An `other` site
 changes in no way.
+
+A `ghost` entry may also carry `media`, its object-storage host and bucket
+(`branchleft-media-<slug>`, copied from the tenant stack like the port). The
+edge then answers those three upload paths itself by reading the bucket, so a
+reader's browser need not contact the storage host: `hetzner/edge/render.md`,
+"Tenant media". The renderer refuses a bucket that is not a tenant media
+bucket name, so an entry cannot point the edge at a state or backup bucket.

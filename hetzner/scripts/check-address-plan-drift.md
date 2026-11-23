@@ -3,7 +3,7 @@
 `hetzner-host/addressPlan.ts` is the one place `NETWORK_CIDR`, `SUBNET_CIDR`
 and `HOST_IPS`/`APP_HOST_IPS` are decided. `hetzner/network.ts` and
 `hetzner/egress.ts` import that module, so Pulumi always sees a plan change.
-The NAT gateway script, the DOCKER-USER isolation-policy script, and the
+The NAT gateway script, the DOCKER-USER isolation-policy script, edge1's playbook (where the edge_firewall role is given the subnet it masquerades), and the
 provisioning runbook cannot: the scripts run on a host with no repository
 checkout to import from, and the runbook is prose a human reads, not code
 anything executes. All three therefore carry a copy of the plan's subnet
@@ -24,6 +24,14 @@ edge1-shaped and db1-shaped literal in the shell scripts and the runbook
 still matches them -- every occurrence, not the first one found, because a
 file edited in one place and left stale in another is the half-updated state
 the gate exists to catch.
+
+`hetzner/README.md` (the host table) and `hetzner/RUNBOOK-edge.md` (the
+opening line naming `edge1`) are read line by line. Any line that names a plan
+host and carries an in-network address must carry a current plan value. A
+host's address that moves in the plan and stays old on such a line fails with
+the file, the line, the stale value and the value the plan now has for each
+named host. Adding a host to the plan needs no edit to the gate, because host
+names are read from the plan. A line that names no host is not read.
 
 Two things a naive text match over these files would get wrong, both handled
 below:

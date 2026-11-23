@@ -31,9 +31,18 @@
 # host that can open the spool's loopback drain port and nothing else. It is inert until the owner
 # has placed its two input files, and it opens no port and adds no firewall rule.
 #
-# The roles have no secret and no required input, so the only variables file is the
-# shared pull values and the host's trust file, which hold the signer list and nothing
-# else. The inventory has no entry for the host: a playbook and its trust file enrol it.
+# host_tls_identity follows the host's own roles: it makes the host's own TLS key and self-signed certificate and pins the
+# one client certificate its exporter will trust, taken from the owner's value in owner_vars/demo1.yml.
+# It must stay before any role that reads those files (the exporter's).
+#
+# node_exporter_public is last. demo1 takes the Debian package of the exporter, which serves
+# TLS and accepts only a client certificate the owner's CA signed, because the host shares no
+# private network with the monitoring host. The role waits, changing nothing, until the owner has
+# placed the CA, certificate and key files (roles/node_exporter_public/README.md).
+#
+# The roles have no secret and no required input. The variables files are the shared pull values,
+# the host's trust file, which holds the signer list and nothing else, and the owner's public
+# certificate value. The inventory has no entry for the host: a playbook and its trust file enrol it.
 - name: Build demo1
   hosts: all
   gather_facts: false
@@ -42,6 +51,7 @@
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/demo1.yml'
+    - '{{ playbook_dir }}/../owner_vars/demo1.yml'
   pre_tasks:
     - name: Refuse a run that is not demo1's
       ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
@@ -54,7 +64,10 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/broker_deploy # noqa: role-name[path]
     - role: ../roles/demo1_build # noqa: role-name[path]
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]
     - role: ../roles/spool_path_account # noqa: role-name[path]
+    - role: ../roles/host_tls_identity # noqa: role-name[path]
+    - role: ../roles/node_exporter_public # noqa: role-name[path]

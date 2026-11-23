@@ -41,9 +41,12 @@ capd = _load_module()
 SUBNET_CIDR = "10.20.1.0/24"
 EDGE1 = "10.20.1.10"
 DB1 = "10.20.1.20"
+APP1 = "10.20.1.100"
 
 
-def address_plan(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, db1: str = DB1) -> str:
+def address_plan(
+    subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, db1: str = DB1, app1: str = APP1
+) -> str:
     return (
         "export const NETWORK_CIDR = '10.20.0.0/16';\n"
         f"export const SUBNET_CIDR = '{subnet_cidr}';\n"
@@ -52,9 +55,23 @@ def address_plan(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, db1: str = 
         f"  db1: '{db1}',\n"
         "} as const;\n"
         "export const APP_HOST_IPS = {\n"
-        "  app1: '10.20.1.100',\n"
+        f"  app1: '{app1}',\n"
         "} as const;\n"
     )
+
+
+def host_table(edge1: str = EDGE1, db1: str = DB1, app1: str = APP1) -> str:
+    """The host table hetzner/README.md carries, one row per plan host."""
+    return (
+        f"| `edge1` | `edge` | IPv4 + IPv6      | `{edge1}`    | this stack       |\n"
+        f"| `app1`  | `app`  | undecided        | `{app1}`   | `ghost-platform` |\n"
+        f"| `db1`   | `db`   | none             | `{db1}`   | `ghost-platform` |\n"
+    )
+
+
+def edge_runbook(edge1: str = EDGE1) -> str:
+    """The opening line of hetzner/RUNBOOK-edge.md, which names edge1's address."""
+    return f"`edge1` is a `cx23` in `nbg1` (private `{edge1}`).\n"
 
 
 def nat_script(subnet_cidr: str = SUBNET_CIDR) -> str:
@@ -63,6 +80,20 @@ def nat_script(subnet_cidr: str = SUBNET_CIDR) -> str:
 
 def docker_user_policy_script(db1: str = DB1) -> str:
     return f'DEFAULT_DB_HOST = "{db1}"\n'
+
+
+def edge1_playbook(subnet_cidr: str = SUBNET_CIDR) -> str:
+    """The part of ansible/playbooks/edge1.yml the checker reads: the play var that hands the
+    edge_firewall role the subnet it masquerades. The comment line names the variable the way the
+    real header does, to show that prose is not read as the value."""
+    return (
+        "# edge_firewall_nat_source: 192.0.2.0/24 is how a comment would name it.\n"
+        "- name: Bring edge1 under the pull\n"
+        "  vars:\n"
+        "    enrolled_host: edge1\n"
+        f"    edge_firewall_nat_source: {subnet_cidr}\n"
+        "    edge_firewall_enforce: false\n"
+    )
 
 
 def runbook(
@@ -109,6 +140,12 @@ class TreeBuilder:
         runbook_second_subnet: str | None = None,
         runbook_edge1: str = EDGE1,
         runbook_db1: str = DB1,
+        plan_app1: str = APP1,
+        readme_edge1: str = EDGE1,
+        readme_db1: str = DB1,
+        readme_app1: str = APP1,
+        edge_runbook_edge1: str = EDGE1,
+        playbook_subnet: str = SUBNET_CIDR,
     ) -> "TreeBuilder":
         # Every shell-side value defaults to the *original* literal, not to
         # whatever `plan_*` is this call -- so overriding only `plan_subnet`,
@@ -119,8 +156,11 @@ class TreeBuilder:
             runbook_subnet if runbook_second_subnet is None else runbook_second_subnet
         )
         self.write(
-            "hetzner-host/addressPlan.ts", address_plan(plan_subnet, plan_edge1, plan_db1)
+            "hetzner-host/addressPlan.ts",
+            address_plan(plan_subnet, plan_edge1, plan_db1, plan_app1),
         )
+        self.write("hetzner/README.md", host_table(readme_edge1, readme_db1, readme_app1))
+        self.write("hetzner/RUNBOOK-edge.md", edge_runbook(edge_runbook_edge1))
         self.write("ansible/roles/egress_nat/files/branchleft_nat.py", nat_script(nat_subnet))
         self.write(
             "ansible/roles/deploy_tooling/files/branchleft_docker_user_policy.py",
@@ -130,6 +170,7 @@ class TreeBuilder:
             "hetzner/RUNBOOK-provision-host.md",
             runbook(runbook_subnet, runbook_edge1, runbook_second_subnet, runbook_db1),
         )
+        self.write("ansible/playbooks/edge1.yml", edge1_playbook(playbook_subnet))
         return self
 
 
@@ -202,8 +243,64 @@ class SubnetDriftTests(unittest.TestCase):
                 nat_subnet="10.20.2.0/24",
                 runbook_subnet="10.20.2.0/24",
                 runbook_second_subnet="10.20.2.0/24",
+                playbook_subnet="10.20.2.0/24",
             )
             self.assertEqual(capd.check(tree.root), [])
+
+
+class EdgeFirewallSourceDriftTests(unittest.TestCase):
+    """The subnet edge1's playbook hands the edge_firewall role is a literal the module cannot
+    import. A stale one loads a masquerade for the wrong subnet: every check of the role passes
+    and the plan's real subnet has no outbound internet."""
+
+    def test_a_playbook_subnet_left_stale_after_the_plan_moved_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+                # only the playbook is stale
+            )
+            failures = capd.check(tree.root)
+            playbook = [f for f in failures if "edge1.yml" in f]
+            self.assertEqual(len(playbook), 1, failures)
+            self.assertIn(str(tree.root / "ansible" / "playbooks" / "edge1.yml"), playbook[0])
+            self.assertIn("10.20.1.0/24", playbook[0])
+            self.assertIn("10.20.2.0/24", playbook[0])
+
+    def test_a_playbook_that_stops_carrying_the_subnet_fails_rather_than_passing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            tree.write("ansible/playbooks/edge1.yml", "- name: Bring edge1 under the pull\n")
+            failures = capd.check(tree.root)
+            self.assertTrue(
+                any("edge1.yml" in f and "found none" in f for f in failures), failures
+            )
+
+    def test_a_subnet_that_is_only_in_a_comment_is_not_the_play_var(self):
+        # The comment in the fixture names a different subnet; the check must not read it.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_a_quoted_playbook_subnet_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+            )
+            tree.write(
+                "ansible/playbooks/edge1.yml",
+                '- vars:\n    edge_firewall_nat_source: "10.20.1.0/24"\n',
+            )
+            self.assertTrue(any("edge1.yml" in f for f in capd.check(tree.root)))
+
+    def test_a_missing_playbook_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            (tree.root / "ansible" / "playbooks" / "edge1.yml").unlink()
+            self.assertTrue(any("edge1.yml: cannot read" in f for f in capd.check(tree.root)))
 
 
 class Edge1DriftTests(unittest.TestCase):
@@ -211,9 +308,12 @@ class Edge1DriftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_edge1="10.20.1.11")
             failures = capd.check(tree.root)
-            edge1_failures = [f for f in failures if "10.20.1.10" in f and "10.20.1.11" in f]
+            edge1_failures = [
+                f
+                for f in failures
+                if "RUNBOOK-provision-host.md" in f and "10.20.1.10" in f and "10.20.1.11" in f
+            ]
             self.assertEqual(len(edge1_failures), 1)
-            self.assertIn("RUNBOOK-provision-host.md", edge1_failures[0])
 
     def test_edge1_agreeing_while_subnet_drifts_reports_only_the_subnet_fault(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,6 +671,98 @@ class ParsingTests(unittest.TestCase):
         self.assertIn("kept3", stripped)
         self.assertIn("kept4", stripped)
         self.assertNotIn("dropped", stripped)
+
+
+class HostLineTests(unittest.TestCase):
+    """hetzner/README.md's host table and hetzner/RUNBOOK-edge.md's opening line
+    name a host and its address on the same line. A moved plan value left stale
+    on such a line is the failure these tests build and expect the gate to see.
+    """
+
+    def test_a_moved_edge1_left_stale_in_the_readme_host_table_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_edge1="10.20.1.11")
+            readme_failures = [f for f in capd.check(tree.root) if "README.md" in f]
+            self.assertEqual(len(readme_failures), 1, readme_failures)
+            self.assertIn("10.20.1.10", readme_failures[0])
+            self.assertIn("edge1", readme_failures[0])
+
+    def test_a_moved_edge1_left_stale_in_the_runbook_edge_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_edge1="10.20.1.11",
+                runbook_edge1="10.20.1.11",
+                readme_edge1="10.20.1.11",
+            )
+            failures = capd.check(tree.root)
+            self.assertEqual(len(failures), 1, failures)
+            self.assertIn("RUNBOOK-edge.md", failures[0])
+            self.assertIn("10.20.1.11", failures[0])
+
+    def test_a_moved_app1_left_stale_in_the_readme_host_table_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_app1="10.20.1.101")
+            readme_failures = [f for f in capd.check(tree.root) if "README.md" in f]
+            self.assertEqual(len(readme_failures), 1, readme_failures)
+            self.assertIn("app1", readme_failures[0])
+            self.assertIn("10.20.1.101", readme_failures[0])
+
+    def test_the_message_names_the_file_line_stale_value_and_plan_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_edge1="10.20.1.11")
+            readme_failure = next(f for f in capd.check(tree.root) if "README.md" in f)
+            self.assertIn("README.md:1:", readme_failure)
+            self.assertIn("'10.20.1.10'", readme_failure)
+            self.assertIn("edge1 = '10.20.1.11'", readme_failure)
+
+    def test_a_line_naming_no_host_is_not_read(self):
+        # RUNBOOK-style prose mentions an unallocated address with no host on
+        # the line. The gate does not model prose, so it does not flag it.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            tree.write(
+                "hetzner/README.md",
+                "`10.20.1.40` is left unallocated in `addressPlan.ts`.\n",
+            )
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_adding_a_host_to_the_plan_needs_no_gate_edit(self):
+        plan_with_mon1 = (
+            "export const NETWORK_CIDR = '10.20.0.0/16';\n"
+            "export const SUBNET_CIDR = '10.20.1.0/24';\n"
+            "export const HOST_IPS = {\n"
+            "  edge1: '10.20.1.10',\n"
+            "  db1: '10.20.1.20',\n"
+            "  mon1: '10.20.1.30',\n"
+            "} as const;\n"
+            "export const APP_HOST_IPS = {\n"
+            "  app1: '10.20.1.100',\n"
+            "} as const;\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            tree.write("hetzner-host/addressPlan.ts", plan_with_mon1)
+            tree.write(
+                "hetzner/README.md",
+                host_table() + "| `mon1` | `mon` | none | `10.20.1.30` |\n",
+            )
+            self.assertEqual(capd.check(tree.root), [])
+
+            tree.write(
+                "hetzner/README.md",
+                host_table() + "| `mon1` | `mon` | none | `10.20.1.31` |\n",
+            )
+            mon1_failures = [f for f in capd.check(tree.root) if "mon1" in f]
+            self.assertEqual(len(mon1_failures), 1, mon1_failures)
+
+    def test_a_missing_host_table_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            (tree.root / "hetzner" / "README.md").unlink()
+            failures = capd.check(tree.root)
+            self.assertTrue(
+                any("README.md" in f and "cannot read" in f for f in failures), failures
+            )
 
 
 class ThisRepositoryTests(unittest.TestCase):

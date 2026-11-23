@@ -7,12 +7,23 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  BINLOG_PULL_GAP_FOR,
+  BINLOG_PULL_STALE_SECONDS,
   CONTROL_PLANE_BACKUP_STALE_SECONDS,
   DB_BINLOG_ABSENT_FOR,
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
   DB_DUMP_STALE_SECONDS,
+  EDGE_BAN_OWNER_ENABLED,
+  ALERTMANAGER_PORT,
+  BLACKBOX_EXPORTER_PORT,
+  CADDY_METRICS_PORT,
+  CADVISOR_PORT,
+  CROWDSEC_METRICS_PORT,
   MONITORED_MYSQLD_HOST,
+  MYSQLD_EXPORTER_PORT,
+  PROMETHEUS_PORT,
+  WEBSITE_METRICS_PORT,
   MONITORED_NODE_HOSTS,
   MONITORED_REPLICA_HOST,
   NODE_EXPORTER_PORT,
@@ -20,13 +31,16 @@ import {
   REPLICA_TUNNEL_JOB,
   replicaDeadlineEpoch,
   REPLICA_TUNNEL_METRICS_PORT,
+  RELEASE_WATCHER_HOST,
+  RELEASE_WATCHER_METRICS_PATH,
   renderAlertmanagerEmailTemplate,
   renderAlertmanagerTemplate,
   renderAlertRules,
   renderAlertRulesWithDeadline,
   renderPrometheusConfig,
 } from './render';
-import { HOST_IPS } from '@branchleft/hetzner-host';
+import { EDGE_RULES, HOST_IPS, INTERNAL_RULES, TENANTS_HOST_IPS } from '@branchleft/hetzner-host';
+import { PAGE_REGISTER } from './pageRegister';
 
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
@@ -90,7 +104,15 @@ describe("the pager's own liveness", () => {
 
 describe('the rendered Prometheus config', () => {
   it('names every estate host membership, address-plan-derived rather than typed twice', () => {
-    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual(['edge1', 'app1', 'db1', 'ops1']);
+    expect(MONITORED_NODE_HOSTS.map((host) => host.name)).toEqual([
+      'edge1',
+      'app1',
+      'db1',
+      'ops1',
+      'db-t1',
+      'app-t1',
+      'edge-t',
+    ]);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.address).toBe('10.20.1.10');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.address).toBe('10.20.1.100');
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.address).toBe('10.20.1.20');
@@ -224,10 +246,17 @@ describe('the rendered Prometheus config', () => {
   // rather than skipped inline inside the assertion loop below. An inline
   // skip reads as "this job doesn't need checking" and survives unnoticed
   // when a new job is added; a named list is something a reviewer has to
-  // look at and defend. Empty today -- every scrape job this estate runs,
-  // blackbox_http included, carries the label, so a job missing it is
-  // exactly the defect this test exists to catch.
-  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = [];
+  // look at and defend. Every other scrape job this estate runs carries the
+  // label, so a job missing it is exactly the defect this test exists to
+  // catch.
+  //
+  // release_watcher is the one entry: it reads a file on GitHub's raw-content
+  // host, not a host of ours. `true` would page the owner critical for five
+  // minutes of someone else's outage, and `false` would raise
+  // ExpectedDownTargetAnswering the moment it answered. Unmarked, the generic
+  // TargetDownUnmarked warning reads it at 24 hours, and ReleaseWatcherStale
+  // is the signal that matters.
+  const JOBS_WITHOUT_EXPECTED_UP: readonly string[] = ['release_watcher'];
 
   it('gives every scrape job an expected_up label, so HostOrServiceDown can see it, unless the job is named in the exemption list above', () => {
     const rendered = renderPrometheusConfig(sites);
@@ -288,6 +317,33 @@ describe('the rendered Prometheus config', () => {
     const rendered = renderPrometheusConfig(sites);
     const blackboxSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_http'));
     expect(blackboxSection).toContain("labels: {host: edge1, expected_up: 'true'}");
+  });
+
+  describe('the release watcher gauge, read from the state branch of a public repository', () => {
+    const section = (rendered: string) =>
+      rendered.slice(
+        rendered.indexOf('  - job_name: release_watcher'),
+        rendered.indexOf('\n\n', rendered.indexOf('  - job_name: release_watcher'))
+      );
+
+    it('scrapes the raw file over HTTPS from the state/release-watcher branch, holding no credential', () => {
+      const job = section(renderPrometheusConfig(sites));
+      expect(job).toContain('scheme: https');
+      expect(job).toContain(`metrics_path: ${RELEASE_WATCHER_METRICS_PATH}`);
+      expect(job).toContain(`targets: ['${RELEASE_WATCHER_HOST}:443']`);
+      expect(RELEASE_WATCHER_METRICS_PATH).toBe(
+        '/branchLeft/ghost-platform/state/release-watcher/release-watcher.prom'
+      );
+      expect(job).not.toMatch(/basic_auth|authorization|password|token/i);
+    });
+
+    it('scrapes every two minutes, inside the five-minute lookback and no faster than the host caches', () => {
+      expect(section(renderPrometheusConfig(sites))).toContain('scrape_interval: 2m');
+    });
+
+    it('carries no expected_up label, so a raw-host outage never pages', () => {
+      expect(section(renderPrometheusConfig(sites))).not.toContain('expected_up');
+    });
   });
 
   describe('the mx1 Stalwart exporter, which is what the liveness probe cannot see', () => {
@@ -525,6 +581,23 @@ describe('the rendered alert rules', () => {
     expect(block).not.toContain('severity: page');
   });
 
+  it('alerts when the edge lets requests through because its AppSec checker is down, reading the bouncer failure counter -- see alert_rules_test.yml for the promtool proof it fires above the rate and stays silent on a quiet five minutes', () => {
+    expect(rendered).toContain('alert: AppSecFailingOpen');
+    const block = rendered
+      .split('      - alert: AppSecFailingOpen')[1]
+      .split('\n      - alert: ')[0];
+    // The rate and its hold are the whole rule: dropping the `for:` pages on a
+    // CrowdSec restart, and a wider threshold misses a checker that is down.
+    expect(block).toContain(
+      'expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5\n        for: 10m'
+    );
+    // Owner-routed warning: the off-host mailbox, never the pager. The edge
+    // is serving and its other protections still hold.
+    expect(block).toContain('severity: warning');
+    expect(block).toContain('owner_action: "true"');
+    expect(block).not.toContain('severity: page');
+  });
+
   it('alerts on Alertmanager failing to deliver an email notification -- see alert_rules_test.yml for the promtool proof it is scoped to the email integration', () => {
     expect(rendered).toContain('alert: AlertEmailDeliveryFailing');
     expect(rendered).toContain(
@@ -550,6 +623,21 @@ describe('the rendered alert rules', () => {
       'or label_replace(absent(backup_worker_last_success_timestamp_seconds), "scope", "family", "", "")'
     );
     expect(block).toContain('{{ if eq $labels.scope "family" }}');
+  });
+
+  it('alerts when the release watcher has not polled for 24 hours, or its gauge is absent, as a warning that never pages -- see alert_rules_test.yml for the promtool proof', () => {
+    const start = rendered.indexOf('- alert: ReleaseWatcherStale');
+    expect(start).toBeGreaterThan(-1);
+    const end = rendered.indexOf('- alert:', start + 1);
+    const block = rendered.slice(start, end === -1 ? undefined : end);
+    expect(block).toContain(
+      'time() - ghost_release_watcher_last_success_timestamp_seconds > 86400'
+    );
+    expect(block).toContain('or absent(ghost_release_watcher_last_success_timestamp_seconds)');
+    expect(block).toContain('for: 30m');
+    expect(block).toContain('severity: warning');
+    expect(block).not.toContain('notify: on-host');
+    expect(block).not.toContain('severity: critical');
   });
 
   // The five rules that read db1's own dump and binlog shipping. promtool
@@ -662,6 +750,37 @@ describe('the rendered alert rules', () => {
     expect(block).toContain(
       'control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance)'
     );
+  });
+
+  it('watches the tenant database host binary-log pull from ops1 as two warnings that never page', () => {
+    for (const name of ['BinlogPullGap', 'BinlogPullStale']) {
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('{host="ops1"}');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+      expect(block).not.toContain('absent(');
+    }
+  });
+
+  it('fires the gap alert on a hole or an unshipped log held for two pull periods', () => {
+    const block = ruleBlock('BinlogPullGap');
+    expect(BINLOG_PULL_GAP_FOR).toBe('30m');
+    expect(block).toContain(
+      'binlog_pull_gap_logs{host="ops1"} > 0 or binlog_pull_unshipped_logs{host="ops1"} > 0'
+    );
+    expect(block).toContain('for: 30m');
+  });
+
+  it('calls the pull stale after three missed 15 minute runs, clear of one healthy gap', () => {
+    const block = ruleBlock('BinlogPullStale');
+    expect(BINLOG_PULL_STALE_SECONDS).toBe(3600);
+    expect(block).toContain(
+      'time() - binlog_pull_last_success_timestamp_seconds{host="ops1"} > 3600'
+    );
+    expect(block).not.toContain('for:');
+    // One healthy gap is the 15m period plus the 10m unit timeout.
+    expect(BINLOG_PULL_STALE_SECONDS).toBeGreaterThan(25 * 60);
   });
 
   it('keeps the existing worker-copy alert untouched beside them', () => {
@@ -889,6 +1008,8 @@ describe('the owner_action="true" label', () => {
       .filter((rule) => /\n\s+owner_action: "true"(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
+      'EdgeBanUnowned',
+      'AppSecFailingOpen',
       'HostMemoryPressure',
       'HostCPUSaturated',
       'HostDiskSpaceLow',
@@ -1044,6 +1165,54 @@ describe('the Alertmanager template', () => {
   });
 });
 
+describe('the demo wildcard TLS probe hand-off', () => {
+  it('names the file the host renders into the Prometheus scrape config', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain('scrape_config_files:\n  - /etc/prometheus/demo_tls_probe.yml');
+    // The probe is not a static target: its name never appears in the committed config.
+    expect(rendered).not.toContain('blackbox_demo_tls');
+  });
+});
+
+describe('the edge ban classifier toggle', () => {
+  const defaultsPath = join(
+    __dirname,
+    '..',
+    '..',
+    'ansible',
+    'roles',
+    'edge_ban_owner',
+    'defaults',
+    'main.yml'
+  );
+
+  it('equals edge_ban_owner_enabled in the role defaults', () => {
+    const found = /^edge_ban_owner_enabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/m.exec(
+      readFileSync(defaultsPath, 'utf8')
+    );
+    expect(
+      found,
+      'ansible/roles/edge_ban_owner/defaults/main.yml must set edge_ban_owner_enabled to true or false'
+    ).not.toBeNull();
+    expect(
+      EDGE_BAN_OWNER_ENABLED,
+      'EDGE_BAN_OWNER_ENABLED in hetzner/monitoring/render.ts must equal ' +
+        `edge_ban_owner_enabled in ansible/roles/edge_ban_owner/defaults/main.yml (${found?.[1]})`
+    ).toBe(found?.[1] === 'true');
+  });
+
+  it('is the mode the committed template is rendered in', () => {
+    expect(renderAlertmanagerTemplate()).toBe(
+      renderAlertmanagerTemplate(PAGE_REGISTER, EDGE_BAN_OWNER_ENABLED)
+    );
+  });
+
+  it('changes the template: the discard route and receiver exist only while the classifier is off', () => {
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, false)).toContain('receiver: discard');
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, true)).not.toContain('discard');
+  });
+});
+
 describe('the committed stack directory', () => {
   it('is what this renderer produces from the registry', async () => {
     await expect(renderPrometheusConfig(sites)).toMatchFileSnapshot(
@@ -1056,5 +1225,115 @@ describe('the committed stack directory', () => {
     await expect(renderAlertmanagerTemplate()).toMatchFileSnapshot(
       './stack/alertmanager/alertmanager.yml.tmpl'
     );
+  });
+});
+
+describe('the tenant hosts', () => {
+  const tenantHosts = [
+    { name: 'db-t1', address: TENANTS_HOST_IPS.dbT1 },
+    { name: 'app-t1', address: TENANTS_HOST_IPS.appT1 },
+    { name: 'edge-t', address: TENANTS_HOST_IPS.edgeT },
+  ];
+  const promConfig = renderPrometheusConfig(sites);
+  const rules = renderAlertRules();
+  // The memory cases are their own file (a 24h `for` needs a coarser evaluation
+  // interval), so a host's cases are read across both.
+  const promtoolCases = ['alert_rules_test.yml', 'alert_rules_memory_test.yml']
+    .map((file) => readFileSync(join(__dirname, file), 'utf8'))
+    .join('\n');
+
+  it("reads each one's node_exporter through edge1's tunnel, relabelled to its tenants-network address, expected down until it is enrolled", () => {
+    for (const { name, address } of tenantHosts) {
+      const host = MONITORED_NODE_HOSTS.find((candidate) => candidate.name === name);
+      expect(host?.address, `${name} address`).toBe(address);
+      expect(host?.expectedUp, `${name} expectedUp`).toBe(false);
+      // edge1 cannot reach the tenants network, so the tunnel's local port stands in for a direct row.
+      expect(promConfig).not.toContain(`targets: ['${address}:${NODE_EXPORTER_PORT}']`);
+      expect(promConfig).toContain(`labels: {host: ${name}, expected_up: 'false'}`);
+      expect(promConfig).toContain(`replacement: '${address}:${NODE_EXPORTER_PORT}'`);
+    }
+  });
+
+  it('never lists a tenant host as expected up while no scrape path reaches the tenants network', () => {
+    // The flip is a reviewed change made when a host is enrolled and read back
+    // answering live (RUNBOOK-monitoring.md); this holds it from moving alone.
+    expect(
+      MONITORED_NODE_HOSTS.filter((host) => tenantHosts.some((t) => t.name === host.name)).map(
+        (host) => host.expectedUp
+      )
+    ).toEqual([false, false, false]);
+  });
+
+  it('evaluates the disk and memory rules for every host, because neither rule selects on a host or on expected_up', () => {
+    for (const alert of ['HostDiskSpaceLow', 'HostMemoryPressure']) {
+      const start = rules.indexOf(`- alert: ${alert}`);
+      expect(start, alert).toBeGreaterThan(-1);
+      const rule = rules.slice(start, rules.indexOf('labels:', start));
+      expect(rule, `${alert} expr`).not.toMatch(/host\s*=|expected_up|job\s*=|instance\s*=/);
+    }
+  });
+
+  it("holds a promtool case for each host's disk, memory and host-down alert", () => {
+    for (const { name, address } of tenantHosts) {
+      const instance = `instance="${address}:${NODE_EXPORTER_PORT}", host="${name}"`;
+      for (const metric of [
+        'node_filesystem_avail_bytes',
+        'node_filesystem_size_bytes',
+        'node_memory_MemAvailable_bytes',
+        'node_memory_MemTotal_bytes',
+        'up',
+      ]) {
+        expect(promtoolCases, `${name} ${metric}`).toContain(`${metric}{job="node", ${instance}`);
+      }
+      expect(
+        new RegExp(`alertname="HostDiskSpaceLow"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} disk alert`
+      ).toBe(true);
+      expect(
+        new RegExp(`alertname="HostMemoryPressure"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} memory alert`
+      ).toBe(true);
+      expect(
+        new RegExp(`alertname="HostOrServiceDown"[^\\n]*${instance.replace(/[.]/g, '\\.')}`).test(
+          promtoolCases
+        ),
+        `${name} host-down alert`
+      ).toBe(true);
+    }
+  });
+
+  it('opens no metrics port in any firewall rule the hosts can be given', () => {
+    const metricsPorts = [
+      NODE_EXPORTER_PORT,
+      MYSQLD_EXPORTER_PORT,
+      REPLICA_TUNNEL_METRICS_PORT,
+      CADVISOR_PORT,
+      BLACKBOX_EXPORTER_PORT,
+      ALERTMANAGER_PORT,
+      PROMETHEUS_PORT,
+      CADDY_METRICS_PORT,
+      CROWDSEC_METRICS_PORT,
+      WEBSITE_METRICS_PORT,
+    ];
+    // A rule's port is one number or a range ('9100-9200'); both are read.
+    const covers = (rulePort: string, port: number): boolean => {
+      const [low, high = low] = rulePort.split('-').map(Number);
+      return port >= low! && port <= high!;
+    };
+    for (const [name, ruleSet] of [
+      ['EDGE_RULES', EDGE_RULES],
+      ['INTERNAL_RULES', INTERNAL_RULES],
+    ] as const) {
+      const opened = ruleSet
+        .filter((rule) => rule.port !== undefined)
+        .flatMap((rule) =>
+          metricsPorts.filter((port) => covers(String(rule.port), port)).map((port) => `${port}`)
+        );
+      expect(opened, name).toEqual([]);
+    }
   });
 });

@@ -22,11 +22,12 @@ import {
 } from './sharedTenantFiles';
 import { blockedPageErrorBlock } from './blockedPage';
 import {
+  renderAdminProbingScenario,
   renderAppsecAcquisition,
   renderCaddyfile,
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
-  renderGhostAdminPostoverflow,
+  renderHubAdminProbingPostoverflow,
   renderNextcloudWhitelist,
   renderProfiles,
   renderSimulation,
@@ -112,7 +113,8 @@ describe('resolvePrivateAddress', () => {
   });
 
   // 18081 is the Sweego receiver's drain port: ops1 alone reaches it, so no edge route may name it.
-  it.each([80, 443, 3000, 9090, 9093, 2587, 25860, 18079, 18081])(
+  // 8084 is Karma's loopback port: it has no login, so no edge route may ever reach it.
+  it.each([80, 443, 3000, 9090, 9093, 8084, 2587, 25860, 18079, 18081])(
     'refuses edge1 on port %s: only the pager port and the receiver webhook port are published for the edge',
     (port) => {
       expect(() => resolvePrivateAddress('edge1', port)).toThrow(
@@ -1246,6 +1248,15 @@ describe("the committed posture's IP-decision handler", () => {
       expect(globalBlock).not.toMatch(/hard_fail/);
     });
 
+    it('serves the bouncer counters that say a request was let through unchecked', () => {
+      // Without this flag the bouncer registers none of its counters in Caddy's
+      // registry, so `crowdsec_appsec_lapi_requests_failures_total` never
+      // reaches the metrics listener and AppSecFailingOpen, in
+      // hetzner/monitoring, reads an absent series: silent, like a healthy
+      // edge. A bare flag: the parser rejects an argument.
+      expect(globalBlock).toMatch(/^\t\tenable_caddy_metrics$/m);
+    });
+
     it('polls decisions on an interval, so the handler answers from its cache', () => {
       expect(globalBlock).toMatch(/^\t\tticker_interval \d+s$/m);
     });
@@ -1552,6 +1563,94 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 		}
 		respond @active_upload_by_pattern 403`;
 
+/** The tenant-media routes exactly as a Ghost site with a media bucket carries them. */
+const TENANT_MEDIA_ROUTE_LINES = `
+		@tenant_media_traversal {
+			path /content/images/* /content/media/* /content/files/*
+			expression \`{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)') || {http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)') || {http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')\`
+		}
+		respond @tenant_media_traversal 404
+		@tenant_media_resize {
+			method GET HEAD
+			path /content/images/size/*
+		}
+		@tenant_media {
+			method GET HEAD
+			path /content/images/* /content/media/* /content/files/*
+		}
+		route @tenant_media_resize {
+			rewrite * /branchleft-media-blog{http.request.uri.path}?
+			reverse_proxy https://hel1.your-objectstorage.com {
+				header_up Host {upstream_hostport}
+				header_up -Cookie
+				header_up -Authorization
+				header_down -x-amz-request-id
+				header_down -x-amz-version-id
+				header_down -x-amz-expiration
+				header_down -x-amz-storage-class
+				header_down -x-rgw-object-type
+				header_down -Strict-Transport-Security
+				@media_hit_resize status 2xx 304 416
+				handle_response @media_hit_resize {
+					header Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
+				@media_miss_resize status 403 404
+				handle_response @media_miss_resize {
+					rewrite * {http.request.orig_uri.path}
+					reverse_proxy 10.20.1.100:8101 {
+						@media_bounce status 301 302 307 308
+						handle_response @media_bounce {
+							rewrite * /branchleft-media-blog{http.request.uri.path}?
+							reverse_proxy https://hel1.your-objectstorage.com {
+								header_up Host {upstream_hostport}
+								header_up -Cookie
+								header_up -Authorization
+								header_down -x-amz-request-id
+								header_down -x-amz-version-id
+								header_down -x-amz-expiration
+								header_down -x-amz-storage-class
+								header_down -x-rgw-object-type
+								header_down -Strict-Transport-Security
+								@media_hit_retry status 2xx 304 416
+								handle_response @media_hit_retry {
+									header Cache-Control "public, max-age=31536000, immutable"
+									copy_response
+								}
+								@media_miss_retry status 403 404
+								handle_response @media_miss_retry {
+									respond 404
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		route @tenant_media {
+			rewrite * /branchleft-media-blog{http.request.uri.path}?
+			reverse_proxy https://hel1.your-objectstorage.com {
+				header_up Host {upstream_hostport}
+				header_up -Cookie
+				header_up -Authorization
+				header_down -x-amz-request-id
+				header_down -x-amz-version-id
+				header_down -x-amz-expiration
+				header_down -x-amz-storage-class
+				header_down -x-rgw-object-type
+				header_down -Strict-Transport-Security
+				@media_hit_plain status 2xx 304 416
+				handle_response @media_hit_plain {
+					header Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
+				@media_miss_plain status 403 404
+				handle_response @media_miss_plain {
+					respond 404
+				}
+			}
+		}`;
+
 /** The widget-file route exactly as the Ghost-backed blog's route carries it. */
 const WIDGET_ASSET_ROUTE_LINES = `
 		@widget_assets {
@@ -1653,7 +1752,7 @@ const BLOG_BLOCK = `
 		}
 		crowdsec @edge_untrusted
 		appsec @inspected
-		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}
+		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}${TENANT_MEDIA_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
 ${GHOST_ERROR_BLOCK}`;
@@ -1901,7 +2000,8 @@ describe('the owner console and tenant portal routes', () => {
     it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
       const blog = withoutErrorBlock(blockOf(rendered, 'blog.branchleft.co.uk'));
       expect(blog).toContain('reverse_proxy 10.20.1.100:8101');
-      expect(blog).not.toMatch(/respond [^@\n]/);
+      // The refusals in front of the proxy, not the media routes' own 404, which sit after them.
+      expect(blog.split('route @tenant_media_resize')[0]).not.toMatch(/respond [^@\n]/);
       expect(blog).not.toContain('/members/api/member');
       expect(blog).not.toContain('/ghost/signin');
       expect(blog).not.toContain('abort');
@@ -1942,8 +2042,11 @@ describe('the committed stack directory', () => {
     await expect(renderGhostAdminAppsecConfig(sites)).toMatchFileSnapshot(
       './stack/crowdsec/appsec-configs/ghost-admin-previews.yaml'
     );
-    await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
+    await expect(renderHubAdminProbingPostoverflow()).toMatchFileSnapshot(
       './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
+    );
+    await expect(renderAdminProbingScenario(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/scenarios/http-admin-interface-probing.yaml'
     );
     await expect(renderTrustedSessionWhitelist()).toMatchFileSnapshot(
       './stack/crowdsec/parsers/edge-trusted-session.yaml'
@@ -2045,10 +2148,11 @@ describe('the Ghost admin CrowdSec exclusions', () => {
   const ghost = site({ name: 'ghost-one', hostnames: ['ghost-one.test'], backend: 'ghost' });
   const other = site({ name: 'other-one', hostnames: ['other-one.test'], backend: 'other' });
   const appsec = renderGhostAdminAppsecConfig([ghost, other]);
-  const postoverflow = renderGhostAdminPostoverflow([ghost, other]);
+  const postoverflow = renderHubAdminProbingPostoverflow();
+  const probing = renderAdminProbingScenario([ghost, other]);
 
   it('name only Ghost hostnames, never another site', () => {
-    for (const rendered of [appsec, postoverflow]) {
+    for (const rendered of [appsec, probing]) {
       expect(rendered).toContain("['ghost-one.test']");
       expect(rendered).not.toContain('other-one.test');
     }
@@ -2080,20 +2184,48 @@ describe('the Ghost admin CrowdSec exclusions', () => {
     expect(appsec).toContain("req.Header.Get('X-Ghost-Preview') != ''");
   });
 
-  it('whitelist one scenario, only when every event is the Ghost admin API', () => {
-    expect(postoverflow).toContain(
-      "evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing' &&"
+  it('silence the hub admin-probing scenario and nothing else', () => {
+    const expressions = postoverflow
+      .split('\n')
+      .filter((line) => line.startsWith('    - '))
+      .map((line) => line.trim());
+    expect(expressions).toEqual([
+      "- evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing'",
+    ]);
+    expect(postoverflow).not.toContain('target_fqdn');
+  });
+
+  it('count a probe in our scenario unless it is the Ghost admin API on a Ghost hostname', () => {
+    expect(probing).toContain('name: branchleft/http-admin-interface-probing');
+    expect(probing).toContain(
+      'any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # })'
     );
-    expect(postoverflow).toContain('all(evt.Overflow.Alert.Events, {');
-    expect(postoverflow).not.toMatch(/\bany\(/);
-    expect(postoverflow).toContain("startsWith '/ghost/api/admin/'");
-    expect(postoverflow).toContain("not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')");
+    // Each clause of the exemption, joined by `&&` inside one `not (...)`.
+    const exemption = probing.slice(probing.indexOf('  not (\n'));
+    expect(exemption).toContain("evt.Meta.target_fqdn in ['ghost-one.test'] &&");
+    expect(exemption).toContain("evt.Meta.http_path startsWith '/ghost/api/admin/' &&");
+    expect(exemption).toContain("not (evt.Meta.http_path matches '(?i)[.][.]|%2e')");
+    // Nothing is exempt from a Ghost-less registry: the clause names no hostname.
+    expect(renderAdminProbingScenario([other])).toContain('evt.Meta.target_fqdn in []');
+  });
+
+  it('keep the hub scenario thresholds, so a probe bans as before', () => {
+    for (const line of [
+      'groupby: evt.Meta.source_ip',
+      'distinct: evt.Meta.http_path',
+      'capacity: 2',
+      'leakspeed: 10s',
+      'blackhole: 1m',
+      '  remediation: true',
+    ]) {
+      expect(probing.split('\n')).toContain(line);
+    }
   });
 
   it('refuse a Ghost hostname that could break out of a quoted literal', () => {
     const hostile = site({ hostnames: ["x.test' || true || '"], backend: 'ghost' });
     expect(() => renderGhostAdminAppsecConfig([hostile])).toThrow(/plain lower-case hostname/);
-    expect(() => renderGhostAdminPostoverflow([hostile])).toThrow(/plain lower-case hostname/);
+    expect(() => renderAdminProbingScenario([hostile])).toThrow(/plain lower-case hostname/);
   });
 
   it('are named in the AppSec acquisition ahead of the hub configurations in every posture', () => {
@@ -2119,10 +2251,10 @@ describe('the Ghost admin brute-force scenario', () => {
     expect(scenario).not.toContain('other-one.test');
   });
 
-  it('is not the scenario the admin-API post-overflow drops', () => {
+  it('is not a scenario the admin-probing post-overflow drops', () => {
     const name = scenario.split('\n').find((line) => line.startsWith('name: '));
     expect(name).toBe('name: branchleft/ghost-admin-login-bruteforce');
-    expect(renderGhostAdminPostoverflow([ghost])).not.toContain(
+    expect(renderHubAdminProbingPostoverflow()).not.toContain(
       'branchleft/ghost-admin-login-bruteforce'
     );
     expect(scenario).not.toContain('http-admin-interface-probing');
@@ -2359,6 +2491,55 @@ describe('the break-glass token in the rendered Caddyfile', () => {
       '(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])';
     expect(matcher, 'the strip gate must accept either hex case').toContain(spelled);
     expect(logLine, 'the log filter must accept either hex case').toContain(spelled);
+  });
+
+  describe("Caddy's default logger, which the error line and the no-site line reach", () => {
+    // The global options block: the first line `{` to the first closing `}` at column 0.
+    const globalBlock = rendered.slice(
+      rendered.indexOf('\n{\n') + 1,
+      rendered.indexOf('\n}\n') + 2
+    );
+    const defaultLog = (text: string): string => {
+      const start = text.indexOf('\n\tlog {\n');
+      return start < 0 ? '' : text.slice(start + 1, text.indexOf('\n\t}\n', start) + 3);
+    };
+
+    it('is configured in the global options, writing to stderr', () => {
+      const log = defaultLog(globalBlock);
+      expect(log, 'the global options must carry a log block').not.toBe('');
+      expect(log.split('\n')[0]).toBe('\tlog {');
+      expect(log).toContain('\n\t\toutput stderr\n');
+      expect(log, 'the default logger takes no name').not.toMatch(/\tlog \S+ \{/);
+    });
+
+    it('filters the token out of the uri, Referer and Location, as every site log does', () => {
+      const log = defaultLog(globalBlock);
+      expect(log).toContain('\t\tformat filter {\n\t\t\twrap json\n');
+      for (const field of FIELDS) {
+        const filterLines = log.split('\n').filter((l) => l.trim().startsWith(`${field} regexp `));
+        expect(filterLines, `the default logger must filter ${field}`).toHaveLength(1);
+        expect(filterLines[0]).toContain('REDACTED');
+      }
+    });
+
+    it('spells the filter exactly as the site logs do, so there is one source', () => {
+      const filters = (log: string) => log.split('\n').filter((l) => l.includes(' regexp '));
+      const site = filters(everyLog[0]!.log).map((l) => l.trim());
+      expect(site).toHaveLength(FIELDS.length);
+      expect(filters(defaultLog(globalBlock)).map((l) => l.trim())).toEqual(site);
+    });
+
+    it('is unconditional: every posture and the authoring site configure it', () => {
+      for (const posture of [DETECT_ONLY, IN_BAND_ONLY, ENFORCING, POSTURE]) {
+        const text = renderCaddyfile([site()], [], posture);
+        const global = text.slice(text.indexOf('\n{\n') + 1, text.indexOf('\n}\n') + 2);
+        expect(defaultLog(global)).toContain('\t\toutput stderr\n');
+      }
+    });
+
+    it('is written once, in the global options and nowhere else', () => {
+      expect(rendered.split('\n\t\toutput stderr\n').length - 1).toBe(1);
+    });
   });
 });
 

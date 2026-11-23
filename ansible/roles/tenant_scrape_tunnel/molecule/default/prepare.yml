@@ -1,0 +1,159 @@
+---
+# Test scaffolding, not role tasks. The pinned test image has no OpenSSH server,
+# so this installs the real one, as the hosts run it, and starts it as the
+# service the role reloads. It listens on every address of the container, the
+# loopback ones included, so it stands in for the target host that the scraper
+# host dials. The host's own ssh-keygen makes the host keys and one throwaway
+# client key that no file will list: nothing that holds a private key is in the
+# repository, and no key leaves the container.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    # procps is the pkill the target host's removal ends the account's connections with.
+    - name: Install the SSH server, its client and the process tools
+      ansible.builtin.apt:
+        name:
+          - openssh-server
+          - openssh-client
+          - procps
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the host keys of the SSH server
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -A
+        creates: /etc/ssh/ssh_host_ed25519_key
+
+    - name: Make the directory the client keys are made in
+      ansible.builtin.file:
+        path: '{{ scenario_client_key_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # No module in the pinned collections makes a key pair that is not the
+    # role's, so the command is used (ANS-9). The creates argument makes it report
+    # truthfully. The key is listed nowhere: the case that presents it is turned
+    # away.
+    - name: Make one throwaway client key that no file will list
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - PLACEHOLDER_intruder
+          - -f
+          - '{{ scenario_client_key_dir }}/intruder'
+        creates: '{{ scenario_client_key_dir }}/intruder.pub'
+      no_log: true
+
+    # Close to the Debian defaults: key authentication only, StrictModes on. PAM
+    # is off because a container has no login session for it to open, and with
+    # it off sshd refuses an account whose password field is locked, which the
+    # converge play takes care of.
+    - name: Put the test SSH server's configuration in place
+      ansible.builtin.copy:
+        content: |
+          UsePAM no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          StrictModes yes
+        dest: /etc/ssh/sshd_config.d/10-sshd-test.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Check the whole SSH server configuration
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -t
+      changed_when: false
+
+    - name: Start the SSH server as the service the role reloads
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: restarted
+        enabled: true
+
+    - name: Wait for the SSH server to listen on the address the scraper host dials
+      ansible.builtin.wait_for:
+        host: '{{ scenario_endpoint }}'
+        port: 22
+        timeout: 30
+
+    # The unit's filters (seccomp) need CAP_SYS_ADMIN kept while systemd drops to the unit's user,
+    # and this unprivileged container has none: the unit then dies at once with status 217/USER
+    # ("Failed to keep CAP_SYS_ADMIN") and never dials. A runtime drop-in turns off exactly the
+    # options that install a filter. The options that do not (ProtectSystem, ProtectHome,
+    # PrivateTmp, ProtectControlGroups, NoNewPrivileges, CapabilityBoundingSet, the user) stay as
+    # shipped, and verify.yml reads them back. The unit file itself is untouched. It lives in
+    # /run, so it is neither a file the role wrote nor one that outlives the container.
+    - name: Make the directory of the unit's container drop-in
+      ansible.builtin.file:
+        path: '/run/systemd/system/{{ scenario_unit_name }}.d'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Turn off the unit's seccomp options, which an unprivileged container cannot grant
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          PrivateDevices=no
+          ProtectKernelTunables=no
+          ProtectKernelModules=no
+          RestrictNamespaces=no
+          LockPersonality=no
+          MemoryDenyWriteExecute=no
+          SystemCallArchitectures=
+          RestrictAddressFamilies=
+        dest: '/run/systemd/system/{{ scenario_unit_name }}.d/10-container.conf'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd so the drop-in is read when the role installs the unit
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+# The check run the ANS-16 log scan reads: converge.yml in check mode with --diff
+# against this fresh host, before anything is converged. The harness
+# (ansible/harness/run_harness.py) does the same as its check-fresh step, but a
+# caller that runs only `molecule test` has no such step, and the scan in
+# verify.yml then fails on a log with no diff header. The delivery workflow is
+# such a caller. Doing it here makes the scenario hold on its own.
+# It is a second ansible-playbook run with the command-line --check, not a play
+# keyword: the role's `when: not ansible_check_mode` guards read the command-line
+# flag, which a `check_mode: true` keyword does not set. The run inherits
+# Molecule's environment (the config, the log path and the verbosity), so its
+# output lands in the same log. A check run changes nothing, so converge and the
+# idempotence step are as they were.
+- name: Check the fresh host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run converge.yml in check mode with a diff against the fresh host
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python }}'
+          - -m
+          - ansible.cli.playbook
+          - --inventory
+          - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+          - --check
+          - --diff
+          - '{{ playbook_dir }}/converge.yml'
+      changed_when: false

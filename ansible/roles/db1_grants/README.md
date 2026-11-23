@@ -145,9 +145,13 @@ is matched against the cases' names in `molecule/default/vars/cases.yml`, and th
 positive cases are skipped unless `DB1_GRANTS_VERIFY_POSITIVE=true`. The harness
 sets neither, so it always runs everything.
 
-The cases are shared out between five scenarios, each its own shard with its own
+The cases are shared out between six scenarios, each its own shard with its own
 25-minute limit, because applying the role once per case is what takes the time.
-`default` runs all eight harness steps and the positive cases. `refusals_inputs`,
+`default` runs all eight harness steps and the positive cases. `fresh_plan` has no
+refusal case: it starts from a host with no program directory and no program, the
+state a first plan meets, and requires that the check-mode plan passes and says what
+it left unchecked (in `check-fresh` and in a plan inside its converge), then places
+the programs as the delivering role does and applies the role for real. `refusals_inputs`,
 `refusals_host`, `refusals_accounts` and `refusals_tenants` each apply the role once
 and run the refusal cases whose `part` (in `molecule/default/vars/cases.yml`) is the
 scenario's name; their `skip-steps.txt` leaves out the steps `default` runs. Their
@@ -280,9 +284,15 @@ The role is applied to db1 by the gated pull. Each of these must hold for a run 
 6. The `db1_backup_timers` role is in the playbook before this one, so the dump
    code (`naming.py`, `dump_nightly.py`) is delivered before the dump account
    changes. `db1_backup_timers` delivers `provision_tenant_db.py`, pinned
-   by digest, in a real apply only: its fetch is skipped in check mode. On a host
-   where that apply has not happened, a plan of this role stops with
-   `program-missing`, in check mode too.
+   by digest, in a real apply only: its fetch is skipped in check mode, and it
+   reports the fetch as a change in the plan instead. On a host where that apply
+   has not happened, a plan of this role does not refuse a program directory, a
+   program or the dump program that is not there: it says which paths it left
+   unchecked (a task named "Note the paths a plan finds missing"). A path that is
+   there is checked in check mode as in a real run, and a real run refuses every
+   missing one (`program-dir`, `program-missing`, `dump-code-not-delivered`), so
+   a plan that passes does not promise an apply that passes if the delivering
+   role's fetch fails: that role's own task fails first.
 
 ## Differences from the family base
 

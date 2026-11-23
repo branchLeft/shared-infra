@@ -47,6 +47,9 @@
       admin_absent: 'REFUSED: {{ verify_admin }} is absent'
       mailbox_mode: 'REFUSED: {{ verify_mailbox }} must be a regular file'
       service_mode: 'REFUSED: {{ verify_service }} must be a regular file'
+      file_list: 'REFUSED: mail_reconcilers_credential_files is not the role'
+      bootstrap: 'REFUSED: Stalwart is in bootstrap mode, so configure would finish the bootstrap'
+      untold: 'REFUSED: whether Stalwart is in bootstrap mode could not be told'
     # Cases: tag (or tags), the step and credential sent with -e, and what to expect.
     verify_guard_cases:
       - { name: no confirmation, tag: collector, text: tripwire }
@@ -72,6 +75,49 @@
       - { name: admin file a link, step: mailboxes, files: admin_link, text: admin_mode }
       - { name: mailbox file 0644, step: mailboxes, files: mailbox_0644, text: mailbox_mode }
       - { name: service file 0644, step: mailboxes, files: service_0644, text: service_mode }
+      # An extra variable outranks the role's constant, so a request can name a shorter list
+      # of files to check: the list itself is refused, and no program runs.
+      - name: empty file list
+        step: mailboxes
+        text: file_list
+        extra: { mail_reconcilers_credential_files: [] }
+      - name: empty file list over a wrong file
+        step: mailboxes
+        files: admin_0644
+        text: file_list
+        extra: { mail_reconcilers_credential_files: [] }
+      - name: file list with the administrator file not required
+        step: configure
+        files: none
+        text: file_list
+        extra:
+          mail_reconcilers_credential_files:
+            - { path: '{{ verify_admin }}', required: false }
+            - { path: '{{ verify_service }}', required: false }
+            - { path: '{{ verify_mailbox }}', required: false }
+      - name: file list that is a string
+        step: mailboxes
+        text: file_list
+        extra: { mail_reconcilers_credential_files: '[]' }
+    # The configure step never finishes Stalwart's bootstrap: while the stand-in reports bootstrap
+    # mode, or cannot be asked, the only call that reaches it is the one read of the account.
+    verify_bootstrap_cases:
+      - name: configure in bootstrap mode
+        step: configure
+        bootstrap: true
+        text: bootstrap
+        calls: 1
+      - name: configure in bootstrap mode in check mode
+        step: configure
+        bootstrap: true
+        check: true
+        text: bootstrap
+        calls: 1
+      - name: configure when the account cannot be read
+        step: configure
+        broken: true
+        text: untold
+        calls: 1
   tasks:
     # 1. A plain apply placed the programs, and only those.
     - name: A plain apply
@@ -89,18 +135,18 @@
             path: '{{ verify_dir }}'
           register: mail_reconcilers_verify_plain_dir
 
-        - name: Assert the nineteen programs are there, root's and 0755, and none the stack role owns
+        - name: Assert the twenty programs are there, root's and 0755, and none the stack role owns
           ansible.builtin.assert:
             that:
               - mail_reconcilers_verify_plain_dir.stat.isdir
               - mail_reconcilers_verify_plain_dir.stat.pw_name == 'root'
               - mail_reconcilers_verify_plain_dir.stat.mode == '0755'
-              - mail_reconcilers_verify_plain_found.matched == 19
+              - mail_reconcilers_verify_plain_found.matched == 20
               - mail_reconcilers_verify_plain_found.files | map(attribute='mode') | unique | list == ['0755']
               - mail_reconcilers_verify_plain_found.files | map(attribute='pw_name') | unique | list == ['root']
               - mail_reconcilers_verify_plain_found.files | map(attribute='path') | map('basename') | select('search', verify_foreign) | list | length == 0
             quiet: true
-            fail_msg: A plain apply did not leave exactly the nineteen programs, root's with mode 0755.
+            fail_msg: A plain apply did not leave exactly the twenty programs, root's with mode 0755.
 
     # 2. A tag without its matching confirmation is refused before any program runs, and
     # two tags with one confirmed step run only that step.
@@ -151,6 +197,62 @@
           ansible.builtin.include_tasks: tasks/case.yml
           loop: '{{ verify_files_cases }}'
           loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+    # 4b. The configure step refuses while Stalwart is in bootstrap mode, which the program
+    # would finish: the preconditions pass, the one read of the account is made, and nothing
+    # else reaches Stalwart or the stand-in docker.
+    - name: The bootstrap refusal
+      when: verify_sections | length == 0 or 'bootstrap' in verify_sections
+      block:
+        - name: Request configure in bootstrap mode, and when the mode cannot be told
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_bootstrap_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+        - name: Request configure in check mode while Stalwart is not in bootstrap mode
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case:
+              {
+                name: configure in check mode when not in bootstrap mode,
+                step: configure,
+                check: true,
+                calls: 1,
+              }
+
+        - name: Assert that the one call was the read of the account
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_calls | length == 1
+              - mail_reconcilers_verify_calls[0].method == 'GET'
+              - mail_reconcilers_verify_calls[0].path == '/api/account'
+            quiet: true
+            fail_msg: The only call of configure in check mode was not the one read of the account.
+
+        - name: Request configure in bootstrap mode once more
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case:
+              {
+                name: configure in bootstrap mode again,
+                step: configure,
+                bootstrap: true,
+                text: bootstrap,
+                calls: 1,
+              }
+
+        - name: Look for a call to docker
+          ansible.builtin.stat:
+            path: /var/tmp/stand-in/docker.calls
+          register: mail_reconcilers_verify_bootstrap_docker
+
+        - name: Assert that the program that finishes the bootstrap did not run
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('ne', '') | list | length == 0
+              - not mail_reconcilers_verify_bootstrap_docker.stat.exists
+            quiet: true
+            fail_msg: Configure in bootstrap mode made a write call or asked docker to restart Stalwart.
 
     # 5. A check-mode request runs no program that writes, and only the collector's dry run.
     - name: Check mode

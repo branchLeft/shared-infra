@@ -71,7 +71,13 @@ because the unit files fix the paths they run.
 - `molecule/default` runs the role in a systemd container (ANS-15). The programs are
   fetched over the network from raw.githubusercontent.com at the pinned commit, so
   the container needs that network. The verify play checks each program against its
-  pinned digest, and each unit byte for byte against the role's own copy.
+  pinned digest, and each unit byte for byte against the role's own copy. The verify
+  play reads no clock: each timer must be loaded, enabled, active, with `Result=success`,
+  and trigger its own service. `prepare.yml` installs a placeholder for the shared
+  Compose unit template, because without a unit of that name systemd cannot queue the
+  binlog-ship service when its timer first elapses (five minutes after boot) and the
+  timer fails with `Result=resources`, which made a run longer than five minutes fail
+  verify and report a change at idempotence.
 - `molecule/refusals` converges the same host, then runs three cases on
   `provision_tenant_db.py`, the program `db1_grants` runs. A: a wrong pinned digest
   (passed as an `include_role` parameter, which beats `vars/main.yml`) is refused by
@@ -95,11 +101,23 @@ because the unit files fix the paths they run.
 ## Check mode and a fresh db1
 
 The fetches are skipped in check mode, because a check-mode run creates no
-directory to write into. A plan of a fresh db1 therefore shows no program, and the
-`db1_grants` plan refuses with `program-missing` until a real apply of this role has
-run. That fix is a separate work item and is not made here. The
-live db1 gets `provision_tenant_db.py` from the first gated apply, as `db1_grants`
-Live blockers 1 and 6 say.
+directory to write into. So that a plan of a fresh db1 is not silent about them,
+two check-mode tasks read each program's path as a real run would: one `stat` with
+the sha256, and one report per program that is a change when the program is not on
+the host, or is there with other bytes than the pinned ones (`get_url` reports the
+same in a real run), and not a change when the pinned bytes are there. The plan an
+approver reads therefore shows `provision_tenant_db.py` and every other program as
+to be fetched. The report changes nothing and is not a fetch: the real run fetches
+and refuses wrong bytes.
+
+The `db1_grants` plan follows this role in the playbook and finds no program
+directory and no program on a fresh host. It does not refuse a path that is not
+there in check mode, and says which paths it left unchecked; see its README. The
+default scenario's converge runs the check-mode plan on the fresh container before
+the real apply and requires `provision_tenant_db.py` and `restore_drained.py` among
+its changes, so a role that went silent again fails there. The live db1 gets
+`provision_tenant_db.py` from the first gated apply, as `db1_grants` Live blockers 1
+and 6 say.
 
 ## Not covered
 

@@ -95,6 +95,24 @@
       {{ (control_plane_record.content | default('') | ansible.builtin.b64decode).splitlines()
       | select('match', '^IMAGE=') | map('regex_replace', '^IMAGE=', '') | map('trim')
       | select('match', control_plane_image_pattern) | first | default('') }}
+    control_plane_record_image_lines: >-
+      {{ (control_plane_record.content | default('') | ansible.builtin.b64decode).splitlines()
+      | select('match', '^IMAGE=') | list | length }}
+
+# systemd reads the record as an environment file, where the last IMAGE= line wins, and the
+# line above takes the first digest. With two lines they would name two images, so the run
+# stops and names the file. Where a pin is given the record is not read (above), and the
+# deploy wrapper rewrites the file whole, so there is nothing to refuse.
+- name: Refuse a record with more than one IMAGE line
+  ansible.builtin.assert:
+    that:
+      - control_plane_record_image_lines | int <= 1
+    quiet: true
+    fail_msg: >-
+      control_plane[image-record-duplicate]: {{ control_plane_image_record }} holds
+      {{ control_plane_record_image_lines }} IMAGE= lines. The role takes the first and systemd the
+      last, so they can name two images. Nothing was written. Leave one line, or give
+      control_plane_app_image to deploy a pin the wrapper then records.
 
 - name: Look for the portal container of the stack
   ansible.builtin.command:
@@ -139,6 +157,34 @@
       else (control_plane_recorded_image if (control_plane_recorded_image | length > 0)
       else ((control_plane_portal_image.stdout | default('')) | trim)) }}
 
+# With no pin, the record is what a restart of the unit would run, and the running portal
+# container is what runs now. When both are digests and differ (a failed upgrade that left the
+# pin in place, a hand edit), a run that took the record would silently move the portal and the
+# console to it. So the run stops and names both images, which are names and digests only.
+# Only the digests are compared: the same bytes under another name are no drift. A pin given
+# is the owner's choice of image and skips the check, as does a running image that is not a
+# digest (the next task refuses a tag where it would be used).
+- name: Take the image the portal container runs
+  ansible.builtin.set_fact:
+    control_plane_running_image: "{{ (control_plane_portal_image.stdout | default('')) | trim }}"
+
+- name: Refuse a record whose digest differs from the digest the portal container runs
+  ansible.builtin.assert:
+    that:
+      - >-
+        (control_plane_image_given | ansible.builtin.bool)
+        or (control_plane_recorded_image | length) == 0
+        or not (control_plane_running_image is ansible.builtin.match(control_plane_image_pattern))
+        or (control_plane_recorded_image | ansible.builtin.regex_replace('\A[^@]*@', ''))
+        == (control_plane_running_image | ansible.builtin.regex_replace('\A[^@]*@', ''))
+    quiet: true
+    fail_msg: >-
+      control_plane[image-drift]: {{ control_plane_image_record }} records
+      {{ control_plane_recorded_image }}, but the stack's running portal container was created
+      from {{ control_plane_running_image }}. Taking the record would move the portal and the
+      console to the record's digest. Nothing was written. Find out which is right: restore the
+      record to the running image, or give control_plane_app_image to deploy the image meant.
+
 - name: Refuse a run with no image to deploy
   ansible.builtin.assert:
     that:
@@ -158,6 +204,49 @@
     fail_msg: >-
       control_plane[image-not-pinned]: the image '{{ control_plane_effective_image }}' is not NAME@sha256:
       followed by 64 lower-case hex digits, which the deploy wrapper requires. Nothing was written.
+
+# ----- The provisioning API, settled before anything is written -----
+# Enabling it points the portal and the console at a service that must start with the stack, so
+# the run stops here, with nothing written, if what it needs is not there. The files are the
+# owner's: the role refuses without them and never makes, reads or prints one. The image must be
+# given because the one the stack runs now may predate the service, and a service that cannot
+# start fails the whole stack's start. Off, none of this runs.
+- name: Look at the provisioning API's input files before anything is written
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ control_plane_provisioning_input_files }}'
+  register: control_plane_provisioning_input_stats
+  loop_control:
+    label: '{{ item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
+
+- name: Refuse enabling the provisioning API while an input file is absent or empty
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.size > 0
+    quiet: true
+    fail_msg: >-
+      control_plane[provisioning-input-missing]: control_plane_provisioning_enabled is set but
+      {{ item.item.path }} is absent or empty on this host. Nothing was written. The owner
+      places this file before enabling the API; the role never makes it.
+  loop: '{{ control_plane_provisioning_input_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
+
+- name: Refuse enabling the provisioning API with no image pin given
+  ansible.builtin.assert:
+    that:
+      - control_plane_image_given | ansible.builtin.bool
+    quiet: true
+    fail_msg: >-
+      control_plane[provisioning-image-missing]: control_plane_provisioning_enabled is set but
+      control_plane_app_image was not given. Nothing was written. The image the stack runs may
+      predate the provisioning service, so enabling it and pinning the image that carries it
+      travel together.
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
 
 - name: Create the host configuration directories of the control plane
   ansible.builtin.file:
@@ -307,6 +396,33 @@
     group: root
     mode: '0644'
   loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) | difference(control_plane_stack_files_in_block) }}'
+
+# Compose reads this file from the project directory. It sets whether the provisioning API runs
+# and where the portal and the console find it, from the one switch, and holds no secret, so the
+# plan shows its diff. It is written after the compose file it is read with and before the unit
+# starts the stack.
+- name: Write the stack's interpolation file from whether the provisioning API is enabled
+  ansible.builtin.copy:
+    content: '{{ control_plane_project_env_enabled if (control_plane_provisioning_enabled | ansible.builtin.bool) else control_plane_project_env_disabled }}'
+    dest: '{{ control_plane_project_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# The owner places the three files; the role puts their owner, group and mode right on every run so
+# a file placed as root alone is readable by the container user and never writable. Attributes
+# only, never content. Enabled alone: a host that has not enabled the API has none to set.
+- name: Set the owner, group and mode of the provisioning API's input files
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: file
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop: '{{ control_plane_provisioning_input_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
 
 # The access rules are delivered inside a block, with the steps that follow them: the
 # bring-up, the deploy wrapper, the unit check and the reload. The copy keeps the file it

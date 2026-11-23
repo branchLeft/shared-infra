@@ -266,6 +266,48 @@ toolbar from jsDelivr unless its configuration names other addresses. A tenant r
 - **Not here.** The demo edge (`ghost-platform`'s `demo-host`, vendored under
   `ansible/roles/demo1_build`) refuses a `file_server` outright and is a separate change.
 
+## `siteBlock`: Tenant media
+
+Ghost's S3 adapter links an upload as `<cdnUrl>/<key>` and answers a request for
+`/content/images/...` with a 301 to the same. With `cdnUrl` the storage host, a reader's browser
+contacts that host. A `backend: 'ghost'` site with `media` (`sites.ts`) answers the three upload
+prefixes itself, from the tenant's own bucket, so with `cdnUrl` set to the tenant's own origin
+(a `render-core` change, not this one) the reader contacts nothing else. Until then the route
+is inert for links Ghost still writes, and serves any request that does reach the hostname.
+
+- **Read.** Path-style, `https://<host>/<bucket><path>`; the key is the request path, which is
+  what Ghost wrote (`staticFileURLPrefix` is `content/images`, `content/media`, `content/files`).
+  `GET` and `HEAD` only; anything else falls through to Ghost as before. The bucket must already
+  allow anonymous reads of its objects, which is how the blog's images load today.
+- **What goes to the bucket.** The path only. The query is replaced with an empty one (an S3
+  query selects a version or a sub-resource), `Cookie` and `Authorization` are removed, and `Host`
+  is the storage host's. A `..` segment under the prefixes is a 404 before any of it
+  (`@tenant_media_traversal`). It reads the request three ways, because the bucket path is built
+  from the decoded path and Caddy's path matcher cleans its own copy: the URI as received (a `..`
+  after a slash or an encoded slash), the decoded path (a `..` however the separators were
+  written, so `a%2f..%2fb` is caught), and the decoded path for a leftover `%2e`, `%2f` or `%25`
+  (escaped twice: the edge's own rewrites read the path a second time and would turn it into a
+  dot segment). Ghost writes no `%` into an upload's name. `tenantMediaTraversal.test.ts` sends
+  these forms through the rendered lines under a real Caddy in front of an echoing upstream.
+- **What comes back.** `2xx`, `304` and `416` are passed on with `Cache-Control: public,
+max-age=31536000, immutable` (Ghost never overwrites an upload: it picks a new name, and a
+  resized copy is named by size and source) and with the bucket's request id, version id,
+  expiry date, storage class and `Strict-Transport-Security` removed. `nosniff`, HSTS and the
+  rest of the route's headers are the site's own. `403` and `404` are a 404: the bucket answers
+  a missing key `403`, not `404`. Any other status (a `5xx`) is passed on uncached.
+- **Resized copies.** `/content/images/size/...` is made by Ghost on first request and written
+  to the bucket, so a miss there is asked of Ghost once. Ghost then answers a redirect to the
+  stored copy; the edge follows it itself by reading the bucket again, and a second miss is a 404. Without that second read a missing original would be a redirect loop once `cdnUrl` is
+  the site's own origin. A miss anywhere else is a 404 and never reaches Ghost, for the same
+  reason.
+- **Order.** After the protection chain, the upload refusal (an uploaded `.svg` or `.html` is
+  still a 403) and the widget files, before `reverse_proxy`. A probe is throttled and seen by
+  CrowdSec, and the general throttle counts these requests like any other.
+- **Not here.** Any change to what Ghost writes as `cdnUrl`, and any rewrite of a URL already
+  stored in content: both are `branchLeft/workspace#3868`'s later steps and the second is the
+  owner's. The bucket's `Content-Type` is passed on as stored; a resized copy is stored as
+  `application/octet-stream` by Ghost's own `saveRaw`, which an `<img>` ignores.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
@@ -274,8 +316,8 @@ Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owne
 
 `roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
 a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
-v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
-`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+v2.11.9 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.8 on a background timer). `roll_interval` exists in the
 same module but rolls only on the next write, so it would not bound a quiet edge, and it is
 not used.
 
@@ -368,6 +410,35 @@ Not covered, by decision:
   as malformed) and a name hidden inside another parameter's value. They are forwarded
   as sent, and the first two are redacted in the log.
 
+## `defaultLogDirective`: the error and no-site lines
+
+The site `log` blocks above cover the access log only. Caddy's default logger is a second
+path, and it writes to stderr, so to the edge container's log. Measured against Caddy
+v2.11.4 with no default logger configured, two lines reach it with the token in clear:
+
+- the `http.log.error` line written when a handler fails (a 502 from a refused upstream).
+  It carries the whole request, `request.uri` and `request.headers.Referer` included;
+- the line for a request whose Host matches no site block, which carries the same request.
+
+The token stays valid for its full 600 s, and for as long as a hung upstream keeps the
+request open, so a reader of the container log could use it.
+
+**Fix.** `globalOptions` carries a `log { output stderr; format filter { wrap json ... } }`
+block, written by `defaultLogDirective`. It uses the same `redactingFormat` as every site
+log, so the encoder, the three fields and the pattern have one source. The block names no
+logger, which in Caddy is the default one. Caddy's own default is JSON on stderr when no
+terminal is attached, so a line with no token is unchanged.
+
+`breakGlassToken.test.ts` starts a real Caddy in front of a dead upstream, sends the token
+in every spelling the access-log rows use to a served site and to a host with no site,
+and reads `docker logs`. With the global block removed from the renderer both paths leak
+and the rows fail; with it, nothing matches `FAKE_`. `render.test.ts` pins the block, its
+filter lines and their equality with the site logs.
+
+Not covered: request headers other than `Referer` are written as sent in the error line
+(for example `Cookie`). They carry no break-glass token, and redacting them is a separate
+decision.
+
 ## `siteBlock`: discard route
 
 `EdgeSite.discardRoute` is one literal path the edge answers itself: `POST` gets an empty
@@ -445,6 +516,68 @@ in a zone file would be applied to production DNS, and a name the registry does 
 would answer for a host that serves nothing. The same test refuses a hostname that is
 not a real lowercase DNS name, so an ALL_CAPS placeholder cannot reach a rendered
 configuration. The record's apply, like every DNS apply, is the owner's.
+
+## `siteBlock`: signed object gateway
+
+`EdgeSite.signedObjectGateway` marks a site that is an S3-compatible gateway whose clients
+sign their own requests (the tenant-state gateway, which tenant CI on GitHub-hosted runners
+reaches over the public internet). It renders through `gatewaySiteBlock`. The edge's job is
+to terminate TLS, bound what can reach the gateway, and change nothing the client's
+signature covers; the gateway verifies the signature and decides what each credential may do.
+
+What the block lets through, and nothing else:
+
+- A path-style request: one non-empty first segment (`/<bucket>` or `/<bucket>/<key>`), by
+  `GET`, `HEAD`, `PUT`, `POST` or `DELETE`, with a body of at most the site's
+  `requestBodyMaxSize` (8 MiB for the shipped entry, an order of magnitude above a Pulumi
+  checkpoint), from a client under the general throttle, CrowdSec and AppSec, to the one
+  upstream the entry names.
+- `/healthz` and `/readyz` by `GET` and `HEAD`. `PUT`, `POST` and `DELETE` on them get 405
+  with `Allow: GET, HEAD` from the edge, because they would otherwise match as a bucket
+  of that name.
+- Any other method gets 405 with `Allow` listing the five, from the edge. `/` (a bucket
+  listing) and anything else with no first segment gets 404, from the edge. The final
+  `respond 404` is matcher-less and last, so a case the lines above forgot fails closed.
+- A `.` or `..` segment in the raw path, literal or percent-encoded, gets 400 from the edge.
+  This is an expression on `{http.request.orig_uri}` and not `path_regexp`: Caddy matches
+  `path` and `path_regexp` on the path with dot segments resolved, and proxies the path as
+  sent, so `/bucket/..` is matched as `/` and forwarded unchanged. Measured against Caddy
+  2.11.9 with a stand-in upstream, not assumed. The expression has no brace, because Caddy
+  reads one as a placeholder.
+
+What it does not do, on purpose: it sets no `header_up`, strips no query parameter, rewrites
+no path, and adds no `encode`. The client's `Authorization` and `x-amz-*` headers, the
+`Host` it signed, the path and the query all reach the gateway as sent. Caddy adds
+`X-Forwarded-*` headers, which a signature does not cover unless the client lists them in
+`SignedHeaders`. The break-glass query strip and the Ghost and Nextcloud matchers are not in
+this block. It cannot be combined with a webhook path, `discardRoute`,
+`injectionWafPreviewOnly`, `trustedSession` or a `backend` other than `other`.
+
+Caching: no cache module exists on this edge. `header >Cache-Control "no-store"` is
+deferred, so it replaces a `Cache-Control` the gateway sends instead of adding a second
+value, and it also reaches the edge's own 404, 405 and 400. A 413 from the body cap does
+not carry it (measured), which is no loss: 413 is not cacheable by default.
+
+Timeouts: `dial_timeout 5s` and `response_header_timeout 30s` on the upstream transport. A
+slow client sending a body is bounded only by the server-wide read timeouts in the global
+block, as for the webhook route: Caddy 2.11.9 has no per-route `request_body` read timeout
+(its parser refuses `read_timeout`, measured), and changing the global value affects every
+site.
+
+The upstream address is not in this repository yet: the gateway host is not in the address
+plan, so `sites.ts` holds two `undefined` constants and the entry claims no hostname and no
+upstream until both are set (`sites.md`, "Signed object gateway sites"). Until then the
+committed `stack/caddy/Caddyfile` is unchanged, and `validation/Caddyfile.state-gateway`
+is the same block rendered with a stand-in upstream so CI loads it through Caddy.
+
+Not proven here: AppSec's behaviour against a real Pulumi checkpoint body (the state is
+JSON with arbitrary plaintext config, and a rule firing on it would fail an apply with a
+403; AppSec reads only the first 64 KiB); the general throttle's 200 requests per minute per
+address against several tenants applying at once from one GitHub runner address; and
+CrowdSec's 404 scenarios against the `HEAD` and `GET` of keys that do not exist yet, which
+an S3 client sends as normal traffic. Each is for the first live inspection, and the
+remedy for the first two is a deliberate change in this file and `posture.ts`, not a
+setting.
 
 ## `siteBlock`: `request_body` ordering
 
@@ -671,8 +804,13 @@ the header.
 
 ## Ghost admin API and admin-interface probing
 
-`renderGhostAdminPostoverflow` writes
-`stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
+Two files: `renderAdminProbingScenario` writes
+`stack/crowdsec/scenarios/http-admin-interface-probing.yaml`, the scenario
+`branchleft/http-admin-interface-probing`, and `renderHubAdminProbingPostoverflow`
+writes `stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a
+post-overflow whitelist that silences the hub's scenario of the same kind. (The
+post-overflow file keeps the name it had when it did something narrower: the
+edge stack's file lists, and the stack directory on the host, carry that path.)
 
 What it is for. The hub scenario `crowdsecurity/http-admin-interface-probing`
 reads a 403 or 404 on any path containing one of its entries as a probe, and
@@ -683,19 +821,51 @@ session or a device check and 404 for a missing resource, and the bouncer
 answers 403 to an address already banned, which is how the owner's second ban
 followed the first at 00:50:54Z.
 
-What it narrows. An overflow of that one scenario is dropped only when every
-event in it is a request to `/ghost/api/admin/` on a Ghost hostname with no dot
-segment, literal or percent-encoded. A probe for `/wp-admin`, `/phpmyadmin`,
-`/admin` or any other entry still bans on a Ghost host, any mix of those with
-admin API paths still bans, and admin API paths on any other host still ban.
-Every other scenario still reads every one of these requests.
+What it narrows. Our scenario has the hub's filter, thresholds, data file,
+grouping and one-minute blackhole, with one more condition: a request is not
+counted when it is to `/ghost/api/admin/` on a Ghost hostname with no dot
+segment, literal or percent-encoded. Such a request does not enter the bucket
+at all. A probe for `/wp-admin`, `/phpmyadmin`, `/admin` or any other entry
+still bans on a Ghost host (three of them are needed: admin API paths mixed in
+neither count nor reset them), and admin API paths on any other host still ban.
+A path that leaves the prefix by a dot segment is counted, so
+`/ghost/api/admin/../../phpmyadmin/` is a probe. Every other scenario still
+reads every one of these requests.
 
-The limit it carries. A whitelisted overflow still arms the scenario's one-minute
-blackhole for that address, so three admin API 403s on a Ghost host mute this
-one scenario for that address for a minute. The other HTTP scenarios are not
-muted. The alternatives were worse: a parser whitelist would hide these
-requests from every scenario, and replacing the hub scenario with a copy would
-taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
+Why a scenario and not a post-overflow. The first version dropped, after the
+fact, an overflow made only of admin API requests on a Ghost host. CrowdSec
+applies a scenario's blackhole when the bucket overflows, before any
+post-overflow runs, and keeps it per address across every host. So three admin
+API answers on the Ghost host began a one-minute blackhole that muted the whole
+scenario for that address everywhere, and an attacker could keep it muted by
+repeating them while probing another site. Not pouring those requests into the
+bucket arms nothing. The replay's "admin interfaces on another host right after
+Ghost admin API answers" case is that attack: it was not banned before this
+change, and is now.
+
+Why the hub's scenario is silenced and not replaced. The hub's scenario stays
+installed and untouched, so the `crowdsecurity/caddy` collection is not tainted
+and its hub upgrades continue. Its overflows are all dropped by the
+post-overflow, by name, so it never bans; if one got through, an address would
+be banned twice and counted twice on the ban ladder. The replay fails if the hub's
+scenario raises any alert. Other scenarios (`http-probing`, the CVE ones, the Core
+Rule Set) are not affected by either file.
+
+What the copy costs. Our filter is a copy of the hub's: if the hub changes its
+scenario's filter, ours does not follow. The list of entries does follow, because
+ours reads the same data file (`admin_interfaces.txt`, downloaded from the same
+address when CrowdSec starts). The hub's scenario is pinned by neither the image
+nor this repository (`hub_branch: master`), so compare the two filters when the
+CrowdSec image pin is bumped. A bucket that sees fewer requests than before can
+only ban less: the exempt requests no longer count toward the third distinct
+path, so two probes and any number of admin API answers do not ban.
+
+Proved by `test_crowdsec_replay.py`, which names the scenario each probe must
+reach and not only that the address was banned. The dot-segment case needs this:
+the Apache path traversal scenario (`http-cve-2021-41773`) bans the same three
+requests, so a test that only asks whether an address was banned stays green with
+the dot-segment condition removed. Asking for `branchleft/http-admin-interface-probing`
+among the address's alerts does not.
 
 ## Verified sessions
 
@@ -773,9 +943,9 @@ image and CrowdSec, and `render.test.ts` pins the rendered lines.
 `renderGhostBruteForceScenario` writes
 `stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml`, the scenario
 `branchleft/ghost-admin-login-bruteforce`. No hub scenario counts failed Ghost
-sign-ins, and the post-overflow above drops the hub's admin-probing overflows
-on Ghost admin API paths, so before this nothing at the edge banned an address
-for guessing a password or an Admin API key.
+sign-ins, and the admin-probing scenario above does not count Ghost admin API
+paths, so nothing at the edge banned an address for guessing a password or an
+Admin API key until this one.
 
 What Ghost already does, read from its source (v6.55): `POST
 /ghost/api/admin/session/` runs `brute.globalBlock` (per route per address,
@@ -816,8 +986,9 @@ lock covers the sign-in and nothing covers the key, which is the limit it
 carries. The ban follows the ladder in "Ban length and watch-only scenarios"
 below: ten minutes first, longer on repeats.
 
-Why it is a separate scenario: the post-overflow above matches one scenario by
-name, so this one is never dropped by it. The replay in
+Why it is a separate scenario: the post-overflow above matches the hub's
+admin-probing scenario by name, so this one is never dropped by it, and our
+admin-probing scenario excludes these paths from its own count. The replay in
 `test_crowdsec_replay.py` proves a burst of sign-in failures and of key
 failures is banned, and that the owner's mistyped passwords, new-device
 sign-in and admin use are not.
@@ -922,9 +1093,38 @@ known exploits on the same hostname, and requires each to ban.
 
 ## Being told about a ban
 
-Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
-reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
-scenario), which the monitoring stack already scrapes from edge1, and its page
-register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
-so the page names the scenario and never an address. A simulated decision is
-not in the gauge, so a watch-only scenario never pages; the replay asserts it.
+A ban pages the owner only when the banned address is owned. An address is
+owned when it made a verified Ghost staff request through the edge in the last
+30 days (the access log's `edge_trusted` is `1`), or when it sits inside a
+banned range that contains such an address. "Owned" covers every tenant's
+Ghost staff addresses (admins and editors who signed in through the edge), not
+only the owner's. `EdgeBanIssued` in `hetzner/monitoring/render.ts` pages for
+owned bans, through ntfy (page register entry `edge-ban`). Any other ban raises
+`EdgeBanUnowned`, a warning that goes to email only and never to ntfy.
+
+A systemd timer on edge1 (role `edge_ban_owner`) classifies every ban every 5
+minutes. It reads only the edge's own access log, through the Caddy container,
+and keeps the addresses only in the root-only state file
+`/var/lib/branchleft/edge-ban-owner/trusted.json` (mode 0600), for at most 30
+days, the edge's log retention. The metric and the alerts carry no address: each
+owned ban is its own alert, labelled with CrowdSec's integer decision id. So an
+owned ban pages up to about 5 minutes after it fires, plus the scrape interval.
+A repeat ban of the same scenario is a new decision id, so it also pages within
+about 5 minutes. Unowned bans are counted per scenario and go to email only.
+
+If the classifier is stale (no run for over 15 minutes), every ban pages at
+once. If it has reported and then goes missing (a lost scrape, or the node
+exporter restarting), every ban pages once its absence has lasted 10 minutes, so
+one lost scrape does not page. If it has never reported, every ban pages at once.
+A stale classifier also raises `EdgeBanOwnerStale`, a page of its own, once the
+staleness has lasted 5 minutes.
+
+The role ships disabled: `edge_ban_owner_enabled: false` in
+`ansible/roles/edge_ban_owner/defaults/main.yml`, with the matching constant
+`EDGE_BAN_OWNER_ENABLED` in `hetzner/monitoring/render.ts`. While it is off the
+role installs nothing on edge1, so no classifier ever reports: every ban pages at
+once through the fallback, as before this change, and `EdgeBanOwnerStale` goes to
+the `discard` receiver rather than the phone.
+Turning it on is one commit that sets both to `true` and re-renders. The simulated
+decisions of a watch-only scenario are not classified, so they never page; the
+replay asserts that the gauge leaves them out.

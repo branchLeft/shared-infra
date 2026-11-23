@@ -7,9 +7,24 @@ as `rob@branchleft.co.uk`. This runbook brings them under the tenants stack
 Everything here is the platform owner's: it reads and changes production, and
 nothing in it is run by an agent.
 
-The tenants stack is **not** applied by CI. Merging the change that carries this
-runbook changes no server. The applies below are the owner's hand applies, which
-`CLAUDE.md` allows for first-time provisioning and gated migrations.
+CI plans and applies the tenants stack on a merge to `main` that changes its inputs
+(`hetzner-tenants-plan` and `hetzner-tenants-apply` in `.github/workflows/ci.yml`):
+the apply waits in the `production` environment for the owner's approval, and a plan
+with no change skips it. Merging the change that carries this runbook changes no
+server. The adoption applies below are still the owner's hand applies, which
+`CLAUDE.md` allows for first-time provisioning and gated migrations, because each
+stage is checked between applies. Once an adoption change is merged, the plan CI
+shows for it is the same plan; approve its apply there instead of running
+`pulumi up` again, or reject it if the hand apply already ran. The Hetzner token
+and passphrase CI reads are the repository secrets `HCLOUD_TOKEN_TENANTS` and
+`PULUMI_PASSPHRASE_HETZNER_TENANTS`; CI reads the salt from the stack's state.
+
+The `app-t1` section at the end is the exception to the hand applies: its two stack
+applies (its steps 4 and 8) run in CI. An agent opens each stack change as a signed pull
+request, the owner merges it, and the owner approves the `production` apply that the merge
+starts. There is no `pulumi config set` and no `pulumi up` in that section. Every command
+that touches the server, its network or its address stays the owner's hand step, because
+no CI job holds a credential for it.
 
 ## What the servers look like when this starts
 
@@ -729,9 +744,12 @@ What is code and what is the owner's:
   private-only host's network inline), the `app-t1` firewall, the adopt id and the `appt1` playbook,
   trust file and enrolment rows. At `stage: converge` the stack compares the live network
   attachment with that declaration, so a hand attachment at any other address plans an update.
-- **The owner's.** Every command below. The import stage ignores `networks` on a private-only host
-  (`hetzner-host/README.md`, "Two stages"), and the bootstrap needs the private path, so the first
-  attachment is a hand step, as in main runbook step 9. Nothing here is run by an agent.
+- **An agent's.** The two pull requests that change `Pulumi.production.yaml` (steps 4 and 8). An
+  agent never connects to the server, never reads the Console and never approves an apply.
+- **The owner's.** Every command below, the merge of each stack change and the approval of each
+  apply. The import stage ignores `networks` on a private-only host (`hetzner-host/README.md`,
+  "Two stages"), and the bootstrap needs the private path, so the first attachment is a hand step,
+  as in main runbook step 9.
 
 ### The steps, in this order
 
@@ -798,49 +816,53 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    ```
 
    Good is exactly `10.20.1.201`. Any other address is a stop: detach it in the Console and ask again.
+   Undo: `hcloud server detach-from-network "${APPT1_SERVER_ID}" --network tenants`. Nothing else
+   is changed on the server, and the stack does not know about the attachment until step 8.
 
-3. **Generate the deploy key**, on the workstation. The private half stays there; the public half is
-   set in step 4:
+3. **Generate the deploy key**, on the workstation. The private half stays there and is never
+   pasted anywhere; the public half goes into the stack file in step 4:
 
    ```bash
    ssh-keygen -t ed25519 -N '' -C 'deploy@app-t1' -f ~/.ssh/id_ed25519_deploy_app-t1
    ```
 
-4. **First apply, at `stage: import`.** In the working copy, as for `db-t1` (main runbook step 8), and
-   recorded in git afterwards the way the other two were:
+   Good is a `Your public key has been saved` line. If the file already exists, `ssh-keygen` asks
+   before it overwrites: answer `n`, and the existing key is the one to use. The key has no
+   passphrase, as for the other two hosts. Then print the public half and give that one line to the
+   agent session that opens step 4's pull request. It is a public key, not a secret:
 
    ```bash
-   cd ~/branchLeft/shared-infra/hetzner/tenants
+   cat ~/.ssh/id_ed25519_deploy_app-t1.pub
    ```
 
-   ```bash
-   pulumi config set appt1Enabled true
-   ```
+   Good is one line, `ssh-ed25519` then the key then `deploy@app-t1`. The credential register has
+   no entry for this key, and none is needed: only the public half leaves the workstation.
 
-   ```bash
-   pulumi config set appt1DeployPublicKey "$(cat ~/.ssh/id_ed25519_deploy_app-t1.pub)"
-   ```
+4. **First apply, at `stage: import`, through CI.** There is no command to run. The first deploy of
+   a stack is the owner's, so three things are yours, in this order:
 
-   ```bash
-   pulumi preview --diff
-   ```
+   - **Merge the stack change.** An agent opens a signed pull request that adds two lines to
+     `hetzner/tenants/Pulumi.production.yaml` and nothing else: `branchleft-hetzner-tenants:appt1Enabled`
+     set to `"true"`, and `branchleft-hetzner-tenants:appt1DeployPublicKey` set to the public line
+     from step 3. `appt1Adopt` is already there at `stage: import`. The file is yours in
+     `CODEOWNERS` (`Pulumi*.yaml`), so you merge it. The merge starts a run of the `CI` workflow
+     (`ci.yml`) in `branchLeft/shared-infra`.
+   - **Read the plan.** Open that run from the merge commit's checks. The job `Plan (hetzner tenants,
+pulumi preview)` has finished and its summary, titled `Hetzner tenants plan — read before
+approving the apply`, holds the plan as JSON. Read the `op` and `urn` of each entry in `steps`.
+     Good is: one `import` whose `urn` ends `hcloud:index/server:Server::app-t1`, one `create` whose
+     `urn` ends `hcloud:index/firewall:Firewall::app-t1-firewall` (declared, never attached), and
+     every other entry, if the summary lists any, `same`. A `create` of a server, any `replace` or `delete`, any primary IP, any attachment,
+     or an import warning is a stop. The plan job also runs the delete guard
+     (`scripts/assert-no-hetzner-deletes.py`) and fails on a delete, so a red plan job is a stop and
+     nothing is waiting for you.
+   - **Approve the apply.** On the run's page press **Review deployments**, tick `production`,
+     write nothing, and press **Approve and deploy**. To refuse, press **Reject** in the same
+     dialog and hand back the summary. The job `Apply (hetzner tenants, pulumi up)` then re-reads
+     the plan, runs the delete guard again and applies. Good is that job green.
 
-   Good is: `import` of the `app-t1` server, `create` of the `app-t1` firewall (declared, never
-   attached), and nothing else. A `create` of a server, any `replace` or `delete`, any primary IP,
-   any attachment, or an import warning is a stop and is not applied. Then the guard and the apply,
-   as in main runbook step 8:
-
-   ```bash
-   pulumi preview --json > ~/tenants-adopt-plan.json
-   ```
-
-   ```bash
-   python3 ~/branchLeft/shared-infra/scripts/assert-no-hetzner-deletes.py ~/tenants-adopt-plan.json
-   ```
-
-   ```bash
-   pulumi up
-   ```
+   The apply puts `app-t1` into the stack's state and creates one firewall; it changes nothing on
+   the server. Undo: "Rolling an adopted host back out of the stack" below.
 
 5. **Bootstrap it through `edge-t`.** Main runbook step 9's "Case A and B: bootstrap db-t1" block (its
    two `ssh` commands), with three substitutions and no others: the address `10.20.1.201` for
@@ -852,11 +874,22 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    of this section run main runbook step 11's two commands that detach and delete it again. Good is
    `bootstrap ok`, with the `apt-get` lines having succeeded through the gateway.
 
-6. **Provision it and bring it under the pull.** `RUNBOOK-provision-host.md`, section 5 (with
-   `10.20.1.201` as the host address) and section 6 (the tenant containers' confinement, since
-   `app-t1` is an app host), then the first gated run of the `appt1` playbook by the bootstrap route
-   that `ansible/inventories/README.md` describes. Good is the permanent default-route unit
-   installed, and the host's own pull run reporting no failed task.
+6. **Enrol it for the gated Ansible run.** Run the `appt1` host section of
+   [`ansible-enrol-host-for-ci-runbook.md`](https://github.com/branchLeft/ghost-platform-docs/blob/main/ansible-enrol-host-for-ci-runbook.md)
+   in `ghost-platform-docs`, from its Part 0 to its Part 5. It replaces this step's earlier text, which
+   sent you to `RUNBOOK-provision-host.md` sections 5 and 6 and to a first gated run. Do not run
+   that runbook's host-provisioning steps (its shared baseline and its app-host isolation steps) on this host: the `appt1` playbook applies
+   `host_baseline`, `egress_nat` and `deploy_tooling`, which install the same files, and a hand copy
+   would be a second writer of them. What the page needs before its Part 1: steps 1 to 5 of this
+   section done, the gateway proof of main runbook step 7 passed, and shared-infra's `appt1` playbook
+   merged with its tenant roles. What it needs before its Part 4: `10.20.1.201` in
+   `ci_jump_destinations` in `ansible/owner_vars/edget.yml`, merged and applied to `edge-t`. Good is
+   that page's Part 5: a gated plan whose row for `app-t1` reads `clean`.
+
+   The tenant containers' confinement of `RUNBOOK-provision-host.md` section 6 is not part of this
+   step. The `appt1` playbook applies `deploy_tooling` as class `internal`, which installs no policy
+   program, and no other role delivers one to `app-t1`. Whether `app-t1` needs it is not decided
+   here.
 
 7. **Remove the leftover public IPv6 address**, only after the private path has been proven on its
    own, below. The public IPv6 address is the way back in if the private path fails, so this step
@@ -941,16 +974,23 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    left. If either fails now, the server has no public address to fall back on: use the Console's
    server page (its **Console** button) and hand back the output.
 
-8. **Converge.** Set `stage: converge` under `appt1Adopt` in the working copy
-   (`pulumi config set --path appt1Adopt.stage converge`), then `pulumi preview --diff`. Good is
-   updates in place to protection and labels on `app-t1` only: nothing for the network or the public
-   interface, no replace, no delete, nothing on `edge-t` or `db-t1`. The guard and the apply are
-   as in main runbook step 10.
+8. **Converge, through CI.** Only after step 7 has given `0 0`. An agent opens a signed pull request
+   that changes one line of `hetzner/tenants/Pulumi.production.yaml`: `stage: import` under
+   `appt1Adopt` becomes `stage: converge`. You merge it, then read and approve the apply exactly as
+   step 4 describes. Good in the plan summary is `update` steps on the `app-t1` server only, and the
+   fields they change are protection and labels: nothing for the network or the public interface,
+   no `replace`, no `delete`, nothing on `edge-t` or `db-t1`. Anything else is a stop: press
+   **Reject** and hand back the summary. Leave `stage: converge` set for the life of the host.
+   Undo: set the line back to `import` in another pull request; protection and labels are the only
+   changes to take back.
 
-9. **Prove nothing is left to change**, as main runbook step 11 does: `pulumi preview --diff` and the refresh
-   preview both report no changes. Then record `appt1Enabled: "true"`, `appt1DeployPublicKey` and
-   `appt1Adopt` at `stage: converge` in `Pulumi.production.yaml` in a signed pull request, with no
-   encryption salt, token or passphrase in it.
+9. **Prove nothing is left to change.** After the step 8 apply is green, bring your checkout of
+   `shared-infra` to the merged `main` and run main runbook step 11's two read-only commands in
+   `hetzner/tenants`, `pulumi preview --diff` and `pulumi refresh --preview-only`. Good is no
+   changes from both, for `app-t1`, `db-t1`, `edge-t` and the addresses. The stack file already
+   holds `appt1Enabled`, `appt1DeployPublicKey` and `appt1Adopt` at `stage: converge`, because steps 4
+   and 8 were merged, so nothing is recorded by hand at the end. Do not run `pulumi config set`
+   here: a value set in the working copy is not what CI plans.
 
 As for `db-t1` (main runbook step 10), `hold-no-inbound` is not detached from `app-t1`, and the stack attaches no
 firewall to it. The final delete of `hold-no-inbound` is not part of this series.
@@ -962,6 +1002,9 @@ firewall to it. The final delete of `hold-no-inbound` is not part of this series
   ignored set differs: hand back the output.
 - **A preview proposes to create a server.** The adopt config for that host is
   missing or misspelled. Do not apply.
+- **A CI plan for `app-t1` shows anything the step does not list.** Press **Reject** on the
+  `production` deployment of that run: nothing is applied, and the stack file on `main` stays as
+  merged. Hand back the plan summary; an agent opens the correcting pull request.
 - **An apply fails part-way.** The imports are in state and are harmless; re-run
   `pulumi preview --diff` and read it again. Do not detach `hold-no-inbound` on the
   strength of a failed apply.

@@ -5,12 +5,32 @@
 # the step's name unless given). A case with text expects a refusal containing that text
 # and exactly calls calls (none by default); one without expects success, with calls
 # counted only if given. A case with a label has that credential recorded once in the
-# service credential file, which must be root's with mode 0600.
+# service credential file, which must be root's with mode 0600. A case with bootstrap has the
+# stand-in report bootstrap mode, one with broken has it answer every request with a 500, and
+# extra is a mapping sent with -e beside the step.
 - name: 'Reset for: {{ case.name }}'
   ansible.builtin.include_tasks: reset.yml
   vars:
     reset_files: '{{ verify_file_sets[case.files | default("admin")] }}'
     reset_state: '{{ verify_states[case.state | default(case.step | default("none"))] | default({}) }}'
+
+- name: 'Make the stand-in report bootstrap mode for: {{ case.name }}'
+  ansible.builtin.copy:
+    content: ''
+    dest: /var/tmp/stand-in/bootstrap
+    owner: root
+    group: root
+    mode: '0644'
+  when: case.bootstrap | default(false)
+
+- name: 'Make the stand-in answer every request with a 500 for: {{ case.name }}'
+  ansible.builtin.copy:
+    content: 'unavailable'
+    dest: /var/tmp/stand-in/fail
+    owner: root
+    group: root
+    mode: '0644'
+  when: case.broken | default(false)
 
 - name: 'Ask: {{ case.name }}'
   ansible.builtin.include_tasks: ask.yml
@@ -19,7 +39,8 @@
     ask_tags: '{{ case.tags | default("mail_reconcilers_" ~ (case.tag | default(case.step))) }}'
     ask_extra: >-
       {{ ({'mail_reconcilers_step': case.step} if case.step is defined else {})
-         | combine({'mail_reconcilers_credential': case.cred} if case.cred is defined else {}) }}
+         | combine({'mail_reconcilers_credential': case.cred} if case.cred is defined else {})
+         | combine(case.extra | default({})) }}
     ask_check: '{{ case.check | default(false) }}'
 
 - name: Read the stand-in's calls

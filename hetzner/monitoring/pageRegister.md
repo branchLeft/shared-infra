@@ -65,9 +65,29 @@ Healthchecks-delivered entries are not checked. `pageRegister.test.ts` runs it
 against the real register and the real rendered rules, and against the reaper
 entry flipped to live with no rule, which must report it.
 
-One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
-three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
-match and the failed-unsafe tenant are raised by the platform itself, and the
+Two `severity: page` rules come from the edge's ban classifier on edge1, and their
+entries carry no exemption. `EdgeBanIssued` pages for each ban on an owned address
+(`edge_ban_owned{owned="true"}`, one sample per decision id); `EdgeBanOwnerStale` pages
+when the classifier has not run for over 15 minutes, once that has lasted 5 minutes.
+`EdgeBanIssued` also pages every ban while the classifier is stale (at once) or has
+reported and then been absent for 10 minutes; a classifier that has never reported
+pages at once. While the role is disabled (`EDGE_BAN_OWNER_ENABLED` is `false`),
+`EdgeBanOwnerStale` is routed to the `discard` receiver, not to a page. A ban on any other address is
+`EdgeBanUnowned`, a warning that goes to email and is not registered. Each of the other three live Alertmanager entries carries a
+`ruleExemption`: the tier-two safety
+match and the failed-unsafe tenant have no producer yet: the platform is planned to raise them, and nothing does today. The
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.
+
+## A page that never becomes an alert: the abuse report
+
+The `abuse-report` entry has `deliveryPath: 'ntfy_direct'` and no alertname. The mail host posts
+it straight to the pager with a publish-only grant on a topic of its own (`NTFY_ABUSE_TOPIC`),
+so it renders no Alertmanager route, no rule raises it, and neither direction of the
+rule-and-register check applies to it, as for the Healthchecks-delivered entry. It is listed so
+the register still names every path that can reach the phone. Its contract is the page's content:
+it says only that an abuse report arrived, with no sender, no message text and no tenant. The
+register has no label schema, so no test can enforce that; the producer's own tests do
+(`ansible/roles/mx1_abuse_page`), and `pageRegister.test.ts` pins that the server config gives the
+mail host one grant, write-only, on this topic and none on the page topic.

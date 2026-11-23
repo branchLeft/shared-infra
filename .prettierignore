@@ -30,10 +30,12 @@ hetzner/edge/stack/crowdsec/parsers/nextcloud-profile.yaml
 hetzner/edge/stack/crowdsec/remediation/profiles.yaml
 hetzner/edge/stack/crowdsec/remediation/simulation.yaml
 hetzner/edge/stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+hetzner/edge/stack/crowdsec/scenarios/http-admin-interface-probing.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 hetzner/edge/validation/Caddyfile.trusted-session
 hetzner/edge/validation/Caddyfile.webhook
+hetzner/edge/validation/Caddyfile.state-gateway
 
 # Files a role carries byte for byte from branchLeft/ghost-platform and holds to a pinned
 # sha256 (ansible/roles/demo1_build, ansible/roles/demo1_egress_spool). A formatter that

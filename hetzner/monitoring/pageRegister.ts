@@ -4,7 +4,7 @@
  * and why alerts group on the cause, is in `pageRegister.md`.
  */
 
-export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks';
+export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks' | 'ntfy_direct';
 
 export interface PageRegisterEntry {
   /** Stable slug -- the identity a future change argues about, never renamed. */
@@ -20,11 +20,14 @@ export interface PageRegisterEntry {
    */
   readonly alertName: string | null;
   /**
-   * How this entry's page actually reaches a phone. Six entries route
+   * How this entry's page actually reaches a phone. Every entry but one routes
    * through this stack's own Alertmanager; the drain worker's dead-man's
    * switch pages through its own Healthchecks.io check directly, so this
    * entry renders no Alertmanager route at all -- it is listed here only so
-   * the register still names every path that can reach the phone.
+   * the register still names every path that can reach the phone. The mail
+   * host's abuse-report page (`ntfy_direct`) is posted by mx1 itself to the
+   * pager with a publish-only grant on a topic of its own, so it renders no
+   * route either.
    */
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
@@ -62,9 +65,10 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tier-two safety match is recorded, not by a ' +
-      "Prometheus rule: nothing this stack scrapes measures one, so this stack's " +
-      'rendered rules carry no rule for it and cannot.',
+      'No producer exists yet: nothing raises TierTwoSafetyMatch today. The platform is ' +
+      'planned to raise it when a tier-two safety match is recorded, not through a ' +
+      'Prometheus rule, since nothing this stack scrapes measures one; the rendered ' +
+      'rules carry no rule for it.',
   },
   {
     id: 'tenant-failed-unsafe',
@@ -75,7 +79,8 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised by the platform when a tenant enters failed-unsafe, not by a Prometheus ' +
+      'No producer exists yet: nothing raises TenantFailedUnsafe today. The platform is ' +
+      'planned to raise it when a tenant enters failed-unsafe, not through a Prometheus ' +
       "rule: that state is the platform's own, and this stack scrapes no metric for it, " +
       'so the rendered rules carry no rule for it.',
   },
@@ -99,19 +104,33 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: true,
     ruleExemption:
-      'Raised per tenant by the external reader-facing probe, not by a Prometheus rule: ' +
-      "this stack's blackbox probes carry an instance label and no tenant label, so no " +
-      'rule here can raise a tenant-labelled page. A failing probe reaches the phone ' +
-      'meanwhile through BlackboxProbeFailed at critical severity.',
+      'No producer exists yet: nothing raises ReadersCannotRead today. The external ' +
+      'reader-facing probe is planned to raise it per tenant, not through a Prometheus ' +
+      "rule: this stack's blackbox probes carry an instance label and no tenant label, so no " +
+      'rule here can raise a tenant-labelled page. Until that producer exists, a failing ' +
+      'probe reaches the phone through BlackboxProbeFailed at critical severity.',
   },
   {
     id: 'edge-ban',
     name: 'The edge banned an address',
     reason:
       'A CrowdSec ban refuses that address on every site behind edge1, the sign-in ' +
-      'service included, and the owner has been banned by false alarms three times; the ' +
-      'owner learns of each ban, and which scenario made it, as it happens.',
+      'service included, and the owner has been banned by false alarms three times; a ' +
+      "ban of one of the owner's own addresses pages, with the scenario that made it, " +
+      'and a ban of any other address goes to email.',
     alertName: 'EdgeBanIssued',
+    deliveryPath: 'alertmanager',
+    dormant: false,
+    tenantScoped: false,
+  },
+  {
+    id: 'edge-ban-owner-stale',
+    name: 'The edge ban classifier is stale',
+    reason:
+      "The classifier that tells a ban of the owner's own address from any other has " +
+      'stopped reporting, so every ban pages until it runs again; the owner has to know ' +
+      'it is down, and why the pages have multiplied, before the next ban.',
+    alertName: 'EdgeBanOwnerStale',
     deliveryPath: 'alertmanager',
     dormant: false,
     tenantScoped: false,
@@ -125,6 +144,20 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
       'that can reach a phone.',
     alertName: null,
     deliveryPath: 'healthchecks',
+    dormant: false,
+    tenantScoped: false,
+  },
+  {
+    id: 'abuse-report',
+    name: 'A report reached abuse@',
+    reason:
+      'A report of abusive or harmful material is a notice that is never to be read ' +
+      'days late. The mail host posts straight to the pager, with a publish-only grant ' +
+      'on its own topic (`NTFY_ABUSE_TOPIC`), when abuse@ receives a message; the page ' +
+      'says only that a report arrived, with no sender, no message text and no tenant. ' +
+      'It never becomes an Alertmanager alert.',
+    alertName: null,
+    deliveryPath: 'ntfy_direct',
     dormant: false,
     tenantScoped: false,
   },
@@ -151,6 +184,11 @@ export const PAGE_RECEIVER_NAME = 'ntfy-page';
  * all access by default, so knowing the name grants nothing -- only the
  * publisher token and the owner's login can write or read it. */
 export const NTFY_PAGE_TOPIC = 'branchleft-pages';
+
+/** The topic the mail host publishes an abuse-report page to, and the only
+ * topic its grant covers: write-only for the `mx1` machine user, read-only for
+ * the owner's login. Not a secret, for the reason `NTFY_PAGE_TOPIC` is not. */
+export const NTFY_ABUSE_TOPIC = 'branchleft-abuse';
 
 /** Where Alertmanager reaches ntfy: the Compose service name on the stack's
  * own network, never the public hostname, so a page does not depend on the
@@ -191,6 +229,74 @@ export function renderPageRoute(register: readonly PageRegisterEntry[]): string 
     `      receiver: ${PAGE_RECEIVER_NAME}`,
     "      group_by: ['tenant']",
   ].join('\n');
+}
+
+/** The alert whose owned bans get their own child route, before the generic
+ * page route. */
+const OWNED_EDGE_BAN_ALERT_NAME = 'EdgeBanIssued';
+
+/**
+ * The child route that pages an owned edge ban, rendered from `register`.
+ * It groups on the scenario, not `tenant` (which `EdgeBanIssued` lacks), so a
+ * second scenario's ban is a new group that notifies after `group_wait`, not
+ * after the root's one hour. Tenant-scoped pages never match it. It must sit
+ * before the generic route and must not `continue`, or the alert pages twice.
+ * Empty unless a live entry names the alert.
+ */
+export function renderOwnedEdgeBanRoute(register: readonly PageRegisterEntry[]): string {
+  if (!pageAlertNames(register).includes(OWNED_EDGE_BAN_ALERT_NAME)) return '';
+  return [
+    '    - matchers:',
+    '        - severity = "page"',
+    `        - alertname = "${OWNED_EDGE_BAN_ALERT_NAME}"`,
+    `      receiver: ${PAGE_RECEIVER_NAME}`,
+    "      group_by: ['alertname', 'reason']",
+    '      group_wait: 30s',
+    '      group_interval: 5m',
+  ].join('\n');
+}
+
+/** The receiver an alert is sent to when it must reach no one: declared with
+ * no integrations, so a route to it notifies nothing. */
+export const DISCARD_RECEIVER_NAME = 'discard';
+
+const EDGE_BAN_OWNER_STALE_ENTRY_ID = 'edge-ban-owner-stale';
+const EDGE_BAN_OWNER_STALE_ALERT_NAME = 'EdgeBanOwnerStale';
+
+/**
+ * `register` with the classifier's staleness entry held dormant, for the page
+ * routes while the classifier is not installed. The committed register is
+ * unchanged, so the two-way checks against the rules stay meaningful: the
+ * rule exists in both modes, only its route differs.
+ */
+export function holdEdgeBanOwnerStale(register: readonly PageRegisterEntry[]): PageRegisterEntry[] {
+  return register.map((entry) =>
+    entry.id === EDGE_BAN_OWNER_STALE_ENTRY_ID ? { ...entry, dormant: true } : entry
+  );
+}
+
+/**
+ * The route that discards `EdgeBanOwnerStale`, for the page routes
+ * `holdEdgeBanOwnerStale` leaves it out of: without it a page-severity alert
+ * that matches no route falls through to the root's email receiver. Empty
+ * unless a live entry names the alert. It must sit before the generic page
+ * route.
+ */
+export function renderEdgeBanOwnerStaleDiscardRoute(
+  register: readonly PageRegisterEntry[]
+): string {
+  if (!pageAlertNames(register).includes(EDGE_BAN_OWNER_STALE_ALERT_NAME)) return '';
+  return [
+    '    - matchers:',
+    '        - severity = "page"',
+    `        - alertname = "${EDGE_BAN_OWNER_STALE_ALERT_NAME}"`,
+    `      receiver: ${DISCARD_RECEIVER_NAME}`,
+  ].join('\n');
+}
+
+/** The discard receiver: a name and nothing else. */
+export function renderDiscardReceiverBlock(): string {
+  return `  - name: ${DISCARD_RECEIVER_NAME}`;
 }
 
 /**

@@ -1,0 +1,59 @@
+---
+# Internal to the role, not part of its interface: role variables outrank every value a caller
+# passes except an explicit parameter, so a play variable cannot move a path or a lifetime.
+
+# A certificate lives two years. The run fails while less than the renewal window is left, so the
+# owner has sixty days to renew it and to carry the new public certificate to the peer's host.
+host_tls_identity_validity_days: 730
+host_tls_identity_renew_days: 60
+host_tls_identity_horizon: '+{{ host_tls_identity_renew_days }}d'
+
+# The library the certificate modules need, from the Debian archive. The modules run under the
+# host's own interpreter, not the toolchain's virtual environment, so the library must be the
+# distribution's.
+host_tls_identity_library_package: python3-cryptography
+
+# Extended key usage names as the certificate module reports them, per usage.
+host_tls_identity_usage_names:
+  serverAuth: TLS Web Server Authentication
+  clientAuth: TLS Web Client Authentication
+
+# One row per host that makes an identity. `usage` is what this host's certificate is for;
+# `peer_usage` is what the certificate it trusts from its peer must be for, and `peer_dns` is the
+# name that certificate must carry (empty: no name is required). `group` is the group that may read
+# the files: empty leaves it alone, because the exporter's own role gives it once the package has
+# made the exporter's account.
+host_tls_identity_profiles:
+  # demo1's exporter serves this certificate; the pin is the one client certificate it accepts.
+  demo1:
+    dir: /etc/branchleft/node-exporter-tls
+    key_name: server.key
+    cert_name: server.crt
+    pin_name: ca.crt
+    common_name: demo1
+    dns_names:
+      - demo1
+    usage: serverAuth
+    peer_usage: clientAuth
+    peer_dns: ''
+    group: ''
+  # edge1's Prometheus presents this certificate (its container runs as nobody, gid 65534); the pin
+  # is the one server certificate it accepts, and it must carry the name Prometheus verifies.
+  edge1:
+    dir: /etc/branchleft/demo1-metrics-tls
+    key_name: client.key
+    cert_name: client.crt
+    pin_name: ca.crt
+    common_name: edge1
+    dns_names: []
+    usage: clientAuth
+    peer_usage: serverAuth
+    peer_dns: demo1
+    group: '65534'
+
+# Read from the row of the host the play is for.
+host_tls_identity_profile: '{{ host_tls_identity_profiles[enrolled_host] }}'
+host_tls_identity_dir: '{{ host_tls_identity_profile.dir }}'
+host_tls_identity_key_file: '{{ host_tls_identity_dir }}/{{ host_tls_identity_profile.key_name }}'
+host_tls_identity_cert_file: '{{ host_tls_identity_dir }}/{{ host_tls_identity_profile.cert_name }}'
+host_tls_identity_pin_file: '{{ host_tls_identity_dir }}/{{ host_tls_identity_profile.pin_name }}'

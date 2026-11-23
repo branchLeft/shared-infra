@@ -3,8 +3,21 @@
 # than after someone clicks through the UI once over the SSH tunnel.
 apiVersion: 1
 
+# A host whose Grafana has started before holds this datasource with an uid Grafana made up.
+# A provisioned datasource of the same name that names another uid is not an update: Grafana
+# stops at start with "Datasource provisioning error: data source not found", and the
+# container never comes up. So the old one is deleted by name first and the file below is
+# inserted whole, on a fresh volume (nothing to delete) and on every start after.
+# `test_grafana_datasource.py` holds every datasource that pins an uid to a line here.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
 datasources:
   - name: Prometheus
+    # Fixed, so the provisioned dashboards can name this datasource by uid
+    # (`dashboards.test.ts` holds every panel to it).
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090

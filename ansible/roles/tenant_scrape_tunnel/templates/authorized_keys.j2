@@ -1,0 +1,1 @@
+restrict,port-forwarding{% for destination in tenant_scrape_tunnel_destinations %},permitopen="{{ destination.address }}:{{ tenant_scrape_tunnel_target_port }}"{% endfor %},command="{{ tenant_scrape_tunnel_nologin }}" {{ tenant_scrape_tunnel_scraper_public_key.split(' ')[0] }} {{ tenant_scrape_tunnel_scraper_public_key.split(' ')[1] }}

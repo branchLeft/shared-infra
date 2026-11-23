@@ -390,6 +390,11 @@ The order of the checks on this source, each before the next and none after a ch
    loop, so a sender that stops sending cannot hold the program: it ends the request as
    `bad-bundle`. The single-flight lock is taken only after the read, so a stalled
    upload never makes another request answer `busy`.
+   The spool as a whole is bounded too: at most 4 files and 400 MiB in all, counting the
+   upload being read. A request that would pass either bound is refused as `spool-full`
+   before anything more is written, its own file is removed and the other uploads are left
+   alone. Files older than the deadline plus 60 seconds (a killed run left them) are swept
+   before the bound is checked, so they cannot fill the spool for good.
 4. The spool is admitted in a quarantine repository: the header must be a git bundle
    header, `git bundle verify` must pass (a bundle that needs history it does not carry
    is refused), the objects are fetched from the file into the quarantine, an explicit
@@ -450,6 +455,91 @@ After a first apply it prints the commit as `floor=<40 hex>` and then
 `verdict=unchanged exit=0 changed=0`. A unit test compares this block with the command
 the push scenario runs, so the two cannot differ.
 
+### The look: what the host shows after a check
+
+An issue whose finish line is a host stays "Merged, not live" until someone has seen the change
+work there. The look is the one way an agent can: after a check run, the program prints a
+fixed, small set of read-only facts about the host, one line each, keyed by the issue that
+wants it to be seen. The lines appear in the host's section of the plan job summary (and of
+the nightly drift check), so a run can be cited in a `Live:` line.
+
+What it is not: a way to run anything. The caller still sends one commit and nothing else. The
+facts are declared in `ansible/tools/look/facts.json` of the commit being checked, which is
+signed, on `main`, and merges like code. A fact asks for one of three kinds, each with exactly
+its own fields, and the program (this file, the owner's) holds the list of kinds and the places a
+file fact may read. A new kind, or a new directory, is a change to this program.
+
+```json
+{
+  "facts": [
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-db1",
+      "playbook": "ansible/playbooks/db1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    }
+  ]
+}
+```
+
+Every entry has `issue` (a workspace issue number), `name` (a lowercase word of letters, digits
+and hyphen, unique in the file), `playbook` (the host's playbook; only that host looks) and
+`kind`, then the fields of its kind:
+
+| Kind          | Fields                              | Result printed                                                                                                                            |
+| ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_sha256` | `path`                              | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                          |
+| `unit_active` | `unit`                              | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown` |
+| `http_status` | `port`, `url_path`, optional `host` | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed     |
+
+A file fact reads only below `/etc/systemd/system/`, `/usr/local/bin/`, `/usr/local/lib/` and
+`/usr/local/sbin/` (the places the roles put programs and unit files, and no place that holds a
+secret, because a digest of a short secret can be guessed). A link out of those directories is
+`outside-root`. `host` is the name sent in the `Host` header; the connection is to the loopback
+address whatever it says. A `GET` that changes state is a fault of the declaration, caught at
+review: pick a path that only reads.
+
+A run prints, after the playbook's own output and only for a check:
+
+```text
+look issue=4082 name=pull-trigger-program-db1 kind=file_sha256 result=<64 hex digits>
+look-refused entry=2 reason=path-not-allowed
+look-summary declared=3 here=1 refused=1 file=ok
+```
+
+`here` is the number of facts for this host's playbook. A commit with no look file prints
+nothing. The look runs when the playbook ended by itself (a failed playbook too, not a
+timeout or a stop), and it never changes the verdict, the exit status or the summary line the
+workflow reads. An apply and a step print no look: nothing reads an apply's standard error
+except on failure, and a step is narrow.
+
+Refusals, each a fixed word that repeats nothing from the file. Of the whole file: `file-not-json`
+(not JSON, or a key repeated), `file-shape` (not exactly `{"facts": [...]}`), `file-too-large`
+(over 64 KiB), `file-too-many` (over 64 entries), `file-not-regular` (the path is a link or a
+directory in the commit) and `file-unreadable` (git could not give it). Of one entry, the others
+standing: `entry-shape`, `unknown-kind` (not one of the three), `unknown-field` (a field the kind
+does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-issue`, `bad-name`
+(also a name holding a word the plan job's secret scan reads, which would fail the plan of every
+host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
+four directories, or not a plain name), `bad-unit` (not a plain unit name), `bad-port`,
+`bad-url-path` (a query, a fragment, `..`, a doubled slash), `bad-host-name`, `line-shape` (a line
+that is not of the one shape, which is not printed) and `look-fault` (the look itself failed;
+the run is as it would have been without it).
+
+Every value on a line is a number from the file's `issue`, a name that passed its pattern, a
+digest, a three-digit status or a word from the lists above, and a final check admits only
+that shape, so nothing a host holds can reach the log. A unit's reply that is not a known word
+is `unknown`, and the text is dropped. The whole look has 120 seconds, a unit 10 and a `GET` 5,
+and a stop request ends it (`skipped-time`).
+
+How an agent uses it: add a fact for the issue to `ansible/tools/look/facts.json` in the change
+that delivers the behaviour (or in a later one), merge it like any change, wait for the gated
+delivery of that commit, then read the next plan or nightly drift run's job summary at a commit
+that holds the delivery: the host's section ends with the `look` line. Quote that run and the
+line in the `Live:` comment. The unit tests fail a declaration that any host would refuse, so a
+refusal is not expected on a merged file.
+
 ### Exit codes
 
 | Exit | Verdict        | Meaning                                                                                                                        |
@@ -464,12 +554,15 @@ the push scenario runs, so the two cannot differ.
 | 40   | `error`        | Invalid or unsafe configuration or state, a missing tool, a failed git command, or `io-error` or `internal-error` (see below). |
 
 The `reason` field of exit 20 is one of `bad-request`, `not-on-main`, `rollback`,
-`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, and for
+`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, on a host that
+requires a release tag `release-tag-missing` and `too-many-release-tags` (see "The release-tag
+route"), and for
 step requests `step-mode-only` (a step with `--mode apply` or `--mode check`),
 `step-not-allowed` (the id is not on the host's allow-list, which may be empty) and
 `confirm-mismatch` (the word is not that step's word). On the bundle source (see "Push
 receiver") there are three more: `mode-mismatch` (the request's mode word is not the key's),
-`no-floor` (the host has no rollback floor) and `bad-bundle` (standard input is not a
+`no-floor` (the host has no rollback floor), `spool-full` (the spool already holds
+as many uploads, or as many bytes, as it may) and `bad-bundle` (standard input is not a
 bundle that stands alone, passes the object check and has the requested commit as its
 `HEAD`, or it was too large or too slow); a refusal of the bundle source also prints
 `changed=0`.
@@ -591,14 +684,18 @@ unit test makes each of them.
   floor and the playbook, and has no `main` to compare with (see "Push receiver"). A commit
   made in the web interface on another branch and signed by the same key is applied if it
   descends from the floor. This is the owner's ruling, and the floor reset is a person's
-  step in the operator runbook.
+  step in the operator runbook. A host told to require a release tag does not have this
+  limit: it needs no `main`, because the owner's signature on the tag is the trust root (see
+  "The release-tag route"). The program has the route; no host's configuration turns it on
+  yet, so on every host this limit still stands.
 - **The floor of a bundle host is a seed.** The first floor comes from
   `pull_trigger_floor_seed`, a commit id chosen when the host is enrolled; the receiver
   refuses everything before then. A wrong seed that is newer than the commits to be pushed
   refuses them as `rollback`.
 - **The push scenario cuts the container off the network, not off loopback.** It shows the
   receiver needs no network; it does not show what a host's firewall allows. The size limit
-  (200 MiB) and the deadline (300 s) are constants of the program, not settings.
+  (200 MiB), the deadline (300 s) and the spool bounds (4 files, 400 MiB) are constants of the
+  program, not settings.
 - **A read of standard input holds the connection.** A sender that dribbles bytes is cut at
   the deadline, but until then the SSH session is open and the spool holds what was sent.
   The spool and the quarantine are swept at the start of the next request.
@@ -799,24 +896,106 @@ copies the program, changes one check with a replacement that must match, and ru
 that the installed program refuses. The copy must answer the red way (the refusal is gone) and
 the installed program must still give the refusal, which is the green side.
 
-| Control                                              | Broken by                                       | Fails in                                                                           |
-| ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| P1 the request's mode word must equal the key's      | removing the comparison                         | `test_request_mode_word_must_equal_key_mode`, scenario `no-mode-compare`           |
-| P2 a host with no floor applies nothing              | removing the no-floor refusal                   | `test_a_host_with_no_floor_applies_nothing...`, scenario `no-floor-test`           |
-| P3 a commit older than the floor is refused          | removing the floor comparison                   | `test_a_commit_older_than_the_floor...`, scenario `no-floor-compare`               |
-| P4 the signature is checked on a pushed commit       | removing the signature check                    | `test_an_unsigned_commit_is_refused`, scenario `no-signature-check`                |
-| P5 the request's playbook must be the configured one | removing the comparison                         | `test_the_playbook_in_the_request...`, scenario `no-playbook-compare`              |
-| P6 the bundle's HEAD must be the requested commit    | removing the HEAD test                          | `test_a_bundle_whose_head_is_not...`, scenario `no-head-test`                      |
-| P7 the objects are checked with `fsck --strict`      | removing the explicit check                     | `test_an_object_that_fails_git_s_object_check...`, scenario `no-object-check`      |
-| P8 standard input is limited in bytes                | removing the limit                              | `test_a_bundle_over_the_byte_limit...`, scenario `no-byte-limit`                   |
-| P9 standard input is read against a deadline         | a blocking read in place of the `select` loop   | `test_a_stalled_stream_ends_at_the_deadline...`, scenario `blocking-read`          |
-| P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git        | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
-| P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                  | the push scenario's seed check                                                     |
-| P12 the receiver needs no network                    | none: the container has no network when it runs | the push scenario's control connect, which must fail                               |
+| Control                                              | Broken by                                          | Fails in                                                                           |
+| ---------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| P1 the request's mode word must equal the key's      | removing the comparison                            | `test_request_mode_word_must_equal_key_mode`, scenario `no-mode-compare`           |
+| P2 a host with no floor applies nothing              | removing the no-floor refusal                      | `test_a_host_with_no_floor_applies_nothing...`, scenario `no-floor-test`           |
+| P3 a commit older than the floor is refused          | removing the floor comparison                      | `test_a_commit_older_than_the_floor...`, scenario `no-floor-compare`               |
+| P4 the signature is checked on a pushed commit       | removing the signature check                       | `test_an_unsigned_commit_is_refused`, scenario `no-signature-check`                |
+| P5 the request's playbook must be the configured one | removing the comparison                            | `test_the_playbook_in_the_request...`, scenario `no-playbook-compare`              |
+| P6 the bundle's HEAD must be the requested commit    | removing the HEAD test                             | `test_a_bundle_whose_head_is_not...`, scenario `no-head-test`                      |
+| P7 the objects are checked with `fsck --strict`      | removing the explicit check                        | `test_an_object_that_fails_git_s_object_check...`, scenario `no-object-check`      |
+| P8 standard input is limited in bytes                | removing the limit                                 | `test_a_bundle_over_the_byte_limit...`, scenario `no-byte-limit`                   |
+| P9 standard input is read against a deadline         | a blocking read in place of the `select` loop      | `test_a_stalled_stream_ends_at_the_deadline...`, scenario `blocking-read`          |
+| P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git           | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
+| P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                     | the push scenario's seed check                                                     |
+| P12 the receiver needs no network                    | none: the container has no network when it runs    | the push scenario's control connect, which must fail                               |
+| P13 a floor seed is refused on a host that pulls     | the host check replaced by `true` in the seed copy | the push scenario's pull-host seed check                                           |
 
 The playbook-link, checkout and lock controls are those of the pull route and are shown
 by the default scenario and in "How to test it". `check` on this source changes nothing
 and does not move the floor (a unit test and the push scenario).
+
+### The controls of the look, and how each is shown to fail
+
+Each was broken on purpose in the program, seen to fail by the named test, restored, and seen
+to pass; the record is in the pull request that added the look. The look is read-only and has no
+caller input, so what these hold is that a declaration cannot make it do more.
+
+| Control                                              | Broken by                                          | Fails in                                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| L1 only the three kinds exist                        | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                          |
+| L2 an entry has exactly its kind's fields            | accepting a field the kind does not name           | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`, `test_a_command_like_entry_is_refused_and_runs_nothing` |
+| L3 a file fact reads only below the four directories | accepting any absolute path                        | `test_a_file_outside_the_four_directories_or_not_plain_is_refused`                                                              |
+| L4 a unit is a plain unit name                       | accepting any text as a unit                       | `test_a_unit_that_is_not_a_plain_unit_name_is_refused`                                                                          |
+| L5 the GET goes to the loopback address only         | connecting to the name given for the `Host` header | `test_the_host_header_is_the_declared_name_but_the_connection_is_loopback`                                                      |
+| L6 a unit's reply is one of a closed list of words   | printing the reply as it came                      | `test_a_unit_answer_that_is_not_a_known_word_is_not_repeated`                                                                   |
+| L7 only a line of the one shape is printed           | dropping the shape check                           | `test_a_line_that_is_not_of_the_one_shape_is_not_printed`                                                                       |
+| L8 an apply and a step print no look                 | printing the look for every mode                   | `test_an_apply_and_a_failed_playbook_print_no_look`                                                                             |
+| L9 a fault in the look cannot change a verdict       | removing the guard around the look                 | `test_a_fault_in_the_look_never_changes_the_verdict`                                                                            |
+| L10 a name cannot trip the plan job's secret scan    | removing the word check                            | `test_a_name_with_a_word_the_plan_scan_reads_is_refused`                                                                        |
+| L11 a refusal runs nothing for the entry             | running the unit check before the field check      | `test_a_refused_entry_runs_nothing_and_is_named`                                                                                |
+| L12 the repository's own file has no refusal         | adding a command-like entry to `facts.json`        | `test_the_declared_file_of_the_repository_has_no_refusal`                                                                       |
+
+### The release-tag route
+
+`docs/pull-signer-trust.md` (T8) names the gap this closes: a host that takes a commit by
+push has no `main`, so any holder of the push or check key can name a commit of their own as
+`main`, and the commit signer's key (GitHub's) signs commits on every branch. The control is a
+trust root the host can check offline: a release tag signed by a key the owner holds.
+
+The program has two more configuration keys, both optional and absent from every host's
+configuration today (the role does not write them, and the trust files and
+`check_enrolment.py` do not yet carry them), so no host behaves differently:
+
+- `release_signers`: a list of `{format, key}`, as `signers` is. These keys are read for a tag
+  and for nothing else. A key of `signers` is never read for a tag.
+- `require_release_tag`: `true` or `false`. `true` with no release key is a refused
+  configuration (`config-invalid`), not a host that refuses every request.
+
+When it is `true`, the one admission method that both sources and every mode (apply, check
+and step) call requires, in place of the commit's own signature, that:
+
+1. a tag under `refs/tags/release/` was fetched (pull route) or carried in the bundle (push
+   route). The pull route empties its private namespace first, so a tag withdrawn at the
+   remote is gone on the next request;
+2. the ref is an annotated tag object whose own text names exactly this commit (a lightweight
+   tag, and a tag of a tag, are dropped) and a name of the shape `release/YYYYMMDD.N` in that
+   text, whatever the ref is called, so a tag signed for another purpose is not replayed;
+3. more than 64 such tags is `too-many-release-tags`, and not a cut: junk cannot crowd a real
+   tag out unseen. Fewer are each checked;
+4. the tag's own signature, read from the tag object's bytes and never from the commit,
+   is good and by a release key. An SSH signature must be made under the namespace `git`; an
+   OpenPGP signature is refused if its key is expired or revoked, or if any signature status
+   is bad. Anything else is `release-tag-missing`, which leaves the host as it was.
+
+The pull route keeps its ancestor-of-`main` test and its floor first. The push route keeps its
+floor. Neither reads the commit's signature in this mode.
+
+What is not built, and so not proved: the sender (`branchLeft/github-workflows`, `git bundle
+create`) does not yet put the tags in the bundle; no release key exists; the role, the trust
+files and `check_enrolment.py` do not carry the two keys; the `release/*` tag ruleset (standards
+tooling) and the tag trigger of the delivery do not exist. SSH user verification (the PIN) is the
+design's open spike question and is not enforced here. Until those are done and the owner has
+signed a release, nothing may set `require_release_tag`, because the host would refuse every
+push.
+
+| Control                                                  | Broken by                                           | Fails in                                                                                                     |
+| -------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| R1 a host that requires a tag refuses a commit with none | skipping the tag check                              | `test_a_commit_with_no_tag_is_refused...`, and every refusal case                                            |
+| R2 only a release key's signature counts                 | accepting the commit signers, or any good signature | `test_a_tag_signed_by_a_key_that_is_not_a_release_key_is_refused`                                            |
+| R3 the signature is read from the tag, not the commit    | reading the commit's signature                      | `test_a_commit_signed_by_a_release_key_with_no_tag_is_refused`                                               |
+| R4 the tag names exactly this commit, directly           | dropping the header test                            | `test_a_tag_that_names_another_commit...`, `test_a_tag_names_a_commit_directly_only_if_its_own_lines_say_so` |
+| R5 the name in the signed text has the release shape     | dropping the name test                              | `test_a_signed_tag_with_a_name_outside_the_release_shape_is_refused`                                         |
+| R6 an SSH signature is bound to the namespace `git`      | `check-novalidate` with another namespace           | `test_a_signature_made_under_another_ssh_namespace_is_refused`                                               |
+| R7 a tag changed after signing is refused                | not checking the signature                          | `test_a_tag_whose_message_was_changed_after_signing_is_refused`                                              |
+| R8 more than 64 candidates is its own refusal            | cutting the list in place of refusing               | `test_more_tags_than_the_limit_are_refused_as_their_own_reason...`                                           |
+| R9 a withdrawn tag is gone on the next fetch             | not emptying the namespace                          | `test_a_tag_withdrawn_at_the_remote_is_gone_on_the_next_request`                                             |
+| R10 a host not told to require a tag is unchanged        | reading tags without the flag                       | `test_a_host_that_is_not_told_to_require_a_tag_ignores_tags_and_reads_the_commit`                            |
+
+These are unit cases on real git, real tags and real SSH and OpenPGP signatures, on both
+sources. There is no Molecule scenario for this route yet, because no installed host takes the
+keys.
 
 ## How to change it safely
 
@@ -827,6 +1006,8 @@ and does not move the floor (a unit test and the push scenario).
    exit-code table in this README together. Every sentence a refusal can give is
    fixed text in the `Why` enumeration, so that no text from a caller reaches a log;
    keep it that way.
+   The look keeps its own fixed words (`LookWhy`) and its own closed lists, and a unit test
+   holds this README to them.
 3. Keep every task able to run under `--check --diff`, and keep the role idempotent.
 4. A control is changed only with its proof: weaken the control in a copy, see the
    named assertion in `verify.yml` or the unit test fail, restore it, see it pass.

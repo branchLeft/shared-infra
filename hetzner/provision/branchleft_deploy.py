@@ -76,11 +76,16 @@ ATTESTED_REPO = "branchLeft/ghost-platform"
 # one workflow whose attestation it must carry. Adding an image is a reviewed
 # diff; an image it lists is refused unless attested by exactly that workflow on
 # refs/heads/main. An image name absent from this table is refused too, unless
-# UNATTESTED_STACK_IMAGES below names it for that stack.
+# UNATTESTED_STACK_IMAGES below names it for that stack. The repository the
+# attestation must come from is the one that owns the workflow (`attested_repo`),
+# so an image built outside ghost-platform names its own repository here.
 ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
     "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
     "ghcr.io/branchleft/percona-server": f"{ATTESTED_REPO}/.github/workflows/percona-image.yml",
+    # The website image, built and attested by branchLeft/website's own CI workflow.
+    "ghcr.io/branchleft/website": "branchLeft/website/.github/workflows/ci.yml",
+    "ghcr.io/branchleft/mysqld-exporter": f"{ATTESTED_REPO}/.github/workflows/mysqld-exporter-image.yml",
 }
 
 # The reviewed exemption list: for each stack, the image names it may deploy with
@@ -91,14 +96,10 @@ ATTESTED_IMAGES: dict[str, str] = {
 # to close by registering the image in ATTESTED_IMAGES instead. See
 # branchleft_deploy.md, "verify_attestation and ATTESTED_IMAGES".
 UNATTESTED_STACK_IMAGES: dict[str, frozenset[str]] = {
-    "website": frozenset({"ghcr.io/branchleft/website"}),
     "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
     # The CrowdSec sidecar beside the edge image: third-party, and nothing here builds it.
     "edge": frozenset({"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}),
-    # prom/mysqld-exporter is TEMPORARY. ghost-platform's mysqld-exporter-image.yml builds and
-    # attests the same exporter as ghcr.io/branchleft/mysqld-exporter; once that image is published,
-    # registered in ATTESTED_IMAGES and named by the db role, delete the entry.
-    "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+    "db": frozenset({"mysql"}),
     # The control-plane stack's database and identity provider are third-party sidecars beside its
     # registered portal-apps image. No workflow here signs either.
     "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
@@ -205,6 +206,24 @@ def attested_name(image: str) -> str:
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
+# A register signer is `owner/repo/.github/workflows/<file>`; the first two parts are
+# the repository the attestation must come from.
+_SIGNER = re.compile(r"(?P<repo>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/\.github/workflows/[^/\s]+")
+
+
+def attested_repo(signer: str) -> str:
+    """The repository that owns a register signer: `owner/repo` of its workflow path.
+
+    The verifier is given this repository with the signer, and refuses a signer that is
+    not a workflow file inside it. A register entry that is not a workflow path is a fault
+    in the register, so it stops the deploy rather than verify against a guessed repository.
+    """
+    found = _SIGNER.fullmatch(signer)
+    if found is None:
+        raise DeployError(f"register signer is not owner/repo/.github/workflows/<file>: {signer!r}")
+    return found.group("repo")
+
+
 def offline_verifier_env() -> dict[str, str]:
     """The offline verifier's entire environment: verifier_env() without the registry key.
 
@@ -303,7 +322,7 @@ def verify_attestation_offline(image: str, signer: str, *, run=subprocess.run) -
             "--custom-trusted-root",
             os.path.join(private, "trusted_root.jsonl"),
             "--repo",
-            ATTESTED_REPO,
+            attested_repo(signer),
             "--signer-workflow",
             signer,
             "--source-ref",
@@ -383,7 +402,7 @@ def verify_attestation(image: str, *, stack: str, run=subprocess.run) -> bool:
         return True
     try:
         result = run(
-            [VERIFIER, canonical, ATTESTED_REPO, signer, "--bundle-from-oci"],
+            [VERIFIER, canonical, attested_repo(signer), signer, "--bundle-from-oci"],
             check=False,
             capture_output=True,
             text=True,

@@ -68,32 +68,38 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), egress_nat (the
-# NAT gateway, after host_baseline for its Docker and iptables), ci_jump (directly after ci_login;
-# it only reports until the owner enables it), deploy_tooling and
+# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall
+# (after host_baseline for Docker), egress_nat (after the firewall role: it reads its table),
+# ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
-# the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
-# all: it refuses to run until its secret files exist), app1's host_inputs,
+# the deploy tooling installs), then edge1's node_exporter and tenant_scrape_tunnel (after the edge
+# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring
+# roles (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then
+# sweego_receiver (last of all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
-# order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
+# order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
+# of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and
+# app1's export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back),
+
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
 # (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
 # the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
-# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's broker_deploy (first: demo1_build
-# reads what it leaves behind), two build roles and spool_path_account. ops1 and db1 also apply
+# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host,
+# then broker_tunnel_client last of all (inert until the owner seeds it), and demo1's
+# broker_deploy (first: demo1_build reads what it leaves behind), two build roles and
+# spool_path_account. ops1 and db1 also apply
 # deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
         "host_inputs",
         "host_baseline",
+        "edge_firewall",
         "egress_nat",
         "ci_login",
         "ci_jump",
@@ -101,7 +107,9 @@ APPLIED_ON_MAIN = {
         "deploy_tooling",
         "edge_stack",
         "node_exporter",
+        "tenant_scrape_tunnel",
         "exporters_and_collectors",
+        "edge_ban_owner",
         "ntfy_pager",
         "monitoring_stack",
         "sweego_receiver",
@@ -126,6 +134,7 @@ APPLIED_ON_MAIN = {
         "mail_collector",
         "spool_paths",
         "ring_controller_host",
+        "broker_tunnel_client",
     ],
     "app1": [
         "host_inputs",
@@ -136,6 +145,7 @@ APPLIED_ON_MAIN = {
         "publicpress_website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
+        "promote_host",
         "tenant_onboarding",
         "export_bundler",
         "node_exporter",
@@ -150,11 +160,22 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"],
+    "demo1": [
+        "host_inputs",
+        "broker_deploy",
+        "demo1_build",
+        "demo1_egress_spool",
+        "spool_path_account",
+        "host_tls_identity",
+        "node_exporter_public",
+    ],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
-    "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
+    "edge1": (
+        "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n"
+        "    edge_firewall_nat_source: 10.20.1.0/24\n    edge_firewall_enforce: false\n"
+    ),
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
     "ops1": "    deploy_tooling_host_class: internal\n",
     "db1": "    deploy_tooling_host_class: internal\n",
@@ -332,6 +353,29 @@ class HostRoleLists(unittest.TestCase):
         self._list_file("ops1", text.replace("- ring_controller_host\n", "", 1))
         self._assert_refused("ops1", "role ring_controller_host is not on ops1's list")
 
+    # Safety class: promote_host installs the applier that moves a tenant stack to the image a
+    # signed ledger names, with the one signer it trusts, so it is on app1's list and on no other
+    # host's.
+    # The control is the list, which is the owner's merge. Green first: the real tree passes and
+    # the role is on exactly one list. Red when the role is added to another host's list and that
+    # host's playbook applies it, and red when it is dropped from app1's list.
+    def test_promote_host_is_on_app1_list_and_no_other(self) -> None:
+        self.assertEqual(check(ROOT), [])
+        holders = [host for host, names in self.listed.items() if "promote_host" in names]
+        self.assertEqual(holders, ["app1"])
+        for host in ("ops1", "edge1"):
+            with self.subTest(host=host):
+                self.assertNotIn("promote_host", self.listed[host])
+                self._playbook(host, _entry("promote_host"))
+                self._assert_refused(host, f"role promote_host is not on {host}'s list")
+
+    def test_promote_host_dropped_from_app1_list_is_refused(self) -> None:
+        path = self.ansible / HOST_ROLES_DIR / "app1.yml"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("- promote_host\n", text, "the sabotage matched nothing")
+        self._list_file("app1", text.replace("- promote_host\n", "", 1))
+        self._assert_refused("app1", "role promote_host is not on app1's list")
+
     # Safety class: mail_collector installs the unit that carries the sending credentials on ops1,
     # so it is on ops1's list and on no other host's. The control is the list, which is the owner's
     # merge. Green first: the real tree passes and the role is on exactly one list. Red when the
@@ -413,7 +457,8 @@ class HostRoleLists(unittest.TestCase):
     # edge1 applies the loader first, then the NAT gateway (egress_nat) right after the baseline,
     # whose Docker and iptables its reconciler needs, then the edge stack after the CI login
     # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
-    # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
+    # then the three monitoring roles: the collectors, the edge ban owner (after the collectors,
+    # which create the textfile directory it writes to), the pager, and the monitoring stack last
     # (it hashes the pager's files and decides the one restart of its unit), then the Sweego
     # receiver after all of them, because it refuses to run until the owner has placed its secret
     # files and that refusal must not hold the roles before it back. The edge stack is
@@ -429,6 +474,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "edge_firewall",
                 "egress_nat",
                 "ci_login",
                 "ci_jump",
@@ -436,7 +482,9 @@ class HostRoleLists(unittest.TestCase):
                 "deploy_tooling",
                 "edge_stack",
                 "node_exporter",
+                "tenant_scrape_tunnel",
                 "exporters_and_collectors",
+                "edge_ban_owner",
                 "ntfy_pager",
                 "monitoring_stack",
                 "sweego_receiver",
@@ -447,6 +495,12 @@ class HostRoleLists(unittest.TestCase):
         self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
+        self.assertEqual(names.count("edge_firewall"), 1)
+        # The firewall role loads and confirms the masquerade table first; the reconciler that
+        # follows it reads that table and, finding it, inserts no masquerade of its own, so the
+        # order is the control.
+        self.assertLess(names.index("host_baseline"), names.index("edge_firewall"))
+        self.assertLess(names.index("edge_firewall"), names.index("egress_nat"))
         self.assertEqual(names.count("egress_nat"), 1)
         self.assertLess(names.index("host_baseline"), names.index("egress_nat"))
         self.assertLess(names.index("egress_nat"), names.index("ci_login"))
@@ -458,7 +512,7 @@ class HostRoleLists(unittest.TestCase):
     # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
     # reads the worker's variables in the same play, so it follows the worker. The database role
     # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
-    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # any role moves or is dropped, green with the roles named in this order. The node exporter
     # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
@@ -489,9 +543,10 @@ class HostRoleLists(unittest.TestCase):
                 "mail_collector",
                 "spool_paths",
                 "ring_controller_host",
+                "broker_tunnel_client",
             ],
         )
-        self.assertEqual(names[-1], "ring_controller_host")
+        self.assertEqual(names[-1], "broker_tunnel_client")
         # The step account follows the baseline directly, so no later role's failure holds back
         # the route a step is sent over.
         self.assertEqual(names.index("ci_step_login"), names.index("host_baseline") + 1)
@@ -532,6 +587,7 @@ class HostRoleLists(unittest.TestCase):
                 "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "promote_host",
                 "tenant_onboarding",
                 "export_bundler",
                 "node_exporter",
@@ -572,10 +628,13 @@ class HostRoleLists(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "host_tls_identity",
+                "node_exporter_public",
             ],
         )
         # The account's read-back of the drain port needs the spool running, so it follows the role
@@ -597,7 +656,13 @@ class HostRoleLists(unittest.TestCase):
         path.write_text(listed.replace(row, "", 1), encoding="utf-8")
         self._assert_refused("demo1", "role broker_deploy is not on demo1's list")
         path.unlink()
-        for name in ("broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"):
+        for name in (
+            "broker_deploy",
+            "demo1_build",
+            "demo1_egress_spool",
+            "spool_path_account",
+            "host_tls_identity",
+        ):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
 

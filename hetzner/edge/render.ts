@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
-import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
+import type { EdgeSite, HostRedirect, SiteMedia, StaticSite } from '../../siteTypes';
 import {
   BAN_LADDER_MINUTES,
   BAN_LADDER_WINDOW,
@@ -202,7 +202,8 @@ const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
 /**
  * Our own scenario that bans an address for repeated failed Ghost admin
  * sign-ins and admin API key failures. Its name is deliberately not
- * `ADMIN_PROBING_SCENARIO`, so the post-overflow above never drops it. Why, and
+ * `HUB_ADMIN_PROBING_SCENARIO`, so the post-overflow that silences that one
+ * never drops it. Why, and
  * what each number is: `render.md`, "Ghost admin brute force".
  */
 const GHOST_BRUTE_FORCE_SCENARIO = 'branchleft/ghost-admin-login-bruteforce';
@@ -223,8 +224,19 @@ const GHOST_BRUTE_FORCE_LEAKSPEED = '30s';
  */
 const GHOST_FAILED_SIGNIN_STATUSES = [401, 404, 422, 429] as const;
 
-/** The hub scenario that reads a 403 or 404 on any path containing `/admin` as a probe. */
-const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+/**
+ * The hub scenario that reads a 403 or 404 on any path containing `/admin` as a
+ * probe. Ours below reads the same requests; this one is silenced so that only
+ * ours bans.
+ */
+const HUB_ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+
+/**
+ * Our copy of the hub's admin-interface probing scenario, which does not count
+ * Ghost's own admin API on a Ghost hostname. The only admin-probing scenario
+ * that bans. Why: `render.md`, "Ghost admin API and admin-interface probing".
+ */
+const ADMIN_PROBING_SCENARIO = 'branchleft/http-admin-interface-probing';
 
 /**
  * The Caddy variable a verified session sets, and the top-level access-log
@@ -374,9 +386,23 @@ const LOG_ROLL_AT = '00:00';
 const LOG_ROLL_SIZE = '100MiB';
 const LOG_ROLL_KEEP = 31;
 
-function logDirective(path: string): string[] {
+/**
+ * The encoder every edge log shares: Caddy's JSON, with the break-glass parameter's
+ * value replaced in the fields the token can reach. Unindented, so each caller
+ * nests it at its own depth.
+ */
+function redactingFormat(): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
+  return [
+    'format filter {',
+    '\twrap json',
+    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t${field} regexp "${pattern}" "$1=REDACTED"`),
+    '}',
+  ];
+}
+
+function logDirective(path: string): string[] {
   return [
     'log {',
     `\toutput file ${path} {`,
@@ -385,12 +411,23 @@ function logDirective(path: string): string[] {
     `\t\troll_keep_for ${LOG_RETENTION}`,
     `\t\troll_at ${LOG_ROLL_AT}`,
     '\t}',
-    '\tformat filter {',
-    '\t\twrap json',
-    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),
-    '\t}',
+    ...redactingFormat().map((line) => `\t${line}`),
     '}',
   ];
+}
+
+/**
+ * Caddy's default logger, set in the global options. Two lines reach it that no
+ * site's `log` block sees: the `http.log.error` line written when a handler fails
+ * (a 502 from a refused upstream), which carries the whole request including its
+ * URI and headers, and the line for a request whose Host matches no site block.
+ * Left alone it writes both to stderr, and so to the container log, with a
+ * break-glass token in clear. Same encoder and fields as `logDirective`, so no log
+ * path the token can reach is left unfiltered. See render.md
+ * §"defaultLogDirective: the error and no-site lines".
+ */
+function defaultLogDirective(): string[] {
+  return ['log {', '\toutput stderr', ...redactingFormat().map((line) => `\t${line}`), '}'];
 }
 
 function tlsDirective(): string[] {
@@ -557,6 +594,111 @@ function widgetAssets(): string[] {
     `header @widget_assets Cache-Control "${WIDGET_ASSET_CACHE_CONTROL}"`,
     'file_server @widget_assets {',
     `\troot ${WIDGET_ASSET_ROOT}`,
+    '}',
+  ];
+}
+
+/**
+ * A Ghost tenant's uploads (`/content/images/`, `/content/media/`,
+ * `/content/files/`) answered from the tenant's own hostname by fetching them
+ * from its object-storage bucket, so a reader's browser contacts no storage
+ * host. Ghost's S3 adapter answers these paths with a 301 to the bucket; this
+ * route answers first, and a bucket object is read exactly as Ghost would have
+ * linked it (path-style, key = the request path). Only `GET` and `HEAD`, never
+ * a client query string (an S3 query selects a version or a sub-resource), never
+ * a cookie or credential, and none of the bucket's own response headers. A
+ * missing object is a 404 here; a missing resized copy (`/content/images/size/`)
+ * is first asked of Ghost, which makes it, and then read again from the bucket,
+ * once. Why each line: `render.md`, "Tenant media".
+ */
+const MEDIA_PATHS = ['/content/images/*', '/content/media/*', '/content/files/*'];
+const MEDIA_RESIZE_PATH = '/content/images/size/*';
+const MEDIA_BUCKET = /^branchleft-media-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const MEDIA_STRIPPED_RESPONSE_HEADERS = [
+  'x-amz-request-id',
+  'x-amz-version-id',
+  'x-amz-expiration',
+  'x-amz-storage-class',
+  'x-rgw-object-type',
+  'Strict-Transport-Security',
+];
+/**
+ * Three reads of the one request, because the bucket path is built from the
+ * decoded one (`{http.request.uri.path}`) and Caddy's `path` matcher cleans
+ * its own copy, so no single read sees every form. The URI as received: a
+ * `..` segment, plain or percent-encoded, after a slash plain or encoded.
+ * The decoded path: a `..` segment, however the separators and dots were
+ * written. The decoded path again: an escape left in it (`%2e`, `%2f`, `%25`)
+ * was escaped twice, and the edge's own rewrites (to the bucket after a Ghost
+ * round, to Ghost on a missing resized copy) read it a second time into a
+ * dot segment. Ghost writes no `%` into an upload's name.
+ */
+const MEDIA_TRAVERSAL_EXPRESSION = [
+  "{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')",
+  "{http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)')",
+  "{http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')",
+].join(' || ');
+
+function mediaBucketProxy(media: SiteMedia, suffix: string, onMiss: string[]): string[] {
+  return [
+    `rewrite * /${media.bucket}{http.request.uri.path}?`,
+    `reverse_proxy https://${media.host} {`,
+    '\theader_up Host {upstream_hostport}',
+    '\theader_up -Cookie',
+    '\theader_up -Authorization',
+    ...MEDIA_STRIPPED_RESPONSE_HEADERS.map((name) => `\theader_down -${name}`),
+    `\t@media_hit_${suffix} status 2xx 304 416`,
+    `\thandle_response @media_hit_${suffix} {`,
+    `\t\theader Cache-Control "${MEDIA_CACHE_CONTROL}"`,
+    '\t\tcopy_response',
+    '\t}',
+    `\t@media_miss_${suffix} status 403 404`,
+    `\thandle_response @media_miss_${suffix} {`,
+    ...onMiss.map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+}
+
+function tenantMedia(media: SiteMedia, ghostAddress: string): string[] {
+  if (!HOSTNAME.test(media.host)) {
+    throw new Error(`media host "${media.host}" is not a plain hostname`);
+  }
+  if (!MEDIA_BUCKET.test(media.bucket)) {
+    throw new Error(
+      `media bucket "${media.bucket}" must be a tenant media bucket name, "branchleft-media-" ` +
+        'followed by the tenant slug: the edge reads no other bucket'
+    );
+  }
+  const resizeMiss = [
+    'rewrite * {http.request.orig_uri.path}',
+    `reverse_proxy ${ghostAddress} {`,
+    '\t@media_bounce status 301 302 307 308',
+    '\thandle_response @media_bounce {',
+    ...mediaBucketProxy(media, 'retry', ['respond 404']).map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+  return [
+    '@tenant_media_traversal {',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    `\texpression \`${MEDIA_TRAVERSAL_EXPRESSION}\``,
+    '}',
+    'respond @tenant_media_traversal 404',
+    '@tenant_media_resize {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_RESIZE_PATH}`,
+    '}',
+    '@tenant_media {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    '}',
+    'route @tenant_media_resize {',
+    ...mediaBucketProxy(media, 'resize', resizeMiss).map((line) => `\t${line}`),
+    '}',
+    'route @tenant_media {',
+    ...mediaBucketProxy(media, 'plain', ['respond 404']).map((line) => `\t${line}`),
     '}',
   ];
 }
@@ -857,10 +999,132 @@ function webhookSiteBlock(
   };
 }
 
+/**
+ * The request methods a signed object gateway is sent: the reads, `PUT` for an
+ * object and a multipart part, `POST` for the multipart calls, `DELETE` for a
+ * lock object. Any other method is answered by the edge. Why each, and what the
+ * gateway itself still refuses: `render.md`, "`siteBlock`: signed object gateway".
+ */
+const GATEWAY_READ_METHODS = ['GET', 'HEAD'] as const;
+const GATEWAY_WRITE_METHODS = ['PUT', 'POST', 'DELETE'] as const;
+const GATEWAY_METHODS = [...GATEWAY_READ_METHODS, ...GATEWAY_WRITE_METHODS] as const;
+
+/** The two paths the gateway answers for the edge's own probes; reads only. */
+const GATEWAY_PROBE_PATHS = ['/healthz', '/readyz'] as const;
+
+/**
+ * A path-style request is `/<bucket>` or `/<bucket>/<key>`: one non-empty first
+ * segment. `/` (a bucket listing) and `//x` (an empty first segment) are not
+ * request shapes the gateway serves, so they do not match. The probe paths
+ * match too, which is why a write to one is answered before this matcher is
+ * reached.
+ */
+const GATEWAY_PATH_REGEXP = '^/[^/]+(?:/.*)?$';
+
+/**
+ * A `.` or `..` segment in the path of the request as it arrived, written
+ * literally or percent-encoded. Matched on the original URI and not with
+ * `path_regexp`, because Caddy matches `path` and `path_regexp` against the path
+ * with its dot segments already resolved while it proxies the path as it was
+ * sent: a request for `/bucket/..` is matched as `/` and forwarded as
+ * `/bucket/..`. A signature covers the path as the client canonicalised it, so
+ * a server that resolves dot segments differently from the client reads a
+ * different object than the one the client signed for. The expression carries
+ * no brace, because a placeholder reads one.
+ */
+const GATEWAY_DOT_SEGMENT_REGEXP = '^[^?]*/(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|[?]|$)';
+
+/**
+ * Upstream timeouts of a gateway route. A checkpoint is a few hundred
+ * kilobytes, so neither bound is generous: the dial is a hop on the private
+ * network, and the first response byte of a state write is bounded by the
+ * object store behind the gateway.
+ */
+const GATEWAY_DIAL_TIMEOUT = '5s';
+const GATEWAY_RESPONSE_HEADER_TIMEOUT = '30s';
+
+/**
+ * A signed object gateway (`EdgeSite.signedObjectGateway`). Deliberately not the
+ * generic block with matchers added: it carries none of the Ghost matchers, and
+ * it forwards a request unchanged or answers it itself. It sets no `header_up`,
+ * rewrites no path and strips no query parameter, because the client's
+ * signature covers the method, the path, the query and the signed headers, and
+ * the gateway recomputes it. Why each line is where it is: `render.md`.
+ */
+function gatewaySiteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
+  const upstream = site.privateUpstream;
+  if (upstream === undefined) {
+    throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  if (
+    site.inboundWebhookPath !== undefined ||
+    site.discardRoute !== undefined ||
+    site.injectionWafPreviewOnly ||
+    site.trustedSession !== undefined ||
+    (site.backend !== undefined && site.backend !== 'other')
+  ) {
+    throw new Error(
+      `site ${site.name} is a signed object gateway and cannot also be a webhook, Ghost or Nextcloud site, or declare a discardRoute, injectionWafPreviewOnly or trustedSession`
+    );
+  }
+  const address = resolvePrivateAddress(upstream.host, upstream.port);
+  return {
+    addresses: hostnames,
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      '@gateway_probe_write {',
+      `\tmethod ${GATEWAY_WRITE_METHODS.join(' ')}`,
+      `\tpath ${GATEWAY_PROBE_PATHS.join(' ')}`,
+      '}',
+      '@gateway_wrong_method {',
+      `\tnot method ${GATEWAY_METHODS.join(' ')}`,
+      '}',
+      '@gateway_dot_segments {',
+      `\texpression \`{http.request.orig_uri}.matches('${GATEWAY_DOT_SEGMENT_REGEXP}')\``,
+      '}',
+      '@gateway {',
+      `\tmethod ${GATEWAY_METHODS.join(' ')}`,
+      `\tpath_regexp ${GATEWAY_PATH_REGEXP}`,
+      '}',
+      'route {',
+      ...hstsDirective().map((line) => `\t${line}`),
+      // Deferred (`>`), so it replaces a Cache-Control the gateway sends rather
+      // than adding a second value beside it, and it reaches the edge's own
+      // 404 and 405 too.
+      '\theader >Cache-Control "no-store"',
+      ...requestBodyDirective(site).map((line) => `\t${line}`),
+      ...protectionChain(posture, `${site.name}_per_ip`, { appsec: 'all' }).map(
+        (line) => `\t${line}`
+      ),
+      `\theader @gateway_probe_write Allow "${GATEWAY_READ_METHODS.join(', ')}"`,
+      '\trespond @gateway_probe_write 405',
+      `\theader @gateway_wrong_method Allow "${GATEWAY_METHODS.join(', ')}"`,
+      '\trespond @gateway_wrong_method 405',
+      '\trespond @gateway_dot_segments 400',
+      `\treverse_proxy @gateway ${address} {`,
+      '\t\ttransport http {',
+      `\t\t\tdial_timeout ${GATEWAY_DIAL_TIMEOUT}`,
+      `\t\t\tresponse_header_timeout ${GATEWAY_RESPONSE_HEADER_TIMEOUT}`,
+      '\t\t}',
+      '\t}',
+      // Last, matcher-less: whatever the lines above did not answer or proxy is
+      // refused here, so a missed case fails closed rather than reaching upstream.
+      '\trespond 404',
+      '}',
+    ],
+  };
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
     throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  // Checked first, so a site that is both refuses to render instead of
+  // silently becoming a webhook site.
+  if (site.signedObjectGateway === true) {
+    return gatewaySiteBlock(site, hostnames, posture);
   }
   if (site.inboundWebhookPath !== undefined) {
     return webhookSiteBlock(site, site.inboundWebhookPath, hostnames, posture);
@@ -921,6 +1185,9 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     `\t${ghostSetupRefusal()}`,
     ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
     ...(isGhost ? widgetAssets().map((line) => `\t${line}`) : []),
+    ...(isGhost && site.media !== undefined
+      ? tenantMedia(site.media, address).map((line) => `\t${line}`)
+      : []),
     `\treverse_proxy ${address}`,
     '}'
   );
@@ -1123,6 +1390,7 @@ function globalOptions(): string[] {
     '\t\tprotocols h1 h2',
     '\t\tmetrics',
     '\t}',
+    ...defaultLogDirective().map((line) => `\t${line}`),
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
     '\t\tapi_key {env.CROWDSEC_BOUNCER_KEY}',
@@ -1139,6 +1407,14 @@ function globalOptions(): string[] {
     // `handle_errors` ever sees it; with it the refusal is a Caddy error, so the page in
     // `blockedPageErrorBlock` answers. Status and logged line are unchanged.
     '\t\tenable_caddy_error',
+    // A bare flag. Without it the bouncer counts nothing: its own counters of
+    // AppSec calls and failed calls (`crowdsec_appsec_lapi_requests_total`,
+    // `crowdsec_appsec_lapi_requests_failures_total`) are only registered in
+    // Caddy's registry, and so served by the `metrics` listener, when it is on.
+    // The failure counter is the one signal of a request that was let through
+    // uninspected, and it is what AppSecFailOpenSustained in
+    // hetzner/monitoring/render.ts reads.
+    '\t\tenable_caddy_metrics',
     '\t}',
     '}',
   ];
@@ -1363,30 +1639,71 @@ export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
 }
 
 /**
- * The post-overflow whitelist that stops `ADMIN_PROBING_SCENARIO` banning for
- * Ghost's own admin API on our Ghost hostnames. It drops an overflow of that
- * one scenario only when every event in it is a request to the admin API
- * prefix on a Ghost hostname, with no dot segment, encoded or not. Why, and
- * the limit it carries: `render.md`, "Ghost admin API and admin-interface
- * probing".
+ * The post-overflow whitelist that drops every overflow of the hub's
+ * admin-interface probing scenario, so that `renderAdminProbingScenario`, which
+ * reads the same requests, is the only one that bans. The hub item stays
+ * installed and untouched, so its upgrades are unaffected. The file keeps the
+ * name `ghost-admin-api-postoverflow.yaml` from when it did something narrower:
+ * the lists the edge stack is applied from carry that path. Why:
+ * `render.md`, "Ghost admin API and admin-interface probing".
  */
-export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
+export function renderHubAdminProbingPostoverflow(): string {
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft/hub-admin-interface-probing-is-silenced',
+    'description: The hub admin-interface probing scenario never bans; branchleft/http-admin-interface-probing does',
+    'whitelist:',
+    `  reason: replaced by ${ADMIN_PROBING_SCENARIO}`,
+    '  expression:',
+    `    - evt.Overflow.Alert.GetScenario() == '${HUB_ADMIN_PROBING_SCENARIO}'`,
+  ].join('\n')}\n`;
+}
+
+/**
+ * The admin-interface probing scenario: the hub's, line for line, but a 403 or
+ * 404 on Ghost's own admin API prefix, on a Ghost hostname and with no dot
+ * segment (literal or percent-encoded), is not counted at all. Not pouring those
+ * requests into the bucket is the point: a post-overflow that drops an overflow
+ * after the fact leaves the scenario's blackhole running, and the blackhole is
+ * kept per address across every host, so three admin API answers would mute the
+ * scenario for that address everywhere for a minute. Why, and what the copy
+ * costs: `render.md`, "Ghost admin API and admin-interface probing".
+ */
+export function renderAdminProbingScenario(entries: EdgeSite[]): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
-    'name: branchleft/ghost-admin-api-is-not-admin-probing',
-    'description: Ghost admin API answers on our Ghost hostnames are not admin-interface probing',
-    'whitelist:',
-    '  reason: Ghost admin API on a Ghost hostname',
-    '  expression:',
-    '    - >-',
-    `      evt.Overflow.Alert.GetScenario() == '${ADMIN_PROBING_SCENARIO}' &&`,
-    '      len(evt.Overflow.Alert.Events) > 0 &&',
-    '      all(evt.Overflow.Alert.Events, {',
-    `        .GetMeta('target_fqdn') in ${quotedList(hosts)} &&`,
-    `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
-    "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
-    '      })',
+    'type: leaky',
+    `name: ${ADMIN_PROBING_SCENARIO}`,
+    'description: Generic HTTP admin interface probing, not counting the Ghost admin API on a Ghost hostname',
+    'filter: >-',
+    "  evt.Meta.service == 'http' &&",
+    "  evt.Meta.log_type in ['http_access-log', 'http_error-log'] &&",
+    "  evt.Meta.http_status in ['404', '403'] &&",
+    '  any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # }) &&',
+    '  not (',
+    `    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    `    evt.Meta.http_path startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
+    "    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
+    '  )',
+    'groupby: evt.Meta.source_ip',
+    'distinct: evt.Meta.http_path',
+    'data:',
+    '  - source_url: https://hub-data.crowdsec.net/web/admin_interfaces.txt',
+    '    dest_file: admin_interfaces.txt',
+    '    type: string',
+    'capacity: 2',
+    'leakspeed: 10s',
+    'blackhole: 1m',
+    'labels:',
+    '  confidence: 3',
+    '  spoofable: 0',
+    '  classification:',
+    '    - attack.T1595',
+    '  behavior: "http:scan"',
+    '  label: "HTTP Admin Interface Probing"',
+    '  service: http',
+    '  remediation: true',
   ].join('\n')}\n`;
 }
 
@@ -1415,7 +1732,8 @@ export function renderTrustedSessionWhitelist(): string {
  * The scenario that bans an address after repeated failed Ghost admin sign-ins
  * or admin API 401s (a bad or unknown Admin API key, a wrong sign-in
  * verification code) on our Ghost hostnames. Separate from the hub's admin
- * probing scenario so the post-overflow above cannot drop it. Why, and the
+ * probing scenario so the post-overflow that silences that one cannot drop it,
+ * and from ours, which does not count these paths at all. Why, and the
  * limits it carries: `render.md`, "Ghost admin brute force".
  */
 export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {

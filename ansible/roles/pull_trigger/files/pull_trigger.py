@@ -14,6 +14,8 @@ import contextlib
 import dataclasses
 import enum
 import fcntl
+import hashlib
+import http.client
 import json
 import os
 import re
@@ -66,12 +68,43 @@ MAX_BUNDLE_BYTES: Final = 200 * 1024 * 1024
 BUNDLE_DEADLINE_SECONDS: Final = 300
 BUNDLE_READ_CHUNK: Final = 1024 * 1024
 SPOOL_GRACE_SECONDS: Final = 60
+# The spool as a whole. Each upload is held to MAX_BUNDLE_BYTES, but uploads arrive before the
+# lock is taken, so several can sit in the spool at once. These bound how many, and how many
+# bytes in all, so a sender that opens many sessions cannot fill the host's disk. When either
+# is reached the next request is refused as `spool-full`, before it writes anything. The byte
+# bound is its own number, not a multiple of MAX_BUNDLE_BYTES: the harness lowers that one.
+MAX_SPOOL_FILES: Final = 4
+MAX_SPOOL_BYTES: Final = 400 * 1024 * 1024
 SPOOL_NAME: Final = "spool"
 QUARANTINE_NAME: Final = "quarantine"
 QUARANTINE_REF: Final = "refs/pull-trigger/head"
 BUNDLE_HEADERS: Final = (b"# v2 git bundle\n", b"# v3 git bundle\n")
 BUNDLE_SUMMARY_PREFIX: Final = "push-receiver"
 PULL_SUMMARY_PREFIX: Final = "pull-trigger"
+# The release tag (docs/pull-signer-trust.md, T8). A release is an annotated tag whose own text
+# names a commit of this history and a name of this fixed shape, signed by a release key. The tags
+# are fetched into this private namespace, which is emptied first on the pull route, so a tag
+# withdrawn at the source is gone on the next fetch. The refspec is never built from caller text.
+RELEASE_REF_PREFIX: Final = "refs/pull-trigger/release/"
+RELEASE_FETCH_SPEC: Final = f"+refs/tags/release/*:{RELEASE_REF_PREFIX}*"
+RELEASE_NAME: Final = re.compile(r"release/[0-9]{8}\.[0-9]{1,4}")
+# More candidates than this is a refusal of its own, not a silent cut: junk tags must not be able
+# to crowd a real tag out unseen. Each candidate costs one signature check.
+MAX_RELEASE_CANDIDATES: Final = 64
+TAG_SIGNATURE_START: Final = re.compile(
+    rb"^-----BEGIN (?P<kind>SSH|PGP) SIGNATURE-----$", re.MULTILINE
+)
+TAG_SIGNATURE_END: Final = {
+    b"SSH": b"-----END SSH SIGNATURE-----",
+    b"PGP": b"-----END PGP SIGNATURE-----",
+}
+# What ssh-keygen prints for a good signature checked without an allowed-signers file.
+SSH_GOOD_SIGNATURE: Final = re.compile(
+    r'Good "git" signature with (?P<algorithm>[A-Z0-9-]+) '
+    r"key (?P<fingerprint>SHA256:[A-Za-z0-9+/]+)",
+)
+# gpg status words that end a verification as not good, whatever else was printed.
+GPG_BAD_STATUS: Final = frozenset({"BADSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "ERRSIG"})
 
 HTTPS_URL: Final = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)+")
 FILE_URL: Final = re.compile(r"file:///[A-Za-z0-9._~/-]+")
@@ -104,7 +137,11 @@ CONFIG_KEYS: Final = frozenset(
 # Optional. An absent ``steps`` means no step may be requested, which is the safe direction. An
 # absent ``source`` means ``remote``: the role writes ``source`` only for a host that takes
 # bundles, so every other host keeps a configuration a program from before this key still parses.
-OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps", "source"})
+# ``release_signers`` and ``require_release_tag`` are written only for a host that is moved to the
+# release-tag route, so every other host keeps a configuration a program from before them parses.
+OPTIONAL_CONFIG_KEYS: Final = frozenset(
+    {"steps", "source", "release_signers", "require_release_tag"}
+)
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
 # role that its playbook keeps behind the ``never`` tag. This is the only home of the list: the
@@ -128,6 +165,55 @@ STEP_TAG_PREFIX: Final = "control_plane_db_"
 # The extra variable the program sets to the validated step id. It is a constant here.
 STEP_VARIABLE: Final = "control_plane_db_step"
 STEP_FIELDS: Final = frozenset({"id", "tag", "word"})
+
+# The look: a fixed, closed set of read-only facts about this host, printed after a check run.
+# A fact is declared in ``LOOK_PATH`` of the commit being checked, which is signed, on main and
+# reviewed like any code; it can ask only for one of the kinds below and only with the fields the
+# kind names. There is no command, no caller input and no free text: every value a line carries is
+# a digest, a three-digit status or a word from a closed list written in this file, so nothing the
+# host holds (a file's content, a service's body, an error) can reach the log. Adding a kind, or a
+# directory a file fact may read, is a change to this root program, reviewed by the owner.
+LOOK_PATH: Final = "ansible/tools/look/facts.json"
+MAX_LOOK_BYTES: Final = 65_536
+MAX_LOOK_FACTS: Final = 64
+LOOK_TOTAL_SECONDS: Final = 120.0
+LOOK_UNIT_SECONDS: Final = 10.0
+LOOK_HTTP_SECONDS: Final = 5.0
+LOOK_MAX_FILE_BYTES: Final = 64 * 1024 * 1024
+LOOK_READ_CHUNK: Final = 1024 * 1024
+# Where a file fact may read: the places the roles put programs and unit files. Never a place that
+# holds a secret, because a digest of a short secret can be guessed.
+LOOK_FILE_ROOTS: Final = (
+    "/etc/systemd/system/",
+    "/usr/local/bin/",
+    "/usr/local/lib/",
+    "/usr/local/sbin/",
+)
+LOOK_LOOPBACK: Final = "127.0.0.1"
+LOOK_NAME_PATTERN: Final = re.compile(r"[a-z][a-z0-9-]{0,47}")
+# The plan job withholds a host's output that matches the credential words of its scan, and that
+# would fail the plan of every host. A name can never be the cause.
+LOOK_SCAN_WORDS: Final = re.compile(
+    r"passw|passphrase|secret|token|api-?key|private-?key|credential"
+)
+LOOK_FILE_PART: Final = re.compile(r"[A-Za-z0-9_@][A-Za-z0-9_@.+-]*")
+LOOK_UNIT_PATTERN: Final = re.compile(
+    r"[A-Za-z0-9_@][A-Za-z0-9_@.:-]{0,95}\.(?:service|timer|socket|target|path)"
+)
+LOOK_URL_PATH: Final = re.compile(r"/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?")
+LOOK_HOST_NAME: Final = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+LOOK_MAX_PATH: Final = 200
+LOOK_MAX_URL_PATH: Final = 128
+LOOK_MAX_ISSUE: Final = 99_999_999
+LOOK_UNIT_STATES: Final = frozenset(
+    {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance"}
+)
+# The only shape a fact line may have. A line that does not match is never printed.
+LOOK_LINE: Final = re.compile(
+    r"look issue=[0-9]{1,8} name=[a-z][a-z0-9-]{0,47} "
+    r"kind=(?:file_sha256|unit_active|http_status) "
+    r"result=(?:[0-9a-f]{64}|[0-9]{3}|[a-z]+(?:-[a-z]+)*)"
+)
 
 Clock = Callable[[], datetime]
 
@@ -249,10 +335,273 @@ class Why(enum.Enum):
     BUNDLE_NOT_A_BUNDLE = "standard input is not a git bundle"
     BUNDLE_OVERSIZE = "the bundle is larger than the limit"
     BUNDLE_STALLED = "the bundle was not received in time"
+    SPOOL_FULL_FILES = "the spool already holds as many uploads as it may"
+    SPOOL_FULL_BYTES = "the spool would hold more bytes than it may"
     BUNDLE_UNVERIFIABLE = "the bundle does not verify"
     BUNDLE_UNPACK = "the bundle's objects could not be unpacked, or failed the object check"
     BUNDLE_FSCK = "the bundle's objects failed the object check"
     BUNDLE_HEAD = "the bundle's HEAD is not the requested commit"
+    CONFIG_RELEASE_FLAG = "require_release_tag must be true or false"
+    CONFIG_RELEASE_SIGNERS = "release_signers must be a list, and not empty when a tag is required"
+    RELEASE_TAG_ABSENT = "no release tag signed by a release key names this commit"
+    RELEASE_TAG_FLOOD = "more release tags name this commit than the limit"
+
+
+class LookKind(enum.Enum):
+    """The closed list of facts a host can be asked for. A kind not here is refused."""
+
+    FILE_SHA256 = "file_sha256"
+    UNIT_ACTIVE = "unit_active"
+    HTTP_STATUS = "http_status"
+
+
+class LookWhy(enum.Enum):
+    """Every reason a look entry or the look file is refused, kept in one place.
+
+    The words are fixed and none repeats text from the file, so a refusal line cannot carry what
+    a bad entry held. None holds a word the plan job's secret scan reads.
+    """
+
+    FILE_NOT_JSON = "file-not-json"
+    FILE_SHAPE = "file-shape"
+    FILE_TOO_LARGE = "file-too-large"
+    FILE_TOO_MANY = "file-too-many"
+    FILE_NOT_REGULAR = "file-not-regular"
+    FILE_UNREADABLE = "file-unreadable"
+    ENTRY_SHAPE = "entry-shape"
+    UNKNOWN_KIND = "unknown-kind"
+    UNKNOWN_FIELD = "unknown-field"
+    MISSING_FIELD = "missing-field"
+    BAD_ISSUE = "bad-issue"
+    BAD_NAME = "bad-name"
+    DUPLICATE_NAME = "duplicate-name"
+    BAD_PLAYBOOK = "bad-playbook"
+    PATH_NOT_ALLOWED = "path-not-allowed"
+    BAD_UNIT = "bad-unit"
+    BAD_PORT = "bad-port"
+    BAD_URL_PATH = "bad-url-path"
+    BAD_HOST_NAME = "bad-host-name"
+    LINE_SHAPE = "line-shape"
+    LOOK_FAULT = "look-fault"
+
+
+# The fields every entry has, and the fields each kind adds. ``host`` of an http fact is optional.
+LOOK_COMMON_FIELDS: Final = frozenset({"issue", "name", "playbook", "kind"})
+LOOK_KIND_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.FILE_SHA256: frozenset({"path"}),
+    LookKind.UNIT_ACTIVE: frozenset({"unit"}),
+    LookKind.HTTP_STATUS: frozenset({"port", "url_path"}),
+}
+LOOK_OPTIONAL_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.FILE_SHA256: frozenset(),
+    LookKind.UNIT_ACTIVE: frozenset(),
+    LookKind.HTTP_STATUS: frozenset({"host"}),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class LookFact:
+    """One declared fact. The fields a kind does not use stay at their empty value."""
+
+    issue: int
+    name: str
+    playbook: str
+    kind: LookKind
+    path: str = ""
+    unit: str = ""
+    port: int = 0
+    url_path: str = ""
+    host: str = "localhost"
+
+
+@dataclasses.dataclass(frozen=True)
+class LookRefusal:
+    """An entry that was refused: its place in the list (from 1) and the fixed reason."""
+
+    entry: int
+    why: LookWhy
+
+
+@dataclasses.dataclass(frozen=True)
+class LookDeclaration:
+    """What the look file holds: the facts that passed, the entries refused, and the file's state.
+
+    ``file`` is ``ok`` or the reason the whole file was refused, in which case it holds no fact.
+    """
+
+    facts: tuple[LookFact, ...] = ()
+    refusals: tuple[LookRefusal, ...] = ()
+    file: str = "ok"
+
+    @property
+    def declared(self) -> int:
+        """The entries the file held, those refused included."""
+        return len(self.facts) + len(self.refusals)
+
+
+def refused_look_file(why: LookWhy) -> LookDeclaration:
+    """Return the declaration of a file that is refused whole."""
+    return LookDeclaration(file=why.value)
+
+
+def _single_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build an object from its pairs and refuse a key given twice.
+
+    Raises:
+        ValueError: a key is given twice.
+    """
+    built: dict[str, object] = {}
+    for key, value in pairs:
+        if key in built:
+            raise ValueError(key)
+        built[key] = value
+    return built
+
+
+def _refuse_constant(_name: str) -> object:
+    """Refuse NaN and the infinities, which JSON does not have.
+
+    Raises:
+        ValueError: always.
+    """
+    raise ValueError
+
+
+def _whole_number(value: object, low: int, high: int) -> bool:
+    """Say whether the value is a whole number in range; a JSON true or false is not."""
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _text_matching(value: object, pattern: re.Pattern[str], longest: int) -> bool:
+    """Say whether the value is text, short enough, and entirely of the pattern's shape."""
+    return isinstance(value, str) and len(value) <= longest and pattern.fullmatch(value) is not None
+
+
+def look_path_allowed(path: object, roots: Sequence[str]) -> bool:
+    """Say whether a file fact may name this path.
+
+    It must be absolute and already normalised (no ``.``, ``..``, doubled or trailing slash),
+    made of plain name parts, and be a file below one of the roots, not the root itself.
+    """
+    if not isinstance(path, str) or len(path) > LOOK_MAX_PATH:
+        return False
+    pure = PurePosixPath(path)
+    if not pure.is_absolute() or str(pure) != path:
+        return False
+    if not all(LOOK_FILE_PART.fullmatch(part) for part in pure.parts[1:]):
+        return False
+    return any(
+        path.startswith(root) and len(pure.parts) > len(PurePosixPath(root).parts) for root in roots
+    )
+
+
+def _field_problem(entry: Mapping[str, object], kind: LookKind) -> LookWhy | None:
+    """Return the reason an entry has the wrong set of fields for its kind, or None."""
+    required = LOOK_COMMON_FIELDS | LOOK_KIND_FIELDS[kind]
+    keys = frozenset(entry)
+    if keys - required - LOOK_OPTIONAL_FIELDS[kind]:
+        return LookWhy.UNKNOWN_FIELD
+    if required - keys:
+        return LookWhy.MISSING_FIELD
+    return None
+
+
+def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
+    entry: Mapping[str, object], kind: LookKind, roots: Sequence[str]
+) -> LookWhy | None:
+    """Return the reason a kind's own fields are refused, or None."""
+    if kind is LookKind.FILE_SHA256 and not look_path_allowed(entry["path"], roots):
+        return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.UNIT_ACTIVE and not _text_matching(entry["unit"], LOOK_UNIT_PATTERN, 128):
+        return LookWhy.BAD_UNIT
+    if kind is LookKind.HTTP_STATUS:
+        if not _whole_number(entry["port"], 1, 65_535):
+            return LookWhy.BAD_PORT
+        if not _text_matching(entry["url_path"], LOOK_URL_PATH, LOOK_MAX_URL_PATH):
+            return LookWhy.BAD_URL_PATH
+        parts = str(entry["url_path"]).split("/")
+        if "." in parts or ".." in parts:
+            return LookWhy.BAD_URL_PATH
+        if "host" in entry and not _text_matching(entry["host"], LOOK_HOST_NAME, 253):
+            return LookWhy.BAD_HOST_NAME
+    return None
+
+
+def _look_fact(  # noqa: PLR0911 - one answer per way an entry can be wrong
+    entry: object, names: set[str], roots: Sequence[str]
+) -> LookFact | LookWhy:
+    """Check one entry against its kind and return the fact, or the reason it is refused."""
+    if not isinstance(entry, dict):
+        return LookWhy.ENTRY_SHAPE
+    kind_text = entry.get("kind")
+    kind = next((item for item in LookKind if item.value == kind_text), None)
+    if kind is None:
+        return LookWhy.UNKNOWN_KIND
+    problem = _field_problem(entry, kind)
+    if problem is not None:
+        return problem
+    issue, name, playbook = entry["issue"], entry["name"], entry["playbook"]
+    if not (isinstance(issue, int) and _whole_number(issue, 1, LOOK_MAX_ISSUE)):
+        return LookWhy.BAD_ISSUE
+    if (
+        not isinstance(name, str)
+        or not _text_matching(name, LOOK_NAME_PATTERN, 48)
+        or LOOK_SCAN_WORDS.search(name) is not None
+    ):
+        return LookWhy.BAD_NAME
+    if name in names:
+        return LookWhy.DUPLICATE_NAME
+    if not isinstance(playbook, str) or canonical_playbook(playbook) is None:
+        return LookWhy.BAD_PLAYBOOK
+    problem = _kind_problem(entry, kind, roots)
+    if problem is not None:
+        return problem
+    names.add(name)
+    port = entry.get("port", 0)
+    return LookFact(
+        issue=issue,
+        name=name,
+        playbook=playbook,
+        kind=kind,
+        path=str(entry.get("path", "")),
+        unit=str(entry.get("unit", "")),
+        port=port if isinstance(port, int) else 0,
+        url_path=str(entry.get("url_path", "")),
+        host=str(entry.get("host", "localhost")),
+    )
+
+
+def parse_look(text: str, roots: Sequence[str] = LOOK_FILE_ROOTS) -> LookDeclaration:
+    """Read the look file: ``{"facts": [entry, ...]}``.
+
+    A file that is too large, is not JSON, repeats a key, or is not exactly that object is
+    refused whole. An entry that is wrong in any way is refused by itself with a fixed reason and
+    the others stand, so one bad entry hides no other issue's look. A declaration with any
+    refusal fails the role's unit tests, so a refusal at a host is not expected to be merged.
+
+    Returns:
+        The facts that passed, the entries refused and the state of the file.
+    """
+    if len(text.encode("utf-8")) > MAX_LOOK_BYTES:
+        return refused_look_file(LookWhy.FILE_TOO_LARGE)
+    try:
+        data = json.loads(text, object_pairs_hook=_single_keys, parse_constant=_refuse_constant)
+    except (ValueError, RecursionError):
+        return refused_look_file(LookWhy.FILE_NOT_JSON)
+    if not isinstance(data, dict) or set(data) != {"facts"} or not isinstance(data["facts"], list):
+        return refused_look_file(LookWhy.FILE_SHAPE)
+    if len(data["facts"]) > MAX_LOOK_FACTS:
+        return refused_look_file(LookWhy.FILE_TOO_MANY)
+    facts: list[LookFact] = []
+    refusals: list[LookRefusal] = []
+    names: set[str] = set()
+    for number, entry in enumerate(data["facts"], start=1):
+        outcome = _look_fact(entry, names, roots)
+        if isinstance(outcome, LookWhy):
+            refusals.append(LookRefusal(number, outcome))
+        else:
+            facts.append(outcome)
+    return LookDeclaration(tuple(facts), tuple(refusals))
 
 
 class TriggerError(Exception):
@@ -341,6 +690,24 @@ class BadBundleError(RefusedError):
     reason = "bad-bundle"
 
 
+class ReleaseTagMissingError(RefusedError):
+    """A release tag is required and none that names the commit is signed by a release key."""
+
+    reason = "release-tag-missing"
+
+
+class ReleaseTagFloodError(RefusedError):
+    """More release tags name the commit than the limit, so none is believed unseen."""
+
+    reason = "too-many-release-tags"
+
+
+class SpoolFullError(RefusedError):
+    """The spool holds as many uploads, or as many bytes, as it may; nothing was written."""
+
+    reason = "spool-full"
+
+
 class UnsignedError(RefusedError):
     """The commit carries no signature."""
 
@@ -411,6 +778,7 @@ class Tools:
     gpg: Path = Path("/usr/bin/gpg")
     gpgconf: Path = Path("/usr/bin/gpgconf")
     ssh_keygen: Path = Path("/usr/bin/ssh-keygen")
+    systemctl: Path = Path("/usr/bin/systemctl")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -445,6 +813,8 @@ class Config:
     keep_runs: int
     steps: tuple[Step, ...] = ()
     source: Literal["remote", "bundle"] = "remote"
+    release_signers: tuple[Signer, ...] = ()
+    require_release_tag: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -490,6 +860,8 @@ class Receiving:
     descriptor: int = 0
     max_bytes: int = MAX_BUNDLE_BYTES
     deadline_seconds: float = BUNDLE_DEADLINE_SECONDS
+    max_spool_files: int = MAX_SPOOL_FILES
+    max_spool_bytes: int = MAX_SPOOL_BYTES
 
 
 def utc_now() -> datetime:
@@ -772,6 +1144,25 @@ def _absolute(data: Mapping[str, object], key: str, longest: int = 4096) -> Path
     return Path(text)
 
 
+def _release_signers_from(data: Mapping[str, object]) -> tuple[Signer, ...]:
+    """Return the release keys, and refuse a requirement that no key could ever satisfy.
+
+    The release keys are a list of their own. A key of ``signers`` is never read for a tag, and a
+    key of this list is never read for a commit.
+
+    Raises:
+        ConfigError: the flag is not a boolean, the keys are not a list, or a tag is required
+            and there is no key.
+    """
+    flag = data.get("require_release_tag", False)
+    if not isinstance(flag, bool):
+        raise ConfigError(Why.CONFIG_RELEASE_FLAG)
+    value = data.get("release_signers", [])
+    if not isinstance(value, list) or (flag and not value):
+        raise ConfigError(Why.CONFIG_RELEASE_SIGNERS)
+    return tuple(_signer_from(entry) for entry in value)
+
+
 def parse_config(text: str) -> Config:
     """Turn the configuration text into a validated ``Config``.
 
@@ -811,6 +1202,7 @@ def parse_config(text: str) -> Config:
     source = data.get("source", SOURCE_REMOTE)
     if source not in SOURCES:
         raise ConfigError(Why.CONFIG_SOURCE)
+    release_signers = _release_signers_from(data)
     return Config(
         remote_url=url,
         signers=tuple(_signer_from(entry) for entry in signers_value),
@@ -823,6 +1215,8 @@ def parse_config(text: str) -> Config:
         keep_runs=_whole(data, "keep_runs", 1, 1_000),
         steps=_steps_from(data),
         source=SOURCE_BUNDLE if source == SOURCE_BUNDLE else SOURCE_REMOTE,
+        release_signers=release_signers,
+        require_release_tag=data.get("require_release_tag") is True,
     )
 
 
@@ -1030,6 +1424,31 @@ class Git:
         environment = {**self.environment, **(extra_environment or {})}
         return run_command([*argv, *args], environment)
 
+    def object_bytes(self, kind: Literal["tag"], name: str) -> bytes:
+        """Return an object's exact bytes, which a signature is checked over.
+
+        The text runner would translate line ends and replace bytes that are not UTF-8, so a
+        signature over them would not verify.
+
+        Raises:
+            GitError: git cannot run or exits with a non-zero status.
+        """
+        argv = [str(self._tools.git), f"--git-dir={self._git_dir}", "cat-file", kind, name]
+        try:
+            done = subprocess.run(  # noqa: S603 - constants and an id this program read from git
+                argv,
+                capture_output=True,
+                env=dict(self.environment),
+                stdin=subprocess.DEVNULL,
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise GitError(Why.COMMAND_INCOMPLETE, "git") from None
+        if done.returncode != 0:
+            raise GitError(Why.COMMAND_STATUS, f"git cat-file exited {done.returncode}")
+        return done.stdout
+
     def output(
         self,
         *args: str,
@@ -1101,6 +1520,64 @@ class Repository:
         listing = self._git.output("ls-tree", "-z", commit, "--", path)
         return listing.startswith(("100644 blob ", "100755 blob "))
 
+    def look_text(self, commit: str) -> str | LookWhy | None:
+        """Return the look file of the commit as text, None if it has none, or why it is refused.
+
+        The text is read from the commit object and not from the checkout, so a link cannot
+        point it elsewhere. A fault of git here is a refusal of the file, never of the run.
+        """
+        try:
+            listing = self._git.output("ls-tree", "-z", commit, "--", LOOK_PATH)
+            if not listing:
+                return None
+            if not listing.startswith(("100644 blob ", "100755 blob ")):
+                return LookWhy.FILE_NOT_REGULAR
+            size = int(self._git.output("cat-file", "-s", f"{commit}:{LOOK_PATH}").strip())
+            if size > MAX_LOOK_BYTES:
+                return LookWhy.FILE_TOO_LARGE
+            return self._git.output("cat-file", "blob", f"{commit}:{LOOK_PATH}")
+        except (TriggerError, ValueError):
+            return LookWhy.FILE_UNREADABLE
+
+    def release_tags_naming(self, commit: str) -> list[str]:
+        """Return the ids of the annotated release tags that name exactly this commit.
+
+        Only what is under ``RELEASE_REF_PREFIX`` is read. A ref is dropped unless it is a tag
+        object (so a lightweight tag is dropped), whose own text names this commit directly (so a
+        tag of a tag is dropped) and has a name of the fixed shape in its own text, whatever the
+        ref is called. The listing's dereferenced fields are only a first cut: newer gits peel a
+        tag of a tag through to its commit, so the tag's own first header lines are read as well.
+        Nothing here reads a signature.
+
+        Raises:
+            GitError: git cannot list the refs.
+        """
+        fields = "%(objectname)%00%(objecttype)%00%(tag)%00%(*objecttype)%00%(*objectname)"
+        listing = self._git.output("for-each-ref", f"--format={fields}", RELEASE_REF_PREFIX)
+        candidates: set[str] = set()
+        for line in listing.split("\n"):
+            parts = line.split("\x00")
+            if len(parts) != len(fields.split("%00")):
+                continue
+            tag_id, kind, name, target_kind, target = parts
+            if (
+                kind == "tag"
+                and target_kind == "commit"
+                and target == commit
+                and RELEASE_NAME.fullmatch(name) is not None
+            ):
+                candidates.add(tag_id)
+        return sorted(tag for tag in candidates if self._tag_names_directly(tag, commit))
+
+    def _tag_names_directly(self, tag_id: str, commit: str) -> bool:
+        """Say whether the tag object's own ``object`` and ``type`` lines name this commit.
+
+        Raises:
+            GitError: git cannot read the object.
+        """
+        head = self._git.object_bytes("tag", tag_id).split(b"\n", 2)
+        return head[:2] == [f"object {commit}".encode(), b"type commit"]
+
 
 class Cache(Repository):
     """A root-owned bare repository holding only what was fetched from main."""
@@ -1110,13 +1587,18 @@ class Cache(Repository):
         super().__init__(git)
         self._remote_url = remote_url
 
-    def fetch_main(self) -> None:
+    def fetch_main(self, release_tags: bool = False) -> None:
         """Fetch ``main`` and nothing else, so a commit not on main is not even present.
+
+        A host that requires a release tag also fetches the ``release/`` tags, into a namespace
+        that is emptied first so a tag withdrawn at the remote is gone.
 
         Raises:
             GitError: the fetch fails.
         """
         self._git.initialise()
+        if release_tags:
+            self._empty_release_namespace()
         self._git.output(
             "fetch",
             "--no-tags",
@@ -1126,7 +1608,19 @@ class Cache(Repository):
             "--",
             self._remote_url,
             f"+refs/heads/main:{MAIN_REF}",
+            *([RELEASE_FETCH_SPEC] if release_tags else []),
         )
+
+    def _empty_release_namespace(self) -> None:
+        """Delete every ref under ``RELEASE_REF_PREFIX``.
+
+        Raises:
+            GitError: git cannot list or delete the refs.
+        """
+        listing = self._git.output("for-each-ref", "--format=%(refname)", RELEASE_REF_PREFIX)
+        for ref in listing.split("\n"):
+            if ref.startswith(RELEASE_REF_PREFIX):
+                self._git.output("update-ref", "-d", ref)
 
     def require_ancestor_of_main(self, commit: str) -> None:
         """Refuse a commit that is not an ancestor of the fetched tip of main.
@@ -1159,12 +1653,14 @@ class Quarantine(Repository):
             start = handle.read(max(len(header) for header in BUNDLE_HEADERS))
         return start.startswith(BUNDLE_HEADERS)
 
-    def admit(self, bundle: Path, commit: str) -> None:
+    def admit(self, bundle: Path, commit: str, release_tags: bool = False) -> None:
         """Unpack the bundle here and require its HEAD to be the requested commit.
 
         The bundle needs a bundle header and must verify (a complete history). Its objects must
         unpack and pass git's object check, made by the fetch and by ``git fsck``, so the guard
         does not depend on the git version (older gits ignore ``transfer.fsckObjects`` here).
+        A host that requires a release tag also takes the bundle's ``release/`` tags, into the
+        namespace the signature check reads; the quarantine is new for each request.
 
         Raises:
             BadBundleError: Any of those fails; each has its own sentence.
@@ -1184,6 +1680,7 @@ class Quarantine(Repository):
             "--",
             str(bundle),
             f"+HEAD:{QUARANTINE_REF}",
+            *([RELEASE_FETCH_SPEC] if release_tags else []),
         )
         if fetched.returncode != 0:
             raise BadBundleError(Why.BUNDLE_UNPACK)
@@ -1346,6 +1843,125 @@ class Verifier:
         return found
 
 
+def split_signed_tag(raw: bytes) -> tuple[bytes, bytes, Literal["ssh", "openpgp"]] | None:
+    """Split a tag object into the bytes that were signed and its detached signature.
+
+    The signature is the armoured block that runs to the end of the object, from the last line
+    that opens one. Anything else (no block, a block that does not close on the last line) is
+    not a signed tag and is None. A message that holds a decoy block moves the split and so
+    makes the signature fail, which is the safe direction.
+    """
+    starts = list(TAG_SIGNATURE_START.finditer(raw))
+    if not starts:
+        return None
+    start = starts[-1]
+    block = raw[start.start() :]
+    kind = start.group("kind")
+    if not block.rstrip(b"\n").endswith(TAG_SIGNATURE_END[kind]):
+        return None
+    return raw[: start.start()], block, "ssh" if kind == b"SSH" else "openpgp"
+
+
+class ReleaseVerifier(Verifier):
+    """Checks that a tag is signed by one of the release keys, and by nothing else.
+
+    It is built from the release keys alone. A key of the commit signer list is never put in its
+    keyring or its fingerprints, so a commit signer cannot sign a release. The signature is read
+    from the tag object's own bytes, never from the commit it names.
+    """
+
+    def signed_by_release_key(self, tag: str, scratch_root: Path) -> bool:
+        """Say whether the tag object carries a good signature by a listed release key.
+
+        Raises:
+            GitError: the keyring cannot be built or git cannot run.
+        """
+        split = split_signed_tag(self._git.object_bytes("tag", tag))
+        if split is None:
+            return False
+        payload, signature, key_format = split
+        with tempfile.TemporaryDirectory(dir=scratch_root, prefix="v-") as scratch:
+            home = Path(scratch)
+            try:
+                allowed, _settings = self._prepare(home)
+                (home / "tag.sig").write_bytes(signature)
+                if key_format == "ssh":
+                    return self._ssh_good(home, payload, allowed)
+                (home / "tag.payload").write_bytes(payload)
+                return self._pgp_good(home, allowed)
+            finally:
+                self._stop_agent(home / "gnupg")
+
+    def _ssh_good(self, home: Path, payload: bytes, allowed: frozenset[str]) -> bool:
+        """Say whether ssh-keygen finds a good ``git``-namespace signature by an allowed key.
+
+        Raises:
+            GitError: ssh-keygen cannot run to completion.
+        """
+        try:
+            done = subprocess.run(  # noqa: S603 - constants and paths this program made
+                [
+                    str(self._tools.ssh_keygen),
+                    "-Y",
+                    "check-novalidate",
+                    "-n",
+                    "git",
+                    "-s",
+                    str(home / "tag.sig"),
+                ],
+                capture_output=True,
+                input=payload,
+                env=dict(self._git.environment),
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise GitError(Why.COMMAND_INCOMPLETE, "ssh-keygen") from None
+        if done.returncode != 0:
+            return False
+        for line in done.stdout.decode("utf-8", errors="replace").splitlines():
+            good = SSH_GOOD_SIGNATURE.fullmatch(line.strip())
+            if good is not None and good.group("fingerprint") in allowed:
+                return True
+        return False
+
+    def _pgp_good(self, home: Path, allowed: frozenset[str]) -> bool:
+        """Say whether gpg finds a good signature by an allowed key, from its status lines."""
+        gnupg = home / "gnupg"
+        environment = {**self._git.environment, "GNUPGHOME": str(gnupg)}
+        done = run_command(
+            [
+                str(self._tools.gpg),
+                "--batch",
+                "--no-tty",
+                "--homedir",
+                str(gnupg),
+                "--status-fd",
+                "1",
+                "--verify",
+                str(home / "tag.sig"),
+                str(home / "tag.payload"),
+            ],
+            environment,
+        )
+        words: set[str] = set()
+        fingerprints: set[str] = set()
+        for line in done.stdout.split("\n"):
+            fields = line.split()
+            if len(fields) < 2 or fields[0] != "[GNUPG:]":
+                continue
+            words.add(fields[1])
+            if fields[1] == "VALIDSIG" and len(fields) >= 3:
+                fingerprints.add(fields[2])
+                fingerprints.add(fields[-1])
+        return (
+            done.returncode == 0
+            and {"GOODSIG", "VALIDSIG"} <= words
+            and not words & GPG_BAD_STATUS
+            and any(item in allowed for item in fingerprints)
+        )
+
+
 class Workspace:
     """The program's private state: cache, work directories, floor, lock and the current link."""
 
@@ -1392,6 +2008,14 @@ class Workspace:
         """
         for stale in self.quarantine.iterdir():
             shutil.rmtree(stale, ignore_errors=True)
+        self.sweep_spool(oldest)
+
+    def sweep_spool(self, oldest: float) -> None:
+        """Remove spool files older than ``oldest`` seconds (safe without the lock).
+
+        A young file may be an upload under way, so it is left. This runs before the spool's
+        bound is checked, so uploads that a killed run left cannot fill the spool for good.
+        """
         cutoff = time.time() - oldest
         for upload in self.spool.iterdir():
             with contextlib.suppress(FileNotFoundError):
@@ -1697,6 +2321,129 @@ def require_playbook_in_checkout(checkout: Path, playbook: str) -> None:
         raise PlaybookNotAllowedError(Why.PLAYBOOK_ESCAPES)
 
 
+class Looker:
+    """Looks at this host for the facts a declaration names, and only reads.
+
+    Every result is a digest, a status number or a word from a closed list; a fact that cannot
+    be read gives a word, never the error. Nothing is written, started, restarted or changed: a
+    file is opened for reading, ``systemctl is-active`` is asked, and one GET goes to the
+    loopback address. The look has a time of its own, and a stop request ends it.
+    """
+
+    def __init__(
+        self,
+        tools: Tools,
+        stop: threading.Event,
+        roots: Sequence[str] = LOOK_FILE_ROOTS,
+        total_seconds: float = LOOK_TOTAL_SECONDS,
+    ) -> None:
+        """Remember the programs, the stop signal, the readable roots and the time allowed."""
+        self._tools = tools
+        self._stop = stop
+        self._roots = tuple(roots)
+        self._deadline = time.monotonic() + total_seconds
+
+    def lines(self, declaration: LookDeclaration, playbook: str) -> list[str]:
+        """Return the lines to print: one for each fact of this playbook, a refusal each, a summary.
+
+        Facts for another playbook are not looked at here; they were still checked, so every host
+        refuses the same entries.
+        """
+        here = [fact for fact in declaration.facts if fact.playbook == playbook]
+        lines = [
+            f"look-refused entry={item.entry} reason={item.why.value}"
+            for item in declaration.refusals
+        ]
+        for fact in here:
+            lines.append(self._line(fact))
+        lines.append(
+            f"look-summary declared={declaration.declared} here={len(here)} "
+            f"refused={len(declaration.refusals)} file={declaration.file}"
+        )
+        return lines
+
+    def _line(self, fact: LookFact) -> str:
+        """Return the line of one fact, or a refusal if the line is not of the one shape."""
+        if self._stop.is_set() or time.monotonic() > self._deadline:
+            result = "skipped-time"
+        else:
+            result = self.result(fact)
+        line = f"look issue={fact.issue} name={fact.name} kind={fact.kind.value} result={result}"
+        if LOOK_LINE.fullmatch(line) is None:
+            return f"look-refused entry=0 reason={LookWhy.LINE_SHAPE.value}"
+        return line
+
+    def result(self, fact: LookFact) -> str:
+        """Look at one fact and return its result word."""
+        if fact.kind is LookKind.FILE_SHA256:
+            return self._file_digest(fact.path)
+        if fact.kind is LookKind.UNIT_ACTIVE:
+            return self._unit_state(fact.unit)
+        return self._http_status(fact)
+
+    def _file_digest(self, path: str) -> str:
+        """Return the SHA-256 of a regular file inside a root, or a word saying why not."""
+        try:
+            real = os.path.realpath(path)
+        except (OSError, ValueError):
+            return "unreadable"
+        if not any(real.startswith(root) for root in self._roots):
+            return "outside-root"
+        try:
+            descriptor = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_FILE_BYTES:
+                return "too-large"
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, LOOK_READ_CHUNK):
+                digest.update(chunk)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        return digest.hexdigest()
+
+    def _unit_state(self, unit: str) -> str:
+        """Return what ``systemctl is-active`` says of a unit, as one of a closed list of words."""
+        argv = [str(self._tools.systemctl), "is-active", "--no-pager", "--", unit]
+        try:
+            done = run_command(argv, {"PATH": SEARCH_PATH, "LC_ALL": "C"}, LOOK_UNIT_SECONDS)
+        except GitError:
+            return "unknown"
+        word = done.stdout.strip()
+        return word if word in LOOK_UNIT_STATES else "unknown"
+
+    @staticmethod
+    def _http_status(fact: LookFact) -> str:
+        """Return the status of one GET to the loopback address, or a word saying why not.
+
+        Only the status is read: no body, no header, no redirect followed, and the connection is
+        to the loopback address whatever name the entry gives for the ``Host`` header.
+        """
+        connection = http.client.HTTPConnection(LOOK_LOOPBACK, fact.port, timeout=LOOK_HTTP_SECONDS)
+        try:
+            connection.request(
+                "GET",
+                fact.url_path,
+                headers={"Host": fact.host, "Connection": "close", "User-Agent": "pull-trigger"},
+            )
+            status = connection.getresponse().status
+        except TimeoutError:
+            return "timeout"
+        except (OSError, http.client.HTTPException):
+            return "unreachable"
+        finally:
+            connection.close()
+        return f"{status:03d}" if 100 <= status <= 599 else "unreachable"  # noqa: PLR2004 - HTTP's range
+
+
 def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
     """Copy the descriptor to a new private file in ``spool_dir`` and return its path.
 
@@ -1707,31 +2454,62 @@ def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
     Raises:
         BadBundleError: More than the byte limit arrives, the deadline passes before the end of
             the stream, or the descriptor cannot be read.
+        SpoolFullError: The spool holds as many files as it may, or this upload would take it
+            past its byte bound.
     """
     deadline = time.monotonic() + receiving.deadline_seconds
     descriptor, name = tempfile.mkstemp(dir=spool_dir, prefix="in-", suffix=".bundle")
     path = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as sink:
-            _copy_bounded(receiving, deadline, sink)
+            # Counted after the file exists, so two uploads that arrive together each see the
+            # other and the bound holds; the worst case is that both are refused.
+            _require_file_room(spool_dir, receiving.max_spool_files)
+            _copy_bounded(receiving, deadline, sink, spool_dir, path)
     except BaseException:
         path.unlink(missing_ok=True)
         raise
     return path
 
 
-def _copy_bounded(receiving: Receiving, deadline: float, sink: BinaryIO) -> None:
-    """Copy the descriptor to the sink until its end, within the byte limit and the deadline.
+def _require_file_room(spool_dir: Path, most: int) -> None:
+    """Refuse when the spool, counting the new file, holds more than ``most`` files.
+
+    Raises:
+        SpoolFullError: There are too many.
+    """
+    if len(list(spool_dir.iterdir())) > most:
+        raise SpoolFullError(Why.SPOOL_FULL_FILES)
+
+
+def _others_bytes(spool_dir: Path, own: Path) -> int:
+    """Return the bytes held by the spool files other than ``own``."""
+    held = 0
+    for entry in spool_dir.iterdir():
+        if entry != own:
+            with contextlib.suppress(FileNotFoundError):
+                held += entry.lstat().st_size
+    return held
+
+
+def _copy_bounded(
+    receiving: Receiving, deadline: float, sink: BinaryIO, spool_dir: Path, own: Path
+) -> None:
+    """Copy the descriptor to the sink until its end, within the limits and the deadline.
 
     Raises:
         BadBundleError: More than the limit arrives, or the deadline passes.
+        SpoolFullError: With the other uploads, this one would pass the spool's byte bound.
     """
     total = 0
     while chunk := _read_before(receiving.descriptor, deadline):
         total += len(chunk)
         if total > receiving.max_bytes:
             raise BadBundleError(Why.BUNDLE_OVERSIZE)
+        if total + _others_bytes(spool_dir, own) > receiving.max_spool_bytes:
+            raise SpoolFullError(Why.SPOOL_FULL_BYTES)
         sink.write(chunk)
+        sink.flush()
 
 
 def _read_before(descriptor: int, deadline: float) -> bytes:
@@ -1879,6 +2657,7 @@ class Trigger:
         ):
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
         self._workspace.prepare_bundle()
+        self._workspace.sweep_spool(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
         spool = spool_stream(self._workspace.spool, self._receiving)
         try:
             with single_flight(self._workspace.lock):
@@ -1904,10 +2683,8 @@ class Trigger:
         try:
             git = Git(self._tools, directory, self._workspace.home, protocols="file")
             quarantine = Quarantine(git)
-            quarantine.admit(spool, commit)
-            Verifier(git, quarantine, self._tools, self._config.signers).verify(
-                commit, self._workspace.scratch
-            )
+            quarantine.admit(spool, commit, release_tags=self._config.require_release_tag)
+            self._require_authority(git, quarantine, commit)
             floor = self._workspace.last_applied()
             if floor is None:
                 raise NoFloorError(Why.FLOOR_ABSENT)
@@ -1967,15 +2744,40 @@ class Trigger:
         self._require_tools()
         git = Git(self._tools, self._workspace.repo, self._workspace.home)
         cache = Cache(git, self._config.remote_url)
-        cache.fetch_main()
+        cache.fetch_main(release_tags=self._config.require_release_tag)
         cache.require_ancestor_of_main(commit)
         floor = self._workspace.last_applied()
         if floor is not None and floor != commit and not cache.is_ancestor(floor, commit):
             raise RollbackError(Why.COMMIT_OLDER)
-        Verifier(git, cache, self._tools, self._config.signers).verify(
-            commit, self._workspace.scratch
-        )
+        self._require_authority(git, cache, commit)
         return self._checked_out_and_run(cache, mode, commit, step)
+
+    def _require_authority(self, git: Git, repository: Repository, commit: str) -> None:
+        """Require what makes this host run the commit: a commit signer, or a release tag.
+
+        Both sources and every mode (apply, check, step) call this one method, before any playbook
+        is chosen, so a mode added later is covered and never silently exempt. A host not told to
+        require a release tag checks the commit's signature as before. A host that is told to
+        requires an annotated tag that names the commit and is signed by a release key; it does not
+        read the commit's own signature, so its trust does not rest on the hosting platform's key.
+
+        Raises:
+            ReleaseTagFloodError: more tags name the commit than ``MAX_RELEASE_CANDIDATES``.
+            ReleaseTagMissingError: no tag that names the commit is signed by a release key.
+        """
+        if not self._config.require_release_tag:
+            Verifier(git, repository, self._tools, self._config.signers).verify(
+                commit, self._workspace.scratch
+            )
+            return
+        candidates = repository.release_tags_naming(commit)
+        if len(candidates) > MAX_RELEASE_CANDIDATES:
+            raise ReleaseTagFloodError(Why.RELEASE_TAG_FLOOD)
+        verifier = ReleaseVerifier(git, repository, self._tools, self._config.release_signers)
+        if not any(
+            verifier.signed_by_release_key(tag, self._workspace.scratch) for tag in candidates
+        ):
+            raise ReleaseTagMissingError(Why.RELEASE_TAG_ABSENT)
 
     def _checked_out_and_run(
         self, repository: Repository, mode: Mode, commit: str, step: Step | None
@@ -1989,12 +2791,42 @@ class Trigger:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_REGULAR)
         checkout = self._workspace.new_checkout(repository.git, commit)
         try:
-            return self._run(mode, commit, checkout, step)
+            declaration = self._declared_look(repository, commit) if mode is Mode.CHECK else None
+            return self._run(mode, commit, checkout, step, declaration)
         finally:
             # Only an apply that got as far as running keeps its checkout (as
             # ``current``); a check, a refusal and a failure before that leave nothing behind.
             if not self._workspace.is_current(checkout):
                 shutil.rmtree(checkout, ignore_errors=True)
+
+    @staticmethod
+    def _declared_look(repository: Repository, commit: str) -> LookDeclaration | None:
+        """Return what the commit's look file declares, or None when it has none.
+
+        Nothing here can fail the run: a file that cannot be read is a refusal that the look
+        prints, and the verdict and the exit status are what they would be without a look.
+        """
+        try:
+            text = repository.look_text(commit)
+            if text is None:
+                return None
+            if isinstance(text, LookWhy):
+                return refused_look_file(text)
+            return parse_look(text)
+        except Exception:  # noqa: BLE001 - nothing the look does may change a verdict
+            return refused_look_file(LookWhy.LOOK_FAULT)
+
+    def _print_look(self, declaration: LookDeclaration) -> None:
+        """Write the look lines to the caller after the playbook's output; a caller gone is fine."""
+        try:
+            looker = Looker(self._tools, self._stop)
+            lines = looker.lines(declaration, self._config.playbook)
+        except Exception:  # noqa: BLE001 - nothing the look does may change a verdict
+            lines = [f"look-refused entry=0 reason={LookWhy.LOOK_FAULT.value}"]
+        text = "".join(f"{line}\n" for line in lines)
+        with contextlib.suppress(OSError, ValueError):
+            self._caller.write(text.encode("ascii"))
+            self._caller.flush()
 
     def _require_tools(self) -> None:
         """Check that every program this run will start is installed.
@@ -2012,8 +2844,18 @@ class Trigger:
             if not (program.is_file() and os.access(program, os.X_OK)):
                 raise ToolMissingError(Why.TOOL_MISSING, program.name)
 
-    def _run(self, mode: Mode, commit: str, checkout: Path, step: Step | None) -> Verdict:
+    def _run(
+        self,
+        mode: Mode,
+        commit: str,
+        checkout: Path,
+        step: Step | None,
+        declaration: LookDeclaration | None = None,
+    ) -> Verdict:
         """Run the playbook in the checkout and turn its end into a verdict.
+
+        A check run that has a look declaration prints the look after the playbook's own output,
+        when the playbook ended by itself; the look never changes the verdict.
 
         Raises:
             PlaybookNotAllowedError: the playbook resolves outside ansible/playbooks.
@@ -2033,6 +2875,8 @@ class Trigger:
             checkout, self._config.playbook, mode, log_path, self._config.timeout_seconds, step
         )
         self._journal.prune()
+        if declaration is not None and not (result.timed_out or result.interrupted):
+            self._print_look(declaration)
         if result.timed_out:
             return Verdict(Exit.TIMED_OUT, "timed-out")
         if result.interrupted:

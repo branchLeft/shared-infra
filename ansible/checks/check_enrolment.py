@@ -70,8 +70,6 @@ APPS_IMAGE_KEY = "control_plane_db_apps_image"
 # NAME@sha256: and 64 hex digits is the role's pattern (control_plane_image_pattern), which
 # test_step_allowlist.py reads by name.
 CONTROL_PLANE_IMAGE_KEY = "control_plane_app_image"
-# Keys a host's file may omit, by host. Every other allowed key is required.
-OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {"ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,))}
 # The two inputs of the ring_controller_host role. Each is public text that is empty until the
 # owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
 # (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
@@ -87,20 +85,55 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 STEP_LOGIN_KEY = "ci_step_login_key"
 STEP_LOGIN_FROM = "ci_step_login_from"
 STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
+# The one input of the host_tls_identity role: the peer's public certificate, as PEM text, empty
+# until the owner has read it off the peer's host. It is public data. The role holds every shape
+# check (one certificate, self-signed, the use, the name, the lifetime), so only the type is read
+# here. The hosts that apply the role are exactly HOST_TLS_HOSTS, so a host cannot gain the role
+# without its value, nor the value without the role (_check_host_tls_hosts).
+HOST_TLS_KEY = "host_tls_identity_peer_cert"
+HOST_TLS_ROLE = "host_tls_identity"
+HOST_TLS_HOSTS = frozenset(("demo1",))
 # The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
 # range and the difference between them (its _inputs.yml), so only the type is read here. edge1
 # only: the role refuses any other host, and the playbook lists it there alone.
 SWEEGO_RECEIVER_PORT_KEYS = frozenset(("sweego_receiver_port", "sweego_receiver_drain_port"))
+# The inputs of the mail_collector role, which only ops1 applies (its argument_specs). All are
+# public data: the sending credential is a root-only file the owner places, never a key here. Each
+# is optional, since an absent key leaves the role's own default, which keeps the collector off.
+# The role holds the shapes (image digest pattern, domain, host entries), so only the types are
+# read here: text, a list, a whole number, a bool.
+MAIL_COLLECTOR_TEXT_KEYS = frozenset(
+    (
+        "mail_collector_image",
+        "mail_collector_smtp_host",
+        "mail_collector_demo_mail_domain",
+        "mail_collector_shim_scheme",
+    )
+)
+MAIL_COLLECTOR_HOSTS_KEY = "mail_collector_hosts"
+MAIL_COLLECTOR_PORT_KEYS = frozenset(("mail_collector_smtp_port", "mail_collector_shim_port"))
+MAIL_COLLECTOR_SECURE_KEY = "mail_collector_smtp_secure"
+MAIL_COLLECTOR_KEYS = (
+    MAIL_COLLECTOR_TEXT_KEYS
+    | MAIL_COLLECTOR_PORT_KEYS
+    | frozenset((MAIL_COLLECTOR_HOSTS_KEY, MAIL_COLLECTOR_SECURE_KEY))
+)
+# Keys a host's file may omit, by host. Every other allowed key is required.
+OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {
+    "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS
+}
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
     "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY, CONTROL_PLANE_IMAGE_KEY))
     | STEP_LOGIN_VARS
-    | RING_CONTROLLER_TEXT_KEYS,
+    | RING_CONTROLLER_TEXT_KEYS
+    | MAIL_COLLECTOR_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
     | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
-    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
+    | (frozenset((HOST_TLS_KEY,)) if host in HOST_TLS_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS, *HOST_TLS_HOSTS)
 }
 STEPS_KEY = "pull_trigger_steps"
 # Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
@@ -181,15 +214,27 @@ EXPECTED_ROLES = [
 # bool, so the string "true" does not match), and a second gateway on one network loops that
 # network's egress. A network does not span hcloud projects, so the switch is on one host per
 # network: edge1 for the estate's network and edget (edge-t) for the tenants network, and no
-# other host. R2 allows no `vars` on a role entry, so these rows are their one home.
-HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
-    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
-    "edget": {"egress_nat_gateway_enabled": True},
+# other host. The edge_firewall role loads a host firewall and edge1's masquerade:
+# edge_firewall_nat_source is the estate subnet it masquerades and edge_firewall_enforce is the
+# default-drop switch, false (monitor mode) until the owner merges the one-line flip here and in
+# the playbook, so no pull and no other host can turn it on. R2 allows no `vars` on a role entry,
+# so these rows are their one home.
+HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
+    "edge1": {
+        "deploy_tooling_host_class": "gateway",
+        "egress_nat_gateway_enabled": True,
+        "edge_firewall_nat_source": "10.20.1.0/24",
+        "edge_firewall_enforce": False,
+    },
+    "edget": {"egress_nat_gateway_enabled": True, "host_baseline_journal_retention_days": 30},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
     "ops1": {"deploy_tooling_host_class": "internal"},
     "db1": {"deploy_tooling_host_class": "internal"},
-    "dbt1": {"deploy_tooling_host_class": "internal"},
-    "appt1": {"deploy_tooling_host_class": "internal"},
+    # The three tenant hosts keep their journal for 30 days, inside the 90 days the privacy
+    # notice states for server logs; test_tenant_host_monitoring.py holds the figure and
+    # the ceiling.
+    "dbt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
+    "appt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
     # mx1's jail has no ignoreip line (the opt-out of host_baseline). The pin is here, and the
     # playbook must carry the same value (R2 holds it exactly).
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},
@@ -809,6 +854,27 @@ def _step_login_problems(doc: dict[str, object]) -> list[str]:
     return problems
 
 
+def _mail_collector_problems(doc: dict[str, object]) -> list[str]:
+    """The types of the mail_collector values, by key. What a value may look like is the role's
+    rule alone (its argument_specs and vars), so a list's entries are not read here."""
+    problems = [
+        f"{key} must be text"
+        for key in sorted(MAIL_COLLECTOR_TEXT_KEYS)
+        if key in doc and not isinstance(doc[key], str)
+    ]
+    if MAIL_COLLECTOR_HOSTS_KEY in doc and not isinstance(doc[MAIL_COLLECTOR_HOSTS_KEY], list):
+        problems.append(f"{MAIL_COLLECTOR_HOSTS_KEY} must be a list")
+    # A bool is an int in Python, so it is refused by name: true would read as port 1.
+    problems.extend(
+        f"{key} must be a whole number"
+        for key in sorted(MAIL_COLLECTOR_PORT_KEYS)
+        if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
+    )
+    if MAIL_COLLECTOR_SECURE_KEY in doc and not isinstance(doc[MAIL_COLLECTOR_SECURE_KEY], bool):
+        problems.append(f"{MAIL_COLLECTOR_SECURE_KEY} must be a bool")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
@@ -832,6 +898,9 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
         if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
+    if HOST_TLS_KEY in doc and not isinstance(doc[HOST_TLS_KEY], str):
+        problems.append(f"{HOST_TLS_KEY} must be text")
+    problems.extend(_mail_collector_problems(doc))
     problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
@@ -890,6 +959,22 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
     )
 
 
+def _check_host_tls_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the host_tls_identity role are exactly HOST_TLS_HOSTS, the hosts
+    whose owner_vars file holds the peer's certificate it pins."""
+    applying = {host for host, roles in host_roles.items() if HOST_TLS_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {HOST_TLS_ROLE} "
+        "but is not in HOST_TLS_HOSTS"
+        for host in sorted(applying - HOST_TLS_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in HOST_TLS_HOSTS "
+        f"but does not list {HOST_TLS_ROLE}"
+        for host in sorted(HOST_TLS_HOSTS - applying)
+    )
+
+
 def check(root: Path) -> list[str]:
     """Return one finding per broken rule, or an empty list when the tree passes."""
     findings: list[str] = []
@@ -925,6 +1010,7 @@ def check(root: Path) -> list[str]:
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
     _check_jump_hosts(host_roles, findings)
+    _check_host_tls_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

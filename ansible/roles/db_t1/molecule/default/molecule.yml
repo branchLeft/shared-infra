@@ -26,7 +26,7 @@ platforms:
     # bind mount means none is created; the key guards against one if the mount
     # is ever dropped.
     keep_volumes: false
-    # No privileged mode and no added capabilities. The host cgroup namespace is
+    # No privileged mode, and one added capability (below). The host cgroup namespace is
     # a stated exception (ANS-15): on a cgroup v2 host a private namespace over
     # the read-write cgroup mount below makes systemd exit at once.
     cgroupns_mode: host
@@ -36,6 +36,11 @@ platforms:
       - /run
       - /run/lock
     command: /lib/systemd/systemd
+    # NET_ADMIN is the one added capability. The database port rule is loaded into the
+    # container's own network namespace through iptables, which is a netlink write. It reaches
+    # no host network: the container has its own. Not privileged.
+    capabilities:
+      - NET_ADMIN
     labels:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:

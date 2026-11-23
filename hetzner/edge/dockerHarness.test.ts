@@ -84,6 +84,9 @@ interface Script {
   inspectContainer?: Mode;
   remove?: Mode;
   info?: Mode;
+  list?: Mode;
+  /** Names the fake engine lists as existing containers (without the leading slash). */
+  listed?: string[];
 }
 
 interface Fake {
@@ -145,6 +148,14 @@ async function fakeDaemon(script: Script): Promise<Fake> {
           Name: `/${NAME}`,
           NetworkSettings: { Ports: { '8081/tcp': [{ HostIp: '127.0.0.1', HostPort: '49153' }] } },
         })
+      );
+    } else if (req.method === 'GET' && url.startsWith('/containers/json')) {
+      answer(script.list, () =>
+        json(
+          res,
+          200,
+          (script.listed ?? []).map((n) => ({ Id: 'c'.repeat(64), Names: [`/${n}`] }))
+        )
       );
     } else if (req.method === 'DELETE' && url.startsWith('/containers/')) {
       answer(script.remove, () => {
@@ -311,6 +322,31 @@ describe.skipIf(!hasCli)(
       const failure = await startContainer(spec, { env: f.env }, fast).catch((e: unknown) => e);
       expect((failure as Error).message).toContain(`docker port ${NAME}`);
       expect(removals(f)).toHaveLength(1);
+    }, 20_000);
+
+    it('sweeps a container a dead run left in Created state before it starts, and leaves a live run alone', async () => {
+      const dead = 'bl-test-container-2000000000';
+      const live = `bl-test-container-${process.pid}`;
+      const f = await daemon({
+        create: 'ok',
+        start: 'ok',
+        inspectContainer: 'ok',
+        list: 'ok',
+        listed: [dead, live],
+        remove: 'ok',
+      });
+      await expect(startContainer(spec, { env: f.env }, fast)).resolves.toBe(49153);
+      expect(f.requests.filter((r) => r.startsWith(`DELETE /containers/${dead}`))).toHaveLength(1);
+      expect(f.requests.filter((r) => r.startsWith(`DELETE /containers/${live}`))).toEqual([]);
+    }, 20_000);
+
+    it('refuses to start when a stale container cannot be removed, and names it', async () => {
+      const dead = 'bl-test-container-2000000000';
+      const f = await daemon({ create: 'ok', list: 'ok', listed: [dead], remove: 'fail' });
+      const failure = await startContainer(spec, { env: f.env }, fast).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(DockerFailure);
+      expect((failure as Error).message).toContain(dead);
+      expect(f.requests.some((r) => r.startsWith('POST /containers/create'))).toBe(false);
     }, 20_000);
 
     it('treats an already-removed container as removed', async () => {

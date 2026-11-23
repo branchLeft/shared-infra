@@ -147,7 +147,7 @@
           when: not ansible_check_mode
           no_log: true
 
-        # The shared Compose unit allows five starts in fifteen minutes (StartLimitBurst in
+        # The shared Compose unit allows five starts in an hour (StartLimitBurst in
         # hetzner/provision/branchleft-compose@.service), and this scenario starts the spool
         # unit once per case that stops it. Without this the later restores are refused by
         # systemd with "attempted too often", which fails the restore and not the refusal under

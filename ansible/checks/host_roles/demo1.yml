@@ -1,7 +1,15 @@
 ---
-# broker_deploy first: demo1_build reads what it leaves behind. It refuses until a release is
+# host_inputs first (check_enrolment R11): it sets the owner's address that broker_deploy reads.
+# broker_deploy next: demo1_build reads what it leaves behind. It refuses until a release is
 # pinned. host_baseline and egress_nat stay off.
+- host_inputs
 - broker_deploy
 - demo1_build
 - demo1_egress_spool
 - spool_path_account
+# host_tls_identity makes demo1's own key and self-signed certificate and pins edge1's client certificate
+# as the one its exporter trusts. It goes before any role that reads those files.
+- host_tls_identity
+# node_exporter_public last, so its waiting for the owner's certificate files holds nothing
+# back. demo1 takes the Debian-package exporter, which serves TLS to a verified client certificate only.
+- node_exporter_public

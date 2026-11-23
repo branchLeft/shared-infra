@@ -321,8 +321,7 @@ handler chain as a public site and answers 204.
 **Both directions matter.** Checks (a) and (b) are a matched pair: (a) proves
 the general throttle is present and trips, (b) proves the magic-link throttle is
 present and trips on its own, tighter budget. Both expect a `429`, so neither
-passes if the whole `rate_limit` module has silently failed to load
-(`branchLeft/workspace#209`).
+passes if the whole `rate_limit` module has silently failed to load.
 
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering this section independently — every check below
@@ -651,8 +650,7 @@ _config hash_ moved. The **contents** of a bind-mounted file or directory are no
 hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
 `--wait` passes because the unchanged containers are already healthy, and Caddy
 goes on serving the configuration it loaded at container start. This was
-observed on the monitoring stack the same day it landed
-(branchLeft/workspace#666) and again here.
+observed on the monitoring stack the same day it landed and again here.
 
 The `edge` instance is deliberately **not** given the blanket
 `--force-recreate` that the monitoring instance gets: recreating this stack
@@ -889,10 +887,27 @@ scenario reads them, and the throttle allows 1200 requests a minute
 and a desktop sync that must not ban, and attacks on the same hostname that
 must.
 
-**Every ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
-reaches the phone through ntfy within about two minutes of a ban, naming the
-scenario. It names no address: read it with the `cscli decisions list` command
-above, and clear a false alarm with the `cscli decisions delete --ip` command.
+**Only an owned ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
+reaches the phone through ntfy for each ban on an owned address, within about five
+minutes of the ban plus the scrape interval, naming the scenario. A repeat ban of
+the same scenario pages again. "Owned" includes every tenant's Ghost staff
+addresses, not only the owner's; the classifier keeps them in the root-only state
+file for at most 30 days. A ban on any other address raises `EdgeBanUnowned` and
+goes to email only. If the classifier is stale (no run for over 15 minutes), every
+ban pages at once. If it has reported and then goes quiet, every ban pages once its
+absence has lasted 10 minutes, so one lost scrape does not page; if it has never
+reported, every ban pages at once. `EdgeBanOwnerStale` pages after 5 minutes of
+staleness. The role ships disabled, so until it is turned on every ban pages at
+once, as before this change, and `EdgeBanOwnerStale` goes to the `discard` receiver
+instead of the phone (`hetzner/edge/render.md`, "Being told about a ban"). The page names no
+address: read it with the `cscli decisions list` command above, and clear a false
+alarm with the `cscli decisions delete --ip` command.
+
+To see why a ban was classified unowned, on edge1 run
+`systemctl status branchleft-edge-ban-owner.timer` and
+`journalctl -u branchleft-edge-ban-owner`. The addresses the classifier trusts
+are in `/var/lib/branchleft/edge-ban-owner/trusted.json`, root-only. Do not
+print that file into a ticket, a PR or a log: it holds addresses.
 
 ## 11. Adding a site to the edge
 

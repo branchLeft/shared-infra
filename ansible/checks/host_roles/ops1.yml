@@ -1,14 +1,13 @@
----
 - host_inputs
 - host_baseline
 - ci_step_login
+- breakglass_mint_host
 - safety_service
 - safety_channel_key
-- breakglass_mint_host
-- status_page
 - deploy_verifier
 - deploy_tooling
 - control_plane
+- status_page
 - nextcloud_stack
 - backup_worker
 - backup_restore
@@ -18,3 +17,4 @@
 - mail_collector
 - spool_paths
 - ring_controller_host
+- broker_tunnel_client

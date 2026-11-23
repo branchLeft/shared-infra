@@ -103,7 +103,9 @@
           - "'PERCONA_TELEMETRY_DISABLE' in db_t1_verify_compose"
           - "'network_mode: host' in db_t1_verify_compose"
           - "'ports:' not in db_t1_verify_compose"
-          - "'bind-address = 127.0.0.1' in db_t1_verify_cnf"
+          - "('bind-address = ' ~ db_t1_private_address ~ '\\n') in db_t1_verify_cnf"
+          - "'bind-address = 0.0.0.0' not in db_t1_verify_cnf"
+          - "'bind-address = 127.0.0.1' not in db_t1_verify_cnf"
           - "'mysqlx = OFF' in db_t1_verify_cnf"
           - "'gtid_mode = ON' in db_t1_verify_cnf"
         quiet: true
@@ -121,6 +123,122 @@
           - db_t1_verify_unit_state.status.ActiveState != 'active'
         quiet: true
         fail_msg: The stack's unit is not enabled, or the role started it (only the deploy program starts it).
+
+    # ----- The database port rule -----
+
+    - name: Read the filter table back from the kernel
+      ansible.builtin.command:
+        argv: [iptables, -S]
+      register: db_t1_verify_filter
+      changed_when: false
+
+    # Nothing else of the firewall was written: the table holds this chain, the jump and nothing
+    # more, and the policies are the ones the container started with.
+    - name: Assert the table holds the chain, its two rules in order and the one jump, and nothing else
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_filter.stdout_lines | select('match', '^-A ') | list == expected_rules
+          - "'-P INPUT ACCEPT' in db_t1_verify_filter.stdout_lines"
+          - "'-P FORWARD ACCEPT' in db_t1_verify_filter.stdout_lines"
+          - "'-P OUTPUT ACCEPT' in db_t1_verify_filter.stdout_lines"
+          - db_t1_verify_filter.stdout_lines | select('match', '^-N ') | list == ['-N ' ~ db_t1_rule_chain]
+        quiet: true
+        fail_msg: >-
+          The filter table is not the chain, its two rules and the one jump of the database port
+          rule, or a policy moved. It holds {{ db_t1_verify_filter.stdout_lines }}.
+      vars:
+        expected_rules:
+          - '-A INPUT -j {{ db_t1_rule_chain }}'
+          - '-A {{ db_t1_rule_chain }} -s {{ db_t1_client_address }}/32 -p tcp -m tcp --dport {{ db_t1_port }} -j ACCEPT'
+          - '-A {{ db_t1_rule_chain }} -p tcp -m tcp --dport {{ db_t1_port }} -j DROP'
+
+    - name: Read the rule unit, the drop-in and Docker's unit back from systemd
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - '{{ db_t1_rule_unit_name }}'
+        - '{{ db_t1_rule_docker_unit_name }}'
+      register: db_t1_verify_rule_units
+
+    - name: Assert the rule unit is active and enabled and Docker requires it and starts after it
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_rule_units.results[0].status.ActiveState == 'active'
+          - db_t1_verify_rule_units.results[0].status.UnitFileState == 'enabled'
+          - db_t1_rule_unit_name in db_t1_verify_rule_units.results[1].status.Requires.split()
+          - db_t1_rule_unit_name in db_t1_verify_rule_units.results[1].status.After.split()
+          - db_t1_rule_docker_unit_name in db_t1_verify_rule_units.results[0].status.Before.split()
+        quiet: true
+        fail_msg: The rule unit is not active and enabled, or Docker does not require it and follow it, or the unit is not before Docker.
+
+    # The behavioural proof. Two listeners on the database address, 3306 (the database's) and
+    # 3307 (any other port), then a connection to each from the application host's address,
+    # from an address that is neither, and from the database host's own address. An accepted
+    # connection completes against the listener's backlog; a dropped one times out.
+    - name: Place the connection probe
+      ansible.builtin.copy:
+        content: |
+          import json
+          import socket
+
+          ADDRESS = "{{ db_t1_private_address }}"
+
+
+          def listen(port):
+              listener = socket.socket()
+              listener.bind((ADDRESS, port))
+              listener.listen(8)
+              return listener
+
+
+          def attempt(source, port):
+              client = socket.socket()
+              client.settimeout(3)
+              client.bind((source, 0))
+              try:
+                  client.connect((ADDRESS, port))
+              except socket.timeout:
+                  return "timeout"
+              except OSError as error:
+                  return "error " + str(error)
+              finally:
+                  client.close()
+              return "connected"
+
+
+          listeners = [listen({{ db_t1_port }}), listen({{ db_t1_port + 1 }})]
+          print(json.dumps({
+              "app_database_port": attempt("{{ db_t1_client_address }}", {{ db_t1_port }}),
+              "other_database_port": attempt("10.20.1.99", {{ db_t1_port }}),
+              "self_database_port": attempt(ADDRESS, {{ db_t1_port }}),
+              "app_other_port": attempt("{{ db_t1_client_address }}", {{ db_t1_port + 1 }}),
+              "other_other_port": attempt("10.20.1.99", {{ db_t1_port + 1 }}),
+          }))
+        dest: /var/tmp/db-t1-connection-probe.py
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Connect to the database address from each source
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /var/tmp/db-t1-connection-probe.py]
+      register: db_t1_verify_probe
+      changed_when: false
+
+    - name: Assert only the application host reaches the database port and no other port is limited
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_probe.stdout | from_json == expected
+        quiet: true
+        fail_msg: >-
+          The connections did not end as the rule says they must: {{ db_t1_verify_probe.stdout }}.
+      vars:
+        expected:
+          app_database_port: connected
+          other_database_port: timeout
+          self_database_port: timeout
+          app_other_port: connected
+          other_other_port: connected
 
 - name: Verify that no log shows the root value
   hosts: localhost

@@ -1,10 +1,48 @@
 ---
 # Guarded step configure: reconcile Stalwart's settings through its API. The program
-# restarts Stalwart when it changes anything. It takes its own bootstrap path when the
-# administrator credential file is absent, so the preconditions refuse that first.
+# restarts Stalwart when it changes anything. It also finishes Stalwart's bootstrap, by two
+# routes: when the administrator credential file is absent, and when the file exists but
+# Stalwart still reports bootstrap mode (an interrupted bootstrap). The bootstrap is the
+# owner's one-time step, so the preconditions refuse the first route and the probe below the
+# second, before the program can run.
 
 - name: Check the install directory and the credential files before configure
   ansible.builtin.import_tasks: _preconditions.yml
+
+# One read of Stalwart's account answer with the administrator credential file, by a program
+# of the role (files/check_stalwart_bootstrap_mode.py) that prints one fixed line and no
+# answer. It writes nothing, so it runs in a check-mode request too, and a plan shows the
+# refusal. It is copied for the one run and placed nowhere, so the plain apply still places
+# exactly twenty programs. Exit 0 is the only status that lets the step go on: 3 is bootstrap mode, anything else is a
+# mode that could not be told.
+- name: Ask Stalwart whether it is still in bootstrap mode
+  ansible.builtin.script:
+    cmd: check_stalwart_bootstrap_mode.py
+    executable: /usr/bin/python3 -I
+  environment: '{{ mail_reconcilers_program_environment }}'
+  register: mail_reconcilers_bootstrap_probe
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  no_log: true
+  diff: false
+
+- name: Refuse a configure while Stalwart is in bootstrap mode, or when the mode cannot be told
+  ansible.builtin.assert:
+    that:
+      - (mail_reconcilers_bootstrap_probe.rc | default(1)) == 0
+    quiet: true
+    fail_msg: >-
+      {{ 'REFUSED: Stalwart is in bootstrap mode, so configure would finish the bootstrap, which
+         is the one-time step of the owner. The owner runs it by hand, as root on the mail host
+         (' ~ mail_reconcilers_install_dir ~ '/' ~ mail_reconcilers_wrappers.configure ~ ', see
+         mail/RUNBOOK-mx1-provision.md, How to re-run safely), then this step is requested again.'
+         if (mail_reconcilers_bootstrap_probe.rc | default(1)) == 3 else
+         'REFUSED: whether Stalwart is in bootstrap mode could not be told (probe exit '
+         ~ (mail_reconcilers_bootstrap_probe.rc | default(1)) ~ '), so configure did not run.
+         Check that Stalwart answers on the loopback address and accepts the administrator
+         credential file.' }}
+      No program ran.
 
 # No check-mode run: the program writes settings and restarts a service, and has no
 # preview. A check-mode request shows the checks above and nothing else.

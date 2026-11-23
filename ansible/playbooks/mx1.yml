@@ -1,12 +1,13 @@
 ---
 # mx1: the logical name of the self-hosted mail host (HOST_NAME allows [a-z][a-z0-9]* only).
-# Under the gated pull. Five roles, in order: the Ansible toolchain the host runs this playbook
+# Under the gated pull. Eight roles, in order: the Ansible toolchain the host runs this playbook
 # with, the trigger that runs it, the host baseline (key-only sshd drop-in, unattended
 # upgrades, fail2ban and Docker CE), the mail host's two Compose projects, local resolver and
-# DNSBL check (mx1_stack, which needs the Docker the baseline installs), and last the mail
+# DNSBL check (mx1_stack, which needs the Docker the baseline installs), the mail
 # reconcilers (mail_reconcilers), which on this route only place their programs under
-# /root/mail-provision. The baseline is the one the mail host's provisioning scripts wrote by
-# hand; the role writes the same bytes. There is no owner_vars file for this host, so no step of
+# /root/mail-provision, and last the abuse-report page (mx1_abuse_page). The loader of the host's
+# private inputs (host_inputs) comes first of the roles. The baseline is the one the mail host's
+# provisioning scripts wrote by hand; the role writes the same bytes. There is no owner_vars file for this host, so no step of
 # mail_reconcilers can be requested through the pull (R10): a plain apply is the only run it gets.
 # The first apply on a host that already runs mail is read in a plan before anything is approved;
 # mx1 is on the never-list, so it is the owner's to approve (mx1_stack README, "How it is delivered").
@@ -17,8 +18,11 @@
 # sshd drop-in is written under the role's own name (01-), so the host keeps an identical
 # 99- duplicate from the scripts; that duplicate is a known, accepted one.
 #
-# The host has no private inputs, so host_inputs is not applied and its row is absent from
-# checks/host_roles.yml.
+# The host's one private input is the pager token that lets it post an abuse-report page. It
+# reaches mx1_abuse_page through the loader (host_inputs, first of the roles), and it is optional
+# (host_inputs_optional_by_host): until the owner seeds /etc/branchleft/host-inputs.json with
+# seed_host_inputs.py --host mx1 the plan stops at host_inputs[file-missing]; with the file but no
+# token the page stays off.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files and
@@ -44,6 +48,8 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/mx1_stack # noqa: role-name[path]
     - role: ../roles/mail_reconcilers # noqa: role-name[path]
+    - role: ../roles/mx1_abuse_page # noqa: role-name[path]

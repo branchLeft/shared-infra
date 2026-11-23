@@ -83,9 +83,11 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_watcher_token",
         "ntfy_pager_owner_password_hash",
         "ntfy_pager_machine_password_hash",
+        "ntfy_pager_mx1_token",
         "ci_jump_user",
     ),
     "edget": ("ci_jump_user",),
+    "demo1": ("broker_deploy_owner_due_diligence_email",),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -107,6 +109,8 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "backup_restore_state_copy_tenant_endpoint",
         "backup_restore_state_copy_tenant_region",
         "backup_restore_state_copy_tenant_access_key_id",
+        "broker_tunnel_client_demo1_address",
+        "broker_tunnel_client_demo1_host_key",
     ),
     "app1": (
         "website_app1_smtp_host",
@@ -115,6 +119,9 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_password",
         "deploy_slot_keys_slots",
     ),
+    # The mail host's one input is typed: the publish-only ntfy token has no live file on mx1, and
+    # the same value is the edge1 input above.
+    "mx1": ("mx1_abuse_page_token",),
 }
 
 # Inputs the tool can read live although no host's row holds them yet. The tenant stacks are for
@@ -122,6 +129,12 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
 # key, `--host` never seeds it and `--set` refuses it. A test fails once a row holds a key that is
 # still listed here, so the list only shrinks.
 NOT_YET_ROUTED: Final = frozenset({STACKS_KEY})
+
+# Optional inputs (host_inputs_optional_by_host) that the fill never asks for: each is added on
+# its own with --set once the owner turns its role on, and a file without it is complete.
+SET_ONLY: Final = frozenset(
+    {"broker_tunnel_client_demo1_address", "broker_tunnel_client_demo1_host_key"}
+)
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
 # pager keys look in the pager's own file first (the unit loads it later, so it wins), then in
@@ -203,11 +216,19 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
+    # Typed on mx1 and on edge1, the same value: the token is the mail host's credential and the
+    # pager's server config must list it. It has no live file the role does not itself write.
+    "ntfy_pager_mx1_token": (Source(TYPED, ""),),
+    "mx1_abuse_page_token": (Source(TYPED, ""),),
+    # The broker tunnel's two inputs have no live file: the owner types each once with --set.
+    "broker_tunnel_client_demo1_address": (Source(TYPED, ""),),
+    "broker_tunnel_client_demo1_host_key": (Source(TYPED, ""),),
+    "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
 MESSAGES: Final[dict[str, str]] = {
-    "unknown-host": "this tool seeds edge1, edget, ops1 or app1 only",
+    "unknown-host": "this tool seeds edge1, edget, ops1, app1 or mx1 only",
     "not-root": "must run as root",
     "directory": "a directory above the file is not a real directory owned by root and closed",
     "exists": "the inputs file appeared meanwhile and was not overwritten",
@@ -666,6 +687,8 @@ def collect(ctx: Context, host: str) -> Collected:
     from_live: list[str] = []
     pending: list[str] = []
     for key in HOSTS[host]:
+        if key in SET_ONLY:
+            continue
         for source in SOURCES[key]:
             if source.kind in (SLOTS, TYPED):
                 break
@@ -887,7 +910,7 @@ class QuietParser(argparse.ArgumentParser):
 
 def parse_args(argv: Sequence[str] | None, stream: TextIO) -> argparse.Namespace:
     parser = QuietParser(stream)
-    parser.add_argument("--host", required=True, help="edge1, edget, ops1 or app1")
+    parser.add_argument("--host", required=True, help="edge1, edget, ops1, app1 or mx1")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--replace", action="store_true", help="replace an existing file")
     mode.add_argument("--set", dest="set_key", metavar="KEY", help="change one key, asked hidden")

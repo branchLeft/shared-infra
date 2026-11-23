@@ -39,8 +39,10 @@ It does not:
   when it is missing. The packages come with the host baseline and with Docker.
 - choose the gateway host. Setting `egress_nat_gateway_enabled` for the right host,
   and for that host only, is the caller's.
-- write a firewall ruleset of its own. The NAT reconciler inserts its three
-  `iptables` rules, each once, and the role neither adds nor removes any.
+- write a firewall ruleset of its own. The NAT reconciler inserts its `iptables` rules, each
+  once, and the role neither adds nor removes any. On a host where the `edge_firewall` role has
+  loaded its nftables masquerade table (edge1), the reconciler inserts the two forwarding rules
+  only: see "The masquerade's two homes".
 - remove anything. A role that stops being applied to a host leaves its files and
   units in place.
 - apply itself to a host (see how it is delivered).
@@ -126,7 +128,21 @@ What the two reconcilers then do to the host is their own work and is described 
 their source: the host egress reconciler sets a default route and the resolver file on
 a host with no public address and does nothing on any other; the NAT reconciler writes
 `/etc/sysctl.d/99-branchleft-nat.conf`, turns forwarding on, and inserts one masquerade
-rule and two forwarding rules. The role does not touch those.
+rule and two forwarding rules (on a host where the `edge_firewall` role's table holds the
+masquerade, it does none of the first three: see the next section). The role does not touch those.
+
+### The masquerade's two homes
+
+The NAT reconciler reads `nft list table ip branchleft_edge_nat` at every run. When that table
+holds a masquerade, which only the `edge_firewall` role loads and only on edge1, the role is the
+masquerade's home and the sysctl drop-in's writer on that host: the reconciler inserts no
+masquerade, writes no drop-in, requires the running kernel to forward (and refuses, naming the
+role, when it does not), and inserts the two forwarding accepts in `DOCKER-USER`. Everywhere
+else, edget included, and on edge1 when the table is not loaded or cannot be read, it does all
+three itself, exactly as before. A masquerade in both places is harmless; a gateway with
+neither has no egress, so an unreadable table counts as not loaded. The unit runs after
+`branchleft-firewall.service` (a `Wants`, not a `Requires`), so at boot the table is read after
+it is loaded. `ansible/checks/test_edge_firewall_single_home.py` holds the split.
 
 ### One home for every file
 

@@ -188,7 +188,13 @@ and returns sentences that name a rule, a service or a key, never a value. It re
   duplicate key, a line that is not `KEY=value`, a control character, and a variable the role does not supply;
 - a pin that is not exactly one `IMAGE=<name>@sha256:<64 hex digits>` line, and (in the role, not
   the module) a tenant pin whose image is not the tenant image the deploy wrapper verifies;
-- a uid the volume program lists for another slug, or a slug it lists with another uid.
+- a uid the volume program lists for another slug, or a slug it lists with another uid;
+- a service that mounts another slot's verdict volume (`ghost-<other>-verdict`), in any mode or
+  by a bind of its path on the host;
+- a service that mounts the slot's own verdict volume writable (the verdict host end, which makes
+  the socket there) unless it runs as the user `<uid>:<uid>` of the slot and its environment gives
+  `VERDICT_HOST_SOCKET_UID` and `VERDICT_HOST_SOCKET_GID` that same uid. A read-only mount (Ghost's
+  own) is not judged. Ghost cannot write the volume: it is given neither variable, so it is refused.
 
 This list is deliberately smaller than the renderer's own posture checks (`assertRuntimePosture`
 and `assertSpoolPosture`), which stay their one home. These are the rules that make delivering a
@@ -222,6 +228,12 @@ for what the bridge forwards out. These are the rules the app-host isolation pol
    quote, a backslash or a `$` in a value is not checked.
 7. **The role cannot tell a stack the owner stopped on purpose from a failed one.** Both fail the
    active check.
+8. **The role judges the compose text, not the socket.** The socket's owner is made by the host end
+   process as the user its container runs as, and the host end checks the file it made against the
+   uid and gid it was given (`verdict-host.md` in the Ghost platform repository, "The local
+   socket"). This role refuses a stack whose host end is not set up to do so. It does not read a
+   live socket, and the verdict host end's own service in the stack is rendered by the platform's
+   renderer, not here. The real owner on a host is first seen when a slot's stack is first applied.
 
 ## How to run its test
 
@@ -269,17 +281,19 @@ Every secret in the test is a throwaway made for the run from the harness's run 
 
 Each row was done by an edit, one run, and a restore.
 
-| Edit to the role                                                    | Step that fails                                                   |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Take `no_log` off the task that judges each tenant's stack          | `verify`: the log scan finds a throwaway secret in the run's log  |
-| Let the module accept an image tag and a port on every address      | the unit tests, and `converge` at the image-tag refusal           |
-| Replace the image pin on every run (`force: true`)                  | `converge`, at the pin the deploy wrapper advanced                |
-| Record the stamp before the restart, not after the unit is active   | `converge`, at the run that retries after a failed restart        |
-| Skip the read-back of the spool's firewall rules                    | `converge`, at the refusal of a spool whose firewall rule is gone |
-| Copy a tenant's first pin into place instead of running the wrapper | `converge`, at the refusal of an image that is not attested       |
-| Take out the refusal of an image outside the wrapper's register     | `converge`, at the refusal of an image outside the register       |
-| Take `no_log` off the wrapper's run                                 | `check_secret_no_log.py`: rule R1 on that task                    |
-| Take the wrapper's journal line out (`log_refusal`)                 | `converge`, at the journal read after the unattested refusal      |
+| Edit to the role                                                              | Step that fails                                                   |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Take `no_log` off the task that judges each tenant's stack                    | `verify`: the log scan finds a throwaway secret in the run's log  |
+| Let the module accept an image tag and a port on every address                | the unit tests, and `converge` at the image-tag refusal           |
+| Replace the image pin on every run (`force: true`)                            | `converge`, at the pin the deploy wrapper advanced                |
+| Record the stamp before the restart, not after the unit is active             | `converge`, at the run that retries after a failed restart        |
+| Skip the read-back of the spool's firewall rules                              | `converge`, at the refusal of a spool whose firewall rule is gone |
+| Copy a tenant's first pin into place instead of running the wrapper           | `converge`, at the refusal of an image that is not attested       |
+| Take out the refusal of an image outside the wrapper's register               | `converge`, at the refusal of an image outside the register       |
+| Take `no_log` off the wrapper's run                                           | `check_secret_no_log.py`: rule R1 on that task                    |
+| Take the wrapper's journal line out (`log_refusal`)                           | `converge`, at the journal read after the unattested refusal      |
+| Stop judging the host end's `user`, or either socket id in its environment    | the unit tests, `VerdictSocketOwnerTests`                         |
+| Let a stack mount another slot's verdict volume, or read `ro,rw` as read-only | the unit tests, `VerdictSocketOwnerTests`                         |
 
 ## How it is delivered
 
@@ -299,9 +313,8 @@ The wiring that change makes has three requirements:
   reads that policy back, but the order is the playbook's to keep. It also runs after the deploy
   verifier role, which installs the verifier the deploy wrapper runs for a tenant's first pin
   (`ansible/checks/test_deploy_verifier_coverage.py` holds this for every playbook that applies the
-  role). It runs last of the host's
-  roles, because it restarts the tenants' live stacks: a failure there must not hold other roles
-  back.
+  role). No playbook applies tenant_compose yet; its place among the host's roles is set by the
+  change that wires it in.
 - The role runs after the tenant onboarding role, which installs the volume program. The role
   fails closed, naming the program, when it is absent.
 - The stacks' text and the secrets reach a host that pulls its own commit with no extra variables
@@ -376,5 +389,9 @@ rebuilds the whole file, and a key that only ever had a typed value (such as
 - The stamp is written last. A task added after the restart must not be able to fail without the stamp
   being left behind, and nothing may be recorded before the unit is shown active.
 - A new input is added to `meta/argument_specs.yml` and `defaults/main.yml` together, with the role's prefix.
+- The module has a byte-identical copy in `roles/tenant_entry/files/`, which the tenant entry point's
+  `stack` verb runs on a new tenant's compose text so that both routes use one judge. A change to the
+  module is copied there in the same change; a test in `tenant_entry` fails when the two differ. The
+  module imports Ansible's own code inside `main()` so that copy can be loaded without Ansible.
 - Run the harness, the unit tests and the type check before every push, and never loosen
   `verify.yml` or a unit test to make a change pass.

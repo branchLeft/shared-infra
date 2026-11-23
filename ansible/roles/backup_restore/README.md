@@ -37,7 +37,12 @@ points `current` at the release, and this role reads that release.
    and starts the timer only when it reports every input in place. False leaves
    the timer as it is on the host, unless `backup_restore_state_copy_timer_may_disable`
    is true; then it stops and disables it.
-6. **Refuses the restore-drill timer.** `backup_restore_drill_timer_enabled: true`
+6. **Raises an alert when the drill unit fails.** It writes the unit
+   `branchleft-restore-drill-failed.service` and a second drop-in for the drill
+   unit, `/etc/systemd/system/branchleft-restore-drill.service.d/20-on-failure.conf`,
+   whose only line is `OnFailure=branchleft-restore-drill-failed.service`. See
+   "The failure alert" below.
+7. **Refuses the restore-drill timer.** `backup_restore_drill_timer_enabled: true`
    fails the role with a message. The drill reads each tenant's private age
    identity, and no identity is placed on this host: how one would be kept is an
    open owner decision. The only thing the role does to the drill timer is stop
@@ -49,6 +54,31 @@ one is `install_state_copy.py --check`, which changes nothing, when the
 state-copy timer is asked for. It does not create a secret, an age keypair, a
 bucket or a key, take the first copy, prove the alert, run a drill, or touch a
 Pulumi state backend.
+
+### The failure alert
+
+The drill is a oneshot unit that the release pins, so a drill that crashes before it writes
+its metrics, is killed, or runs into its three-hour timeout leaves no sign that Prometheus can
+read: `node_exporter` has no systemd collector, and the drill's own gauges are written only
+by a run that got that far. The role closes that with a chain of four links, each held to its
+other home by a test.
+
+1. The drop-in `20-on-failure.conf` gives the drill unit `OnFailure=` the unit below. It sorts
+   after the registry key drop-in (`10-registry-key.conf`) and sets nothing else.
+2. `branchleft-restore-drill-failed.service` is a oneshot unit with one command,
+   `install -D -m 0644 /dev/null /var/lib/branchleft/backup-worker-exporter/restore_drill_unit_failed.prom`.
+   It needs no credential, no network, and none of the drill's own dependencies, so a drill
+   whose `docker.service` failed is marked too.
+3. `node_exporter` reads that directory and reports the file's modification time as
+   `node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"}`.
+4. The rule `RestoreDrillUnitFailed` in `hetzner/monitoring/render.ts` fires while that time is
+   later than `restore_drill_last_run_timestamp_seconds`, or the drill has never written that
+   gauge. A later run that records its result clears it. It is a warning with no
+   `owner_action`, like the rest of the `backup` group, so Alertmanager sends it to the
+   on-host mailbox.
+
+The failure unit has no `OnFailure=` of its own, and the file is never removed by the role:
+the rule compares times, so an old mark does no harm once a run has recorded itself after it.
 
 ### Where Nextcloud comes in
 
@@ -162,6 +192,9 @@ drill's timer stays refused either way.
   directory reaches it through the unit and not through the pinned release files. A directory that
   is not there is anonymous access. The value is `backup_restore_registry_docker_config`, a copy of
   `deploy_verifier_registry_docker_dir` held to it by `ansible/checks/test_registry_key_callers.py`.
+- The failure unit `/etc/systemd/system/branchleft-restore-drill-failed.service` and a second drop-in
+  for the drill unit, `.../branchleft-restore-drill.service.d/20-on-failure.conf`, both `root:root`
+  `0644`, written from templates, with the same systemd reload. See "The failure alert".
 - `/etc/branchleft/secrets`, `root:root` `0700`. The role never creates a file in it.
 - `/etc/branchleft/state-copy.env` and, when switched on, `/etc/branchleft/restore-drill.env`,
   each `root:root` `0600`, created empty first when absent, their owner, group and
@@ -220,26 +253,29 @@ database tools.
 One row per edit, with the scenario run and a restore afterwards. The assertion
 named is the one that goes red.
 
-| Edit to the role                                                      | Step that fails | Assertion that names it                                                                                       |
-| --------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------- |
-| `backup_restore_state_copy_timer_enabled` default changed to `true`   | `verify`        | "The state-copy timer is not off after a default apply; its default must be false."                           |
-| The `may_disable` gate removed from the state-copy timer task         | `verify`        | "The default apply stopped a state-copy timer that was on; the timer task must be gated on ..."               |
-| The `may_disable` gate removed from the drill timer task              | `verify`        | "The default apply stopped a restore-drill timer that was on; the task must be gated on ..."                  |
-| The task that holds the drill timer off deleted                       | `verify`        | "The restore-drill timer is still on after an apply with may_disable true."                                   |
-| The assert that refuses the drill timer deleted                       | `verify`        | "ACCEPTED: the role did not refuse the case drill timer asked for."                                           |
-| The installer's `--check` task and its assert deleted                 | `verify`        | "ACCEPTED: ... state-copy timer asked for while the installer reports a missing input."                       |
-| `no_log` removed from the task that assembles an environment          | `verify`        | "A secret reached the output of a run, in plain text or as the base64 slurp returns it. A no_log is missing." |
-| `no_log` removed from the task that reads a secret file               | `verify`        | the same assertion                                                                                            |
-| The private-identity assert on a secret file deleted                  | `verify`        | "Case secret file holds a private identity: the role did not refuse with the expected text ..."               |
-| The private-identity assert on the assembled environment deleted      | `verify`        | "ACCEPTED: ... key id is a private identity."                                                                 |
-| A pattern assert on an input deleted                                  | `verify`        | "ACCEPTED: ... estate bucket not a bucket name."                                                              |
-| The three-buckets assert deleted                                      | `verify`        | "ACCEPTED: ... estate bucket is the destination."                                                             |
-| The destination's bucket derived from the wrong variable              | `verify`        | "these names have a wrong or an extra value: STATE_COPY_DEST_BUCKET"                                          |
-| The secret file's mode check deleted                                  | `verify`        | "ACCEPTED: ... secret file is open to the group."                                                             |
-| The release-file stat assert deleted                                  | `verify`        | "ACCEPTED: ... a file an installer requires is not in the release."                                           |
-| The missing-secret gate removed from the state-copy environment write | `verify`        | the role fails reading a file that is not there, in the case of a secret file that is not placed              |
-| A pin in `backup_worker_release_files` changed                        | `verify`        | "The pin for ... in backup_worker_release_files is missing or is not the sha256 recorded ..."                 |
-| A name in `backup_restore_state_copy_env_names` changed               | `verify`        | "The role's environment names differ from the names the installers and the drill require."                    |
+| Edit to the role                                                        | Step that fails | Assertion that names it                                                                                                                 |
+| ----------------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `backup_restore_state_copy_timer_enabled` default changed to `true`     | `verify`        | "The state-copy timer is not off after a default apply; its default must be false."                                                     |
+| The `may_disable` gate removed from the state-copy timer task           | `verify`        | "The default apply stopped a state-copy timer that was on; the timer task must be gated on ..."                                         |
+| The `may_disable` gate removed from the drill timer task                | `verify`        | "The default apply stopped a restore-drill timer that was on; the task must be gated on ..."                                            |
+| The task that holds the drill timer off deleted                         | `verify`        | "The restore-drill timer is still on after an apply with may_disable true."                                                             |
+| The assert that refuses the drill timer deleted                         | `verify`        | "ACCEPTED: the role did not refuse the case drill timer asked for."                                                                     |
+| The installer's `--check` task and its assert deleted                   | `verify`        | "ACCEPTED: ... state-copy timer asked for while the installer reports a missing input."                                                 |
+| `no_log` removed from the task that assembles an environment            | `verify`        | "A secret reached the output of a run, in plain text or as the base64 slurp returns it. A no_log is missing."                           |
+| `no_log` removed from the task that reads a secret file                 | `verify`        | the same assertion                                                                                                                      |
+| The private-identity assert on a secret file deleted                    | `verify`        | "Case secret file holds a private identity: the role did not refuse with the expected text ..."                                         |
+| The private-identity assert on the assembled environment deleted        | `verify`        | "ACCEPTED: ... key id is a private identity."                                                                                           |
+| A pattern assert on an input deleted                                    | `verify`        | "ACCEPTED: ... estate bucket not a bucket name."                                                                                        |
+| The three-buckets assert deleted                                        | `verify`        | "ACCEPTED: ... estate bucket is the destination."                                                                                       |
+| The destination's bucket derived from the wrong variable                | `verify`        | "these names have a wrong or an extra value: STATE_COPY_DEST_BUCKET"                                                                    |
+| The secret file's mode check deleted                                    | `verify`        | "ACCEPTED: ... secret file is open to the group."                                                                                       |
+| The release-file stat assert deleted                                    | `verify`        | "ACCEPTED: ... a file an installer requires is not in the release."                                                                     |
+| The missing-secret gate removed from the state-copy environment write   | `verify`        | the role fails reading a file that is not there, in the case of a secret file that is not placed                                        |
+| A pin in `backup_worker_release_files` changed                          | `verify`        | "The pin for ... in backup_worker_release_files is missing or is not the sha256 recorded ..."                                           |
+| A name in `backup_restore_state_copy_env_names` changed                 | `verify`        | "The role's environment names differ from the names the installers and the drill require."                                              |
+| The `OnFailure=` line deleted from the drill's drop-in template         | `verify`        | "The drill unit does not name the failure unit in OnFailure=." (and the unit test `test_the_drop_in_names_the_failure_unit_under_unit`) |
+| The drop-in task deleted                                                | `verify`        | the same assertion, and `test_both_files_are_root_0644_from_their_templates_and_reload_systemd`                                         |
+| The failure unit's `ExecStart` changed to a command that writes no mark | `verify`        | "A failed drill did not leave its mark in the textfile directory." (the Molecule case fails the drill for real)                         |
 
 Reviewed or asserted, but not shown to fail by a sabotage run: the unit
 checksums in `verify`, the secrets directory mode, and the second-run check
@@ -263,6 +299,16 @@ checksums in `verify`, the secrets directory mode, and the second-run check
   the checks and tasks that need the release are skipped there (`check-fresh`).
   The harness does not catch a silent skip, and this is the review of it (ANS-10).
   A real apply, and `check-configured`, do run them.
+- **The alert rule is not proved by this scenario.** The container has no Prometheus. The rule
+  and its four cases are in `hetzner/monitoring` (`alert_rules_test.yml`, run by `promtool`),
+  and the file name the role writes and the rule selects is held equal by
+  `tests/unit/test_backup_restore_on_failure.py`. The first live proof is a real failure on ops1
+  (ANS-17).
+- **The `verify` case fails the drill by a test drop-in, not by the real program.** It replaces
+  the placeholder drill's `ExecStart` with `/bin/false` for one start, asserts the mark, and
+  removes both the drop-in and the mark.
+- **`install -D` creates the textfile directory when it is missing.** The mode is `0755` from
+  the unit's `UMask=0022`, the mode `node_exporter` expects; the `node_exporter` role owns it.
 - **The restore-drill timer-on path does not exist**, so there is nothing to test.
 - **The secret files are checked once, then read.** A plain file that is not a link,
   in a root-only directory, so only root could swap it between the check and the read.

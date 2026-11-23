@@ -2,6 +2,7 @@
 - host_inputs
 - deploy_tooling
 - deploy_slot_keys
+- promote_host
 - export_bundler
 - tenant_onboarding
 - deploy_verifier

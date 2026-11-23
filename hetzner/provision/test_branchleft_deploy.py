@@ -615,6 +615,9 @@ TENANT_DIGEST = "b" * 64
 TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
 TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 PERCONA_SIGNER = "branchLeft/ghost-platform/.github/workflows/percona-image.yml"
+WEBSITE = f"ghcr.io/branchleft/website@sha256:{'c' * 64}"
+WEBSITE_SIGNER = "branchLeft/website/.github/workflows/ci.yml"
+MYSQLD_EXPORTER_SIGNER = "branchLeft/ghost-platform/.github/workflows/mysqld-exporter-image.yml"
 # The digest the Percona image workflow pushed, scanned (blocking=0) and attested on
 # ghost-platform main, run 43331723453 at commit 1289eb507b95. The db_t1 role pins the same one.
 PERCONA_DIGEST = "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
@@ -702,8 +705,56 @@ class AttestationTests(unittest.TestCase):
                     "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
                 ),
                 "ghcr.io/branchleft/percona-server": PERCONA_SIGNER,
+                "ghcr.io/branchleft/website": WEBSITE_SIGNER,
+                "ghcr.io/branchleft/mysqld-exporter": MYSQLD_EXPORTER_SIGNER,
             },
         )
+
+    def test_the_website_image_is_verified_against_its_own_repository_and_workflow(self):
+        # The register's signer names the repository, so the verifier is asked about
+        # branchLeft/website and not about ghost-platform.
+        run = FakeRun([0, 0])
+        self.deploy_to("website", WEBSITE, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, WEBSITE, "branchLeft/website", WEBSITE_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("website", self.config_dir)), WEBSITE
+        )
+
+    def test_an_unsigned_website_digest_is_refused_before_any_host_change(self):
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy_to("website", WEBSITE, run)
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+        self.assertFalse(os.path.exists(bd.image_env_path("website", self.config_dir)))
+
+    def test_the_website_image_is_no_longer_exempt_on_any_stack(self):
+        for stack, names in bd.UNATTESTED_STACK_IMAGES.items():
+            with self.subTest(stack=stack):
+                self.assertNotIn("ghcr.io/branchleft/website", names)
+
+    def test_a_register_signer_names_the_repository_that_owns_its_workflow(self):
+        for name, signer in bd.ATTESTED_IMAGES.items():
+            with self.subTest(name=name):
+                repo = bd.attested_repo(signer)
+                self.assertTrue(signer.startswith(f"{repo}/.github/workflows/"), signer)
+        self.assertEqual(bd.attested_repo(TENANT_SIGNER), bd.ATTESTED_REPO)
+        self.assertEqual(bd.attested_repo(WEBSITE_SIGNER), "branchLeft/website")
+
+    def test_a_signer_that_is_not_a_workflow_path_is_refused_rather_than_guessed(self):
+        for signer in (
+            "",
+            "branchLeft/website",
+            "branchLeft/website/ci.yml",
+            "branchLeft/website/.github/workflows/",
+            "branchLeft/website/.github/workflows/a/b.yml",
+            "branchLeft/website/.github/workflows/ci.yml\n",
+            "a b/website/.github/workflows/ci.yml",
+        ):
+            with self.subTest(signer=signer), self.assertRaises(bd.DeployError):
+                bd.attested_repo(signer)
 
     def test_the_scanned_percona_digest_is_verified_against_its_own_workflow_and_pinned(self):
         run = FakeRun([0, 0])
@@ -839,12 +890,13 @@ class AttestationTests(unittest.TestCase):
         edge_caddy = f"ghcr.io/branchleft/edge-caddy@sha256:{'d' * 64}"
         self.assert_refused_with_nothing_run("blog", edge_caddy)
         self.assert_refused_with_nothing_run(
-            "edge", f"ghcr.io/branchleft/website@sha256:{'d' * 64}"
+            "edge", f"ghcr.io/branchleft/publicpress-website@sha256:{'d' * 64}"
         )
 
     def test_every_stack_pinned_through_the_wrapper_today_still_deploys_its_image(self):
+        # The website is not here: its image is registered, so it is verified
+        # (test_the_website_image_is_verified_against_its_own_repository_and_workflow).
         today = {
-            "website": "ghcr.io/branchleft/website",
             "publicpress-website": "ghcr.io/branchleft/publicpress-website",
             "edge": "ghcr.io/branchleft/edge-caddy",
             "db": "mysql:8.4",
@@ -903,12 +955,11 @@ class AttestationTests(unittest.TestCase):
         self.assertEqual(
             bd.UNATTESTED_STACK_IMAGES,
             {
-                "website": frozenset({"ghcr.io/branchleft/website"}),
                 "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
                 "edge": frozenset(
                     {"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}
                 ),
-                "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+                "db": frozenset({"mysql"}),
                 "control-plane": frozenset(
                     {"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}
                 ),
@@ -1606,13 +1657,18 @@ PROBE = "    healthcheck:\n      test: ['CMD', 'true']\n"
 OVERRIDE = "compose.override.yml"
 
 # The third-party sidecars the committed stacks run beside their pin, by stack. Each is named
-# for its stack in UNATTESTED_STACK_IMAGES: none has a signing workflow that registers it. The
-# db exporter's entry is temporary, until the exporter image is signed and registered.
+# for its stack in UNATTESTED_STACK_IMAGES: none has a signing workflow that registers it.
 SIDECARS = {
-    "db": frozenset({"prom/mysqld-exporter"}),
     "edge": frozenset({"docker.io/crowdsecurity/crowdsec"}),
     "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
 }
+
+# The sidecars the committed stacks run that a signing workflow attests: each is in
+# ATTESTED_IMAGES, so the wrapper verifies it and no exemption list names it.
+ATTESTED_SIDECARS = {
+    "db": frozenset({"ghcr.io/branchleft/mysqld-exporter"}),
+}
+MYSQLD_EXPORTER_DIGEST = "sha256:25d73600fb442f5f50fa772a9201d0a5a5bdc90d82dbbb6c75e83c1656329290"
 
 
 def service_block(name, image, extra=""):
@@ -2293,7 +2349,10 @@ class CommittedStackTests(unittest.TestCase):
     def test_each_committed_stack_runs_exactly_the_sidecars_the_tests_count(self):
         for stack in COMMITTED_STACKS:
             with self.subTest(stack):
-                self.assertEqual(self.sidecars_of(stack), set(SIDECARS.get(stack, ())))
+                self.assertEqual(
+                    self.sidecars_of(stack),
+                    set(SIDECARS.get(stack, ())) | set(ATTESTED_SIDECARS.get(stack, ())),
+                )
 
     def test_each_sidecar_is_registered_or_named_for_its_stack(self):
         for stack in COMMITTED_STACKS:
@@ -2303,6 +2362,24 @@ class CommittedStackTests(unittest.TestCase):
                         name in bd.ATTESTED_IMAGES
                         or name in bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset())
                     )
+
+    def test_the_db_exporter_is_the_registered_image_pinned_by_digest_and_verified(self):
+        directory = self.stack_directory(COMMITTED_STACKS["db"])
+        pin = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
+        run = FakeRun([0, 0])
+        bd.verify_compose_images("db", directory, pin, run=run, render=self.render)
+        exporter = f"ghcr.io/branchleft/mysqld-exporter@{MYSQLD_EXPORTER_DIGEST}"
+        self.assertEqual(
+            [call[:4] for call in run.calls],
+            [[bd.VERIFIER, exporter, bd.ATTESTED_REPO, MYSQLD_EXPORTER_SIGNER]],
+        )
+
+    def test_the_db_exporter_the_verifier_refuses_stops_the_db_deploy(self):
+        directory = self.stack_directory(COMMITTED_STACKS["db"])
+        pin = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.verify_compose_images("db", directory, pin, run=FakeRun([1]), render=self.render)
+        self.assertIn("mysqld-exporter", str(raised.exception))
 
     def test_each_committed_stack_verifies_with_the_shipped_lists(self):
         for stack, relative in COMMITTED_STACKS.items():

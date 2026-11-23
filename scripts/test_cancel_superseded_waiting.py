@@ -28,6 +28,7 @@ MAIL = "Apply (mail, pulumi up)"
 NETWORK = "Apply (hetzner network, pulumi up)"
 ESTATE = "Apply (hetzner estate, pulumi up)"
 DNS = "Apply (hetzner dns, pulumi up)"
+TENANTS = "Apply (hetzner tenants, pulumi up)"
 PLAN_MAIL = "Plan (mail, pulumi preview)"
 
 
@@ -35,12 +36,13 @@ def job(name, status, conclusion=None):
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-def planned(mail=False, network=False, estate=False, dns=False):
+def planned(mail=False, network=False, estate=False, dns=False, tenants=False):
     return {
         "mail": mail,
         "hetzner_network": network,
         "hetzner_estate": estate,
         "hetzner_dns": dns,
+        "hetzner_tenants": tenants,
     }
 
 
@@ -112,6 +114,20 @@ class KeepRules(unittest.TestCase):
         self.assertEqual(verdict, "cancel", reason)
         self.assertIn(DNS, reason)
 
+    def test_clears_a_waiting_tenants_apply_when_this_push_planned_tenants(self):
+        verdict, reason = superseded.decide([job(TENANTS, "waiting")], planned(tenants=True))
+        self.assertEqual(verdict, "cancel", reason)
+        self.assertIn(TENANTS, reason)
+
+    def test_keeps_a_waiting_tenants_apply_when_this_push_did_not_plan_tenants(self):
+        # The tenants apply is a stack of its own: a push that planned every
+        # other stack must not cancel a run still waiting to apply tenants.
+        verdict, reason = superseded.decide(
+            [job(TENANTS, "waiting")], planned(mail=True, network=True, estate=True, dns=True)
+        )
+        self.assertEqual(verdict, "keep", reason)
+        self.assertIn("did not plan its stack", reason)
+
     def test_keeps_an_unrecognised_apply_name(self):
         jobs = [job("Apply (somewhere else, pulumi up)", "waiting")]
         verdict, _ = superseded.decide(jobs, planned(mail=True, network=True, estate=True))
@@ -120,7 +136,7 @@ class KeepRules(unittest.TestCase):
 
 class ListingReading(unittest.TestCase):
     def run_main(self, text):
-        argv = ["--mail", "true", "--network", "false", "--estate", "true", "--dns", "false"]
+        argv = ["--mail", "true", "--network", "false", "--estate", "true", "--dns", "false", "--tenants", "false"]
         out = io.StringIO()
         original = sys.stdin
         sys.stdin = io.StringIO(text)
@@ -141,6 +157,14 @@ class ListingReading(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as raised:
                 superseded.main(["--mail", "true", "--network", "false", "--estate", "true"])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_the_tenants_flag_is_required(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                superseded.main(
+                    ["--mail", "true", "--network", "false", "--estate", "true", "--dns", "false"]
+                )
         self.assertEqual(raised.exception.code, 2)
 
     def test_an_unreadable_listing_exits_nonzero_and_prints_nothing(self):

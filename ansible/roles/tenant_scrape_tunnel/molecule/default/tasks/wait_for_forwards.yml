@@ -1,0 +1,22 @@
+---
+# Waits until every forward of the tunnel listens on the private address, and when one does not,
+# fails with the unit's status and journal (unit_diagnostics.yml). The unit was started before the
+# target host's half installed the key, so it has been retrying on a growing delay: the forwards
+# come up once a connection is made, which is the retry the design relies on. Both scenarios wait
+# here, so the wait and its failure report have one home.
+- name: Wait for each forward, and report the unit when one does not listen
+  block:
+    - name: Wait for each forward to listen on the private address
+      ansible.builtin.wait_for:
+        host: '{{ scenario_bind_address }}'
+        port: '{{ item.local_port }}'
+        timeout: 120
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.local_port }}'
+  rescue:
+    - name: Fail with the unit's status and journal
+      ansible.builtin.include_tasks: unit_diagnostics.yml
+      vars:
+        diagnose_reason: >-
+          A forward did not listen on {{ scenario_bind_address }} within the wait, so the tunnel never came up.

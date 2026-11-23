@@ -113,13 +113,16 @@ STACKS_ROUTED = mock.patch.dict(
 )
 # Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
 JUMP_KEY = "ci_jump_user"
+# Typed only too: the mail host's publish-only ntfy token, one value that edge1 and mx1 both hold.
+MX1_KEY = "ntfy_pager_mx1_token"
+MX1_HOST_KEY = "mx1_abuse_page_token"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
     {"slug": "alpha", "recipient": RECIPIENT_A},
     {"slug": "beta", "recipient": RECIPIENT_B},
 ]
-EDGE1_KEYS = (*EDGE1_LIVE, JUMP_KEY)
+EDGE1_KEYS = (*EDGE1_LIVE, MX1_KEY, JUMP_KEY)
 OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
 
 
@@ -219,6 +222,12 @@ class TableTests(unittest.TestCase):
         self.assertEqual([], table_problems(self.rows))
         for host, keys in tool.HOSTS.items():
             self.assertEqual(len(keys), len(set(keys)), host)
+
+    def test_a_set_only_key_is_an_optional_input_of_every_row_that_holds_it(self) -> None:
+        optional = mapping_of(self.loader["host_inputs_optional_by_host"])
+        for host, keys in tool.HOSTS.items():
+            for key in tool.SET_ONLY.intersection(keys):
+                self.assertIn(key, [str(k) for k in list_of(optional.get(host, []))], host)
 
     def test_a_new_loader_key_without_a_tool_mapping_is_found(self) -> None:
         rows = {host: [*keys] for host, keys in self.rows.items()}
@@ -396,6 +405,7 @@ class Rig:
         self.cfg.chmod(0o755)
         self.answers = list(answers)
         self.jump_answer: str | None = value_for(JUMP_KEY)
+        self.mx1_answer: str | None = value_for(MX1_KEY)
         self.path_answers = list(path_answers)
         self.prompts: list[str] = []
         self.flushes = 0
@@ -435,6 +445,10 @@ class Rig:
         # test queues, so it is answered apart from the queue and the other prompts keep theirs.
         if prompt.startswith(f"{JUMP_KEY}: ") and self.jump_answer is not None:
             return self.jump_answer
+        if prompt.startswith(f"{MX1_KEY}: ") and self.mx1_answer is not None:
+            return self.mx1_answer
+        if prompt.startswith(f"{MX1_HOST_KEY}: ") and self.mx1_answer is not None:
+            return self.mx1_answer
         if not self.answers:
             raise EOFError
         return self.answers.pop(0)
@@ -555,18 +569,54 @@ def app1_document(stacks: bool = True) -> dict[str, object]:
 
 
 class FillTests(unittest.TestCase):
-    def test_edge1_is_filled_from_the_live_files_and_only_the_jump_account_is_typed(self) -> None:
+    def test_edge1_is_filled_from_the_live_files_and_only_two_inputs_are_typed(self) -> None:
         rig = Rig(self)
         rig.seed_edge1()
         self.assertEqual(0, rig.run("--host", "edge1"))
         self.assertEqual(edge1_document(), rig.document())
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertEqual([f"{MX1_KEY}: ", f"{JUMP_KEY}: "], rig.prompts)
         for key in EDGE1_KEYS:
             self.assertIn(key, rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
-        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn(f"typed (2): {MX1_KEY}, {JUMP_KEY}", rig.stdout)
         self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
+
+    def test_mx1_has_no_live_file_and_its_one_input_is_typed(self) -> None:
+        # The mail host's file holds the publish-only token and nothing else, typed hidden.
+        rig = Rig(self)
+        self.assertEqual(0, rig.run("--host", "mx1"))
+        self.assertEqual({MX1_HOST_KEY: value_for(MX1_KEY)}, rig.document())
+        self.assertEqual([f"{MX1_HOST_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (1): {MX1_HOST_KEY}", rig.stdout)
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
+
+    def test_mx1_with_no_terminal_writes_nothing_and_names_the_key(self) -> None:
+        rig = Rig(self)
+        rig.mx1_answer = None
+        self.assertEqual(1, rig.run("--host", "mx1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertIn(f"still missing (1): {MX1_HOST_KEY}", rig.stdout)
+
+    def test_the_same_token_on_both_hosts_is_one_value_typed_twice_never_printed(self) -> None:
+        edge = Rig(self)
+        mail = Rig(self)
+        edge.seed_edge1()
+        self.assertEqual(0, edge.run("--host", "edge1"))
+        self.assertEqual(0, mail.run("--host", "mx1"))
+        self.assertEqual(edge.document()[MX1_KEY], mail.document()[MX1_HOST_KEY])
+
+    def test_the_mail_host_token_is_set_alone_on_an_edge1_file_placed_without_it(self) -> None:
+        rig = Rig(self)
+        rig.seed_edge1()
+        document = {k: v for k, v in edge1_document().items() if k != MX1_KEY}
+        rig.put(tool.DEST_NAME, json.dumps(document))
+        self.assertEqual(0, rig.run("--host", "edge1", "--set", MX1_KEY))
+        self.assertEqual(edge1_document(), rig.document())
+        self.assertEqual([f"{MX1_KEY}: "], rig.prompts)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
 
     def test_edget_has_no_live_file_and_only_the_jump_account_is_typed(self) -> None:
         # edge-t is a new host: nothing on it to read, so the one input of its row is typed.
@@ -636,17 +686,19 @@ class FillTests(unittest.TestCase):
         rig = Rig(self, answers=["typed-snds-value"])
         rig.seed_edge1(skip=["monitoring_stack_snds_data_url"])
         self.assertEqual(0, rig.run("--host", "edge1"))
-        self.assertEqual(2, len(rig.prompts))
         self.assertIn("monitoring_stack_snds_data_url", rig.prompts[0])
         self.assertEqual("typed-snds-value", rig.document()["monitoring_stack_snds_data_url"])
-        self.assertIn(f"typed (2): monitoring_stack_snds_data_url, {JUMP_KEY}", rig.stdout)
+        self.assertEqual(3, len(rig.prompts))
+        self.assertIn(
+            f"typed (3): monitoring_stack_snds_data_url, {MX1_KEY}, {JUMP_KEY}", rig.stdout
+        )
         self.assertNotIn("typed-snds-value", rig.everything)
 
     def test_a_live_value_is_never_prompted_over(self) -> None:
         rig = Rig(self, answers=["typed"])
         rig.seed_edge1()
         rig.run("--host", "edge1")
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertEqual([f"{MX1_KEY}: ", f"{JUMP_KEY}: "], rig.prompts)
         self.assertEqual(["typed"], rig.answers)
 
     def test_an_empty_answer_writes_nothing_and_names_the_key(self) -> None:
@@ -666,6 +718,7 @@ class FillTests(unittest.TestCase):
     def test_no_terminal_writes_nothing_and_lists_every_missing_key(self) -> None:
         rig = Rig(self)
         rig.jump_answer = None
+        rig.mx1_answer = None
         self.assertEqual(1, rig.run("--host", "edge1"))
         self.assertFalse(rig.dest.exists())
         self.assertIn(f"still missing ({len(EDGE1_KEYS)}):", rig.stdout)
@@ -1315,7 +1368,7 @@ class WriteTests(unittest.TestCase):
         self.assertFalse(rig.dest.exists())
 
     def test_an_unknown_host_is_refused(self) -> None:
-        for host in ("db1", "demo1"):
+        for host in ("db1",):
             rig = Rig(self)
             self.assertEqual(1, rig.run("--host", host), host)
             self.assertFalse(rig.dest.exists())

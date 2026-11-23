@@ -1,0 +1,66 @@
+---
+# Constants of the service, not inputs: role variables outrank every value a
+# caller passes, so a caller cannot move them.
+media_backup_account: backup-worker
+media_backup_base_dir: /opt/branchleft/media-backup
+media_backup_releases_dir: /opt/branchleft/media-backup/releases
+media_backup_current_link: /opt/branchleft/media-backup/current
+media_backup_release_dir: '{{ media_backup_releases_dir }}/{{ media_backup_source_sha }}'
+media_backup_program: '{{ media_backup_current_link }}/infra/provisioning/scripts/media_backup_weekly.py'
+media_backup_unit_dir: /etc/systemd/system
+media_backup_service_unit: branchleft-media-backup.service
+media_backup_timer_unit: branchleft-media-backup.timer
+
+# The files the owner places and the role reads only by stat. The recipients
+# file is the nightly worker's: the role looks at it and never writes it.
+media_backup_env_file: /etc/branchleft/media-backup.env
+media_backup_folders_file: /etc/branchleft/backup-worker-media-folders
+media_backup_recipients_file: /etc/branchleft/backup-worker-recipients
+media_backup_signing_key_file: /etc/branchleft/media-backup-manifest-signing-key
+
+# The owner, group and mode of each owner-placed file: the one home of those
+# values. Only attributes are here, never content. Each is found by path below.
+media_backup_private_files:
+  - path: '{{ media_backup_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  - path: '{{ media_backup_folders_file }}'
+    owner: root
+    group: '{{ media_backup_account }}'
+    mode: '0640'
+media_backup_env_private: >-
+  {{ media_backup_private_files
+     | ansible.builtin.selectattr('path', 'equalto', media_backup_env_file)
+     | ansible.builtin.first }}
+media_backup_folders_private: >-
+  {{ media_backup_private_files
+     | ansible.builtin.selectattr('path', 'equalto', media_backup_folders_file)
+     | ansible.builtin.first }}
+
+# The directories of a release. The program is a plain file root owns and nobody
+# else can write.
+media_backup_release_subdirs:
+  - infra
+  - infra/provisioning
+  - infra/provisioning/scripts
+  - db
+  - db/provision
+
+# The files a release must hold: the program and what it imports.
+media_backup_required_paths:
+  - infra/provisioning/scripts/media_backup_weekly.py
+  - infra/provisioning/scripts/media_backup_restore.py
+  - infra/provisioning/scripts/shared_objectstorage.py
+  - infra/provisioning/scripts/backup_recipients.py
+  - db/provision/objectstorage.py
+
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+media_backup_sha_pattern: '^[0-9a-f]{40}\Z'
+media_backup_checksum_pattern: '^[0-9a-f]{64}\Z'
+media_backup_path_pattern: '^[a-z0-9_]+(/[a-z0-9_]+)*[.]py\Z'
+media_backup_calendar_pattern: '^[A-Za-z0-9 :*,./-]+\Z'
+media_backup_memory_pattern: '^[1-9][0-9]*[MG]\Z'
+# The program's own ceiling (HARD_CEILING_REQUESTS_PER_SECOND), held here so a
+# value it would refuse never reaches the unit.
+media_backup_rate_max: 400

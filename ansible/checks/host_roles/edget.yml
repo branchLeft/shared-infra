@@ -3,8 +3,11 @@
 # [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
 # network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the
 # second hop of the pipeline's route (ws#2899); ci_login and deploy_tooling follow with the
-# edge-t server (ws#2898), and the edge stack as a later change.
+# edge-t server, and the edge stack as a later change. tenant_scrape_tunnel is edge-t's half of
+# the restricted tunnel that edge1's Prometheus scrapes the tenant node exporters through.
 - host_inputs
 - host_baseline
 - egress_nat
 - ci_jump
+- tenant_scrape_tunnel
+- node_exporter

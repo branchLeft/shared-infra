@@ -659,6 +659,54 @@ class BundleTests(unittest.TestCase):
         self.assertIn(trigger.Why.BUNDLE_OVERSIZE.value, result.errors)
         self.assert_nothing_left(host)
 
+    def fill_spool(self, host: Host, count: int, *, size: int = 1, age: float = 0) -> list[Path]:
+        """Put ``count`` files in the host's spool, each ``age`` seconds old; return them."""
+        spool = host.state / "spool"
+        host.state.mkdir(mode=0o700, exist_ok=True)
+        spool.mkdir(mode=0o700, exist_ok=True)
+        files = []
+        for number in range(count):
+            held = spool / f"held-{number}.bundle"
+            held.write_bytes(b"x" * size)
+            if age:
+                os.utime(held, (time.time() - age, time.time() - age))
+            files.append(held)
+        return files
+
+    def test_a_full_spool_refuses_the_next_upload_and_leaves_the_others_alone(self) -> None:
+        host = self.make_host()
+        host.seed(self.commit("c0"))
+        held = self.fill_spool(host, trigger.MAX_SPOOL_FILES)
+        with self.untouched(host):
+            result = self.push(host, self.commit("c1"), bundle=self.bundle("c1"))
+        self.assert_refused(result, "spool-full")
+        self.assertIn(trigger.Why.SPOOL_FULL_FILES.value, result.errors)
+        self.assertEqual([], host.applied())
+        self.assertEqual(sorted(held), sorted((host.state / "spool").iterdir()))
+
+    def test_an_upload_that_would_pass_the_spool_byte_bound_is_refused_and_removed(self) -> None:
+        host = self.make_host()
+        host.seed(self.commit("c0"))
+        held = self.fill_spool(host, 1, size=400)
+        limits = trigger.Receiving(max_spool_bytes=500)
+        self.assertGreater(self.bundle("c1").stat().st_size, 100)
+        with self.untouched(host):
+            result = self.push(host, self.commit("c1"), bundle=self.bundle("c1"), receiving=limits)
+        self.assert_refused(result, "spool-full")
+        self.assertIn(trigger.Why.SPOOL_FULL_BYTES.value, result.errors)
+        self.assertEqual([], host.applied())
+        self.assertEqual(held, list((host.state / "spool").iterdir()))
+
+    def test_files_a_killed_run_left_do_not_fill_the_spool_for_good(self) -> None:
+        host = self.make_host()
+        host.seed(self.commit("c0"))
+        old = self.fill_spool(host, trigger.MAX_SPOOL_FILES, age=10_000)
+        result = self.push(host, self.commit("c1"), bundle=self.bundle("c1"))
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=applied"), result.summary)
+        self.assertEqual(1, len(host.applied()))
+        self.assertFalse(any(path.exists() for path in old))
+
     def test_an_object_that_fails_git_s_object_check_is_refused_even_though_the_bundle_verifies(
         self,
     ) -> None:
@@ -956,8 +1004,13 @@ class ConfigSourceTests(unittest.TestCase):
         # The check the earlier program made, written out: no key outside its sets.
         self.assertTrue(trigger.CONFIG_KEYS <= set(data) <= old_keys)
 
-    def test_the_new_key_is_the_only_one_added_to_the_optional_set(self) -> None:
-        self.assertEqual({"steps", "source"}, set(trigger.OPTIONAL_CONFIG_KEYS))
+    def test_the_optional_set_is_exactly_the_keys_a_host_may_leave_out(self) -> None:
+        # ``release_signers`` and ``require_release_tag`` are the release-tag route's two keys
+        # (test_pull_trigger_release_tag); a host that does not use it carries neither.
+        self.assertEqual(
+            {"steps", "source", "release_signers", "require_release_tag"},
+            set(trigger.OPTIONAL_CONFIG_KEYS),
+        )
 
 
 class PullRouteUnchangedTests(unittest.TestCase):
@@ -1108,6 +1161,29 @@ class StreamTests(unittest.TestCase):
         self.assertIn(trigger.Why.BUNDLE_OVERSIZE.value, str(caught.exception))
         self.assertEqual([], list(self.root.iterdir()))
 
+    def test_a_stream_is_refused_when_the_spool_already_holds_the_most_files(self) -> None:
+        for number in range(3):
+            (self.root / f"held-{number}").write_bytes(b"x")
+        read_end, write_end = os.pipe()
+        os.write(write_end, b"abc")
+        os.close(write_end)
+        self.addCleanup(os.close, read_end)
+        with self.assertRaises(trigger.SpoolFullError) as caught:
+            trigger.spool_stream(self.root, trigger.Receiving(read_end, 100, 5, 3, 10_000))
+        self.assertIn(trigger.Why.SPOOL_FULL_FILES.value, str(caught.exception))
+        self.assertEqual(3, len(list(self.root.iterdir())))
+
+    def test_a_stream_is_refused_when_the_spool_total_would_pass_its_bound(self) -> None:
+        (self.root / "held").write_bytes(b"x" * 90)
+        read_end, write_end = os.pipe()
+        os.write(write_end, b"y" * 20)
+        os.close(write_end)
+        self.addCleanup(os.close, read_end)
+        with self.assertRaises(trigger.SpoolFullError) as caught:
+            trigger.spool_stream(self.root, trigger.Receiving(read_end, 1000, 5, 4, 100))
+        self.assertIn(trigger.Why.SPOOL_FULL_BYTES.value, str(caught.exception))
+        self.assertEqual(["held"], [path.name for path in self.root.iterdir()])
+
     def test_a_descriptor_that_cannot_be_read_is_refused(self) -> None:
         with self.assertRaises(trigger.BadBundleError) as caught:
             trigger.spool_stream(self.root, trigger.Receiving(987654, 1000, 5))
@@ -1116,6 +1192,8 @@ class StreamTests(unittest.TestCase):
     def test_the_limits_are_the_documented_ones(self) -> None:
         self.assertEqual(200 * 1024 * 1024, trigger.MAX_BUNDLE_BYTES)
         self.assertEqual(300, trigger.BUNDLE_DEADLINE_SECONDS)
+        self.assertEqual(4, trigger.MAX_SPOOL_FILES)
+        self.assertEqual(400 * 1024 * 1024, trigger.MAX_SPOOL_BYTES)
 
 
 class BundleRequestParsingTests(unittest.TestCase):

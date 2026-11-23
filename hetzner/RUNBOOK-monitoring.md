@@ -104,12 +104,12 @@ container's cgroup by construction.
 - `edge`: Caddy `256m` (~2.5x the 100 MB worst case), CrowdSec `1024m`
   (~1.9x the combined 550 MB agent+AppSec+CRS worst case, headroom for
   rule-set growth during a real attack) -- 1280 MB committed.
-- `monitoring`: `768+128+384+64+64+256 = 1664 MB` committed (Prometheus,
-  Alertmanager, Grafana, node_exporter, blackbox_exporter, cAdvisor in that
-  order).
+- `monitoring`: `768+128+128+64+384+64+64+256 = 1856 MB` committed (Prometheus,
+  Alertmanager, ntfy, Karma, Grafana, node_exporter, blackbox_exporter, cAdvisor
+  in that order).
 
-1280 + 1664 = 2944 MB of 4096 MB committed across every container ceiling,
-leaving 1152 MB (28%) for OS/Docker/sshd overhead and burst above any single
+1280 + 1856 = 3136 MB of 4096 MB committed across every container ceiling,
+leaving 960 MB (23%) for OS/Docker/sshd overhead and burst above any single
 container's own limit -- comfortably above the 300-400 MB doc 14 estimates
 needs there. The systemd drop-ins' `MemoryMax` (`1536M` edge, `2048M`
 monitoring) are set above each stack's own container-limit total for the
@@ -272,16 +272,16 @@ shared unit template), and it is also what
 that script's docstring for why Alertmanager's own config format cannot read
 an environment variable itself, unlike Caddy's `{env.X}`.
 
-| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `SNDS_DATA_URL`              | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | A complete SNDS **Automated Data Access** URL, access key embedded in its query string -- the whole URL is the secret, which is why the collector never prints it. Generated from the SNDS portal's automated-access page (§14) and **expiring 30 days later**, so this is a monthly chore, not a set-once credential. `SNDSAccessLinkExpiringSoon` (`render.ts`) fires at 25 days to make it a scheduled one rather than an outage. A stale or absent URL fails only the collector's own run (the previous reputation textfile is left in place, per that script's docstring) and drives `snds_collector_last_run_success` to 0, which `SNDSCollectorFailing` picks up within the hour. **Deliberately not the OAuth bearer token** the same portal page also offers: that lives ~8h with no `refresh_token`, which cannot serve a 6-hourly unattended collector at all (branchLeft/workspace#538) |
+| Variable                     | Used by                                                                                  | Where the value comes from                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SMTP_USERNAME`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `SMTP_PASSWORD`              | Alertmanager (via the render script)                                                     | Step 2's submission credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `HEALTHCHECKS_PING_URL`      | Alertmanager (via the render script)                                                     | The Healthchecks.io check's ping URL (PR's handover steps)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ALERT_RECIPIENT_EMAIL`      | Alertmanager (via the render script)                                                     | A mailbox someone actually reads -- not mx1, so the mx1-circularity dead-man's-switch reasoning (doc 14 §9.2) does not apply to routine alert delivery too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `MAILHOST_PING_URL`          | Alertmanager (via the render script)                                                     | A second, dedicated Healthchecks.io check's `/fail` endpoint -- hitting `/fail` marks it down immediately rather than waiting for a missed heartbeat. Routed to by `MailHostDown` and `AlertEmailDeliveryFailing` only (see `mailhost-deadman` in `renderAlertmanagerTemplate()`), never by anything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `GRAFANA_ADMIN_PASSWORD`     | Grafana (native `GF_SECURITY_ADMIN_PASSWORD`)                                            | Generated fresh, stored in the password manager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `STALWART_PROMETHEUS_SECRET` | Prometheus (via the render script, as the `stalwart` job's `basic_auth` `password_file`) | `/opt/stalwart/.env` on mx1, minted by `mail/provision/30-deploy-stalwart.sh` -- see `mail/RUNBOOK-mx1-prometheus-metrics.md`. **The one row here that is not fatal when absent**: the render script warns on stderr and removes any stale file, Prometheus starts normally, and the `stalwart` target reports `down` until it is set                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `SNDS_DATA_URL`              | `snds/collect_snds_metrics.py`, run by `snds-collector.timer` (§14)                      | A complete SNDS **Automated Data Access** URL, access key embedded in its query string -- the whole URL is the secret, which is why the collector never prints it. Generated from the SNDS portal's automated-access page (§14) and **expiring 30 days later**, so this is a monthly chore, not a set-once credential. `SNDSAccessLinkExpiringSoon` (`render.ts`) fires at 25 days to make it a scheduled one rather than an outage. A stale or absent URL fails only the collector's own run (the previous reputation textfile is left in place, per that script's docstring) and drives `snds_collector_last_run_success` to 0, which `SNDSCollectorFailing` picks up within the hour. **Deliberately not the OAuth bearer token** the same portal page also offers: that lives ~8h with no `refresh_token`, which cannot serve a 6-hourly unattended collector at all |
 
 **This step now writes five secrets, not four -- `MAILHOST_PING_URL` is as
 required as the other three Alertmanager variables.**
@@ -350,10 +350,24 @@ secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
 first role run after it restarts the stack once, even when the role's own inputs
 are unchanged. The role's README, "Restart", has the detail.
 
-**The role runs on edge1.** The edge1 playbook wires `monitoring_stack`. The role writes the six keys above from the host's inputs on each
-gated apply, so rotating one of them is a change to its input followed by that
-apply. No hand block writes them any more. The `STALWART_PROMETHEUS_SECRET` block
-below is the one hand path left in this step.
+**The role runs on edge1.** The edge1 playbook wires `monitoring_stack`. The role writes the six keys above from the host's inputs on each gated apply. No hand block writes them.
+
+**Rotating one of the six keys.** Each key has one runnable path. It changes that key only in `/etc/branchleft/host-inputs.json`, asks for the new value at a hidden prompt, and reads the file back. It prints the key name and a byte count, never the value. Run it on edge1 with a terminal (`ssh -t`), once per key, as the key you are rotating:
+
+```bash
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_smtp_username'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_smtp_password'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_healthchecks_ping_url'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_alert_recipient_email'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_mailhost_ping_url'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_grafana_admin_password'
+```
+
+The tool needs the host's inputs file to exist already (placed once at bootstrap; it stops with `no-file` otherwise) and refuses to run as anyone but root. Do not run it with `--replace` between a `--set` and the gated apply: the fill step reads the live files, which still hold the old value. The path before the first apply of a commit that holds the tool is in `ansible/roles/host_inputs/README.md`, "Bootstrap and rotation".
+
+The rotated line reaches `monitoring.env` only at the next gated apply of `monitoring_stack` (owner step). That apply writes the key, and a changed key restarts the stack once (`SMTP_*`, `HEALTHCHECKS_PING_URL`, `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL` and `GRAFANA_ADMIN_PASSWORD`; a changed `SNDS_DATA_URL` does not). Check the file's shape afterwards with the command below.
+
+`STALWART_PROMETHEUS_SECRET` is not one of the six. Its own hand block is below.
 
 Check the file's shape without printing it:
 
@@ -564,9 +578,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker ps --filter label=com.docker.compose.project=monitoring'
 ```
 
-Expect seven containers, each reading `Up (healthy)`: `prometheus`,
-`alertmanager`, `ntfy`, `grafana`, `node-exporter`, `blackbox-exporter`,
-`cadvisor`.
+Expect eight containers, each reading `Up (healthy)`: `prometheus`,
+`alertmanager`, `ntfy`, `karma`, `grafana`, `node-exporter`,
+`blackbox-exporter`, `cadvisor`.
 
 Every one of them has a health check, so the health state is part of the
 answer. `Up (health: starting)` is normal for up to about a minute after a
@@ -593,7 +607,9 @@ Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `blackbox_mail` (five targets on `mx1.branchleft.co.uk`: 25 and 587 read the
 SMTP banner; 465, 993 and 8443, the mailgun shim's Caddy endpoint, complete a
 TLS handshake), `stalwart` (Stalwart's own
-Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
+Prometheus exporter on `mx1`, over HTTPS on 443), `release_watcher` (the
+release watcher's `.prom` file on `raw.githubusercontent.com`, every two
+minutes), the `node` target for
 `edge1`, `db1` and `ops1`, and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
 minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
@@ -631,6 +647,14 @@ through `db1`'s tunnel on `10.20.1.20:9105`
 reads `down`, until that tunnel is installed and the label flipped. It exists
 only for the length of the migration.
 
+`release_watcher` is the odd one out: it reads a file from GitHub's
+raw-content host (`ghost_release_watcher_last_success_timestamp_seconds`, kept
+on the `state/release-watcher` branch of `branchLeft/ghost-platform`), carries
+no `expected_up` label on purpose, and so is not in the list above;
+`render.md#the-release-watcher-scrape-path` says why. A `down` there is read at 24
+hours by `TargetDownUnmarked`, and `ReleaseWatcherStale` is the alert that
+matters.
+
 `stalwart` is the one target here whose credential is not in this repo and
 not in the container image. It is `basic_auth` with a `password_file`, written
 onto the host by `render_alertmanager_config.py` from
@@ -661,6 +685,23 @@ zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFaili
 `email`, per the rewritten circularity note above -- `RateLimitDeclinesSustained`
 is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
 that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
+
+`AppSecFailingOpen` says the edge is serving requests the AppSec checker did not
+inspect (`appsec_fail_open`, `RUNBOOK-edge.md` section 10b). It reads
+`crowdsec_appsec_lapi_requests_failures_total` from the `caddy` job: the Caddy
+bouncer counts every AppSec call that errored or timed out, and serves the
+counter once the rendered Caddyfile sets `enable_caddy_metrics`. CrowdSec's own
+metrics cannot carry this signal -- a stopped CrowdSec has no metrics port, so
+`up{job="crowdsec"}` says the process is gone but not how much traffic went
+through uninspected -- and a log-derived counter would need a log shipper this
+stack does not have. The rule is `increase(...[5m]) > 5` held `for: 10m`, so it
+fires about 15 minutes after the checker stopped and stays silent for a restart
+or a stall under five minutes. It routes as `owner_action` (warning to the
+off-host mailbox), not as a page: the edge is serving and the ban list and
+throttle still hold. It does not count a checker that answers 401 or 500 (also
+fail-open, not a transport failure). Not yet proven in the lab with CrowdSec
+stopped on a running edge: `alert_rules_test.yml` proves the rule, the lab run
+proves the counter moves.
 
 `RateLimitDeclinesSustained` fires only when one key has kept being declined for
 30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
@@ -893,7 +934,7 @@ REST API behind an OAuth 2.0 bearer token. That token lives about 8 hours and
 Microsoft issues no `refresh_token` for it, so it cannot keep a 6-hourly
 unattended collector authenticated: a human would have to re-authenticate
 several times a day, for ever. The collector ran that way until
-branchLeft/workspace#538 -- every run failed within hours of each manual
+the collector was found failing -- every run failed within hours of each manual
 renewal, and the reputation data it was supposed to be watching read as
 _silent_ rather than as _clean_ for two weeks before anyone noticed. The
 automated-access URL expires every 30 days instead, which is a cadence a
@@ -1147,6 +1188,49 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 Confirm 15d's query returns `1` again.
 
+### 15f. The tenant hosts: db-t1, app-t1 and edge-t (branchLeft/workspace#1810)
+
+The three tenants-project hosts apply the same `node_exporter` role (`ansible/playbooks/dbt1.yml`,
+`appt1.yml`, `edget.yml`) and are in `MONITORED_NODE_HOSTS` as `expectedUp: false`, on the tenants
+network's addresses (`TENANTS_HOST_IPS`). They page nobody until each is enrolled and flipped, the
+same rule as every host above. Three things are true of them that are not true of `ops1`.
+
+**The tenants network is not the estate's network.** A network does not span hcloud projects and the
+tenants project reuses the estate's address range, so `10.20.1.200`, `.201` and `.210` mean nothing
+to the Prometheus on edge1, which reads them through a restricted SSH tunnel to edge-t instead
+(branchLeft/workspace#3922, `ansible/roles/tenant_scrape_tunnel`, `hetzner/monitoring/tenantTunnel.ts`):
+its scrape fails, quietly, until that tunnel is applied, and no flip below is made before it is in
+place and a query for the host returns `1`. Until then the disk, memory and
+host-down alerts are proven by promtool only (`alert_rules_test.yml` and `alert_rules_memory_test.yml`,
+grep the host's address): the rules do not select on `host` or `expected_up`, so they evaluate for a
+tenant host the moment its series arrive, and `HostOrServiceDown` waits for the flip.
+
+**Stated local log retention, per host.** Each host's journal keeps an entry for at most 30 days and
+at most 500M (`host_baseline_journal_retention_days: 30` in the host's playbook), inside the 90 days
+the website's privacy notice states for server logs. `db-t1` also bounds each container's log to three
+files of 10 MB. `edge-t`'s Caddy log, when its edge stack lands, follows the edge's own 30 days
+(`hetzner/edge/render.md`, `logDirective`). The privacy notice is the owner's: if its figure moves
+below 30 days, these move with it, and `checks/test_tenant_host_monitoring.py` holds the ceiling.
+
+**No metrics port is public.** Every exporter binds a private or loopback address (node_exporter the
+host's tenants-network address, the MySQL exporter `127.0.0.1`), no tenant firewall has a rule for an
+exporter's port (`hetzner/tenants.metricsPorts.test.ts`), and `db-t1` and `app-t1` have no public
+address at all. The one public host is `edge-t`. After its first apply, from a machine outside the
+tenants project, with `EDGE_T_IPV4` read in (`read -r EDGE_T_IPV4`):
+
+```bash
+for port in 9100 9104 9105; do nc -zv -w 5 "$EDGE_T_IPV4" "$port"; done
+```
+
+Expect each to time out or be refused. Any `succeeded` is a finding: stop and report it.
+
+**Enrolling a host.** Once the host's exporter is installed by the gated apply and a path from edge1
+exists, read it back with 15d's query with `host="db-t1"` (or `app-t1`, `edge-t`); expect one series,
+value `1`. Then flip that host's `expectedUp` to `true` in `render.ts`, regenerate with `pnpm run
+render`, and run 15e's second half against it: stop `node_exporter.service` on the host, wait 5
+minutes, and the `HostOrServiceDown` email for that host arrives; start it again and the query reads
+`1`.
+
 ## 16. The page register
 
 `hetzner/monitoring/pageRegister.ts` is the single committed list of what
@@ -1165,6 +1249,8 @@ two. The sixth -- a stopped drain worker -- pages through its own
 Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
+A seventh, the abuse report, is posted by the mail host itself straight to
+the pager (`deliveryPath: 'ntfy_direct'`) and renders no route either.
 
 **The receiver is `ntfy-page`: a webhook to the self-hosted ntfy in this
 stack.** Alertmanager publishes over the stack's own network to
@@ -1186,6 +1272,17 @@ email and the rest of monitoring keep running, and page alerts reach nobody
 until the variables are fixed and the unit restarted. The install and phone
 steps, with the test page and its read-back, are in the ghost-platform-docs
 page `ntfy-pager-install-runbook.md`.
+
+**A report to abuse@ pages the phone through its own grant.** The mail host posts straight to
+the pager, not through Alertmanager. The server config gives the `mx1` machine user one
+publish-only grant on its own topic, `branchleft-abuse`, which the owner's login can read; the
+mail host cannot read it back, cannot write the page topic and has no other access. Its token
+is a fifth, optional line of the same file, `NTFY_MX1_TOKEN`, written by the `ntfy_pager` role
+from the optional input `ntfy_pager_mx1_token`; with none, or a malformed or reused one, the
+renderer drops that one token line, warns by name, and the pager and every other grant go on
+unchanged. On the mail host the `mx1_abuse_page` role polls abuse@ and posts one fixed notice
+(no sender, no message text, no tenant). The steps that make it live, and what good looks like at
+each, are the owner's and are in the pull request that added it.
 
 **Every `severity=critical` alert also pages the phone** (the owner's ruling:
 critical alerts only, over self-hosted ntfy). A critical alert goes to
@@ -1213,6 +1310,69 @@ the reaper, in the change that flips its flag; a rule carrying
 dormant entry reaches no phone. Nothing here is applied to the host: this
 section's change is to the committed register, and the rendered Alertmanager
 config is unchanged until the entry is switched on.
+
+## Responding to the AppSec fail-open alert
+
+`AppSecFailingOpen` fires when the edge serves requests without WAF inspection.
+Caddy waits one second for the CrowdSec AppSec checker, then lets the request
+through (`appsec_timeout 1s`, `appsec_fail_open`; `RUNBOOK-edge.md` section 10b).
+Nothing is down for visitors, so it is a warning routed to the owner's mailbox.
+
+**The signal.** `increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5`,
+held for 10 minutes. The counter is Caddy's, not CrowdSec's: CrowdSec cannot report
+its own absence (stopped, its metrics port is gone), and a log-derived counter would
+need a log shipper the stack does not have.
+
+**Limits.** Only transport failures count (refused connection, timeout). A checker
+answering 401 or 500 also fails open and is not counted; the first request shows
+that misconfiguration. An absent series never fires.
+
+**Timing.** The expression stays true for 5 minutes after the last failure, so the
+alert fires only for an outage of 5 minutes or more: about 15 minutes after a
+stopped checker. A CrowdSec restart or a deploy stays silent.
+
+**Response.** On edge1, `docker ps` shows whether the crowdsec container is running,
+and `docker logs --since 15m crowdsec` says why it is not answering. Bringing it back
+and reading its log is the owner's action.
+
+## 17. Karma, the incident view
+
+Karma shows every alert Alertmanager holds, with the silences on them, grouped
+in one page: what is open, since when, and who has silenced it. It reads
+`http://alertmanager:9093` and keeps nothing of its own. It is read-only
+(`ALERTMANAGER_READONLY`), so creating or expiring a silence stays in
+Alertmanager's own page (`http://127.0.0.1:9093/` over the tunnel in step 8).
+
+Karma has no login. That is why it is published on `127.0.0.1:8084` of `edge1`
+and nowhere else: not on the private address Grafana uses, which every host on
+the private network can reach, and not in `sites.ts` or the Caddyfile.
+`hetzner/monitoring/test_karma_compose.py` fails the build if either changes.
+
+To open it, tunnel to `edge1`'s loopback and browse to the local end:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner -L 8084:127.0.0.1:8084 root@"$EDGE1_IPV4" -N &
+open http://127.0.0.1:8084/
+```
+
+Close the tunnel when done (`kill %1` in the same shell). To check it is not
+reachable any other way, run this from the workstation without the tunnel:
+
+```bash
+curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://"$EDGE1_IPV4":8084/
+```
+
+Expect a connection failure or timeout, never an HTTP response.
+
+An empty page with a red banner naming an Alertmanager means Karma cannot read
+`alertmanager:9093`: read `docker logs monitoring-karma-1` on `edge1` for the
+error. The container's health probe is `karma --check-config`, which proves the
+configuration parses and not that the server answers; the live read is what
+CI proves on every change, by posting an alert and reading it back through
+Karma (`ci-config-validate.yml`, "Start Karma against Alertmanager").
+
+Karma arrives on the host through the gated Ansible apply that delivers
+`compose.yml`; nothing here is a hand step.
 
 ## Responding to the mail-delivery alerts
 
@@ -1249,8 +1409,7 @@ of it. Complaint rate -- the number an ESP would quote -- is reported by
 receiving providers through out-of-band feedback loops, and no self-hosted MTA
 can observe it. The real complaint rate for Outlook.com/Hotmail recipients is
 Microsoft's own Smart Network Data Services (SNDS) feed, covered below. Gmail's
-equivalent, Google Postmaster Tools, is a separate, deliberately deferred story
-(branchLeft/workspace#494).
+equivalent, Google Postmaster Tools, is a separate, deliberately deferred story.
 
 **`MailDeliveryMetricsMissing`** -- the scrape succeeds and publishes no
 `delivery_completed` at all. Nothing is wrong with mail; the two rules above
@@ -1345,8 +1504,7 @@ junk by an Outlook.com/Hotmail recipient, on at least 50 messages. This is
 the signal `MailDeliveryFailureRatioHigh` structurally cannot be: a message
 that is accepted, delivered, and then marked as junk by its recipient never
 touches any of Stalwart's own delivery counters, which is exactly the shape
-of a magic-link signup flood landing on real, harvested addresses
-(branchLeft/workspace#222). Check the volume alerts
+of a magic-link signup flood landing on real, harvested addresses. Check the volume alerts
 (`MailDeliveryVolumeSpike`, `RateLimitDeclinesSustained`) for the same
 period first -- a real complaint spike from a flood usually arrives a day
 after the volume spike that caused it, not alongside it.
@@ -1384,8 +1542,7 @@ changed the response format -- `snds/collect_snds_metrics.py`'s
 `parse_snds_response` is deliberately defensive (skips a malformed line
 rather than raising) but a wholesale schema change still yields zero parsed
 records, which reads as "no reputation data available", not as a fault of
-its own; watch the run's own stderr for skipped-line warnings
-(branchLeft/workspace#539).
+its own; watch the run's own stderr for skipped-line warnings.
 
 **`SNDSCollectorStale`** -- the backstop, not the first signal: the collector
 has published no fresh snapshot in 36 hours, or has never once succeeded.
@@ -1442,7 +1599,7 @@ leaves the last good `snds_complaint_rate`/`snds_reputation_status` in place
 -- blanking them would read as "no complaints", which is worse. So a green
 reputation panel during any of these three means "last known good", not
 "currently clean". That is exactly the two-week silence
-branchLeft/workspace#538 was filed for, and `snds_collector_last_run_success`
+the earlier SNDS failure was filed for, and `snds_collector_last_run_success`
 is the gauge that now contradicts the panel within the hour.
 
 ## What this stack deliberately does not do
@@ -1461,7 +1618,7 @@ is the gauge that now contradicts the panel within the hour.
 - **It does not collect Google Postmaster Tools data.** Gmail's equivalent of
   SNDS needs per-domain OAuth against a separate Google API, approved in
   principle but deliberately deferred until a second tenant domain or
-  load-bearing Gmail volume makes it worth building -- branchLeft/workspace#494.
+  load-bearing Gmail volume makes it worth building.
 - **It does not automate SNDS credential renewal.** Neither credential
   Microsoft offers can be renewed unattended: the OAuth bearer token issues
   no `refresh_token` (and lives ~8h, which is why it is not used here), and a

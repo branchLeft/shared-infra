@@ -13,11 +13,13 @@ is testable on any machine.
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from runbook_sections import runbook_section
 
@@ -55,8 +57,38 @@ exit 0
 """
 
 FAKE_SYSCTL = """#!/usr/bin/env bash
+case "$*" in
+    "-n net.ipv4.ip_forward")
+        if [[ -n "${FAKE_SYSCTL_HANG:-}" ]]; then exec sleep 40; fi
+        printf '%s\\n' "${FAKE_SYSCTL_FORWARDING:-0}"; exit 0 ;;
+esac
+printf '%s\\n' "$*" >> "$FAKE_SYSCTL_LOG"
 exit 0
 """
+
+# `nft list table ip branchleft_edge_nat`: the edge_firewall role's table. FAKE_NFT_TABLE is what
+# it prints; a missing table exits 1 with nothing on stdout, as the real program does.
+FAKE_NFT = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_NFT_LOG"
+if [[ -n "${FAKE_NFT_HANG:-}" ]]; then exec sleep 40; fi
+case "$*" in
+    "list table ip branchleft_edge_nat")
+        if [[ -z "${FAKE_NFT_TABLE:-}" ]]; then exit 1; fi
+        printf '%s\\n' "$FAKE_NFT_TABLE"; exit 0 ;;
+esac
+exit 1
+"""
+
+# What the role's table prints when it holds the masquerade, and when it was loaded without one.
+ROLE_NAT_TABLE_LISTING = (
+    "table ip branchleft_edge_nat {\n\tchain postrouting {\n"
+    "\t\ttype nat hook postrouting priority srcnat; policy accept;\n"
+    '\t\tip saddr 10.20.1.0/24 oifname "eth0" masquerade\n\t}\n}'
+)
+ROLE_NAT_TABLE_WITHOUT_MASQUERADE = (
+    "table ip branchleft_edge_nat {\n\tchain postrouting {\n"
+    "\t\ttype nat hook postrouting priority srcnat; policy accept;\n\t}\n}"
+)
 
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
 case "$*" in
@@ -89,10 +121,13 @@ class NatGatewayTests(unittest.TestCase):
         self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES)
         self._write_fake(os.path.join(bin_dir, "sysctl"), FAKE_SYSCTL)
         self._write_fake(os.path.join(bin_dir, "systemctl"), FAKE_SYSTEMCTL)
+        self._write_fake(os.path.join(bin_dir, "nft"), FAKE_NFT)
         self.bin_dir = bin_dir
 
         self.sysctl_conf = os.path.join(self.tmp.name, "99-branchleft-nat.conf")
         self.iptables_log = os.path.join(self.tmp.name, "iptables.log")
+        self.sysctl_log = os.path.join(self.tmp.name, "sysctl.log")
+        self.nft_log = os.path.join(self.tmp.name, "nft.log")
 
     @staticmethod
     def _write_fake(path, content):
@@ -113,9 +148,16 @@ class NatGatewayTests(unittest.TestCase):
         insert_exit="0",
         systemctl_hangs=False,
         check_hangs=False,
+        role_table="",
+        forwarding="0",
+        drop_nft=False,
+        nft_hangs=False,
+        sysctl_hangs=False,
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
+        if drop_nft:
+            os.remove(os.path.join(self.bin_dir, "nft"))
         env = dict(os.environ)
         env.update(
             {
@@ -130,6 +172,12 @@ class NatGatewayTests(unittest.TestCase):
                 "BRANCHLEFT_NAT_SYSCTL_CONF": self.sysctl_conf,
                 "FAKE_SYSTEMCTL_HANG": "1" if systemctl_hangs else "",
                 "FAKE_IPTABLES_CHECK_HANG": "1" if check_hangs else "",
+                "FAKE_NFT_LOG": self.nft_log,
+                "FAKE_NFT_TABLE": role_table,
+                "FAKE_NFT_HANG": "1" if nft_hangs else "",
+                "FAKE_SYSCTL_LOG": self.sysctl_log,
+                "FAKE_SYSCTL_FORWARDING": forwarding,
+                "FAKE_SYSCTL_HANG": "1" if sysctl_hangs else "",
             }
         )
         if subnet is not None:
@@ -246,6 +294,78 @@ class NatGatewayTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("already up to date", result.stdout)
+
+    def test_the_roles_table_holding_the_masquerade_is_the_only_masquerade(self):
+        # On a host where the edge_firewall role has loaded its table, a second masquerade in
+        # iptables would be a second home for the same fact, and the role removes the old one.
+        result = self.run_script(role_table=ROLE_NAT_TABLE_LISTING, forwarding="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call for call in self.inserted() if "MASQUERADE" in call], [])
+        self.assertEqual(len(self.inserted()), 2)
+        self.assertIn("the masquerade is the edge_firewall table's", result.stdout)
+        with open(self.nft_log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(), ["list table ip branchleft_edge_nat"])
+
+    def test_the_forwarding_accepts_are_still_inserted_beside_the_roles_table(self):
+        self.run_script(role_table=ROLE_NAT_TABLE_LISTING, forwarding="1")
+        self.assertEqual(
+            self.inserted(),
+            [
+                "-t filter -I DOCKER-USER 1 -s 10.20.1.0/24 -o eth0 -j ACCEPT",
+                "-t filter -I DOCKER-USER 1 -d 10.20.1.0/24 -i eth0 "
+                "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            ],
+        )
+
+    def test_beside_the_roles_table_it_writes_no_drop_in_and_sets_no_sysctl(self):
+        # The role is the writer of the forwarding setting on that host.
+        self.run_script(role_table=ROLE_NAT_TABLE_LISTING, forwarding="1")
+        self.assertFalse(os.path.exists(self.sysctl_conf))
+        self.assertFalse(os.path.exists(self.sysctl_log))
+
+    def test_beside_the_roles_table_it_refuses_a_kernel_that_is_not_forwarding(self):
+        # Accepts for traffic the kernel drops would report success and give the estate no egress.
+        result = self.run_script(role_table=ROLE_NAT_TABLE_LISTING, forwarding="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the edge_firewall role owns forwarding", result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_beside_the_roles_table_a_forwarding_read_that_does_not_finish_refuses(self):
+        result = self.run_script(
+            role_table=ROLE_NAT_TABLE_LISTING, forwarding="1", sysctl_hangs=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not learn whether the kernel forwards", result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_a_roles_table_with_no_masquerade_in_it_is_not_the_masquerade(self):
+        # A table the role loaded and something then emptied: the gateway keeps its own masquerade.
+        result = self.run_script(role_table=ROLE_NAT_TABLE_WITHOUT_MASQUERADE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([call for call in self.inserted() if "MASQUERADE" in call]), 1)
+        with open(self.sysctl_conf, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "net.ipv4.ip_forward = 1\n")
+
+    def test_a_host_with_no_roles_table_keeps_its_own_masquerade_and_forwarding(self):
+        # The edget gateway: no role table, so the program is what it was.
+        result = self.run_script(role_table="", forwarding="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([call for call in self.inserted() if "MASQUERADE" in call]), 1)
+        with open(self.sysctl_log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(), ["-q -w net.ipv4.ip_forward=1"])
+
+    def test_a_host_with_no_nft_program_keeps_its_own_masquerade(self):
+        if shutil.which("nft", path="/usr/bin:/bin") is not None:
+            self.skipTest("an nft program is on the fixed PATH of this machine")
+        result = self.run_script(drop_nft=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([call for call in self.inserted() if "MASQUERADE" in call]), 1)
+
+    def test_a_table_read_that_does_not_finish_counts_as_not_loaded(self):
+        # A masquerade in both places is harmless; a gateway with neither has no egress.
+        result = self.run_script(nft_hangs=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([call for call in self.inserted() if "MASQUERADE" in call]), 1)
 
     def test_refuses_a_host_whose_default_route_holds_no_public_address(self):
         # The routing loop: a private-only host's default route is the network
@@ -442,6 +562,14 @@ class UnitFileTests(unittest.TestCase):
 
     def test_keeps_the_after_ordering_a_docker_less_host_relies_on(self):
         self.assertIn("After=network-online.target docker.service", self.lines)
+
+    def test_runs_after_the_firewall_unit_without_requiring_it(self):
+        # The masquerade it looks for may be the edge_firewall role's table, which that unit
+        # loads at boot. Wants, not Requires: a failed firewall load must not stop this
+        # reconciler, and on a host without the unit both lines do nothing.
+        self.assertIn("After=branchleft-firewall.service", self.lines)
+        self.assertIn("Wants=branchleft-firewall.service", self.lines)
+        self.assertNotIn("Requires=branchleft-firewall.service", self.lines)
 
 
 def _extract_gateway_check_patterns():
@@ -669,11 +797,29 @@ class RunbookRestartCheckExecutionTests(unittest.TestCase):
         self.assertNotIn("gateway survives a docker restart", result.stdout)
 
 
+def _join_continued_lines(lines):
+    """Join backslash-continued lines, so each logical command is one string."""
+    logical = []
+    pending = []
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.endswith("\\"):
+            pending.append(stripped[:-1].rstrip())
+            continue
+        pending.append(stripped)
+        logical.append(" ".join(part for part in pending if part))
+        pending = []
+    if pending:
+        logical.append(" ".join(part for part in pending if part))
+    return logical
+
+
 def _extract_scp_commands():
-    """Pull every provisioning `scp` line out of RUNBOOK-provision-host.md."""
+    """Pull every provisioning `scp` command out of RUNBOOK-provision-host.md,
+    with any backslash-continued line joined onto its first."""
     with open(RUNBOOK, encoding="utf-8") as handle:
         lines = handle.readlines()
-    return [line.strip() for line in lines if line.strip().startswith("scp ")]
+    return [line for line in _join_continued_lines(lines) if line.startswith("scp ")]
 
 
 class RunbookScpCommandTests(unittest.TestCase):
@@ -701,6 +847,28 @@ class RunbookScpCommandTests(unittest.TestCase):
                 "a destination trailing slash makes scp fail outright in "
                 f"SFTP mode when the destination does not yet exist: {command}",
             )
+
+
+class ContinuedScpCommandTests(unittest.TestCase):
+    """A backslash-continued scp command is one command, not its first line."""
+
+    def test_a_continued_scp_command_is_extracted_whole(self):
+        runbook_text = (
+            "```bash\n"
+            "scp -r hetzner/provision/. \\\n"
+            "  root@example.com:/root/platform-provision\n"
+            "```\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "RUNBOOK.md")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(runbook_text)
+            with mock.patch.object(sys.modules[__name__], "RUNBOOK", path):
+                commands = _extract_scp_commands()
+        self.assertEqual(
+            commands,
+            ["scp -r hetzner/provision/. root@example.com:/root/platform-provision"],
+        )
 
 
 PYCACHE_CLEANUP = (

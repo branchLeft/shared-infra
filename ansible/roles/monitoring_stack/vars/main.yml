@@ -5,7 +5,7 @@
 # Not carried, on purpose: render_alertmanager_config.py and its notes, and
 # snds/collect_snds_metrics.py. The README says which work owns each.
 #
-# monitoring_stack_files is the one list of the eight stack files in the whole
+# monitoring_stack_files is the one list of the fifteen stack files in the whole
 # repository. No other role delivers any of them, and
 # ansible/checks/test_monitoring_single_home.py fails if one does.
 #
@@ -25,6 +25,8 @@ monitoring_stack_dirs:
   - blackbox
   - grafana
   - grafana/provisioning
+  - grafana/provisioning/dashboard-json
+  - grafana/provisioning/dashboards
   - grafana/provisioning/datasources
   - ntfy
   - prometheus
@@ -34,9 +36,16 @@ monitoring_stack_files:
   - alertmanager/alertmanager.yml.tmpl
   - alertmanager/email.gotmpl
   - blackbox/blackbox.yml
+  - grafana/provisioning/dashboard-json/backups.json
+  - grafana/provisioning/dashboard-json/host-health.json
+  - grafana/provisioning/dashboard-json/mail-queue.json
+  - grafana/provisioning/dashboard-json/support-access.json
+  - grafana/provisioning/dashboard-json/tenant-health.json
+  - grafana/provisioning/dashboards/dashboards.yaml
   - grafana/provisioning/datasources/prometheus.yaml
   - ntfy/server.yml.tmpl
   - prometheus/alerts.yml
+  - prometheus/demo_tls_probe.yml.tmpl
   - prometheus/prometheus.yml
 
 # The files above whose diff the plan does not show: they hold placeholder names, a
@@ -122,7 +131,7 @@ monitoring_stack_fingerprint_skipped_key: SNDS_DATA_URL
 # restart refuses to run with a renderer that is missing or writable by others.
 monitoring_stack_renderer: /opt/branchleft/monitoring/render_alertmanager_config.py
 
-# What the fingerprint hashes, besides the secrets file: the eight stack files,
+# What the fingerprint hashes, besides the secrets file: the fifteen stack files,
 # the monitoring drop-in, the renderer and the pager's secrets file (all of it:
 # unlike monitoring.env it has no key that is left out).
 monitoring_stack_fingerprint_files: >-

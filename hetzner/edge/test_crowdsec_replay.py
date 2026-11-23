@@ -160,6 +160,10 @@ class Case:
     `watched` means the out-of-band Core Rule Set scenario must record an alert
     for the address while no bouncer is told to refuse it: the scenario is
     watch-only (posture.md, "Watch-only scenarios").
+
+    `scenario`, on a case that must be banned, is the scenario that must have
+    raised an alert for the address. A ban by another scenario does not satisfy
+    it: a probe that a second scenario also bans proves nothing about the first.
     """
 
     name: str
@@ -168,10 +172,16 @@ class Case:
     appsec: Sequence[AppsecRequest] = ()
     log: Sequence[LogLine] = ()
     watched: bool = False
+    scenario: str | None = None
 
 
 # The out-of-band Core Rule Set scenario, which only watches.
 OUT_OF_BAND_SCENARIO = "crowdsecurity/crowdsec-appsec-outofband"
+# The scenario that bans a probe of a generic admin interface, and the hub's own
+# scenario of the same kind, which a post-overflow silences so that only ours can
+# ban (render.md, "Ghost admin API and admin-interface probing").
+ADMIN_PROBING = "branchleft/http-admin-interface-probing"
+HUB_ADMIN_PROBING = "crowdsecurity/http-admin-interface-probing"
 
 
 def preview_post(host: str, preview: str | None) -> AppsecRequest:
@@ -268,6 +278,7 @@ CASES: tuple[Case, ...] = (
         "probe: generic admin interfaces on a Ghost site",
         "203.0.113.30",
         banned=True,
+        scenario=ADMIN_PROBING,
         log=(
             LogLine(GHOST_HOST, "/wp-admin/", 404),
             LogLine(GHOST_HOST, "/phpmyadmin/", 404),
@@ -278,22 +289,48 @@ CASES: tuple[Case, ...] = (
         "probe: Ghost admin API paths on a host that is not a Ghost site",
         "203.0.113.31",
         banned=True,
+        scenario=ADMIN_PROBING,
         log=tuple(LogLine(OTHER_HOST, path, 404) for path in GHOST_ADMIN_API_PATHS[:3]),
     ),
     Case(
-        "probe: a generic admin interface mixed into Ghost admin API paths",
+        "probe: generic admin interfaces mixed into Ghost admin API paths",
         "203.0.113.32",
         banned=True,
+        scenario=ADMIN_PROBING,
         log=(
             LogLine(GHOST_HOST, "/wp-login.php", 404),
             LogLine(GHOST_HOST, GHOST_ADMIN_API_PATHS[0], 403),
+            LogLine(GHOST_HOST, "/phpmyadmin/", 404),
             LogLine(GHOST_HOST, GHOST_ADMIN_API_PATHS[2], 403),
+            LogLine(GHOST_HOST, "/admin/", 404),
         ),
     ),
+    # Three admin API answers on the Ghost host mute nothing against the same
+    # address elsewhere. Before, the post-overflow dropped their overflow but the
+    # hub scenario's one-minute blackhole, kept per address, still began, and the
+    # three probes below went unbanned on every other host.
+    Case(
+        "probe: admin interfaces on another host right after Ghost admin API answers",
+        "203.0.113.34",
+        banned=True,
+        scenario=ADMIN_PROBING,
+        log=(
+            *[LogLine(GHOST_HOST, path, 404) for path in GHOST_ADMIN_API_PATHS[:3]],
+            LogLine(OTHER_HOST, "/wp-admin/", 404),
+            LogLine(OTHER_HOST, "/phpmyadmin/", 404),
+            LogLine(OTHER_HOST, "/admin/", 404),
+        ),
+    ),
+    # Three requests that start at the admin API prefix and leave it by dot
+    # segments. Only the scenario's dot-segment clause counts them. Other
+    # scenarios ban the same address (the Apache path traversal one does), so this
+    # case names the scenario it must reach: with the clause gone, it is still
+    # banned, but not by this one.
     Case(
         "probe: dot segments out of the Ghost admin API prefix",
         "203.0.113.33",
         banned=True,
+        scenario=ADMIN_PROBING,
         log=(
             LogLine(GHOST_HOST, "/ghost/api/admin/../../phpmyadmin/", 404),
             LogLine(GHOST_HOST, "/ghost/api/admin/%2e%2e/%2e%2e/wp-admin/", 404),
@@ -667,6 +704,17 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
                 explanation = self._explain(case)
                 print(explanation)
                 self.assertIn(case.ip, self.bans, explanation)
+                if case.scenario is not None:
+                    self.assertIn(case.scenario, self.stack.alerted(case.ip), explanation)
+
+    def test_the_hubs_admin_probing_scenario_never_raises_an_alert(self) -> None:
+        # Only our scenario bans a probe of an admin interface. The hub's runs
+        # beside it, and its overflows are all dropped; one that got through
+        # would ban twice and count twice on the ban ladder.
+        for case in CASES:
+            with self.subTest(case.name):
+                explanation = self._explain(case)
+                self.assertNotIn(HUB_ADMIN_PROBING, self.stack.alerted(case.ip), explanation)
 
     def test_the_core_rule_set_records_its_probes_and_bans_none(self) -> None:
         for case in CASES:
@@ -907,7 +955,6 @@ NC_USER = "owner"
 OWN_HOST_IP = "10.20.1.50"
 FIRST_RUNG_MINUTES = 10
 SECOND_RUNG_MINUTES = 30
-ADMIN_PROBING = "crowdsecurity/http-admin-interface-probing"
 
 NC_COOKIE = (
     "oc_sessionPassphrase=Zk1lZ2h0c2lnbmF0dXJlcGFzc3BocmFzZQ%3D%3D; "

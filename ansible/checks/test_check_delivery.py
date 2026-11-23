@@ -195,8 +195,14 @@ class CallerTests(unittest.TestCase):
         self.assertEqual([], check_delivery.check_caller(ROOT))
 
     def test_skip_failed_hosts_passes_only_as_the_boolean_true(self) -> None:
+        self.check_true_only(check_delivery.SKIP_FAILED_INPUT)
+
+    def test_continue_past_failed_apply_passes_only_as_the_boolean_true(self) -> None:
+        self.check_true_only(check_delivery.CONTINUE_INPUT)
+
+    def check_true_only(self, input_name: str) -> None:
         def set_value(document: dict[str, object], value: object) -> None:
-            mutable(job_of(document)["with"])[check_delivery.SKIP_FAILED_INPUT] = value
+            mutable(job_of(document)["with"])[input_name] = value
 
         values: list[object] = [False, "true", "false", 1, 0, None, "", [], {}]
         for value in values:
@@ -204,7 +210,7 @@ class CallerTests(unittest.TestCase):
             def change(document: dict[str, object], value: object = value) -> None:
                 set_value(document, value)
 
-            self.assert_names(self.weakened(change), check_delivery.SKIP_FAILED_INPUT)
+            self.assert_names(self.weakened(change), input_name)
 
         def set_true(document: dict[str, object]) -> None:
             set_value(document, True)

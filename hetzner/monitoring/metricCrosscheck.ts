@@ -238,6 +238,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   probe_success: 'blackbox_exporter',
   probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
+  // The caddy-crowdsec-bouncer module inside the edge's Caddy (v0.15.0,
+  // internal/metrics); present only while the Caddyfile sets
+  // `enable_caddy_metrics`, which render.test.ts in hetzner/edge asserts.
+  crowdsec_appsec_lapi_requests_failures_total:
+    "the caddy-crowdsec-bouncer module in edge1's Caddy (the caddy scrape job)",
   // Its name, labels and that it leaves out simulated decisions are asserted
   // against a running CrowdSec by hetzner/edge/test_crowdsec_replay.py.
   cs_active_decisions: "CrowdSec's Local API, on edge1 (the crowdsec scrape job)",
@@ -247,6 +252,11 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   node_filesystem_size_bytes: 'node_exporter',
   node_cpu_seconds_total:
     'node_exporter (cpu collector, on by default; the role sets no collector flags)',
+  // The systemd collector, limited to the compose template's instances and with the restart counter on,
+  // by hetzner/provision/node-exporter.service (held by ansible/roles/node_exporter/tests/unit).
+  node_systemd_unit_state: 'node_exporter systemd collector, on app1, db1 and ops1 (not edge1)',
+  node_systemd_service_restart_total:
+    'node_exporter systemd collector with --collector.systemd.enable-restarts-metrics, on app1, db1 and ops1 (not edge1)',
   mysql_global_status_threads_connected: 'mysqld_exporter, on db1',
   mysql_global_variables_max_connections: 'mysqld_exporter, on db1',
   mysql_up: 'mysqld_exporter, on db1',
@@ -268,6 +278,10 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // on db1 (lock gauges under tenant="db1-all-databases", and its own status gauges). None is a collector
   // this repo can scan; render.md, "The `backup` rule group", gives the hosts.
   state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
+  // PROPOSED contract, not yet exported: the safety service's per-incident reporting clock. One series per running clock,
+  // labelled with its tenant, present from the seal until a recorded report removes it. No producer on main yet.
+  scanning_storage_reporting_clock_started_timestamp_seconds:
+    'proposed: scanning-storage adapter in branchLeft/ghost-platform, once the clock is exported (no producer yet)',
   state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   backup_worker_lock_wait_seconds:
     'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
@@ -279,6 +293,13 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // role pins the name to this rule's expression.
   branchleft_pager_route_configured:
     'the monitoring_stack Ansible role, a textfile gauge on the monitoring host',
+  // The restore drill's failure mark: the textfile collector's own per-file mtime of a file the
+  // backup_restore Ansible role's OnFailure= unit touches. The collector is node_exporter, and the
+  // writer is a systemd unit, so nothing under this root can scan either.
+  node_textfile_mtime_seconds:
+    "node_exporter's textfile collector; the file is touched by the backup_restore Ansible role's OnFailure unit, on ops1",
+  restore_drill_last_run_timestamp_seconds:
+    'restore_drill.py, in branchLeft/ghost-platform infra/provisioning/scripts, on ops1',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.
@@ -288,6 +309,15 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
   db_binlog_ship_last_success_timestamp_seconds:
     'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
+  // The edge ban classifier's two textfile metrics, written on edge1 by the program the
+  // edge_ban_owner Ansible role installs (ansible/roles/edge_ban_owner/files): one `owned`
+  // sample per ban, labelled with the scenario and never an address, and the time of its last
+  // run. The program lives outside this directory, so nothing here can scan it; a unit test in
+  // the role pins both names to the rules' expressions in alerts.yml.
+  edge_ban_owned:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
+  edge_ban_owner_last_run_timestamp_seconds:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
   // The control-plane backup's two textfile gauges, written on ops1 by the program the
   // control_plane_backup Ansible role installs (ansible/roles/control_plane_backup/files): the success
   // times by its `run`, the failure time by its `mark-failed`, which the service's OnFailure= starts.
@@ -297,10 +327,26 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py), a textfile gauge on ops1",
   control_plane_backup_last_failure_timestamp_seconds:
     "the control_plane_backup Ansible role's program (branchleft_control_plane_backup.py mark-failed), a textfile gauge on ops1",
+  // The binary-log pull's textfile gauges, written on ops1 by the program the binlog_pull Ansible
+  // role installs (ansible/roles/binlog_pull/files): the success time and the counts the gap rule
+  // reads. The program lives outside this directory, so a unit test in the role pins these names to
+  // the expressions in alerts.yml.
+  binlog_pull_last_success_timestamp_seconds:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_gap_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
+  binlog_pull_unshipped_logs:
+    "the binlog_pull Ansible role's program (branchleft_binlog_pull.py pull), a textfile gauge on ops1",
   // The scanning storage adapter's textfile export, written by each tenant's
   // Ghost process on its app host. Names and label values are the contract in
   // branchLeft/ghost-platform adapters/scanning-storage/src/metrics.md; the
   // source is JavaScript in another repository, so nothing here can scan it.
+  // The release watcher's poll-age gauge, written by services/release-watcher in
+  // branchLeft/ghost-platform (core.render_age_metric) and committed by a
+  // scheduled GitHub Actions run to release-watcher.prom on the state/release-watcher
+  // branch, which the release_watcher scrape job reads. Python, but in another repository.
+  ghost_release_watcher_last_success_timestamp_seconds:
+    'the release watcher, services/release-watcher in branchLeft/ghost-platform, scraped by the release_watcher job from the state/release-watcher branch (no source under this root to check against)',
   scanning_storage_unconfigured_instances:
     "the scanning storage adapter's textfile export, branchLeft/ghost-platform (src/metrics.md)",
   scanning_storage_metrics_written_timestamp_seconds:
