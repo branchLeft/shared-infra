@@ -35,7 +35,10 @@ approval of that gated apply.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
 host in `HOST_PLAY_VARS` in `check_enrolment.py` (seven rows: ops1's, db1's and dbt1's are each `deploy_tooling_host_class: internal` alone; edge1's `deploy_tooling_host_class`
-with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
+with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway, and the
+`edge_firewall` role's `edge_firewall_nat_source` (the estate subnet it masquerades) and
+`edge_firewall_enforce` (`false`, monitor mode, until the owner merges the one-line flip to
+default-drop), so only edge1 can carry those two; edget's
 `egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
 a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
 and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on either; the

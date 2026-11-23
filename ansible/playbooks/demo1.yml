@@ -35,6 +35,11 @@
 # one client certificate its exporter will trust, taken from the owner's value in owner_vars/demo1.yml.
 # It must stay before any role that reads those files (the exporter's).
 #
+# node_exporter_public is last. demo1 takes the Debian package of the exporter, which serves
+# TLS and accepts only a client certificate the owner's CA signed, because the host shares no
+# private network with the monitoring host. The role waits, changing nothing, until the owner has
+# placed the CA, certificate and key files (roles/node_exporter_public/README.md).
+#
 # The roles have no secret and no required input. The variables files are the shared pull values,
 # the host's trust file, which holds the signer list and nothing else, and the owner's public
 # certificate value. The inventory has no entry for the host: a playbook and its trust file enrol it.
@@ -65,3 +70,4 @@
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]
     - role: ../roles/spool_path_account # noqa: role-name[path]
     - role: ../roles/host_tls_identity # noqa: role-name[path]
+    - role: ../roles/node_exporter_public # noqa: role-name[path]
