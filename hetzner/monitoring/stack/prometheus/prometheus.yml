@@ -12,6 +12,11 @@ alerting:
 rule_files:
   - /etc/prometheus/alerts.yml
 
+# The demo wildcard TLS probe: rendered on the host from monitoring.env, see
+# stack/render_alertmanager_config.py. An empty list until its base is set.
+scrape_config_files:
+  - /etc/prometheus/demo_tls_probe.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

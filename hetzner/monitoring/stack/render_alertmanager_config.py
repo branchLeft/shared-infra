@@ -183,6 +183,59 @@ ALERTMANAGER_UID = int(os.environ.get("ALERTMANAGER_UID", "65534"))
 PROMETHEUS_UID = int(os.environ.get("PROMETHEUS_UID", "65534"))
 
 
+# The demo wildcard TLS probe. Its base is an owner-held value in monitoring.env,
+# never in a committed file: the template holds a token, and this writes the
+# scrape file Prometheus reads, beside it, on every start.
+DEMO_TLS_TEMPLATE_NAME = "demo_tls_probe.yml.tmpl"
+DEMO_TLS_OUTPUT_NAME = "demo_tls_probe.yml"
+DEMO_TLS_BASE_VAR = "DEMO_WILDCARD_BASE"
+DEMO_TLS_TOKEN = "__DEMO_WILDCARD_BASE__"
+DEMO_TLS_DISABLED = "scrape_configs: []\n"
+DEMO_TLS_BASE_PATTERN = re.compile(r"([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def render_demo_tls_probe(template: str, base: str | None) -> str:
+    """The scrape file for the given base. Unset or empty writes no scrape config.
+
+    Raises ValueError for a base that is not a lower-case domain of two or more
+    labels, so a typo cannot put a malformed name into the probe's target.
+    """
+    if not base:
+        return DEMO_TLS_DISABLED
+    if DEMO_TLS_BASE_PATTERN.fullmatch(base) is None:
+        raise ValueError(f"{DEMO_TLS_BASE_VAR} is not a lower-case domain of two or more labels")
+    return template.replace(DEMO_TLS_TOKEN, base)
+
+
+def write_demo_tls_probe(stack_dir: pathlib.Path, env: dict[str, str]) -> pathlib.Path:
+    """Writes the demo probe's scrape file. Never fatal: a bad base disables it.
+
+    A fatal error here would stop the whole monitoring stack at start, so a bad
+    base is reported and the probe is left out, as an unset base is.
+    """
+    prom_dir = stack_dir / "prometheus"
+    template_path = prom_dir / DEMO_TLS_TEMPLATE_NAME
+    output = prom_dir / DEMO_TLS_OUTPUT_NAME
+    # The same guard as the mx1 password: an unrendered start leaves an empty
+    # directory at this bind-mount source, and it must not stop the next start.
+    if output.is_dir() and not output.is_symlink():
+        output.rmdir()
+    base = env.get(DEMO_TLS_BASE_VAR)
+    try:
+        rendered = render_demo_tls_probe(template_path.read_text(), base)
+    except (OSError, ValueError) as exc:
+        print(f"render_alertmanager_config: {exc} -- the demo probe is disabled", file=sys.stderr)
+        rendered = DEMO_TLS_DISABLED
+    try:
+        output.write_text(rendered)
+        output.chmod(0o644)
+    except OSError as exc:
+        print(f"render_alertmanager_config: could not write {output}: {exc}", file=sys.stderr)
+        return output
+    print(f"render_alertmanager_config: wrote {output}")
+    return output
+
+
 def write_prometheus_password(stack_dir: pathlib.Path, env: dict[str, str]) -> pathlib.Path | None:
     """Writes the mx1 scrape credential, or removes it when there is none.
 
@@ -284,6 +337,7 @@ def main(argv: list[str]) -> int:
     print(f"render_alertmanager_config: wrote {ntfy_output}")
 
     write_prometheus_password(stack_dir, dict(os.environ))
+    write_demo_tls_probe(stack_dir, dict(os.environ))
     return 0
 
 
