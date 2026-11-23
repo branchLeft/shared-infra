@@ -1,0 +1,28 @@
+---
+# Constants, not inputs: role variables outrank every value a caller passes, so the
+# destination, the local end and the paths cannot be moved by an inventory value.
+broker_tunnel_client_dir: /etc/branchleft/broker-tunnel
+# The private key is the owner's: placed by hand, root:root 0600, and never created,
+# read, hashed or removed by this role. The unit starts only once it is there.
+broker_tunnel_client_key_file: '{{ broker_tunnel_client_dir }}/id_ed25519'
+broker_tunnel_client_config_file: '{{ broker_tunnel_client_dir }}/demo1.conf'
+broker_tunnel_client_known_hosts_file: '{{ broker_tunnel_client_dir }}/known_hosts'
+broker_tunnel_client_unit_name: branchleft-broker-tunnel.service
+broker_tunnel_client_unit_path: '/etc/systemd/system/{{ broker_tunnel_client_unit_name }}'
+# The account on demo1 (ghost-platform demo-host/provision/render_broker_tunnel.py, installed
+# by the demo1_build role) and the one destination its key may open.
+broker_tunnel_client_remote_user: brokertunnel
+broker_tunnel_client_broker_open: 127.0.0.1:8090
+# The local end on ops1's loopback: what the control plane's broker client dials.
+broker_tunnel_client_local_end: 127.0.0.1:18090
+
+# Shapes, matched with \Z so a trailing line break does not pass. An octet is 0 to
+# 255 with no leading zero.
+broker_tunnel_client_octet: '(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+broker_tunnel_client_ipv4_pattern: '^{{ broker_tunnel_client_octet }}(?:\.{{ broker_tunnel_client_octet }}){3}\Z'
+# Private, loopback, link-local, shared (100.64/10), reserved and multicast: demo1's
+# address is public, so one of these is refused.
+broker_tunnel_client_non_public_pattern: >-
+  ^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)
+# A host key: the type and the 68 base64 characters of an ed25519 key, no comment.
+broker_tunnel_client_host_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}\Z'

@@ -101,11 +101,23 @@ because the unit files fix the paths they run.
 ## Check mode and a fresh db1
 
 The fetches are skipped in check mode, because a check-mode run creates no
-directory to write into. A plan of a fresh db1 therefore shows no program, and the
-`db1_grants` plan refuses with `program-missing` until a real apply of this role has
-run. That fix is a separate work item and is not made here. The
-live db1 gets `provision_tenant_db.py` from the first gated apply, as `db1_grants`
-Live blockers 1 and 6 say.
+directory to write into. So that a plan of a fresh db1 is not silent about them,
+two check-mode tasks read each program's path as a real run would: one `stat` with
+the sha256, and one report per program that is a change when the program is not on
+the host, or is there with other bytes than the pinned ones (`get_url` reports the
+same in a real run), and not a change when the pinned bytes are there. The plan an
+approver reads therefore shows `provision_tenant_db.py` and every other program as
+to be fetched. The report changes nothing and is not a fetch: the real run fetches
+and refuses wrong bytes.
+
+The `db1_grants` plan follows this role in the playbook and finds no program
+directory and no program on a fresh host. It does not refuse a path that is not
+there in check mode, and says which paths it left unchecked; see its README. The
+default scenario's converge runs the check-mode plan on the fresh container before
+the real apply and requires `provision_tenant_db.py` and `restore_drained.py` among
+its changes, so a role that went silent again fails there. The live db1 gets
+`provision_tenant_db.py` from the first gated apply, as `db1_grants` Live blockers 1
+and 6 say.
 
 ## Not covered
 

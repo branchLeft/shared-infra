@@ -385,9 +385,23 @@ const LOG_ROLL_AT = '00:00';
 const LOG_ROLL_SIZE = '100MiB';
 const LOG_ROLL_KEEP = 31;
 
-function logDirective(path: string): string[] {
+/**
+ * The encoder every edge log shares: Caddy's JSON, with the break-glass parameter's
+ * value replaced in the fields the token can reach. Unindented, so each caller
+ * nests it at its own depth.
+ */
+function redactingFormat(): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
+  return [
+    'format filter {',
+    '\twrap json',
+    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t${field} regexp "${pattern}" "$1=REDACTED"`),
+    '}',
+  ];
+}
+
+function logDirective(path: string): string[] {
   return [
     'log {',
     `\toutput file ${path} {`,
@@ -396,12 +410,23 @@ function logDirective(path: string): string[] {
     `\t\troll_keep_for ${LOG_RETENTION}`,
     `\t\troll_at ${LOG_ROLL_AT}`,
     '\t}',
-    '\tformat filter {',
-    '\t\twrap json',
-    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),
-    '\t}',
+    ...redactingFormat().map((line) => `\t${line}`),
     '}',
   ];
+}
+
+/**
+ * Caddy's default logger, set in the global options. Two lines reach it that no
+ * site's `log` block sees: the `http.log.error` line written when a handler fails
+ * (a 502 from a refused upstream), which carries the whole request including its
+ * URI and headers, and the line for a request whose Host matches no site block.
+ * Left alone it writes both to stderr, and so to the container log, with a
+ * break-glass token in clear. Same encoder and fields as `logDirective`, so no log
+ * path the token can reach is left unfiltered. See render.md
+ * §"defaultLogDirective: the error and no-site lines".
+ */
+function defaultLogDirective(): string[] {
+  return ['log {', '\toutput stderr', ...redactingFormat().map((line) => `\t${line}`), '}'];
 }
 
 function tlsDirective(): string[] {
@@ -1256,6 +1281,7 @@ function globalOptions(): string[] {
     '\t\tprotocols h1 h2',
     '\t\tmetrics',
     '\t}',
+    ...defaultLogDirective().map((line) => `\t${line}`),
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
     '\t\tapi_key {env.CROWDSEC_BOUNCER_KEY}',

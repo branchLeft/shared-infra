@@ -317,6 +317,8 @@ class RealTree(unittest.TestCase):
                     "backup_restore_state_copy_tenant_endpoint",
                     "backup_restore_state_copy_tenant_region",
                     "backup_restore_state_copy_tenant_access_key_id",
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
                 ],
                 "db1": [
                     "db1_stack_exporter_password",
@@ -334,13 +336,17 @@ class RealTree(unittest.TestCase):
             },
         )
 
-    def test_the_only_optional_input_is_the_jump_accounts_name(self) -> None:
+    def test_the_optional_inputs_are_the_jump_accounts_name_and_the_broker_tunnels(self) -> None:
         # Pinned: an input the file may leave out is a role that runs without it, so each
         # addition is a decision that shows here. Every other input is required.
         self.assertEqual(
             optional_of(ROOT / "ansible"),
             {
                 "edge1": ["ci_jump_user"],
+                "ops1": [
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
+                ],
                 "edget": ["ci_jump_user"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
@@ -403,6 +409,7 @@ class Mutations(unittest.TestCase):
             "backup_worker",
             "backup_restore",
             "broker_deploy",
+            "broker_tunnel_client",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()

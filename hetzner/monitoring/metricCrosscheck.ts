@@ -289,6 +289,13 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // role pins the name to this rule's expression.
   branchleft_pager_route_configured:
     'the monitoring_stack Ansible role, a textfile gauge on the monitoring host',
+  // The restore drill's failure mark: the textfile collector's own per-file mtime of a file the
+  // backup_restore Ansible role's OnFailure= unit touches. The collector is node_exporter, and the
+  // writer is a systemd unit, so nothing under this root can scan either.
+  node_textfile_mtime_seconds:
+    "node_exporter's textfile collector; the file is touched by the backup_restore Ansible role's OnFailure unit, on ops1",
+  restore_drill_last_run_timestamp_seconds:
+    'restore_drill.py, in branchLeft/ghost-platform infra/provisioning/scripts, on ops1',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.
@@ -298,6 +305,15 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
   db_binlog_ship_last_success_timestamp_seconds:
     'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
+  // The edge ban classifier's two textfile metrics, written on edge1 by the program the
+  // edge_ban_owner Ansible role installs (ansible/roles/edge_ban_owner/files): one `owned`
+  // sample per ban, labelled with the scenario and never an address, and the time of its last
+  // run. The program lives outside this directory, so nothing here can scan it; a unit test in
+  // the role pins both names to the rules' expressions in alerts.yml.
+  edge_ban_owned:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
+  edge_ban_owner_last_run_timestamp_seconds:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
   // The control-plane backup's two textfile gauges, written on ops1 by the program the
   // control_plane_backup Ansible role installs (ansible/roles/control_plane_backup/files): the success
   // times by its `run`, the failure time by its `mark-failed`, which the service's OnFailure= starts.

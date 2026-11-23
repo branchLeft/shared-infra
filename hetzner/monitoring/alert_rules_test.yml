@@ -2363,28 +2363,24 @@ tests:
               summary: 'app5 (10.20.1.64:9100) has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
               description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
 
-  # EdgeBanIssued: CrowdSec's decision gauge as edge1's crowdsec job scrapes
-  # it (labels action, origin, reason; no address). No ban, no page.
+  # EdgeBanIssued, EdgeBanUnowned, EdgeBanOwnerStale: the edge_ban_owner textfile
+  # beside CrowdSec's decision gauge. An owned ban with a decision_id is one sample
+  # (integer id, never an address); without one, owned bans aggregate per scenario,
+  # and unowned bans always do, as their own series. The last run `0+30x..` equals
+  # the evaluation time (ran just now); `0x..` never repeated.
   - interval: 30s
     input_series:
-      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-admin-interface-probing", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
-        values: '0x20'
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-admin-interface-probing", owned="true", host="edge1", job="node"}'
+        values: '0 0 2x40'
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-admin-interface-probing", owned="false", host="edge1", job="node"}'
+        values: '0 0 5x40'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x40'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 30s
         alertname: EdgeBanIssued
         exp_alerts: []
-
-  # A ban pages at once, with the scenario that made it, and two bans by one
-  # scenario are one alert carrying the count. A ban by another scenario is a
-  # second alert. When the bans end, the alert ends.
-  - interval: 30s
-    input_series:
-      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-admin-interface-probing", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
-        values: '0 0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 0 0 0'
-      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="branchleft/ghost-admin-login-bruteforce", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
-        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0'
-    alert_rule_test:
-      - eval_time: 1m30s
+      - eval_time: 2m
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
@@ -2392,26 +2388,408 @@ tests:
               reason: crowdsecurity/http-admin-interface-probing
             exp_annotations:
               summary: 'The edge is banning 2 address(es), by crowdsecurity/http-admin-interface-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
-      - eval_time: 2m30s
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+
+  # Each owned ban is its own alert, named by its decision_id. A second owned
+  # ban of the same scenario is a second alert while the first is still firing:
+  # this is what makes Alertmanager see a changed group and notify again.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="101", host="edge1", job="node"}'
+        values: '0 0 1x40'
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="102", host="edge1", job="node"}'
+        values: '_x12 1x28'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 2m
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
               severity: page
-              reason: crowdsecurity/http-admin-interface-probing
+              reason: crowdsecurity/http-probing
+              decision_id: '101'
             exp_annotations:
-              summary: 'The edge is banning 2 address(es), by crowdsecurity/http-admin-interface-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 7m
+        alertname: EdgeBanIssued
+        exp_alerts:
           - exp_labels:
               severity: page
-              reason: branchleft/ghost-admin-login-bruteforce
+              reason: crowdsecurity/http-probing
+              decision_id: '101'
             exp_annotations:
-              summary: 'The edge is banning 1 address(es), by branchleft/ghost-admin-login-bruteforce.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
-      - eval_time: 11m
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-probing
+              decision_id: '102'
+            exp_annotations:
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+
+  # An owned ban whose sample goes away (the ban ended, the next run no longer
+  # lists it) resolves, and the other ban of the same scenario keeps firing.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="101", host="edge1", job="node"}'
+        values: '1x10 stale'
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="102", host="edge1", job="node"}'
+        values: '1x40'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+      - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+
+  # An unowned ban is a warning for the owner by email, never a page, and the
+  # classifier being fresh means CrowdSec's own gauge does not page it.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="false", host="edge1", job="node"}'
+        values: '0 0 1x40'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '0 0 1x40'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: EdgeBanUnowned
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              reason: crowdsecurity/http-probing
+            exp_annotations:
+              summary: 'The edge is banning 1 other address(es), by crowdsecurity/http-probing.'
+              description: 'None of them is an address that made a verified Ghost staff request through the edge in the last 30 days, so this is email only. If one is yours, `cscli decisions list` on edge1 shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided.'
+      - eval_time: 2m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+
+  # One owned and one unowned scenario at once: each reaches only its own alert.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="branchleft/ghost-admin-login-bruteforce", owned="true", decision_id="201", host="edge1", job="node"}'
+        values: '1x10'
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="false", host="edge1", job="node"}'
+        values: '3x10'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname=~"EdgeBan.*", alertstate="firing"}
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="201", reason="branchleft/ghost-admin-login-bruteforce", severity="page"}'
+            value: 1
+          - labels: 'ALERTS{alertname="EdgeBanUnowned", alertstate="firing", owner_action="true", reason="crowdsecurity/http-probing", severity="warning"}'
+            value: 1
+
+  # A stale classifier pages for every ban, owned or not, from CrowdSec's own
+  # gauge, which knows no owner: the file still says "unowned" but is old.
+  # The boundary is `>` 900s: at exactly 15m the classifier is still fresh and
+  # the ban does not page; half a minute later it does. EdgeBanOwnerStale is
+  # held for 5 minutes on top, so it is silent at 15m30s and firing at 21m.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="false", host="edge1", job="node"}'
+        values: '1x50'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '2x50'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0x50'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 15m30s
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-probing
+            exp_annotations:
+              summary: 'The edge is banning 2 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 15m30s
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: EdgeBanOwnerStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The edge ban classifier has not reported for over 15 minutes.'
+              description: 'Until it runs again every ban pages, owned or not. On edge1, `systemctl status branchleft-edge-ban-owner.timer` and `journalctl -u branchleft-edge-ban-owner` say why. A failed `cscli` query leaves the last file in place, so three missed runs raise this.'
+
+  # A stale classifier leaves an owned ban's own alert in place and adds the
+  # per-scenario fallback alert beside it: two pages in one group, not one.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="101", host="edge1", job="node"}'
+        values: '1x50'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '1x50'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0x50'
+    promql_expr_test:
+      - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+      - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", reason="crowdsecurity/http-probing", severity="page"}'
+            value: 1
+
+  # No classifier series at all (it has never reported, which is also how the
+  # edge looks while the edge_ban_owner role is not installed) pages a ban at
+  # once: `absent_over_time` is true the moment no sample exists in the window.
+  # The staleness page follows after its own hold.
+  - interval: 30s
+    input_series:
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-probing
+            exp_annotations:
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 4m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EdgeBanOwnerStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The edge ban classifier has not reported for over 15 minutes.'
+              description: 'Until it runs again every ban pages, owned or not. On edge1, `systemctl status branchleft-edge-ban-owner.timer` and `journalctl -u branchleft-edge-ban-owner` say why. A failed `cscli` query leaves the last file in place, so three missed runs raise this.'
+
+  # One lost scrape does not page every ban. The classifier last reported at
+  # 10m and is missing from 10m30s to 18m (8 minutes: more than the 5 minute
+  # lookback, less than the 10 minute hold); an unowned ban is active
+  # throughout. The fallback holds, so nothing pages, and EdgeBanOwnerStale is
+  # still inside its 5 minute `for` when the classifier comes back.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="false", host="edge1", job="node"}'
+        values: '1x70'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '1x70'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x20 _x16 1110+30x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+
+  # Missing for longer than the hold with a ban active: the ban pages through
+  # the fallback. The last sample is at 10m; the window of 10 minutes still
+  # holds it at 19m30s and no longer at 20m. EdgeBanOwnerStale follows after
+  # its own 5 minutes.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="false", host="edge1", job="node"}'
+        values: '1x80'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-probing", host="edge1", instance="192.0.2.10:6060", job="crowdsec"}'
+        values: '1x80'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x20 _x60'
+    alert_rule_test:
+      - eval_time: 19m30s
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-probing
+            exp_annotations:
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 21m
+        alertname: EdgeBanOwnerStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The edge ban classifier has not reported for over 15 minutes.'
+              description: 'Until it runs again every ban pages, owned or not. On edge1, `systemctl status branchleft-edge-ban-owner.timer` and `journalctl -u branchleft-edge-ban-owner` say why. A failed `cscli` query leaves the last file in place, so three missed runs raise this.'
+
+  # Absent and no ban: the staleness page, and no ban page to go with it.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", host="edge1"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EdgeBanOwnerStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The edge ban classifier has not reported for over 15 minutes.'
+              description: 'Until it runs again every ban pages, owned or not. On edge1, `systemctl status branchleft-edge-ban-owner.timer` and `journalctl -u branchleft-edge-ban-owner` say why. A failed `cscli` query leaves the last file in place, so three missed runs raise this.'
+
+  # A classifier that keeps running is never stale; one that comes back
+  # clears the page.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x100'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0x41 1260+30x40'
+    alert_rule_test:
+      - eval_time: 20m30s
+        alertname: EdgeBanOwnerStale
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: 'The edge ban classifier has not reported for over 15 minutes.'
+              description: 'Until it runs again every ban pages, owned or not. On edge1, `systemctl status branchleft-edge-ban-owner.timer` and `journalctl -u branchleft-edge-ban-owner` say why. A failed `cscli` query leaves the last file in place, so three missed runs raise this.'
+      - eval_time: 25m
+        alertname: EdgeBanOwnerStale
+        exp_alerts: []
+
+  # When the bans end, the page ends.
+  - interval: 30s
+    input_series:
+      - series: 'edge_ban_owned{reason="crowdsecurity/http-probing", owned="true", decision_id="101", host="edge1", job="node"}'
+        values: '0 0 1x10 0x10'
+      - series: 'edge_ban_owner_last_run_timestamp_seconds{host="edge1", job="node"}'
+        values: '0+30x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-probing
+              decision_id: '101'
+            exp_annotations:
+              summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 10m
         alertname: EdgeBanIssued
         exp_alerts: []
 
+  # RestoreDrillUnitFailed: the mark is the mtime of restore_drill_unit_failed.prom, touched by the
+  # backup_restore role's OnFailure unit. It fires while the mark is newer than the drill's own
+  # last-run time, or the drill has never written one, and clears when a later run records itself.
+  # The drill crashed before it ever wrote a metric: the mark exists and restore_drill_last_run_* does not.
+  - interval: 1m
+    input_series:
+      - series: 'node_textfile_mtime_seconds{job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+        values: '3000x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+            value: 1
+
+  # The drill wrote its failed result, then systemd marked the unit failed: the mark is newer.
+  - interval: 1m
+    input_series:
+      - series: 'node_textfile_mtime_seconds{job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+        values: '3000x10'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '2990x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+            value: 1
+
+  # The next run recorded its result after the mark: the alert clears. A run that ends exactly at the
+  # mark's time clears it too (>=), so a drill that passes is never held red by an old failure.
+  - interval: 1m
+    input_series:
+      - series: 'node_textfile_mtime_seconds{job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+        values: '3000x10'
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '2990x4 3000x6'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing", severity="warning", job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill_unit_failed.prom"}'
+            value: 1
+      - expr: ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing"}
+        eval_time: 8m
+        exp_samples: []
+
+  # A host with no mark at all, and a drill that records itself, raises nothing.
+  - interval: 1m
+    input_series:
+      - series: 'restore_drill_last_run_timestamp_seconds{job="node", instance="10.20.1.50:9100", host="ops1"}'
+        values: '2990x10'
+      - series: 'node_textfile_mtime_seconds{job="node", instance="10.20.1.50:9100", host="ops1", file="restore_drill.prom"}'
+        values: '2990x10'
+    promql_expr_test:
+      - expr: ALERTS{alertname="RestoreDrillUnitFailed", alertstate="firing"}
+        eval_time: 5m
+        exp_samples: []
   # ControlPlaneBackupStale: the control-plane backup's per-stage success time, read on ops1.
   # The bound is 36h (129600s, `>` not `>=`), pinned from both sides: 35h and exactly 36h are
   # silent, 37h fires for each stage on its own, carrying the stage label the summary names.
