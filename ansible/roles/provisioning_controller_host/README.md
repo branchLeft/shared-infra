@@ -126,8 +126,7 @@ builder asked this role to decide how `ops1` provides each, in no-touch form:
   the host and no person sees it. Taking it from the escrow into the tenant's stack is a later
   step of the controller.
 - `create-owner-account`: **needs product code in ghost-platform**, since the account is made inside
-  the tenant's Ghost, and no host program can do it. It is its own sub-issue of the programme:
-  [its own issue](https://github.com/branchLeft/workspace/issues/4173). Until it
+  the tenant's Ghost, and no host program can do it. Until it
   lands the step has no program and a run stops there; this role leaves it unconfigured on purpose
   rather than wiring a stand-in that would report success.
 

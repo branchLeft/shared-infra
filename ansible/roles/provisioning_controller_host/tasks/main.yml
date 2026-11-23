@@ -135,6 +135,7 @@
 - name: Hold whether the route is configured
   ansible.builtin.set_fact:
     provisioning_controller_host_configured: '{{ provisioning_controller_host_route_inputs_set | int == 6 }}'
+  no_log: true
 
 - name: Refuse a bundle digest while the route inputs are unset
   ansible.builtin.assert:
@@ -420,20 +421,24 @@
     mode: '0644'
   when: provisioning_controller_host_account_present
 
-- name: Write the ssh client file and pin the hosts' keys
+- name: Write the ssh client file
   ansible.builtin.template:
-    src: '{{ item.src }}'
-    dest: '{{ item.dest }}'
+    src: ssh_config.j2
+    dest: '{{ provisioning_controller_host_ssh_config_file }}'
     owner: root
     group: root
     mode: '0644'
-  loop:
-    - src: ssh_config.j2
-      dest: '{{ provisioning_controller_host_ssh_config_file }}'
-    - src: known_hosts.j2
-      dest: '{{ provisioning_controller_host_known_hosts_file }}'
-  loop_control:
-    label: '{{ item.dest }}'
+  no_log: true
+  when: provisioning_controller_host_configured
+
+- name: Pin the hosts' keys
+  ansible.builtin.template:
+    src: known_hosts.j2
+    dest: '{{ provisioning_controller_host_known_hosts_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  no_log: true
   when: provisioning_controller_host_configured
 
 # --- The units. They are static files, never templated.
