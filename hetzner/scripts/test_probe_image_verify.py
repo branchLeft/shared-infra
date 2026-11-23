@@ -191,7 +191,7 @@ class WrapperContractTests(unittest.TestCase):
             "attested_name",
             "verifier_env",
             "VERIFIER",
-            "ATTESTED_REPO",
+            "attested_repo",
             "ATTESTED_IMAGES",
             "DeployError",
         ):

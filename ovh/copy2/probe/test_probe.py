@@ -41,6 +41,15 @@ def urn(kind: str, name: str) -> str:
     return f"urn:pulumi:probe::branchleft-ovh-copy2::{kind}::{name}"
 
 
+def ok_send(
+    method: str, url: str, headers: Mapping[str, str], body: bytes | None
+) -> tuple[int, str]:
+    """The OVH token and role read both succeed: no network in the tests."""
+    if method == "POST":
+        return 200, json.dumps({"access_token": "token-value-0001"})
+    return 200, "[]"
+
+
 class FakePulumi:
     def __init__(self, world: World) -> None:
         self.world = world
@@ -84,7 +93,11 @@ class FakePulumi:
         if verb == "up":
             self.resources = [
                 {
-                    "urn": urn("ovh:CloudStorageObjectBucket", f"bucket-{name}"),
+                    # The logical name is the stack's, without the run suffix.
+                    "urn": urn(
+                        "ovh:CloudStorageObjectBucket",
+                        f"bucket-{name.rsplit('-', 1)[0]}",
+                    ),
                     "type": "ovh:CloudStorageObjectBucket",
                     "outputs": {"name": name},
                 }
@@ -168,6 +181,7 @@ class Harness(probe.Context):
             project_dir=tmp / "project",
             run=pulumi,
             connect=extra.pop("connect", self._connect),
+            send=extra.pop("send", ok_send),
             sleep=self.slept.append,
             clock=lambda: NOW,
         )
@@ -298,6 +312,18 @@ class UpTests(Base):
         self.pulumi.fail_init = True
         self.assertEqual(1, probe.up(self.ctx))
         self.assertEqual("started", json.loads(self.ctx.run_file.read_text())["phase"])
+
+    def test_a_refused_role_read_stops_before_any_marker_or_stack(self) -> None:
+        def refused(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, str]:
+            if method == "POST":
+                return 200, json.dumps({"access_token": "token-value-0001"})
+            return 403, ""
+
+        self.ctx.send = refused
+        self.assertEqual(1, probe.up(self.ctx))
+        self.assertEqual([], self.pulumi.calls)
+        self.assertFalse(self.ctx.run_file.exists())
+        self.assertIn("this credential cannot read project roles: 403", "\n".join(self.ctx.printed))
 
     def test_a_malformed_run_id_creates_nothing(self) -> None:
         self.ctx.environ = {**self.ctx.environ, "GITHUB_RUN_ID": "1; rm -rf /"}
@@ -468,9 +494,49 @@ class DestroyTests(Base):
             raise ConnectionError("down")
 
         self.ctx.connect = broken
-        self.assertEqual(0, probe.destroy(self.ctx))
-        self.assertIn("bucket A was not emptied first", self.ctx.summaries[0])
+        self.assertEqual(1, probe.destroy(self.ctx))
+        self.assertIn("bucket A is in the stack but was not emptied first", self.ctx.summaries[0])
         self.assertEqual(1, self.pulumi.destroys)
+
+    def _unreadable_outputs(self) -> None:
+        original = self.pulumi.__call__
+
+        def no_outputs(argv, **kw):  # type: ignore[no-untyped-def]
+            if argv[1:3] == ["stack", "output"]:
+                return Completed(1, "", "no outputs")
+            return original(argv, **kw)
+
+        self.ctx.run = no_outputs
+
+    def test_a_first_up_that_created_nothing_is_green_with_no_note(self) -> None:
+        # A failed first up: the stack holds no buckets and wrote no outputs.
+        probe.up(self.ctx)
+        self.pulumi.resources = []
+        self.ctx.printed.clear()
+        self._unreadable_outputs()
+        self.assertEqual(0, probe.destroy(self.ctx))
+        self.assertNotIn("bucket A", self.ctx.everything())
+        self.assertIn("none remain", self.ctx.summaries[0])
+
+    def test_bucket_a_in_state_with_unreadable_outputs_is_red_not_a_false_all_clear(
+        self,
+    ) -> None:
+        probe.up(self.ctx)
+        self._unreadable_outputs()
+        self.assertEqual(1, probe.destroy(self.ctx))
+        self.assertIn("bucket A is in the stack but was not emptied first", self.ctx.summaries[0])
+        self.assertNotIn("none remain", self.ctx.summaries[0])
+        self.assertIn("CLEANUP NEEDS A LOOK", self.ctx.summaries[0])
+
+    def test_a_note_with_no_leftovers_is_never_reported_as_none_remain(self) -> None:
+        self.up_and_check()
+        def down(*_args: str) -> Ops:
+            raise ConnectionError("down")
+
+        self.ctx.connect = down
+        self.assertEqual(1, probe.destroy(self.ctx))
+        self.assertNotIn("none remain", self.ctx.summaries[0])
+        self.assertIn("::error::the probe cleanup reported a problem", self.ctx.everything())
 
     def test_an_unreadable_run_state_is_red_not_green(self) -> None:
         self.up_and_check()

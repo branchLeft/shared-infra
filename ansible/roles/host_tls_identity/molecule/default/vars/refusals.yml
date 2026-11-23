@@ -1,0 +1,62 @@
+---
+# Every value the owner could supply that the role must refuse. `code` is what the refusal names;
+# `host` is the row the play is for; `renew_days` moves the renewal window, to make a fresh certificate look old.
+# The text is lazy: it is read from host_tls_identity_verify_pem, which the verify play sets first.
+host_tls_identity_verify_refusals:
+  - name: two certificates in one value
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['client-pin'] ~ host_tls_identity_verify_pem['rogue-client'] }}"
+    code: 'pin-shape'
+  - name: a private key
+    host: demo1
+    cert: "{{ '-----BEGIN PRIVATE KEY-----\\nAAAA\\n-----END PRIVATE KEY-----\\n' }}"
+    code: 'pin-shape'
+  - name: a certificate with a body that is not a certificate
+    host: demo1
+    cert: "{{ '-----BEGIN CERTIFICATE-----\\n' ~ 'bm90IGEgY2VydGlmaWNhdGU=' ~ '\\n-----END CERTIFICATE-----\\n' }}"
+    code: 'pin-parse'
+  - name: a certificate another authority signed
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['signed-client'] }}"
+    code: 'pin-self-signed'
+  - name: a self-signed certificate authority
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['ca-client'] }}"
+    code: 'pin-ca'
+  - name: a server certificate where demo1 needs a client certificate
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['server-pin'] }}"
+    code: 'pin-usage'
+  - name: a certificate for both uses
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['both-usages'] }}"
+    code: 'pin-usage'
+  - name: a client certificate where edge1 needs a server certificate
+    host: edge1
+    cert: "{{ host_tls_identity_verify_pem['client-pin'] }}"
+    code: 'pin-usage'
+  - name: a server certificate without the name demo1
+    host: edge1
+    cert: "{{ host_tls_identity_verify_pem['other-name-server'] }}"
+    code: 'pin-name'
+  - name: a server certificate with no name at all
+    host: edge1
+    cert: "{{ host_tls_identity_verify_pem['nameless-server'] }}"
+    code: 'pin-name'
+  - name: a certificate with under sixty days left
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['short-client'] }}"
+    code: 'pin-validity'
+  - name: a certificate that lapsed
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['lapsed-client'] | default('') }}"
+    code: 'pin-validity'
+  - name: an own certificate inside the renewal window
+    host: demo1
+    cert: "{{ host_tls_identity_verify_pem['client-pin'] }}"
+    renew_days: 800
+    code: 'renew'
+  - name: a host with no row
+    host: nosuch
+    cert: "{{ host_tls_identity_verify_pem['client-pin'] }}"
+    code: 'no-profile'

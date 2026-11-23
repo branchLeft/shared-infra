@@ -1,0 +1,22 @@
+---
+argument_specs:
+  main:
+    short_description: Make this host's TLS key and certificate, and pin its peer's certificate
+    description: >-
+      Makes the private key and a self-signed certificate on this host, once, with the
+      distribution's cryptography library. The key never leaves the host. The certificate is
+      valid for two years, and the run fails while under sixty days are left. If the owner has
+      supplied the peer's public certificate, checks it (one certificate, self-signed, not a CA,
+      the right key usage and name, valid, not this host's own) and writes it as the file the
+      host's service trusts. With no peer certificate yet it writes none and says so. Runs under
+      --check; on a host that lacks the library it skips the certificate tasks there, because
+      check mode installs nothing.
+    author: branchLeft
+    options:
+      host_tls_identity_peer_cert:
+        type: str
+        required: false
+        default: ''
+        description: >-
+          The peer's public certificate as PEM text, from the host's file in
+          ansible/owner_vars/. Public data. Empty until the owner has read it off the peer's host.

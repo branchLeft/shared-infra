@@ -1,0 +1,37 @@
+---
+# The role ships disabled. While this is false it installs nothing on the host: no directory, no
+# program, no unit, no timer. The monitoring stack's rules and routes assume the classifier exists
+# only when this is true, so the constant of the same name in hetzner/monitoring/render.ts flips in
+# the same commit.
+edge_ban_owner_enabled: false
+
+# The classifier reads the edge's own access log and CrowdSec through the edge's containers.
+# The container labels are the edge stack's Compose project and service names, the same
+# names the edge runbook uses to find the containers.
+edge_ban_owner_docker_binary: /usr/bin/docker
+edge_ban_owner_compose_project: edge
+edge_ban_owner_caddy_service: caddy
+edge_ban_owner_crowdsec_service: crowdsec
+
+# The access log inside the Caddy container: the active file is <stem>.log, and its rolled
+# siblings are read for the window. The window is the logs' own retention, so it cannot
+# reach past the oldest roll that exists.
+edge_ban_owner_log_dir: /var/log/caddy
+edge_ban_owner_log_stem: access
+edge_ban_owner_window_days: 30
+
+# The state file holds the addresses that were trusted in the window. It is root-only, and
+# nothing else reads it. The textfile is the only output node_exporter reads, and it holds
+# no address.
+edge_ban_owner_state_dir: /var/lib/branchleft/edge-ban-owner
+edge_ban_owner_state_file: /var/lib/branchleft/edge-ban-owner/trusted.json
+edge_ban_owner_textfile_path: /var/lib/branchleft/snds-exporter/edge_ban_owner.prom
+
+# The program and its unit. The timer runs every five minutes; the classifier's staleness
+# alert pages after fifteen minutes without a run.
+edge_ban_owner_program_dir: /usr/local/lib/branchleft-edge-ban-owner
+edge_ban_owner_program_name: branchleft_edge_ban_owner.py
+edge_ban_owner_unit_name: branchleft-edge-ban-owner
+edge_ban_owner_timer_calendar: '*:0/5'
+edge_ban_owner_unit_dir: /etc/systemd/system
+edge_ban_owner_start_timeout_seconds: 240

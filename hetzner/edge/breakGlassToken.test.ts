@@ -675,3 +675,204 @@ describe.skipIf(!dockerUp)(caddyTitle, { timeout: 180_000 }, () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The two log paths the site `log` block does not cover: Caddy's default logger.
+// A handler that fails (here a refused upstream, 502) writes an `http.log.error`
+// line, and a request whose Host matches no site writes its own line. Both go to
+// stderr, so to the container log. See render.md "defaultLogDirective".
+
+/**
+ * The global options' own `log { }` block (Caddy's default logger) as the renderer
+ * emits it, or nothing when it has none (the state before the fix).
+ */
+function renderedDefaultLogBlock(rendered: string): string[] {
+  const all = rendered.split('\n');
+  const open = all.indexOf('{');
+  expect(open, 'the rendered file must open with a global options block').toBeGreaterThanOrEqual(0);
+  const global = all.slice(open + 1, all.indexOf('}', open));
+  const from = global.indexOf('\tlog {');
+  if (from < 0) return [];
+  return global.slice(from, global.indexOf('\t}', from) + 1).map((l) => l.slice(1));
+}
+
+/** The Caddyfile under test: the renderer's own default log, site log and strip in front of a dead upstream. */
+function stderrCaddyfile(rendered: string): string {
+  const strip = renderedStripLines(rendered);
+  return [
+    '{',
+    '\tadmin off',
+    '\tauto_https off',
+    indent(renderedDefaultLogBlock(rendered), 1),
+    '}',
+    'http://new.test:8081 {',
+    indent(renderedLogBlock(rendered), 1),
+    indent(strip.matcher, 1),
+    '\troute {',
+    indent(strip.rule, 2),
+    // Nothing listens here: Caddy answers 502 and writes the error line.
+    '\t\treverse_proxy 127.0.0.1:9',
+    '\t}',
+    '}',
+    '',
+  ].join('\n');
+}
+
+interface StderrRow {
+  id: string;
+  /** `new.test` has a site block; `nosite.test` matches none. */
+  host: 'new.test' | 'nosite.test';
+  path: string;
+  headers?: Record<string, string>;
+  secrets: string[];
+}
+
+function stderrRow(
+  id: string,
+  host: StderrRow['host'],
+  make: (token: string) => { path: string; headers?: Record<string, string> }
+): StderrRow {
+  const t = fake();
+  return { id, host, secrets: t.secrets, ...make(t.token) };
+}
+
+const STDERR_ROWS: StderrRow[] = (['new.test', 'nosite.test'] as const).flatMap((host) => {
+  const p = host === 'new.test' ? 'upstream-502' : 'no-site';
+  return [
+    stderrRow(`${p}-ghost`, host, (t) => ({ path: `/ghost/?${NAME}=${t}` })),
+    stderrRow(`${p}-ghost-admin-api`, host, (t) => ({
+      path: `/ghost/api/admin/site/?${NAME}=${t}`,
+    })),
+    stderrRow(`${p}-root`, host, (t) => ({ path: `/?${NAME}=${t}` })),
+    stderrRow(`${p}-others-kept`, host, (t) => ({ path: `/blog/?a=1&${NAME}=${t}&b=2` })),
+    stderrRow(`${p}-upper-name`, host, (t) => ({ path: `/ghost/?BL_BREAK_GLASS=${t}` })),
+    stderrRow(`${p}-percent-name-upper`, host, (t) => ({ path: `/ghost/?${ENC_UPPER}=${t}` })),
+    stderrRow(`${p}-percent-name-lower`, host, (t) => ({ path: `/ghost/?${ENC_LOWER}=${t}` })),
+    stderrRow(`${p}-referer`, host, (t) => ({
+      path: '/ghost/',
+      headers: { Referer: `https://${host}/ghost/?${NAME}=${t}` },
+    })),
+  ];
+});
+
+describe.skipIf(!dockerUp)(
+  `the break-glass token on the container's stderr${dockerUp ? '' : ` (SKIPPED: ${engine.reason})`}`,
+  { timeout: 180_000 },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), 'break-glass-stderr-'));
+    const name = `bl-break-glass-stderr-${process.pid}`;
+    let slot: Slot | undefined;
+    const answers = new Map<string, Answer>();
+    let stderr = '';
+
+    const rendered = renderCaddyfile([tenant], [], ENFORCING);
+    const SLOT_WAIT_MS = 90_000;
+    const setupBudgetMs =
+      SLOT_WAIT_MS +
+      IMAGE_LIMITS.inspectMs +
+      IMAGE_LIMITS.pullMs +
+      CONTAINER_LIMITS.createMs +
+      CONTAINER_LIMITS.startMs +
+      CONTAINER_LIMITS.portMs +
+      CONTAINER_LIMITS.removeMs +
+      60_000;
+
+    afterAll(async () => {
+      try {
+        await removeByName(name);
+      } finally {
+        slot?.release();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    beforeAll(async () => {
+      slot = await takeSlot({ waitMs: SLOT_WAIT_MS, label: 'edge-break-glass-stderr-test' });
+      await ensureImage(CADDY_IMAGE);
+      writeFileSync(join(dir, 'Caddyfile'), stderrCaddyfile(rendered));
+      const port = await startContainer({
+        name,
+        label: 'branchleft.agent=edge-break-glass-stderr-test',
+        image: CADDY_IMAGE,
+        containerPort: 8081,
+        mountSource: dir,
+        mountTarget: '/etc/caddy',
+      });
+      for (let i = 0; ; i += 1) {
+        try {
+          await get(port, '/', { host: 'new.test' });
+          break;
+        } catch (e) {
+          if (i >= 50) throw new Error(`caddy did not start: ${String(e)}`);
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+      for (const r of STDERR_ROWS) {
+        answers.set(r.id, await get(port, r.path, { ...r.headers, host: r.host, 'X-Row': r.id }));
+      }
+      const logs = await docker(['logs', name], 10_000);
+      expect(logs.status, `reading the container log: ${logs.stderr}`).toBe(0);
+      // Caddy writes its logs to stderr; stdout is read too, so a line on either is judged.
+      stderr = `${logs.stderr}\n${logs.stdout}`;
+    }, setupBudgetMs);
+
+    /** The container log's lines that are JSON objects and name this row in their request headers. */
+    const linesFor = (id: string) =>
+      stderr
+        .split('\n')
+        .filter((l) => l.startsWith('{') && l.includes(id))
+        .map((l) => asJson(JSON.parse(l)));
+
+    it('wrote something for every request, so an empty log cannot pass', () => {
+      expect(stderr).toContain('"msg":"serving initial configuration"');
+      for (const r of STDERR_ROWS) {
+        expect(linesFor(r.id).length, `${r.id} must be on stderr:\n${stderr}`).toBeGreaterThan(0);
+      }
+    });
+
+    it('answers 502 for a site with a dead upstream, and answers the no-site host', () => {
+      for (const r of STDERR_ROWS.filter((x) => x.host === 'new.test')) {
+        expect(answers.get(r.id)?.status, r.id).toBe(502);
+      }
+      for (const r of STDERR_ROWS.filter((x) => x.host === 'nosite.test')) {
+        expect(answers.get(r.id), r.id).toBeDefined();
+      }
+    });
+
+    it('holds no part of any fake token anywhere on stderr', () => {
+      expect(stderr).not.toMatch(/FAKE_(CLAIMS|SIG)_/);
+    });
+
+    it.each(STDERR_ROWS)('holds no part of the token: $id', (r) => {
+      for (const secret of r.secrets) {
+        expect(stderr, `${r.id} leaked ${secret}`).not.toContain(secret);
+      }
+    });
+
+    it.each(STDERR_ROWS.filter((r) => r.host === 'new.test'))(
+      'writes the 502 as an http.log.error line: $id',
+      (r) => {
+        const errors = linesFor(r.id).filter((l) => String(l.logger).startsWith('http.log.error'));
+        expect(errors.length, `${r.id} must have an error line`).toBeGreaterThan(0);
+      }
+    );
+
+    it.each(STDERR_ROWS.filter((r) => r.path.includes('?') && r.host === 'new.test'))(
+      'keeps the rest of the URI in the error line, with the value redacted: $id',
+      (r) => {
+        const err = linesFor(r.id).find((l) => String(l.logger).startsWith('http.log.error'))!;
+        const uri = String(asJson(err.request).uri);
+        expect(uri).toContain('REDACTED');
+        expect(uri.split('?')[0]).toBe(r.path.split('?')[0]);
+      }
+    );
+
+    it('redacts the Referer a failed sign-in page sends', () => {
+      const r = STDERR_ROWS.find((x) => x.id === 'upstream-502-referer')!;
+      const err = linesFor(r.id).find((l) => String(l.logger).startsWith('http.log.error'))!;
+      expect(asJson(asJson(err.request).headers).Referer).toEqual([
+        `https://new.test/ghost/?${RED}`,
+      ]);
+    });
+  }
+);

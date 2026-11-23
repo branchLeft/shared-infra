@@ -1,0 +1,56 @@
+# Cases for the TierTwoSafetyMatch reporting-clock rule, kept in their own file
+# because the rule compares time() with a clock start that is a Unix instant,
+# and the clock must run for hours before it crosses the threshold. The
+# evaluation interval is 1h, so every sample and every evaluation lands on a
+# whole hour. Run it on its own, never beside alert_rules_test.yml: promtool
+# would apply that file's 30s interval to it. `rule_files` is relative to this
+# file's own directory.
+evaluation_interval: 1h
+
+rule_files:
+  - stack/prometheus/alerts.yml
+
+tests:
+  # A clock started at 1000s and still running. At 21h the clock is 74600s old,
+  # past the 72000s threshold: fires, routed to page by its own label.
+  - interval: 1h
+    input_series:
+      - series: 'scanning_storage_reporting_clock_started_timestamp_seconds{tenant="t1"}'
+        values: '1000x30'
+    alert_rule_test:
+      - eval_time: 20h
+        alertname: TierTwoSafetyMatch
+        exp_alerts: []
+      - eval_time: 21h
+        alertname: TierTwoSafetyMatch
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              tenant: t1
+            exp_annotations:
+              summary: 'A tier-two match on t1 has its reporting clock running with no report recorded.'
+              description: 'The reporting clock started when the match sealed and runs for 24 hours. It stops only when a person records that the report was made, following the reporting runbook. Act now: the alarm fires before the 24 hours are up.'
+
+  # A clock that a recorded report has stopped: its series goes absent once
+  # the report is recorded (here, after 5h). Nothing is left to age, so the
+  # rule stays silent at 21h even though the clock once ran.
+  - interval: 1h
+    input_series:
+      - series: 'scanning_storage_reporting_clock_started_timestamp_seconds{tenant="t1"}'
+        values: '1000x5 _x25'
+    alert_rule_test:
+      - eval_time: 21h
+        alertname: TierTwoSafetyMatch
+        exp_alerts: []
+
+  # A tier-one freeze starts no clock, so the clock metric is absent for that
+  # tenant. Another tenant's held-upload gauge is present and must not fire
+  # TierTwoSafetyMatch either.
+  - interval: 1h
+    input_series:
+      - series: 'scanning_storage_held_oldest_age_seconds{tenant="t2"}'
+        values: '100000x30'
+    alert_rule_test:
+      - eval_time: 21h
+        alertname: TierTwoSafetyMatch
+        exp_alerts: []

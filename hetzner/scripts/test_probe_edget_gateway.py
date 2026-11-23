@@ -70,6 +70,12 @@ class FakeGateway:
         self.duplicate_masq = False
         self.netns: set[str] = set()
         self.links: dict[str, int] = {}
+        # The edge_firewall nft table: loaded or not, and whether the masquerade lives in it.
+        self.nft_loaded = False
+        self.masq_in_nft = False
+        self.nft_counter = True
+        self.nft_packets = True  # nft prints the packet count; False is the bare `counter masquerade` seen in CI
+        self.nft_duplicate = False  # the nft table holds the same MASQUERADE twice
         # What the world does.
         self.launder_outside = False  # the outside source gets answered
         self.garbage_probe = False  # the in-namespace probe prints nonsense
@@ -148,7 +154,7 @@ class FakeGateway:
         rows = []
         if table == "nat" and chain == "POSTROUTING":
             rows.append("       4      240 MASQUERADE  all  --  *      !docker0  172.17.0.0/16        0.0.0.0/0")
-            if self.masq is not None:
+            if self.masq is not None and not self.masq_in_nft:
                 row = f"{self.masq:8d} {self.masq * 60:8d} MASQUERADE  all  --  *      {UPLINK}    {SUBNET}         0.0.0.0/0"
                 rows.append(row)
                 if self.duplicate_masq:
@@ -220,6 +226,26 @@ class FakeGateway:
                     self.masq = 0 if self.masq is None else self.masq
                     self.duplicate_masq = False
                 return 0, "", ""
+        if a[0] == "nft" and a[1:] == ["list", "table", "ip", "branchleft_edge_nat"]:
+            if not self.nft_loaded:
+                return 1, "", "Error: No such file or directory\n"
+            lines = [
+                "table ip branchleft_edge_nat {",
+                "\tchain postrouting {",
+                "\t\ttype nat hook postrouting priority srcnat; policy accept;",
+            ]
+            if self.masq_in_nft and self.masq is not None:
+                if not self.nft_counter:
+                    count = ""
+                elif self.nft_packets:
+                    count = f"counter packets {self.masq} bytes {self.masq * 60} "
+                else:
+                    count = "counter "
+                lines.append(f'\t\tip saddr {SUBNET} oifname "{UPLINK}" {count}masquerade')
+                if self.nft_duplicate:
+                    lines.append(f'\t\tip saddr {SUBNET} oifname "{UPLINK}" {count}masquerade')
+            lines += ["\t}", "}"]
+            return 0, "\n".join(lines) + "\n", ""
         if a[0] == "iptables":
             rest = a[1:]
             if rest[0] == "-w":
@@ -713,6 +739,103 @@ class SabotageTests(unittest.TestCase):
         host, out = scenario_sabotage_red_then_green(probe)
         self.assertLess(out.index("if this process is killed"), out.index("RED inside-subnet"))
         self.assertIn("systemctl restart branchleft-nat.service", out)
+
+
+class MasqueradeHomeTests(unittest.TestCase):
+    """The masquerade is read from the nft table when loaded, else iptables; never GREEN with neither."""
+
+    def test_nft_only_masquerade_is_green_and_its_counter_rises(self):
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = True
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 0, out)
+        self.assertTrue(verdicts(out)[0].startswith("GREEN inside-subnet-egress-via-masquerade"), out)
+        self.assertIn("MASQUERADE 0->1", out)
+        self.assertTrue(verdicts(out)[1].startswith("GREEN outside-subnet-no-reply"), out)
+
+    def test_iptables_only_masquerade_is_green_as_before(self):
+        host = FakeGateway(probe)
+        self.assertFalse(host.nft_loaded)
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("MASQUERADE 0->1", out)
+
+    def test_neither_nft_nor_iptables_is_red_never_green(self):
+        for loaded in (False, True):
+            with self.subTest(nft_loaded=loaded):
+                host = FakeGateway(probe)
+                host.masq = None
+                host.nft_loaded = loaded
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("GREEN inside-subnet-egress-via-masquerade", out)
+                self.assertIn("is not present", verdicts(out)[0])
+                self.assertNotIn("RESULT PASS", out)
+
+    def test_nft_loaded_without_masquerade_and_iptables_holding_one_is_refused(self):
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = False
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2, out)
+        self.assertIn("both", out)
+
+    def test_masquerade_in_both_nft_and_iptables_is_refused(self):
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = True
+        host.masq = 0
+        original = host.iptables_listing
+
+        def with_iptables_row(table, chain):
+            host.masq_in_nft = False
+            try:
+                return original(table, chain)
+            finally:
+                host.masq_in_nft = True
+
+        host.iptables_listing = with_iptables_row
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2, out)
+        self.assertIn("both", out)
+
+    def test_an_nft_masquerade_with_no_packet_count_is_a_refusal_not_a_pass(self):
+        # Covers both a rule with no counter and the bare `counter masquerade` listing seen in CI:
+        # neither gives a packet count, so neither can prove the masquerade carries traffic.
+        for counter, packets in ((False, True), (True, False)):
+            with self.subTest(counter=counter, packets=packets):
+                host = FakeGateway(probe)
+                host.nft_loaded = True
+                host.masq_in_nft = True
+                host.nft_counter = counter
+                host.nft_packets = packets
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 2, out)
+                self.assertNotIn("GREEN", out)
+                self.assertIn("has no packet count", out)
+
+    def test_sabotage_is_refused_when_the_masquerade_is_in_nft(self):
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = True
+        code, out = host.run_main(probe, ["gateway", "--sabotage"])
+        self.assertEqual(code, 2, out)
+        self.assertIn("nothing was changed", out)
+        self.assertEqual(host.mutations(), [])
+
+
+    def test_two_matching_nft_masquerades_are_refused_never_green(self):
+        # Two rules for the same subnet and uplink: the probe cannot tell which one carries traffic.
+        # Sabotage: change `len(found) > 1` to `> 1000`; this test goes red.
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = True
+        host.nft_duplicate = True
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("2 times; refusing to guess which one counts", out)
 
 
 class ProfileTests(unittest.TestCase):

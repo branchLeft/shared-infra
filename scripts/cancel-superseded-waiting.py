@@ -19,6 +19,7 @@ STACK_OF_APPLY = (
     ("Apply (hetzner network,", "hetzner_network"),
     ("Apply (hetzner estate,", "hetzner_estate"),
     ("Apply (hetzner dns,", "hetzner_dns"),
+    ("Apply (hetzner tenants,", "hetzner_tenants"),
 )
 
 
@@ -69,6 +70,7 @@ def main(argv=None):
     parser.add_argument("--network", required=True, choices=("true", "false"))
     parser.add_argument("--estate", required=True, choices=("true", "false"))
     parser.add_argument("--dns", required=True, choices=("true", "false"))
+    parser.add_argument("--tenants", required=True, choices=("true", "false"))
     args = parser.parse_args(argv)
     try:
         jobs = json.load(sys.stdin)["jobs"]
@@ -81,6 +83,7 @@ def main(argv=None):
         "hetzner_network": args.network == "true",
         "hetzner_estate": args.estate == "true",
         "hetzner_dns": args.dns == "true",
+        "hetzner_tenants": args.tenants == "true",
     }
     verdict, reason = decide(jobs, planned)
     print("%s: %s" % (verdict, reason))

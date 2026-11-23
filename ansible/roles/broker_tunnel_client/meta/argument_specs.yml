@@ -1,0 +1,21 @@
+---
+argument_specs:
+  main:
+    short_description: Hold ops1's ssh -L forward to the demo broker on demo1
+    description:
+      - Installs one supervised ssh local forward from 127.0.0.1:18090 on ops1 to the broker on demo1's 127.0.0.1:8090.
+      - The private key is the owner's, placed at /etc/branchleft/broker-tunnel/id_ed25519; the unit starts only once it is there.
+      - With both inputs unset the unit is installed, stays inactive, and the run says so.
+    author: branchLeft
+    options:
+      broker_tunnel_client_demo1_address:
+        type: str
+        no_log: true
+        description: >-
+          demo1's public IPv4 address. Private input, from host_inputs, with no default and not
+          required: unset leaves the tunnel unconfigured. Set together with the host key.
+      broker_tunnel_client_demo1_host_key:
+        type: str
+        description: >-
+          demo1's host key, 'ssh-ed25519 <base64>', pinned under the alias demo1. From host_inputs,
+          with no default and not required. Set together with the address.

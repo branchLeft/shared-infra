@@ -2,13 +2,15 @@
 # The order follows the host build: check the inputs, the vendored programs and what
 # broker_deploy left behind, stage the pinned programs, compare the sudoers grant with the generator,
 # install the three programs that something else runs, claim the uids and make the
-# router's account, declare the directories, write the units, stage the edge
-# candidate and the wildcard Caddyfile, and last read back what root will run.
+# router's account, make the broker tunnel account, declare the directories, write
+# the units, stage the edge candidate and the wildcard Caddyfile, and last read back
+# what root will run.
 #
 # Each step is its own internal tasks file, named for what it does. The role
 # applies nothing outside this host build: it does not write the sudoers file, run
 # a slot reset, run the go-live step, write the live edge, or start or enable a
-# unit.
+# unit. The one service it touches is sshd, reloaded when the broker tunnel's
+# drop-in or key changes.
 - name: Check the inputs
   ansible.builtin.include_tasks: _inputs.yml
 
@@ -43,6 +45,12 @@
 
 - name: Record the uid claims and make the router's account
   ansible.builtin.include_tasks: _accounts.yml
+
+# ops1's one door into this host: a no-shell account whose one key may forward to
+# the broker and nowhere else. Installed only once the owner has placed ops1's key;
+# until then the run says it is not installed.
+- name: Make the broker tunnel account
+  ansible.builtin.include_tasks: _broker_tunnel.yml
 
 - name: Declare the socket tree and the drain-flag directory
   ansible.builtin.include_tasks: _dirs.yml

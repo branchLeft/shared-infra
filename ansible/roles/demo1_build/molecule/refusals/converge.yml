@@ -813,8 +813,7 @@
       plant: [secret_dir]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
-# The broker tunnel key is named by a holder row before the change that places it lands, and the row
-# accepts the file when it is there. Its control is the host as prepared, with the row present and
+# The broker tunnel key is named by a holder row, and the row accepts the file when it is there. Its control is the host as prepared, with the row present and
 # the file absent, which is accepted: an absent holder row or file is not an error.
 - name: Accept the broker tunnel key that the holder list names
   ansible.builtin.import_playbook: refused_secret.yml
