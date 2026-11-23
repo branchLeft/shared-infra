@@ -1,0 +1,41 @@
+---
+# Test scaffolding, not role tasks. It puts the test-only copy of the programs
+# where a file:// URL can reach it, and makes what backup_worker makes on a real
+# host: the service account and the recipients file.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Copy the test-only release files into the container
+      ansible.builtin.copy:
+        src: source/
+        dest: '{{ media_backup_test_source_dir }}/'
+        owner: root
+        group: root
+        mode: '0644'
+        directory_mode: '0755'
+
+    - name: Create the service account the nightly worker makes
+      ansible.builtin.user:
+        name: backup-worker
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Create the configuration directory
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Place a stand-in recipients file
+      ansible.builtin.copy:
+        content: '{{ media_backup_test_placeholder }}'
+        dest: /etc/branchleft/backup-worker-recipients
+        owner: root
+        group: backup-worker
+        mode: '0640'
