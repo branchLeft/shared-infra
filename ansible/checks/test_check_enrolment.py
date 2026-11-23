@@ -1238,6 +1238,7 @@ class Sabotage(unittest.TestCase):
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n  - key: {key} d\n    destinations: [db-t1]\n"
             "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
+            "host_tls_identity_peer_cert: ''\n"
         )
         self.assertEqual(check(self.root), [])
 

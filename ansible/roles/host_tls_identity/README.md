@@ -95,9 +95,15 @@ delivery does (Owner steps, last item).
 
 ## How it is delivered
 
-By the gated apply (ANS-17), as the last role on demo1's and edge1's lists, after the roles that
-read its files on demo1. The owner's merge adds it to each host's list and the pin to each host's
+By the gated apply (ANS-17). On demo1 it follows the roles that make the host's accounts and goes
+before `node_exporter_public`, which reads its files. On edge1 it goes before `monitoring_stack`,
+which mounts its directory into Prometheus, so a run that fails here restarts nothing onto a
+missing file. The owner's merge adds it to each host's list and the pin to each host's
 `owner_vars` file (`ansible/checks/` and `ansible/owner_vars/` are the owner's).
+
+`ansible/checks/test_edge1_prometheus_tls_files.py` holds edge1's Prometheus config to this role:
+every TLS file the config names must be one the role writes on edge1, and the config may name the
+pin only once `host_tls_identity_peer_cert` is set in `owner_vars/edge1.yml`.
 
 ## How to change it safely
 
