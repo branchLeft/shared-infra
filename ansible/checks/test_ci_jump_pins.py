@@ -1634,15 +1634,18 @@ class SpoolSabotage(_SabotageBase):
     def test_a_host_whose_second_account_name_is_required_by_the_loader_is_red(self) -> None:
         self._red_then_green(
             HOMES[3],
-            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n  mx1:\n    - mx1_abuse_page_token\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
+            "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  edget:\n    - ci_jump_user\n"
+            "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
             "ci_jump_spool_user is not optional in its host_inputs row",
         )
 
     def test_the_second_accounts_name_in_another_hosts_row_is_red(self) -> None:
         self._red_then_green(
             HOMES[3],
-            "    - ntfy_pager_machine_password_hash\n    - ntfy_pager_mx1_token\n    - ci_jump_user\n  edget:",
+            "    - ntfy_pager_machine_password_hash\n    - ntfy_pager_mx1_token\n"
+            "    - ci_jump_user\n  edget:",
             (
                 "    - ntfy_pager_machine_password_hash\n"
                 "    - ntfy_pager_mx1_token\n"
