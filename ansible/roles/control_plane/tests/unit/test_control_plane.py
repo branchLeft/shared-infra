@@ -370,6 +370,11 @@ def _vars() -> dict[str, object]:
     return {str(key): value for key, value in loaded.items()} if isinstance(loaded, dict) else {}
 
 
+def _vars_entries(name: str) -> list[dict[str, str]]:
+    value = _vars()[name]
+    return [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
+
+
 def _vars_list(name: str) -> list[str]:
     value = _vars()[name]
     return [str(item) for item in value] if isinstance(value, list) else []
@@ -635,6 +640,162 @@ class FirstApplyWindowTests(unittest.TestCase):
     def test_the_readme_states_the_gate_floors_the_compose_file_gives(self) -> None:
         for label, seconds in self.floors.items():
             self.assertIn(f"gate floor {label}: {seconds} seconds", self.readme)
+
+
+PROVISIONING_REFUSALS = (
+    "Refuse enabling the provisioning API while an input file is absent or empty",
+    "Refuse enabling the provisioning API with no image pin given",
+)
+PROVISIONING_CODES = ("provisioning-input-missing", "provisioning-image-missing")
+WRITE_ENV = "Write the stack's interpolation file from whether the provisioning API is enabled"
+SET_INPUT_ATTRIBUTES = "Set the owner, group and mode of the provisioning API's input files"
+
+
+class ProvisioningApiTests(unittest.TestCase):
+    """The provisioning API is off until the owner enables it; the switch and the stack agree."""
+
+    def setUp(self) -> None:
+        self.names = [name for name, _ in task_lines(TASKS)]
+        self.by_name = {str(task.get("name")): task for task in _tasks()}
+        compose = _load(STACK / "compose.yml")
+        if not isinstance(compose, Mapping):
+            self.fail("compose.yml is not a mapping")
+        self.compose_text = (STACK / "compose.yml").read_text(encoding="utf-8")
+        self.services = compose["services"]
+
+    def _mounts(self, service: str) -> dict[str, str]:
+        """The service's read-only and writable bind mounts, container path to host path."""
+        mounts: dict[str, str] = {}
+        for entry in self.services[service].get("volumes", []):
+            host, container = str(entry).split(":")[:2]
+            mounts[container] = host
+        return mounts
+
+    def test_the_switch_is_off_by_default_and_the_defaults_file_says_so(self) -> None:
+        defaults = _load(ROLE / "defaults" / "main.yml")
+        if not isinstance(defaults, Mapping):
+            self.fail("defaults/main.yml is not a mapping")
+        self.assertIs(defaults["control_plane_provisioning_enabled"], False)
+        self.assertEqual(self.services["provisioning"]["scale"], "${PROVISIONING_SCALE:-0}")
+
+    def test_enabling_is_refused_before_the_first_write_and_names_a_code_and_no_value(self) -> None:
+        first_write = self.names.index(FIRST_WRITE)
+        for name, code in zip(PROVISIONING_REFUSALS, PROVISIONING_CODES, strict=True):
+            self.assertEqual(self.names.count(name), 1, name)
+            self.assertLess(self.names.index(name), first_write, f"{name!r} comes after a write")
+            task = self.by_name[name]
+            self.assertIn(
+                f"control_plane[{code}]", str(_section(task, "ansible.builtin.assert")["fail_msg"])
+            )
+            self.assertIn("control_plane_provisioning_enabled", " ".join(_conditions(task)))
+            self.assertNotIn("no_log", task)
+        refusal = _section(self.by_name[PROVISIONING_REFUSALS[1]], "ansible.builtin.assert")
+        self.assertEqual(refusal["that"], ["control_plane_image_given | ansible.builtin.bool"])
+
+    def test_the_input_files_are_looked_at_before_the_first_write(self) -> None:
+        look = "Look at the provisioning API's input files before anything is written"
+        self.assertLess(self.names.index(look), self.names.index(FIRST_WRITE))
+        self.assertIs(_section(self.by_name[look], "ansible.builtin.stat")["get_checksum"], False)
+
+    def test_the_interpolation_file_is_written_from_the_switch_and_holds_no_secret(self) -> None:
+        task = self.by_name[WRITE_ENV]
+        copy = _section(task, "ansible.builtin.copy")
+        self.assertEqual(copy["dest"], "{{ control_plane_project_env_file }}")
+        self.assertEqual(
+            _vars()["control_plane_project_env_file"], "{{ control_plane_project_dir }}/.env"
+        )
+        self.assertNotIn("no_log", task)
+        self.assertIn("control_plane_provisioning_enabled", str(copy["content"]))
+        self.assertLess(
+            self.names.index(WRITE_ENV),
+            self.names.index(
+                "Deliver the access rules, and undo the delivery if a step after it fails"
+            ),
+        )
+        enabled = str(_vars()["control_plane_project_env_enabled"])
+        disabled = str(_vars()["control_plane_project_env_disabled"])
+        self.assertNotRegex(enabled + disabled, r"(?i)password|secret|token|key")
+        self.assertIn("PROVISIONING_SCALE=1", enabled)
+        self.assertIn("PROVISIONING_SCALE=0", disabled)
+        self.assertNotIn("PROVISIONING_URL", disabled)
+
+    def test_every_reference_compose_leaves_empty_is_set_by_the_enabled_file_and_no_other(
+        self,
+    ) -> None:
+        references = set(re.findall(r"\$\{(\w+):-[^}]*\}", self.compose_text))
+        provisioning = {name for name in references if "PROVISIONING" in name}
+        enabled = {
+            line.split("=", 1)[0]
+            for line in str(_vars()["control_plane_project_env_enabled"]).splitlines()
+            if "=" in line
+        }
+        self.assertEqual(enabled, provisioning)
+
+    def test_the_urls_the_enabled_file_sets_are_the_service_on_the_stacks_own_network(self) -> None:
+        enabled = str(_vars()["control_plane_project_env_enabled"])
+        urls = re.findall(r"_PROVISIONING_URL=(\S+)", enabled)
+        self.assertEqual(urls, ["http://provisioning:8095"] * 2)
+        self.assertEqual(self.services["provisioning"]["environment"]["PORT"], "8095")
+        self.assertNotIn("ports", self.services["provisioning"])
+
+    def test_each_application_is_mounted_its_own_credentials_directory_and_never_the_others(
+        self,
+    ) -> None:
+        tenant = "/etc/branchleft/control-plane/provisioning/tenant"
+        owner = "/etc/branchleft/control-plane/provisioning/owner"
+        portal = {host.removesuffix(":ro") for host in self._mounts("portal").values()}
+        console = {host.removesuffix(":ro") for host in self._mounts("console").values()}
+        self.assertIn(tenant, self._mounts("portal").values())
+        self.assertNotIn(owner, self._mounts("portal").values())
+        self.assertIn(owner, self._mounts("console").values())
+        self.assertNotIn(tenant, self._mounts("console").values())
+        self.assertTrue(portal and console)
+        service = set(self._mounts("provisioning").values())
+        self.assertLessEqual({tenant, owner}, service)
+
+    def test_every_input_file_is_under_a_directory_the_role_makes_and_the_stack_mounts(
+        self,
+    ) -> None:
+        made = {entry["path"]: entry for entry in _vars_entries("control_plane_host_dirs")}
+        mounted = {host: container for container, host in self._mounts("provisioning").items()}
+        environment = self.services["provisioning"]["environment"]
+        wanted = {
+            environment["PROVISIONING_OWNER_CREDENTIAL_FILE"],
+            environment["PROVISIONING_TENANT_CREDENTIALS_FILE"],
+            environment["PROVISIONING_DEMOS_FILE"],
+        }
+        placed = {}
+        for entry in _vars_entries("control_plane_provisioning_input_files"):
+            directory = entry["path"].rsplit("/", 1)[0]
+            self.assertIn(directory, made, entry["path"])
+            self.assertIn(directory, mounted, entry["path"])
+            placed[mounted[directory] + "/" + entry["path"].rsplit("/", 1)[1]] = entry
+        self.assertEqual(set(placed), wanted)
+        # A credential is never writable and the container user reads it through the group.
+        for path, entry in placed.items():
+            if "credential" in path:
+                self.assertEqual(
+                    (entry["owner"], entry["group"], entry["mode"]), ("root", "1000", "0440")
+                )
+
+    def test_the_state_directory_is_the_services_alone_and_private(self) -> None:
+        made = {entry["path"]: entry for entry in _vars_entries("control_plane_host_dirs")}
+        state = made["/var/lib/branchleft/control-plane/provisioning"]
+        self.assertEqual((state["owner"], state["mode"]), ("1000", "0700"))
+        self.assertIn(
+            "/var/lib/branchleft/control-plane/provisioning", self._mounts("provisioning").values()
+        )
+        for other in ("portal", "console", "db", "zitadel"):
+            self.assertNotIn(
+                "/var/lib/branchleft/control-plane/provisioning", self._mounts(other).values()
+            )
+
+    def test_the_input_attributes_are_set_only_when_enabled_and_never_touch_content(self) -> None:
+        task = self.by_name[SET_INPUT_ATTRIBUTES]
+        file_module = _section(task, "ansible.builtin.file")
+        self.assertEqual(file_module["state"], "file")
+        self.assertNotIn("content", file_module)
+        self.assertIn("control_plane_provisioning_enabled", " ".join(_conditions(task)))
 
 
 if __name__ == "__main__":
