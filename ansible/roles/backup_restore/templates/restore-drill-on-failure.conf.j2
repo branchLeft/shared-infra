@@ -1,0 +1,4 @@
+# Written by the backup_restore role. Any failed state of the drill (a non-zero exit, a
+# signal, the three-hour timeout, a failed dependency) starts the unit that marks it.
+[Unit]
+OnFailure={{ backup_restore_drill_failed_unit }}

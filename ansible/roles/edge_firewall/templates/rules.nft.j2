@@ -1,0 +1,55 @@
+# Rendered by the role. Edit the role, never the file on the host.
+# Each table is added, deleted and defined again, so loading this file replaces
+# the whole of the table it names and never adds rules to an earlier copy, and the
+# three lines are one atomic transaction. The file names two tables and nothing else:
+# it has no `flush ruleset`, no forward chain and no output chain, so Docker's tables,
+# its FORWARD policy and its DOCKER-USER chain are neither read nor changed.
+add table inet {{ edge_firewall_table }}
+delete table inet {{ edge_firewall_table }}
+table inet {{ edge_firewall_table }} {
+    chain input {
+{% if edge_firewall_enforce | bool %}
+        # Enforce mode: anything no rule below accepts is dropped.
+        type filter hook input priority 0; policy drop;
+        ct state invalid drop
+{% else %}
+        # Monitor mode: the policy accepts and the rules below only log what enforce mode
+        # would refuse. An invalid packet is logged and counted, not dropped.
+        type filter hook input priority 0; policy accept;
+        ct state invalid counter limit rate 5/minute burst 10 packets log prefix "{{ edge_firewall_log_prefix }}invalid "
+{% endif %}
+        ct state established,related accept
+        # Loopback is accepted by address, not as a whole interface. The guard's connection
+        # is to the host's own private address, which also arrives on lo; a blanket loopback
+        # accept would let every set pass that check.
+        iif "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept
+        iif "lo" ip6 saddr ::1 ip6 daddr ::1 accept
+        icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query } accept
+        udp sport 67 udp dport 68 accept
+        udp sport 547 udp dport 546 accept
+        # SSH from any source, as in hetzner-host/firewalls.ts: deploys run from GitHub-hosted runners.
+        tcp dport {{ edge_firewall_control_port }} accept
+        tcp dport { {{ edge_firewall_public_tcp_ports | join(', ') }} } accept
+{% if edge_firewall_bridge_tcp_ports | length > 0 %}
+        iifname "br-*" tcp dport { {{ edge_firewall_bridge_tcp_ports | join(', ') }} } accept
+        iifname "docker0" tcp dport { {{ edge_firewall_bridge_tcp_ports | join(', ') }} } accept
+        iif "lo" tcp dport { {{ edge_firewall_bridge_tcp_ports | join(', ') }} } accept
+{% endif %}
+        # What reaches here is refused in enforce mode and merely logged in monitor mode.
+        # Traffic from the estate and from the Docker bridges is logged with a larger allowance,
+        # so that internet scans cannot use up the log before a private flow shows in it.
+        iifname "br-*" counter limit rate 30/minute burst 60 packets log prefix "{{ edge_firewall_log_prefix }}" return
+        iifname "docker0" counter limit rate 30/minute burst 60 packets log prefix "{{ edge_firewall_log_prefix }}" return
+        ip saddr {{ edge_firewall_nat_source }} counter limit rate 30/minute burst 60 packets log prefix "{{ edge_firewall_log_prefix }}" return
+        counter limit rate 5/minute burst 10 packets log prefix "{{ edge_firewall_log_prefix }}"
+    }
+}
+add table ip {{ edge_firewall_nat_table }}
+delete table ip {{ edge_firewall_nat_table }}
+table ip {{ edge_firewall_nat_table }} {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr {{ edge_firewall_nat_source }} oifname "{{ edge_firewall_uplink }}" masquerade
+    }
+}

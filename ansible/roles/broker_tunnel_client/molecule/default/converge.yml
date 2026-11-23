@@ -1,0 +1,16 @@
+---
+# The inputs a seeded ops1 has: a documentation address (RFC 5737) standing in for
+# demo1's, and a fixed test host key. The owner's private key is not placed, so the
+# unit is installed, enabled and inactive, as on ops1 before the key placement.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.broker_tunnel_client
+      vars:
+        broker_tunnel_client_demo1_address: 203.0.113.80
+        broker_tunnel_client_demo1_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f

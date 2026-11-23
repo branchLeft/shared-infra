@@ -102,6 +102,18 @@ def last_handle(body: str) -> Callable[[str], str]:
     )
 
 
+NOSNIFF_BLOCK = '\t\theader {\n\t\t\t>X-Content-Type-Options "nosniff"\n\t\t}\n'
+
+
+def errors_body(body: str) -> Callable[[str], str]:
+    """Return a change that replaces the body of the site's `handle_errors` block."""
+    return lambda good: good.replace(NOSNIFF_BLOCK, body, 1)
+
+
+def without_errors(good: str) -> str:
+    return good.replace("\thandle_errors {\n" + NOSNIFF_BLOCK + "\t}\n", "", 1)
+
+
 TOKEN_DIR = str(Path(TOKEN).parent)
 TOKEN_NAME = Path(TOKEN).name
 # Handler bodies that read a file off the disk. Each is a body for the wildcard site's last
@@ -237,6 +249,42 @@ CASES: dict[str, tuple[Callable[[str], str], str | None]] = {
     "handler_expression_env_oracle": (last_handle(EXPRESSION_ENV_ORACLE), "matcher-expression"),
     "handler_expression_plain": (last_handle(EXPRESSION_PLAIN), "matcher-expression"),
     "handler_expression_in_route": (last_handle(EXPRESSION_IN_ROUTE), "matcher-expression"),
+    # The site's error block adapts to a server-level `errors` key. Only the renderer's one
+    # header-only route (nosniff) is accepted there: the key is a second route table that serves
+    # what it holds, so a handler in it is refused whole, whatever the handler is.
+    "errors_absent": (without_errors, None),
+    "errors_reverse_proxy": (errors_body("\t\treverse_proxy 127.0.0.1:9\n"), "server-errors"),
+    "errors_respond_body": (errors_body('\t\trespond "x"\n'), "server-errors"),
+    "errors_nosniff_then_respond": (
+        errors_body(NOSNIFF_BLOCK + '\t\trespond "x"\n'),
+        "server-errors",
+    ),
+    "errors_nosniff_then_reverse_proxy": (
+        errors_body(NOSNIFF_BLOCK + "\t\treverse_proxy 127.0.0.1:9\n"),
+        "server-errors",
+    ),
+    "errors_other_header": (errors_body('\t\theader X-Any "y"\n'), "server-errors"),
+    "errors_second_header": (
+        errors_body(
+            '\t\theader {\n\t\t\t>X-Content-Type-Options "nosniff"\n\t\t\tX-Any "y"\n\t\t}\n'
+        ),
+        "server-errors",
+    ),
+    "errors_other_header_value": (
+        errors_body('\t\theader {\n\t\t\t>X-Content-Type-Options "other"\n\t\t}\n'),
+        "server-errors",
+    ),
+    "errors_token_header": (
+        errors_body('\t\theader X-Any "{file.' + TOKEN + '}"\n'),
+        "server-errors",
+    ),
+    "errors_rewrite": (errors_body("\t\trewrite * /x\n"), "server-errors"),
+    "errors_redir": (errors_body("\t\tredir https://x.invalid/\n"), "server-errors"),
+    "errors_file_server": (errors_body(FILE_SERVER_ANCESTOR_ROOT), "server-errors"),
+    "errors_status_scoped": (
+        lambda good: good.replace("handle_errors {", "handle_errors 503 {", 1),
+        "server-errors",
+    ),
 }
 
 # Changes to the raw candidate that are refused before Caddy adapts it, with the code. Adapting
@@ -405,6 +453,118 @@ def fixture_path(name: str) -> Path:
 
 def judge_recorded(name: str) -> str | None:
     return judge_caddy_config.judge(json.loads(fixture_path(name).read_text()), BASE, TOKEN)
+
+
+def recorded_good_text() -> str:
+    return fixture_path("good").read_text()
+
+
+class ErrorsKeyTests(unittest.TestCase):
+    """The server `errors` key is accepted only as the one header-only route the renderer emits.
+
+    The key is a second route table Caddy runs on an error response, so a handler in it
+    (a proxy, a file server, a body) would be served as the site's own. Each mutant below starts
+    from the config real Caddy adapted for the renderer's output and changes the one key.
+    """
+
+    def refused(self, config: object) -> str | None:
+        return judge_caddy_config.judge(config, BASE, TOKEN)
+
+    def test_the_recorded_good_config_holds_the_errors_key_and_the_judge_accepts_it(self) -> None:
+        config = json.loads(recorded_good_text())
+        self.assertIn("errors", config["apps"]["http"]["servers"]["srv0"])
+        self.assertIsNone(self.refused(config))
+
+    def test_the_shape_the_judge_accepts_is_exactly_what_real_caddy_recorded(self) -> None:
+        config = json.loads(recorded_good_text())
+        recorded = config["apps"]["http"]["servers"]["srv0"]["errors"]
+        self.assertEqual(recorded, judge_caddy_config.error_routes("*." + BASE))
+
+    def test_a_handler_added_to_the_errors_route_is_refused(self) -> None:
+        handlers = {
+            "reverse_proxy": {"handler": "reverse_proxy", "upstreams": [{"dial": "127.0.0.1:9"}]},
+            "file_server": {"handler": "file_server", "root": "/etc"},
+            "static_response": {"handler": "static_response", "body": "x"},
+            "rewrite": {"handler": "rewrite", "uri": "/x"},
+            "headers_other": {"handler": "headers", "response": {"set": {"X-Any": ["y"]}}},
+        }
+        for name, handler in handlers.items():
+            with self.subTest(handler=name, where="route"):
+                config = json.loads(recorded_good_text())
+                route = config["apps"]["http"]["servers"]["srv0"]["errors"]["routes"][0]
+                route["handle"].append(handler)
+                self.assertEqual(self.refused(config), "server-errors")
+            with self.subTest(handler=name, where="nested"):
+                config = json.loads(recorded_good_text())
+                route = config["apps"]["http"]["servers"]["srv0"]["errors"]["routes"][0]
+                route["handle"][0]["routes"][0]["handle"].append(handler)
+                self.assertEqual(self.refused(config), "server-errors")
+            with self.subTest(handler=name, where="innermost"):
+                config = json.loads(recorded_good_text())
+                route = config["apps"]["http"]["servers"]["srv0"]["errors"]["routes"][0]
+                inner = route["handle"][0]["routes"][0]["handle"][0]["routes"][0]
+                inner["handle"].append(handler)
+                self.assertEqual(self.refused(config), "server-errors")
+
+    def test_a_changed_header_or_a_second_header_value_is_refused(self) -> None:
+        for name in ("other_value", "second_name", "second_value", "deferred_as_one"):
+            with self.subTest(change=name):
+                config = json.loads(recorded_good_text())
+                route = config["apps"]["http"]["servers"]["srv0"]["errors"]["routes"][0]
+                headers = route["handle"][0]["routes"][0]["handle"][0]["routes"][0]["handle"][0]
+                if name == "other_value":
+                    headers["response"]["set"]["X-Content-Type-Options"] = ["other"]
+                elif name == "second_name":
+                    headers["response"]["set"]["X-Any"] = ["y"]
+                elif name == "second_value":
+                    headers["response"]["set"]["X-Content-Type-Options"].append("x")
+                else:
+                    headers["response"]["deferred"] = 1
+                self.assertEqual(self.refused(config), "server-errors")
+
+    def test_a_second_errors_route_or_another_errors_key_is_refused(self) -> None:
+        for name in ("second_route", "extra_key", "path_match", "other_host"):
+            with self.subTest(change=name):
+                config = json.loads(recorded_good_text())
+                errors = config["apps"]["http"]["servers"]["srv0"]["errors"]
+                if name == "second_route":
+                    errors["routes"].append(json.loads(json.dumps(errors["routes"][0])))
+                elif name == "extra_key":
+                    errors["extra"] = {}
+                elif name == "path_match":
+                    errors["routes"][0]["match"] = [{"path": ["/x"]}]
+                else:
+                    errors["routes"][0]["match"] = [{"host": ["other.invalid"]}]
+                self.assertEqual(self.refused(config), "server-errors")
+
+    def test_an_errors_value_that_is_not_the_shape_is_refused(self) -> None:
+        values: list[object] = [None, {}, [], "x", {"routes": []}, {"routes": [{}]}]
+        for value in values:
+            with self.subTest(value=value):
+                config = json.loads(recorded_good_text())
+                config["apps"]["http"]["servers"]["srv0"]["errors"] = value
+                self.assertEqual(self.refused(config), "server-errors")
+
+    def test_another_server_key_beside_errors_is_still_refused_as_a_server_key(self) -> None:
+        config = json.loads(recorded_good_text())
+        config["apps"]["http"]["servers"]["srv0"]["automatic_https"] = {"disable": True}
+        self.assertEqual(self.refused(config), "server-keys")
+
+    def test_the_program_prints_one_line_and_no_hostname_for_a_refused_errors_key(self) -> None:
+        config = json.loads(recorded_good_text())
+        route = config["apps"]["http"]["servers"]["srv0"]["errors"]["routes"][0]
+        route["handle"].append({"handler": "reverse_proxy"})
+        done = subprocess.run(
+            [sys.executable, "-I", str(JUDGE), "--env", ENV, "--base", BASE]
+            + ["--token-file", TOKEN],
+            env={ENV: json.dumps(config)},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(done.stdout.startswith("REFUSED server-errors:"), done.stdout)
+        self.assertEqual(len(done.stdout.splitlines()), 1)
+        self.assertNotIn("invalid", done.stdout)
 
 
 class FixtureTests(unittest.TestCase):

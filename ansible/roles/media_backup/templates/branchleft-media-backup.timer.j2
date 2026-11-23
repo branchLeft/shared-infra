@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly trigger for branchleft-media-backup.service
+
+[Timer]
+OnCalendar={{ media_backup_calendar }}
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
