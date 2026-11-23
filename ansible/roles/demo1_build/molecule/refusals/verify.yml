@@ -60,6 +60,7 @@
         - /var/lib/branchleft/demo-candidates/Caddyfile
         - /etc/systemd/system/branchleft-compose@demo-0-a.service.d
         - /etc/branchleft/demo1-drain-flags-preseeded
+        - /etc/branchleft/demo-sidecar.image.env
         - /etc/branchleft/tenant-uids
       register: demo1_build_verify_absent
 
