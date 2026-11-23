@@ -1,4 +1,4 @@
-"""tenant_compose_stacks is optional: an undefined list delivers nothing, and a defined one is untouched.
+"""tenant_compose_stacks is optional: undefined delivers nothing, and a defined list is untouched.
 
 A host with no tenant yet has no list in its host_inputs file, and the loader counts an empty list
 as missing, so the list cannot be required on such a host. The role reads an undefined list as the
