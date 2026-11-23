@@ -350,10 +350,24 @@ secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
 first role run after it restarts the stack once, even when the role's own inputs
 are unchanged. The role's README, "Restart", has the detail.
 
-**The role runs on edge1.** The edge1 playbook wires `monitoring_stack`. The role writes the six keys above from the host's inputs on each
-gated apply, so rotating one of them is a change to its input followed by that
-apply. No hand block writes them any more. The `STALWART_PROMETHEUS_SECRET` block
-below is the one hand path left in this step.
+**The role runs on edge1.** The edge1 playbook wires `monitoring_stack`. The role writes the six keys above from the host's inputs on each gated apply. No hand block writes them.
+
+**Rotating one of the six keys.** Each key has one runnable path. It changes that key only in `/etc/branchleft/host-inputs.json`, asks for the new value at a hidden prompt, and reads the file back. It prints the key name and a byte count, never the value. Run it on edge1 with a terminal (`ssh -t`), once per key, as the key you are rotating:
+
+```bash
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_smtp_username'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_smtp_password'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_healthchecks_ping_url'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_alert_recipient_email'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_mailhost_ping_url'
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set monitoring_stack_grafana_admin_password'
+```
+
+The tool needs the host's inputs file to exist already (placed once at bootstrap; it stops with `no-file` otherwise) and refuses to run as anyone but root. Do not run it with `--replace` between a `--set` and the gated apply: the fill step reads the live files, which still hold the old value. The path before the first apply of a commit that holds the tool is in `ansible/roles/host_inputs/README.md`, "Bootstrap and rotation".
+
+The rotated line reaches `monitoring.env` only at the next gated apply of `monitoring_stack` (owner step). That apply writes the key, and a changed key restarts the stack once (`SMTP_*`, `HEALTHCHECKS_PING_URL`, `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL` and `GRAFANA_ADMIN_PASSWORD`; a changed `SNDS_DATA_URL` does not). Check the file's shape afterwards with the command below.
+
+`STALWART_PROMETHEUS_SECRET` is not one of the six. Its own hand block is below.
 
 Check the file's shape without printing it:
 

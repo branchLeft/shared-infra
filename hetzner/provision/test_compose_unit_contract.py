@@ -149,6 +149,13 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "unit, not an instance of the Compose template, and nothing here sees "
         "whether that repository declares a health signal for it."
     ),
+    "media-backup": (
+        "branchLeft/ghost-platform commits the weekly media backup program, and no "
+        "Compose file for it. This repository names it only in the paths of the "
+        "media_backup Ansible role. It is a systemd unit, not an instance of the "
+        "Compose template, and nothing here sees whether that repository declares "
+        "a health signal for it."
+    ),
     "ring-controller": (
         "branchLeft/ghost-platform commits the ring controller's programs and "
         "systemd units, and no Compose file for it. This repository names it only "

@@ -46,7 +46,7 @@ both read it.
 | -------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                                                                                                                   |
 | org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                                                                                                                                 |
-| tenants  | Built fresh: `edge-t`, `db-t1`, `app-t1`                                  | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| tenants  | Built fresh: `edge-t`, `db-t1`, `app-t1`                                  | `HCLOUD_TOKEN_TENANTS` (Read and Write, this project only): CI plans and applies the stack (`hetzner-tenants-plan`, `hetzner-tenants-apply` in `production`) — `hetzner/tenants/`'s stack                              |
 | demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                                                                                                                       |
 | dns      | The branchleft.co.uk and publicpress.co.uk DNS zones and no hosts         | `HCLOUD_TOKEN`: first-time init by hand per `hetzner/dns/RUNBOOK-dns-cutover.md`; CI plans and applies every later change (`HCLOUD_TOKEN_DNS`, plan in `dns-plan`, apply in `production-dns`) — `hetzner/dns/`'s stack |
 | backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                                                                                                                       |
@@ -421,7 +421,7 @@ Hetzner console and rescue system, not a password.
 ## Deploys
 
 A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`,
-`ghcr.io/branchleft/percona-server`) is
+`ghcr.io/branchleft/percona-server`, `ghcr.io/branchleft/website`) is
 verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
 fail-closed: a host with no credential refuses every registered deploy. An image outside the register
 is refused unless the reviewed exemption list (`UNATTESTED_STACK_IMAGES`) names it for that stack. That rule holds for every image in the model that `docker compose config` renders for the stack, not only the one on the command line; a sidecar with no digest, an interpolated image, an image mount, a `build` or a Compose that fails to render is refused (`provision/branchleft_deploy.md`, "verify_compose_images"). The verifier and its pinned

@@ -1,0 +1,85 @@
+---
+# The owner's value is the peer's public certificate. It is refused unless it is exactly what this
+# host should trust, and written only after every check has passed, so a refused value never
+# replaces the trust file the service is already using.
+- name: Refuse a pin that is not one certificate
+  ansible.builtin.assert:
+    that:
+      - (host_tls_identity_peer_cert | regex_findall('-----BEGIN CERTIFICATE-----') | length) == 1
+      - (host_tls_identity_peer_cert | regex_findall('-----END CERTIFICATE-----') | length) == 1
+      - "'PRIVATE KEY' not in host_tls_identity_peer_cert"
+    fail_msg: >-
+      host_tls_identity[pin-shape]: host_tls_identity_peer_cert must hold exactly one PEM
+      certificate and nothing else, and never a private key.
+    quiet: true
+
+- name: Read the pinned certificate
+  block:
+    - name: Parse the pinned certificate
+      community.crypto.x509_certificate_info:
+        content: '{{ host_tls_identity_peer_cert }}'
+        valid_at:
+          now: '+0s'
+          horizon: '{{ host_tls_identity_horizon }}'
+      register: host_tls_identity_pin_info
+  rescue:
+    - name: Refuse a pin that does not parse
+      ansible.builtin.fail:
+        msg: 'host_tls_identity[pin-parse]: host_tls_identity_peer_cert is not a certificate this host can read.'
+
+- name: Refuse a pin that is not self-signed
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_pin_info.subject == host_tls_identity_pin_info.issuer
+    fail_msg: >-
+      host_tls_identity[pin-self-signed]: the pinned certificate is issued by another name, so
+      it is not the peer's own certificate.
+    quiet: true
+
+- name: Refuse a pin that is a certificate authority
+  ansible.builtin.assert:
+    that:
+      - "'CA:TRUE' not in (host_tls_identity_pin_info.basic_constraints | default([], true))"
+    fail_msg: >-
+      host_tls_identity[pin-ca]: the pinned certificate may sign other certificates; a pin must
+      be a plain certificate, so trusting it trusts that one key only.
+    quiet: true
+
+- name: Refuse a pin made for the wrong use
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_pin_info.extended_key_usage == [host_tls_identity_usage_names[host_tls_identity_profile.peer_usage]]
+    fail_msg: >-
+      host_tls_identity[pin-usage]: the pinned certificate must be for
+      {{ host_tls_identity_profile.peer_usage }} and nothing else.
+    quiet: true
+
+- name: Refuse a pin that lacks the name it must carry
+  ansible.builtin.assert:
+    that:
+      - ('DNS:' ~ host_tls_identity_profile.peer_dns) in (host_tls_identity_pin_info.subject_alt_name | default([], true))
+    fail_msg: >-
+      host_tls_identity[pin-name]: the pinned certificate must carry the name
+      {{ host_tls_identity_profile.peer_dns }}.
+    quiet: true
+  when: host_tls_identity_profile.peer_dns != ''
+
+- name: Refuse a pin that is not valid now, or lapses inside the renewal window
+  ansible.builtin.assert:
+    that:
+      - host_tls_identity_pin_info.valid_at.now
+      - host_tls_identity_pin_info.valid_at.horizon
+    fail_msg: >-
+      host_tls_identity[pin-validity]: the pinned certificate is not valid now, or has under
+      {{ host_tls_identity_renew_days }} days left. Read the peer's renewed certificate (README).
+    quiet: true
+
+- name: Write the pinned peer certificate as the file the service trusts
+  ansible.builtin.copy:
+    # A block scalar, so the file ends with one real newline.
+    content: |
+      {{ host_tls_identity_peer_cert | trim }}
+    dest: '{{ host_tls_identity_pin_file }}'
+    owner: root
+    group: '{{ host_tls_identity_profile.group | default(omit, true) }}'
+    mode: '0640'

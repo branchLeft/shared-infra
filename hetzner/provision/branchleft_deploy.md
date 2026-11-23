@@ -213,9 +213,13 @@ to resolve deliberately rather than have it guessed at.
 
 An image this host deploys is checked for its build attestation before the
 lock, the pin write or any restart. `ATTESTED_IMAGES` is the register: each
-attested image name and the one workflow whose attestation it must carry, both
-under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
-ghost-platform's `scripts/verify-image-attestation.sh`, always with
+attested image name and the one workflow whose attestation it must carry. The
+repository the attestation must come from is the one that owns that workflow
+(`attested_repo`, the first two parts of the signer path): `branchLeft/ghost-platform`
+for the tenant, portal and Percona images, `branchLeft/website` for the website image.
+A register signer that is not `owner/repo/.github/workflows/<file>` stops the deploy
+rather than being checked against a guessed repository. The check runs `VERIFIER`,
+the host copy of ghost-platform's `scripts/verify-image-attestation.sh`, always with
 `--bundle-from-oci`, and any non-zero exit refuses the deploy.
 
 It fails closed. A missing verifier, an unknown digest, an unsigned image and
@@ -227,16 +231,16 @@ An image name outside the register is refused, not passed unverified, unless
 `UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
 exemption list: each stack that pins through this wrapper today, with the image
 names it runs that no workflow attests yet, its own and its third-party sidecars
-(`website`, `publicpress-website`, `edge`, `db`, `control-plane`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
-the register, so it is verified. It is keyed by stack as well as by name, so an exemption
+(`publicpress-website`, `edge`, `db`, `control-plane`, `mail-spool`). `dbt1` and `website` are not listed: their images, percona-server and
+website, are in the register, so they are verified. It is keyed by stack as well as by name, so an exemption
 does not open the other stacks: a tenant slot key cannot pin the edge image, and
 cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
 stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
 `ghcr.io/branchleft/portal-apps`, `ghcr.io/branchleft/percona-server`, the
 database image of `db-t1`, signed by the Percona image workflow, and
 `ghcr.io/branchleft/mysqld-exporter`, the `db` stack's exporter sidecar, signed by
-`mysqld-exporter-image.yml`). Exempt images skip the verifier; adding
-an entry is a reviewed diff, and the way to remove one is to register the image
+`mysqld-exporter-image.yml`, and `ghcr.io/branchleft/website`, signed by `branchLeft/website`'s `ci.yml`).
+Exempt images skip the verifier; adding an entry is a reviewed diff, and the way to remove one is to register the image
 in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
 names it. This holds for every image a stack's Compose files name, not only the pin
 (`verify_compose_images`, below).
@@ -468,7 +472,7 @@ this module; a file written by any account but root is refused.
 and not group or world writable; the files are regular, singly linked, non-empty and under 4 MiB, opened
 without following a link or blocking on a FIFO; the manifest hashes to the digest. The bytes read are
 copied into a private directory and gh reads the copies, so nothing changes between check and use. gh then
-verifies the repository, the signing workflow from `ATTESTED_IMAGES`, `refs/heads/main`, the OIDC issuer
+verifies the repository that owns the signing workflow (`attested_repo`), the signing workflow from `ATTESTED_IMAGES`, `refs/heads/main`, the OIDC issuer
 and a hosted runner, exactly as the online verifier does. Its environment is the online one without
 `DOCKER_CONFIG`: no registry key and no GitHub credential.
 

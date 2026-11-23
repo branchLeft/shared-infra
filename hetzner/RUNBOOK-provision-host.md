@@ -271,11 +271,17 @@ ciphertext, and neither may be committed.
 
 ### 2. Make the gateway forward
 
-Nothing is run by hand for the forwarding itself. The `egress_nat` role delivers it:
-edge1's playbook applies the role with `egress_nat_gateway_enabled` on, a value the
-owner-only checks pin to edge1 alone (a second gateway would loop the estate's
-egress). The role installs the NAT reconciler and its unit from `hetzner/provision`,
-runs it, and puts the previous files back if the run fails. The route to the host is
+Nothing is run by hand for the forwarding itself. Two roles deliver it, in this order.
+The `edge_firewall` role loads edge1's own nftables tables (the input filter and the
+estate's masquerade), sets forwarding, masks `nftables.service`, and removes the
+`iptables` masquerade rule the reconciler wrote, only after its own table is confirmed.
+Then the `egress_nat` role, with `egress_nat_gateway_enabled` on (a value the owner-only
+checks pin to the two gateways alone, since a second gateway on one network would loop its
+egress), installs the NAT reconciler and its unit from `hetzner/provision`, runs it, and
+puts the previous files back if the run fails. The reconciler reads the firewall role's
+table: finding the masquerade there it inserts only the two `DOCKER-USER` forwarding
+accepts, and it refuses to run (so the apply fails) if forwarding is off. A host with no
+such table gets the `iptables` masquerade from the reconciler, as before. The route to the host is
 the gated `ansible-delivery` run on `main` (the plan job, the approval, then the
 apply); wait for that run to finish on edge1 before step 3, and before any
 private-only host is created.
@@ -334,21 +340,26 @@ here independently.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
   test "$(sysctl -n net.ipv4.ip_forward)" = 1
-  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  { nft list table ip branchleft_edge_nat 2>/dev/null || true; iptables -t nat -S POSTROUTING; } | grep -E -- "-s 10.20.1.0/24 .*-j MASQUERADE|ip saddr 10.20.1.0/24 oifname .+ masquerade"
   iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
   systemctl is-enabled branchleft-nat.service
+  systemctl is-enabled branchleft-firewall.service
+  test "$(systemctl is-enabled nftables.service)" = masked
   echo "gateway ok"
 '
 ```
 
-Expect three rule lines, `enabled`, and `gateway ok`. It exits non-zero on the
+Expect three rule lines, two `enabled` lines, and `gateway ok`. It exits non-zero on the
 first thing that is missing, and the output stops there — so the last line
 printed is the check that passed, and the one after it is what to fix.
 
 **All three rules are checked, not just the masquerade, and that is the point
-of this block.** The masquerade lives in the `nat` table, which Docker does not
-own, so it survives almost everything. The two rules that carry the actual
+of this block.** The masquerade is in the `edge_firewall` role's own nftables table
+(on a host without that role, an `iptables` rule in the `nat` table, which is why the
+first check reads both), and Docker owns neither, so it survives almost everything.
+`iptables -t nat -S POSTROUTING` alone shows only the `iptables` home and would call a
+healthy edge1 broken. The two rules that carry the actual
 permission are the filter-chain accepts, and they live in `DOCKER-USER` — a
 chain Docker does own, and which `iptables -F`, a `firewall-cmd --reload` or a
 change of firewall backend removes on its own. With those gone, the masquerade
@@ -386,7 +397,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl restart docker.service
   AFTER="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
   test "$BEFORE" != "$AFTER"
-  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  { nft list table ip branchleft_edge_nat 2>/dev/null || true; iptables -t nat -S POSTROUTING; } | grep -E -- "-s 10.20.1.0/24 .*-j MASQUERADE|ip saddr 10.20.1.0/24 oifname .+ masquerade"
   iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
   echo "gateway survives a docker restart, reconciler reran at $AFTER"

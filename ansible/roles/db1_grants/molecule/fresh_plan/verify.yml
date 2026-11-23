@@ -1,0 +1,6 @@
+---
+# The default scenario's verify.yml, which holds the assertions on the database the
+# real run left, the record of the client's calls and the log (the part of this
+# scenario has no refusal cases).
+- name: Verify as the default scenario does
+  ansible.builtin.import_playbook: ../default/verify.yml

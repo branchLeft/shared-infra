@@ -59,6 +59,17 @@ route:
       receiver: email-on-host
     - matchers:
         - severity = "page"
+        - alertname = "EdgeBanOwnerStale"
+      receiver: discard
+    - matchers:
+        - severity = "page"
+        - alertname = "EdgeBanIssued"
+      receiver: ntfy-page
+      group_by: ['alertname', 'reason']
+      group_wait: 30s
+      group_interval: 5m
+    - matchers:
+        - severity = "page"
         - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"
       receiver: ntfy-page
       group_by: ['tenant']
@@ -115,3 +126,5 @@ receivers:
     webhook_configs:
       - url: '__MAILHOST_PING_URL__'
         send_resolved: false
+
+  - name: discard
