@@ -1,0 +1,182 @@
+---
+# Inputs first, refused before any task changes anything. No message names a value: the
+# private inputs and the login value never reach a log (ANS-16). The argument spec coerces a
+# wrong type rather than rejecting it and accepts an empty string for a required input, so these
+# reject both.
+- name: Refuse a switch that is not a boolean
+  ansible.builtin.assert:
+    that:
+      - binlog_pull_timer_enabled is boolean
+      - binlog_pull_timer_may_disable is boolean
+      - binlog_pull_flush is boolean
+    fail_msg: >-
+      binlog_pull refused its input (rule: types): the timer switches and the flush switch
+      must be true or false.
+    quiet: true
+
+- name: Refuse a private input that is empty or not plain text
+  ansible.builtin.assert:
+    that:
+      - binlog_pull_db_host is string
+      - binlog_pull_db_host is match(binlog_pull_host_pattern)
+      - binlog_pull_db_user is string
+      - binlog_pull_db_user is match(binlog_pull_user_pattern)
+      - binlog_pull_db_port is integer
+      - binlog_pull_db_port > 0
+      - binlog_pull_db_port < 65536
+      - binlog_pull_db_ca_pem is string
+      - binlog_pull_db_ca_pem is search('-----BEGIN CERTIFICATE-----')
+      - binlog_pull_db_ca_pem is search('-----END CERTIFICATE-----')
+      - binlog_pull_db_ca_pem is not search('PRIVATE KEY')
+    quiet: true
+    fail_msg: >-
+      A required private input is empty or has the wrong shape: the database host, port,
+      account or the CA certificate. They come from the host's inputs and have no default.
+
+- name: Refuse a login value that is empty or cannot be one line of the environment file
+  ansible.builtin.assert:
+    that:
+      - binlog_pull_db_password is string
+      - binlog_pull_db_password is match(binlog_pull_login_pattern)
+    quiet: true
+    fail_msg: >-
+      The login value is empty or holds a character outside letters, digits and the
+      symbols / + = _ . - . It is not shown here.
+  no_log: true
+
+- name: Create the directories the program, its ledger and its configuration live in
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop:
+    - { path: '{{ binlog_pull_config_dir }}', mode: '0755' }
+    - { path: '{{ binlog_pull_program_dir }}', mode: '0755' }
+    - { path: '{{ binlog_pull_state_dir }}', mode: '0700' }
+  loop_control:
+    label: '{{ item.path }}'
+
+# The copy runs the program's own install-time check on a temporary file first, so a program that
+# does not load is never installed and the previous one stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ binlog_pull_program_name }}'
+    dest: '{{ binlog_pull_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+    validate: /usr/bin/python3 -I %s --check
+
+# The database host's CA is public data, but its text is a private input, so nothing about it is
+# logged or shown in a diff.
+- name: Install the database CA
+  ansible.builtin.copy:
+    content: '{{ binlog_pull_db_ca_pem }}'
+    dest: '{{ binlog_pull_ca_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  no_log: true
+  diff: false
+
+# The environment file holds the account's login value, so it is written in two steps. An absent
+# file is created empty at its final owner and mode, so a value never sits in a file wider than
+# that. A file already there is kept (force: false), and its owner, group and mode are set back
+# on every run before the content is written, so a file widened by hand is closed again first.
+- name: Create the environment file empty, closed to everyone but root
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ binlog_pull_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  no_log: true
+  diff: false
+
+# Check mode creates nothing, so a file still absent there is skipped.
+- name: Look at the environment file before its owner and mode are set
+  ansible.builtin.stat:
+    path: '{{ binlog_pull_env_file }}'
+    get_checksum: false
+  register: binlog_pull_env_stat
+
+- name: Set the owner and mode of the environment file on every run
+  ansible.builtin.file:
+    path: '{{ binlog_pull_env_file }}'
+    state: file
+    owner: root
+    group: root
+    mode: '0600'
+  when: not ansible_check_mode or binlog_pull_env_stat.stat.exists
+
+- name: Write the environment file from the inputs
+  ansible.builtin.template:
+    src: binlog-pull.env.j2
+    dest: '{{ binlog_pull_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+    backup: false
+  no_log: true
+  diff: false
+
+- name: Install the service and the timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ binlog_pull_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - '{{ binlog_pull_service_unit }}'
+    - '{{ binlog_pull_timer_unit }}'
+  notify: Reload systemd manager
+
+# Queued handlers run here, so the timer task below meets the unit as it now is.
+- name: Load queued unit changes before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit, so on a fresh host there is nothing for systemd to enable.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: '{{ binlog_pull_unit_dir }}/{{ binlog_pull_timer_unit }}'
+    get_checksum: false
+  register: binlog_pull_timer_stat
+
+# A run every 15 minutes with nowhere to put the ciphertext, or no signing client to put it with,
+# would fail all day. The reads are of presence only: no content is read.
+- name: Read the two files the program takes its destination and client from
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ binlog_pull_copy_env_file }}'
+    - '{{ binlog_pull_release_client }}'
+  register: binlog_pull_precondition_stats
+  when: binlog_pull_timer_enabled | bool
+
+- name: Refuse the timer while the destination file or the staged client is not on the host
+  ansible.builtin.assert:
+    that:
+      - binlog_pull_precondition_stats.results | map(attribute='stat.exists') | list == [true, true]
+    fail_msg: >-
+      binlog_pull refused to enable the timer: the state-copy environment file or the backup
+      worker's staged signing client is not on the host, so a run could not ship its ciphertext.
+      Apply backup_worker and backup_restore with their inputs in place first.
+    quiet: true
+  when: binlog_pull_timer_enabled | bool
+
+# A timer the host already has on is left alone unless binlog_pull_timer_may_disable is true:
+# with the defaults this task does nothing, so a first apply cannot stop a pull that was
+# enabled by hand. The gate is the second variable, never a change to the default.
+- name: Hold the timer to the state the variable asks for
+  ansible.builtin.systemd_service:
+    name: '{{ binlog_pull_timer_unit }}'
+    enabled: '{{ binlog_pull_timer_enabled | bool }}'
+    state: "{{ 'started' if binlog_pull_timer_enabled | bool else 'stopped' }}"
+  when:
+    - binlog_pull_timer_stat.stat.exists
+    - binlog_pull_timer_enabled | bool or binlog_pull_timer_may_disable | bool
