@@ -313,9 +313,8 @@ The wiring that change makes has three requirements:
   reads that policy back, but the order is the playbook's to keep. It also runs after the deploy
   verifier role, which installs the verifier the deploy wrapper runs for a tenant's first pin
   (`ansible/checks/test_deploy_verifier_coverage.py` holds this for every playbook that applies the
-  role). Its place among the host's roles is set by that wiring change: it restarts the tenants'
-  live stacks, so a failure there must not hold other roles back, and node_exporter is last in the
-  host playbooks today, appt1 included.
+  role). No playbook applies tenant_compose yet; its place among the host's roles is set by the
+  change that wires it in.
 - The role runs after the tenant onboarding role, which installs the volume program. The role
   fails closed, naming the program, when it is absent.
 - The stacks' text and the secrets reach a host that pulls its own commit with no extra variables
