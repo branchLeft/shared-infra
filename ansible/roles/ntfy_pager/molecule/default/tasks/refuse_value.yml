@@ -15,6 +15,7 @@
         ntfy_pager_watcher_token: '{{ ntfy_pager_verify_try.watcher_token }}'
         ntfy_pager_owner_password_hash: '{{ ntfy_pager_verify_try.owner_password_hash }}'
         ntfy_pager_machine_password_hash: '{{ ntfy_pager_verify_try.machine_password_hash }}'
+        ntfy_pager_mx1_token: '{{ ntfy_pager_verify_try.mx1_token }}'
     - name: Note that the role did not refuse the value
       ansible.builtin.set_fact:
         ntfy_pager_verify_value_refused: false
@@ -37,7 +38,8 @@
       - "'NTFY_WATCHER_TOKEN=test-sentinel-watcher-token-0002' in ntfy_pager_verify_value_lines"
       - "'NTFY_OWNER_PASSWORD_HASH=test-sentinel-owner-hash-0003' in ntfy_pager_verify_value_lines"
       - "'NTFY_MACHINE_PASSWORD_HASH=test-sentinel-machine-hash-0004' in ntfy_pager_verify_value_lines"
-      - "ntfy_pager_verify_value_lines | select('match', 'NTFY_') | list | length == 4"
+      - "'NTFY_MX1_TOKEN=test-sentinel-mx1-token-0006' in ntfy_pager_verify_value_lines"
+      - "ntfy_pager_verify_value_lines | select('match', 'NTFY_') | list | length == 5"
       - "'test-sentinel-newline-0005' not in (ntfy_pager_verify_value_env.content | b64decode)"
     quiet: true
     fail_msg: >-
