@@ -11,6 +11,9 @@ importers:
       '@branchleft/hetzner-host':
         specifier: link:../hetzner-host
         version: link:../hetzner-host
+      '@pulumi/aws':
+        specifier: 7.54.0
+        version: 7.54.0(supports-color@7.2.0)(typescript@5.9.3)
       '@pulumi/hcloud':
         specifier: 1.41.0
         version: 1.41.0(supports-color@7.2.0)(typescript@5.9.3)
@@ -340,11 +343,26 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
+  '@pulumi/aws@7.54.0':
+    resolution: {integrity: sha512-0asX0tYqnQFztv8k3kylli5ejXXXdttY0aVlVJ5CznEhecnQmE9Nt/XZjs/+4z5MXR7OYIdtomwwjPMt1+J8mw==}
+
   '@pulumi/hcloud@1.41.0':
     resolution: {integrity: sha512-I6Lrf9yIUzU7qNi/lZ4TR8d83RmwgIy3Lf0PepqQC9auJSc0HdF6ty4miOSTOGc6/xVGKW8JdWUdYZPyPenmHg==}
 
   '@pulumi/pulumi@3.258.0':
     resolution: {integrity: sha512-IUds2PGz92YiaOSvegK6p5JjPdu0we+IcS9iClyaXRWWjxn7Po+omRoe/NJ58A0fpZFIZUUKM8+Lg7gYd1RczA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      ts-node: '>= 7.0.1 < 12'
+      typescript: '>= 3.8.3 < 7'
+    peerDependenciesMeta:
+      ts-node:
+        optional: true
+      typescript:
+        optional: true
+
+  '@pulumi/pulumi@3.277.0':
+    resolution: {integrity: sha512-EvvBo55xmGByLRWjIqp24k4vzmPoKmZ6nTmK8EHzRb9veLCNISN3/Fq4RlJxrEt5+HmNkZveEasI+z0UCgkMxw==}
     engines: {node: '>=22'}
     peerDependencies:
       ts-node: '>= 7.0.1 < 12'
@@ -813,6 +831,10 @@ packages:
     resolution: {integrity: sha512-CY6crGq313MX8GkwvB7tzgp99vjQxY1++5y10/BKN/GUfHqWaOGQMNZkBvqSzsZKWk/ijwHlWzzkLulsGHhjWQ==}
     hasBin: true
 
+  js-yaml@4.3.2:
+    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
+    hasBin: true
+
   json-parse-even-better-errors@5.0.0:
     resolution: {integrity: sha512-ZF1nxZ28VhQouRWhUcVlUIN3qwSgPuswK05s/HIaoetAoE/9tngVmCHjSxmSQPav1nd+lPtTL0YZ/2AFdR/iYQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
@@ -942,6 +964,11 @@ packages:
 
   merge-stream@2.0.0:
     resolution: {integrity: sha512-abv/qOcuPfk3URPfDzmZU1LKmuw8kT+0nIHvKrKgFrwifol/doWcdA4ZqsWQ8ENrFKkd67Mfpo/LovbIUsbt3w==}
+
+  mime@2.6.0:
+    resolution: {integrity: sha512-USPkMeET31rOMiarsBNIHZKLGgvKc/LrjofAnBlOttf5ajRvqiRA8QsenbcooctK6d6Ts6aqZXBA+XbkKthiQg==}
+    engines: {node: '>=4.0.0'}
+    hasBin: true
 
   mimic-fn@2.1.0:
     resolution: {integrity: sha512-OqbOk5oEQeAZ8WXWydlu9HJjz9WVdEIvamMCcXmuqUYjTknH/sqsWvhQ3vgwKFRR1HpjvNBKQ37nbJgYzGqGcg==}
@@ -1777,6 +1804,15 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
+  '@pulumi/aws@7.54.0(supports-color@7.2.0)(typescript@5.9.3)':
+    dependencies:
+      '@pulumi/pulumi': 3.277.0(supports-color@7.2.0)(typescript@5.9.3)
+      mime: 2.6.0
+    transitivePeerDependencies:
+      - supports-color
+      - ts-node
+      - typescript
+
   '@pulumi/hcloud@1.41.0(supports-color@7.2.0)(typescript@5.9.3)':
     dependencies:
       '@pulumi/pulumi': 3.258.0(supports-color@7.2.0)(typescript@5.9.3)
@@ -1806,6 +1842,37 @@ snapshots:
       google-protobuf: 3.21.4
       ini: 2.0.0
       js-yaml: 4.3.1
+      minimist: 1.2.8
+      normalize-package-data: 6.0.2
+      require-from-string: 2.0.2
+      semver: 7.8.5
+      source-map-support: 0.5.21
+      upath: 1.2.0
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - supports-color
+
+  '@pulumi/pulumi@3.277.0(supports-color@7.2.0)(typescript@5.9.3)':
+    dependencies:
+      '@grpc/grpc-js': 1.14.4
+      '@logdna/tail-file': 2.2.0
+      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/core': 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/exporter-trace-otlp-grpc': 0.220.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/exporter-zipkin': 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/instrumentation': 0.220.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)
+      '@opentelemetry/instrumentation-grpc': 0.220.0(@opentelemetry/api@1.9.1)(supports-color@7.2.0)
+      '@opentelemetry/resources': 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-base': 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace-node': 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/semantic-conventions': 1.43.0
+      '@types/google-protobuf': 3.15.12
+      '@types/semver': 7.8.0
+      execa: 5.1.1
+      google-protobuf: 3.21.4
+      ini: 2.0.0
+      js-yaml: 4.3.2
       minimist: 1.2.8
       normalize-package-data: 6.0.2
       require-from-string: 2.0.2
@@ -2213,6 +2280,10 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
+  js-yaml@4.3.2:
+    dependencies:
+      argparse: 2.0.1
+
   json-parse-even-better-errors@5.0.0: {}
 
   json-stringify-nice@1.1.4: {}
@@ -2318,6 +2389,8 @@ snapshots:
       - supports-color
 
   merge-stream@2.0.0: {}
+
+  mime@2.6.0: {}
 
   mimic-fn@2.1.0: {}
 

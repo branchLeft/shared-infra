@@ -421,6 +421,8 @@ wrong source. To add a secret option, add its row here.
 | `backup_worker`            | `backup_worker_db_password`               | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
 | `backup_worker`            | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
+| `binlog_pull`              | `binlog_pull_db_ca_pem`                   | none                      |
+| `binlog_pull`              | `binlog_pull_db_password`                 | none                      |
 | `broker_deploy`            | `broker_deploy_owner_due_diligence_email` | host_inputs: demo1        |
 | `broker_tunnel_client`     | `broker_tunnel_client_demo1_address`      | host_inputs: ops1         |
 | `ci_jump`                  | `ci_jump_user`                            | host_inputs: edge1, edget |

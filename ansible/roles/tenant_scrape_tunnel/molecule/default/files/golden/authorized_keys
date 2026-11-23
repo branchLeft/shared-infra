@@ -1,0 +1,1 @@
+restrict,port-forwarding,permitopen="10.20.1.200:9100",permitopen="10.20.1.201:9100",permitopen="10.20.1.210:9100",command="/usr/sbin/nologin" ssh-ed25519 EXAMPLE_SCRAPER_KEY_BODY

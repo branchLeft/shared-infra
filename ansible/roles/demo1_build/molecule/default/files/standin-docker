@@ -24,7 +24,7 @@ from pathlib import Path
 
 ZERO_ID = "sha256:" + "0" * 64
 DEFAULT_STATE = "/var/lib/standin-docker"
-DEFAULT_ADAPT = "/etc/stand-in-caddy-adapt.json"
+DEFAULT_ADAPT = "/usr/share/standin-docker/adapt.json"
 
 
 def complete_lines(data: bytes) -> list[str]:

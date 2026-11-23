@@ -19,7 +19,9 @@
 # (checks/test_ci_jump_hosts.py); only owner_vars/edget.yml and the host's private input
 # ci_jump_user differ.
 #
-# The host's metrics exporter (node_exporter) is last, so a disk refusal holds nothing back.
+# The tenant scrape tunnel's edge-t half (the restricted account that edge1's Prometheus reads this
+# host's node exporter through) comes next to last, and the host's metrics exporter (node_exporter)
+# is last, so a disk refusal holds nothing back.
 #
 # Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline account on
 # edge-t belongs to the edge-t server's own ticket, ws#2898) and the edge stack (Caddy).
@@ -58,4 +60,5 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
+    - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]

@@ -288,6 +288,35 @@ class CommandTest(unittest.TestCase):
         self.assertEqual((endpoint["samples"], endpoint["successes"]), (5, 4))
         self.assertEqual(endpoint["uptime_percent"], 80.0)
 
+    def test_report_out_writes_the_same_document_to_a_world_readable_file(self) -> None:
+        # The route to the figure on the host is this file: the timer's service writes it, and
+        # whatever shows it reads it. It must be the whole document, replaced in one step.
+        directory = _store_with(
+            self, {"sites_a": _minutes(NOW - 4 * MINUTE, 5, failing=range(4, 5))}
+        )
+        out = directory.parent / "report.json"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(
+                uptime.main(
+                    ["report", "--dir", str(directory), "--now", str(NOW), "--out", str(out)]
+                ),
+                0,
+            )
+            self.assertEqual(
+                uptime.main(
+                    ["report", "--dir", str(directory), "--now", str(NOW), "--out", str(out)]
+                ),
+                0,
+            )
+        self.assertEqual(stdout.getvalue(), "", "with --out nothing goes to stdout")
+        (endpoint,) = json.loads(out.read_text(encoding="ascii"))["endpoints"]
+        self.assertEqual((endpoint["samples"], endpoint["successes"]), (5, 4))
+        self.assertEqual(out.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(
+            sorted(path.name for path in directory.parent.iterdir()), ["report.json", "samples"]
+        )
+
     def test_collect_fails_loudly_on_a_body_that_is_not_statuses(self) -> None:
         _Page.body = b'{"error": "x"}'
         server = HTTPServer(("127.0.0.1", 0), _Page)
