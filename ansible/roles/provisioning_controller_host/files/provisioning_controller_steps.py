@@ -2,7 +2,7 @@
 """The controller's own steps that need a program on ops1: the register check and the escrow.
 
 The provisioning controller runs one step at a time through a configured program for each entry
-point. For the `controller` entry point this is that program. It reads the step on standard input
+point; for the `controller` entry point this is that program. It reads the step on standard input
 as one JSON object (`key`, `id`, `idempotencyKey`, `inputs`: names and register values, never a
 secret value) and settles it by its exit status alone, which is all the controller reads:
 
@@ -10,16 +10,13 @@ secret value) and settles it by its exit status alone, which is all the controll
 - 3 the step is refused, and trying again cannot help,
 - 1 anything else, which the controller retries.
 
-It serves two steps and refuses every other, so a step nobody planned for fails at once and acts on
-nothing:
+It serves two steps and refuses every other, so a step nobody planned for acts on nothing:
 
-- `confirm-register-assignment` checks the register file the controller was given: the tenant's
-  entry is there once, and its slot, port, uid, media bucket and media folder are what the step was
-  planned from and are shared with no other entry.
+- `confirm-register-assignment` checks that the tenant's entry is in the register file once, and
+  that its slot, port, uid, media bucket and media folder are what the step was planned from and
+  are shared with no other entry.
 - `escrow-stack-passphrase` makes the tenant's stack passphrase from the operating system's random
   source the first time, holds it in a file only this account can read, and never makes it again.
-  It prints nothing. Nobody types, reads or sees the value; it waits in the file for the escrow
-  bucket's step to take it from there.
 
 It prints nothing at all: the controller discards a program's output, and a refusal here would
 only ever name a field, never a value.
