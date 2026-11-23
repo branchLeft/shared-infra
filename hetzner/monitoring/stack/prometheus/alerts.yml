@@ -95,7 +95,7 @@ groups:
             than the literal address.
 
       - alert: EdgeBanIssued
-        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0
+        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() ((max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent_over_time(edge_ban_owner_last_run_timestamp_seconds[10m])))
         labels:
           severity: page
         annotations:
@@ -103,11 +103,46 @@ groups:
           description: >-
             A banned address gets 403 from every site on edge1 until the ban
             ends (10 minutes for a first ban, up to 4 hours for a repeat).
-            If it is you: from a network that is not banned, or over SSH to
-            edge1, `cscli decisions list` shows the ban and
+            This page means the address is one of yours: one that made a
+            verified Ghost staff request through the edge in the last 30
+            days, or a range holding one. A decision_id label, when there is
+            one, is the CrowdSec decision ID, so each owned ban is its own
+            alert. It also pages for every ban while the classifier is more
+            than 15 minutes stale or has reported nothing for 10 minutes,
+            when nothing says whose they are.
+            From a network that is not banned, or over SSH to edge1,
+            `cscli decisions list` shows the ban and
             `cscli decisions delete --ip ADDRESS` lifts it. The reason is the
             CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says
             what each one reads.
+
+      - alert: EdgeBanUnowned
+        expr: sum by (reason) (edge_ban_owned{owned="false"}) > 0
+        labels:
+          severity: warning
+          owner_action: "true"
+        annotations:
+          summary: "The edge is banning {{ $value }} other address(es), by {{ $labels.reason }}."
+          description: >-
+            None of them is an address that made a verified Ghost staff
+            request through the edge in the last 30 days, so this is email
+            only. If one is yours, `cscli decisions list` on edge1 shows the
+            ban and `cscli decisions delete --ip ADDRESS` lifts it. The
+            reason is the CrowdSec scenario that decided.
+
+      - alert: EdgeBanOwnerStale
+        expr: (max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent(edge_ban_owner_last_run_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The edge ban classifier has not reported for over 15 minutes."
+          description: >-
+            Until it runs again every ban pages, owned or not. On edge1,
+            `systemctl status branchleft-edge-ban-owner.timer` and
+            `journalctl -u branchleft-edge-ban-owner` say why. A failed
+            `cscli` query leaves the last file in place, so three missed
+            runs raise this.
 
       - alert: HostMemoryPressure
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75
@@ -307,6 +342,30 @@ groups:
             is 1.5x the nightly cadence, as for TenantBackupAgeHigh. Warning,
             never page. The estate state has no other off-host copy until
             this runs.
+
+      - alert: RestoreDrillUnitFailed
+        expr: >-
+          node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"}
+          unless on(instance)
+          (restore_drill_last_run_timestamp_seconds >= on(instance) node_textfile_mtime_seconds{file="restore_drill_unit_failed.prom"})
+        labels:
+          severity: warning
+        annotations:
+          summary: "The weekly restore drill on {{ $labels.instance }} failed, and no later run has recorded its result."
+          description: >-
+            branchleft-restore-drill.service entered a failed state: a crash,
+            a kill, the three-hour timeout, or an exit after a failed check.
+            systemd then started branchleft-restore-drill-failed.service,
+            which touched restore_drill_unit_failed.prom in the textfile
+            directory. This rule holds while that file is newer than
+            restore_drill_last_run_timestamp_seconds, or the drill has never
+            written that series, so it also covers the crash that happens
+            before the drill writes any metric. No for: the file is written
+            once per failure and is flat otherwise. On ops1, read
+            journalctl -u branchleft-restore-drill.service for the reason;
+            the next run that records its result clears the alert, and a
+            drill run by hand with systemctl start does the same. Until then
+            nothing has shown that the latest backup restores.
 
       - alert: BackupLockWaitHigh
         expr: backup_worker_lock_wait_seconds > 1

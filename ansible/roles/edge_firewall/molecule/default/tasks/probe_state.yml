@@ -1,0 +1,74 @@
+---
+# Test scaffolding. Reads, into edge_firewall_probe_state, everything an attempt could change:
+#   nft_present    whether the nft program is on the host (the role installs it)
+#   mask_present   whether the mask of nftables.service is on the host
+#   ruleset        the whole kernel ruleset, stateless, or '' when nft is not installed
+#   ours           the role's two tables, stateless, or '' when they are not loaded
+#   active_checksum the checksum of the active rules file, or '' when there is none
+#   docker         Docker's stand-in rules, without counters
+#   legacy_present whether the legacy masquerade rule is still in iptables
+- name: Read whether nft and the mask are on the host, and the active rules file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /usr/sbin/nft
+    - /etc/systemd/system/nftables.service
+    - /etc/branchleft-firewall/active.nft
+  register: edge_firewall_probe_stats
+
+- name: Read the whole ruleset, if nft is installed
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, -s, list, ruleset]
+  register: edge_firewall_probe_ruleset
+  changed_when: false
+  failed_when: false
+
+- name: Read the role's two tables
+  ansible.builtin.command:
+    argv: '{{ item }}'
+  loop:
+    - [/usr/sbin/nft, -s, list, table, inet, branchleft_edge]
+    - [/usr/sbin/nft, -s, list, table, ip, branchleft_edge_nat]
+  register: edge_firewall_probe_tables
+  changed_when: false
+  failed_when: false
+
+- name: Read Docker's stand-in rules
+  ansible.builtin.include_tasks: docker_snapshot.yml
+
+- name: Read whether the legacy masquerade rule is still in iptables
+  ansible.builtin.command:
+    argv:
+      [
+        iptables,
+        -t,
+        nat,
+        -C,
+        POSTROUTING,
+        -s,
+        10.20.1.0/24,
+        -o,
+        '{{ edge_firewall_scenario_uplink_dev }}',
+        -j,
+        MASQUERADE,
+      ]
+  register: edge_firewall_probe_legacy
+  changed_when: false
+  failed_when: false
+
+- name: Keep what was read
+  ansible.builtin.set_fact:
+    edge_firewall_probe_state:
+      nft_present: '{{ edge_firewall_probe_stats.results[0].stat.exists }}'
+      mask_present: '{{ edge_firewall_probe_stats.results[1].stat.exists }}'
+      active_checksum: '{{ edge_firewall_probe_stats.results[2].stat.checksum | default("") }}'
+      ruleset: '{{ edge_firewall_probe_ruleset.stdout if edge_firewall_probe_ruleset.rc == 0 else "" }}'
+      ours: >-
+        {{
+          edge_firewall_probe_tables.results | map(attribute='stdout') | join(' ')
+          if (edge_firewall_probe_tables.results | map(attribute='rc') | select('ne', 0) | list | length) == 0
+          else ''
+        }}
+      docker: '{{ edge_firewall_docker_now }}'
+      legacy_present: '{{ edge_firewall_probe_legacy.rc == 0 }}'

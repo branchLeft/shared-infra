@@ -236,7 +236,11 @@ def _check_set_task(
     if len(setters) != 1 or not str(setters[0].get("name", "")).startswith(SET_TASK_PREFIX):
         findings.append(f"tasks: want exactly one input task, named '{SET_TASK_PREFIX}...'")
         return
-    keys = _mapping(setters[0]["ansible.builtin.set_fact"])
+    keys = {
+        key: value
+        for key, value in _mapping(setters[0]["ansible.builtin.set_fact"]).items()
+        if not key.startswith(INTERNAL_PREFIX)
+    }
     wanted = sorted({name for names in rows.values() for name in names})
     if sorted(keys) != wanted:
         findings.append(f"tasks: the input task sets {sorted(keys)}, the rows name {wanted}")
@@ -327,6 +331,8 @@ class RealTree(unittest.TestCase):
                     "backup_restore_state_copy_tenant_endpoint",
                     "backup_restore_state_copy_tenant_region",
                     "backup_restore_state_copy_tenant_access_key_id",
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
                 ],
                 "db1": [
                     "db1_stack_exporter_password",
@@ -349,13 +355,17 @@ class RealTree(unittest.TestCase):
             },
         )
 
-    def test_the_only_optional_input_is_the_jump_accounts_name(self) -> None:
+    def test_the_optional_inputs_are_the_jump_accounts_name_and_the_broker_tunnels(self) -> None:
         # Pinned: an input the file may leave out is a role that runs without it, so each
         # addition is a decision that shows here. Every other input is required.
         self.assertEqual(
             optional_of(ROOT / "ansible"),
             {
                 "edge1": ["ci_jump_user"],
+                "ops1": [
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
+                ],
                 "edget": ["ci_jump_user"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
@@ -422,6 +432,7 @@ class Mutations(unittest.TestCase):
             "db_t1",
             "db_t1_tenant_entry",
             "broker_deploy",
+            "broker_tunnel_client",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
@@ -676,9 +687,11 @@ class Mutations(unittest.TestCase):
     def test_a_task_that_shows_the_content_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/tasks/main.yml",
-            "        host_inputs_doc: '{{ host_inputs_raw.content | b64decode | from_json }}'\n"
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) "
+            "if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n"
             "      no_log: true\n",
-            "        host_inputs_doc: '{{ host_inputs_raw.content | b64decode | from_json }}'\n",
+            "        host_inputs_doc: '{{ (host_inputs_raw.content | b64decode | from_json) "
+            "if host_inputs_file_stat.stat.exists | default(false) else {} }}'\n",
         )
         self._expect("'Parse the file (no value is shown)' must have no_log: true")
 

@@ -1,0 +1,137 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    # The test setup below is not role tasks, so each reports no change: the
+    # idempotence step measures the role.
+    - name: Empty the files the owner places, as they are before the owner acts
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item.path }}'
+        owner: root
+        group: '{{ item.group }}'
+        mode: '{{ item.mode }}'
+      loop:
+        - path: /etc/branchleft/media-backup.env
+          group: root
+          mode: '0600'
+        - path: /etc/branchleft/backup-worker-media-folders
+          group: backup-worker
+          mode: '0640'
+      loop_control:
+        label: '{{ item.path }}'
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Remove the manifest signing key, as it is before the owner acts
+      ansible.builtin.file:
+        path: /etc/branchleft/media-backup-manifest-signing-key
+        state: absent
+      changed_when: false
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log: the role's own
+    # tasks must be the ones that keep the values out of the log.
+    - name: Apply the role with the defaults
+      ansible.builtin.include_role:
+        name: branchleft.media_backup
+
+    # The remaining cases need a real run: check mode writes no file, so the
+    # files the enable is judged on are not there or not changed.
+    - name: Prove the timer cannot be enabled until the owner has placed each file
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the timer enabled and nothing placed
+          ansible.builtin.include_role:
+            name: branchleft.media_backup
+          vars:
+            media_backup_timer_enabled: true
+        - name: Fail if the timer was enabled with nothing placed
+          ansible.builtin.fail:
+            msg: The role enabled the timer while the files the program needs were not placed.
+      rescue:
+        - name: Assert the failure was the missing file
+          ansible.builtin.assert:
+            that:
+              - "'cannot be enabled' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed for a reason other than the files not being placed.
+
+    - name: Prove a wrong checksum is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with one wrong checksum
+          ansible.builtin.include_role:
+            name: branchleft.media_backup
+          vars:
+            media_backup_release_files: >-
+              {{ [{'path': 'infra/provisioning/scripts/media_backup_weekly.py',
+              'sha256': '0000000000000000000000000000000000000000000000000000000000000000'}]
+              + (media_backup_test_files | rejectattr('path', 'equalto', 'infra/provisioning/scripts/media_backup_weekly.py') | list) }}
+        - name: Fail if the wrong checksum was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a release file whose checksum was wrong.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong checksum for a reason other than the checksum.
+
+    - name: Place each file the owner places, then enable the timer
+      when: not ansible_check_mode
+      block:
+        - name: Place stand-in settings, folders and signing key
+          ansible.builtin.copy:
+            content: '{{ media_backup_test_placeholder }}'
+            dest: '{{ item.path }}'
+            owner: root
+            group: '{{ item.group }}'
+            mode: '{{ item.mode }}'
+          loop:
+            - path: /etc/branchleft/media-backup.env
+              group: root
+              mode: '0600'
+            - path: /etc/branchleft/backup-worker-media-folders
+              group: backup-worker
+              mode: '0640'
+            - path: /etc/branchleft/media-backup-manifest-signing-key
+              group: backup-worker
+              mode: '0640'
+          loop_control:
+            label: '{{ item.path }}'
+          changed_when: false
+          no_log: true
+
+        - name: Apply the role with the timer enabled
+          ansible.builtin.include_role:
+            name: branchleft.media_backup
+          vars:
+            media_backup_timer_enabled: true
+
+    # The control case for the timer default: a timer the host already has on is
+    # left on by a run with the defaults. The role's own timer task must report
+    # no change, so the idempotence step measures it.
+    - name: Prove the defaults leave an enabled timer on
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the defaults
+          ansible.builtin.include_role:
+            name: branchleft.media_backup
+
+        - name: Read the timer after the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-media-backup.timer
+          register: media_backup_converge_timer
+          changed_when: false
+
+        - name: Assert the defaults left the enabled timer enabled
+          ansible.builtin.assert:
+            that:
+              - media_backup_converge_timer.status.UnitFileState == 'enabled'
+            quiet: true
+            fail_msg: The default apply changed a timer that was enabled; the timer task must be gated on media_backup_timer_may_disable.

@@ -38,7 +38,7 @@ VARS = ROLE / "vars" / "main.yml"
 
 ROOT_DIR = "/var/lib/docker"
 STACK_PROJECT = "control-plane"
-FLOORS = preflight.Floors(memory_fresh=2664, memory_running=1000, disk=5120)
+FLOORS = preflight.Floors(memory_fresh=2792, memory_running=1000, disk=5120)
 Fields = dict[str, str]
 
 
@@ -353,13 +353,13 @@ class FloorTests(unittest.TestCase):
 
     def test_memory_one_below_the_fresh_floor_is_refused_and_at_it_is_not(self) -> None:
         """Sabotage: change `<` to `<=` or drop the memory test and a case goes red."""
-        snapshot(FakeDocker(), available=2664)
-        error = refusal_of(lambda: snapshot(FakeDocker(), available=2663))
+        snapshot(FakeDocker(), available=2792)
+        error = refusal_of(lambda: snapshot(FakeDocker(), available=2791))
         self.assertEqual(error.code, "memory-low")
         self.assertIsNotNone(error.record)
 
     def test_a_running_stack_needs_less_than_a_fresh_one(self) -> None:
-        """The floor is 1000 once a stack container exists, 2664 before: 2000 passes only then."""
+        """The floor is 1000 once a stack container exists, 2792 before: 2000 passes only then."""
         running = [container("control-plane-db-1", STACK_PROJECT)]
         snapshot(FakeDocker(), available=2000, stack=running)
         fresh = refusal_of(lambda: snapshot(FakeDocker(), available=2000))
@@ -428,7 +428,7 @@ class FloorTests(unittest.TestCase):
                     {
                         "action": "snapshot",
                         "stack_project": STACK_PROJECT,
-                        "min_available_memory_fresh_mib": 2664,
+                        "min_available_memory_fresh_mib": 2792,
                         "min_available_memory_running_mib": 1000,
                         "min_free_disk_mib": 5120,
                         "proc_root": proc,
@@ -585,7 +585,7 @@ class RoleWiringTests(unittest.TestCase):
     def test_the_floors_are_constants_the_runbook_figures(self) -> None:
         """The floors sit in vars/main.yml, which an inventory or play variable cannot override."""
         values = load_mapping(VARS)
-        self.assertEqual(values["control_plane_min_available_memory_fresh_mib"], 2664)
+        self.assertEqual(values["control_plane_min_available_memory_fresh_mib"], 2792)
         self.assertEqual(values["control_plane_min_available_memory_running_mib"], 1000)
         self.assertEqual(values["control_plane_min_free_disk_mib"], 5120)
         defaults = (ROLE / "defaults" / "main.yml").read_text(encoding="utf-8")

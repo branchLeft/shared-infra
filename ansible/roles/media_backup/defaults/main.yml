@@ -1,0 +1,45 @@
+---
+# No private value is a default. The bucket names, endpoints, regions and the
+# two keys are in a root-only file the owner places (README, "Owner steps").
+# What is here is public and safe to commit.
+
+# The timer stays off. Turning it on is a production apply (README).
+media_backup_timer_enabled: false
+
+# False leaves the timer as it is on the host. Set true, together with
+# media_backup_timer_enabled false, to stop a running timer (README).
+media_backup_timer_may_disable: false
+
+# When the timer fires: weekly, after the nightly dump loop (01:40) and the
+# state copy (03:40) have normally finished on this host.
+media_backup_calendar: 'Sun *-*-* 05:00:00'
+
+# Requests a second the run may make, reads and writes together. The provider
+# allows 750 a second per address and per bucket and the program refuses more
+# than 400. This value is to be set from a measured run; until then it is low.
+media_backup_max_requests_per_second: 50
+
+# Memory the run may use. An object is read whole into memory, so this bounds
+# the largest object that can be copied.
+media_backup_memory_max: 1G
+
+# The one home of the programs is branchLeft/ghost-platform. They are downloaded
+# from this commit, never copied here, and each file is held to the checksum
+# below. Bump the commit and every checksum together: a checksum that does not
+# match the file at the commit fails the download.
+media_backup_source_sha: 73b4f54ae4455146a977016f1319e658fa3af645
+media_backup_source_base_url: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ media_backup_source_sha }}'
+
+# Every file of the release, relative to the release root: the program and what
+# it imports.
+media_backup_release_files:
+  - path: infra/provisioning/scripts/media_backup_weekly.py
+    sha256: e6d55dd35804f293e08e6e3c2abfca4ecd75aecbb8a6d602ad73b640fcda92a4
+  - path: infra/provisioning/scripts/media_backup_restore.py
+    sha256: 1154465003db354d1a955a472ec961b5ebae338fcc6194993b00e2364378fffe
+  - path: infra/provisioning/scripts/shared_objectstorage.py
+    sha256: 52e120f88ca806912532e187a4a8681a780995b40df24437eb36c7a48700a3c8
+  - path: infra/provisioning/scripts/backup_recipients.py
+    sha256: 358feeead752e74c5bcaa12b5acdbdd63cee611d74c1354d2d50f715f8f6e207
+  - path: db/provision/objectstorage.py
+    sha256: 3f47e324fe23496d82675bfffe349d0335de973857b837975d705daa48f77302

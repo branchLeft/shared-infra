@@ -1,0 +1,13 @@
+---
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# A restart of a unit whose conditions do not hold leaves it inactive and succeeds.
+# Skipped in check mode with a stated reason (ANS-10): check mode writes no file, so
+# there is nothing new for ssh to read, and on a fresh host the unit is not loaded.
+- name: Restart the broker tunnel
+  ansible.builtin.systemd_service:
+    name: '{{ broker_tunnel_client_unit_name }}'
+    state: restarted
+  when: not ansible_check_mode
