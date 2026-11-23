@@ -193,3 +193,55 @@
       - tenant_entry_assert_state_program.results[2].stat.mode == '0755'
       - tenant_entry_assert_state_program.results[2].stat.checksum == scenario_secrets_sha256
     quiet: true
+
+# The owner script and the node it runs under: root's, closed to writes by anyone else, the
+# script exactly the pinned bytes (written out in molecule.yml) and node the pinned version.
+- name: Read the owner script, the node directory and the node binary
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - '{{ scenario_owner_program }}'
+    - '{{ scenario_node_dir }}'
+    - '{{ scenario_node }}'
+  register: tenant_entry_assert_state_owner
+
+- name: Ask the node the host holds its version
+  ansible.builtin.command:
+    argv: ['{{ scenario_node }}', --version]
+  register: tenant_entry_assert_state_node_version
+  changed_when: false
+  check_mode: false
+
+- name: Assert the owner script is the pinned bytes, and it and node are root's and closed to writes
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_assert_state_owner.results | map(attribute='stat') | map(attribute='pw_name') | unique | list == ['root']
+      - tenant_entry_assert_state_owner.results | map(attribute='stat') | map(attribute='gr_name') | unique | list == ['root']
+      - tenant_entry_assert_state_owner.results[0].stat.mode == '0644'
+      - tenant_entry_assert_state_owner.results[0].stat.checksum == scenario_owner_sha256
+      - tenant_entry_assert_state_owner.results[1].stat.isdir
+      - tenant_entry_assert_state_owner.results[1].stat.mode == '0755'
+      - tenant_entry_assert_state_owner.results[2].stat.mode == '0755'
+      - tenant_entry_assert_state_node_version.stdout == scenario_node_version
+    quiet: true
+
+# The entry account runs the program through sudo and nothing else. It must not be able to
+# change the node that root runs for it, nor read or change the script in root's own directory.
+- name: Try to write into the node directory, and to read the owner script, as the entry account
+  ansible.builtin.command:
+    argv: "{{ ['runuser', '-u', scenario_user, '--'] + item }}"
+  loop:
+    - [test, -w, '{{ scenario_node_dir }}']
+    - [test, -w, '{{ scenario_node }}']
+    - [test, -r, '{{ scenario_owner_program }}']
+  register: tenant_entry_assert_state_account_access
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Assert the entry account can write neither, and cannot read the script
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_assert_state_account_access.results | map(attribute='rc') | select('equalto', 0) | list | length == 0
+    quiet: true
