@@ -100,22 +100,28 @@ host's own node_exporter and is a different series.
 its exporter is scraped over its public address (`DEMO1_PUBLIC_IPV4`, the `demo1PublicIpv4` output
 of `ghost-platform/infra/demo-host`; its primary IP is kept past a server rebuild). The scrape
 leaves from edge1, so demo1's firewall admits port 9100 from edge1's public IPv4 `/32` and nothing
-else. That narrows who can try; the control is the exporter, which serves TLS and accepts only a
-client certificate signed by the CA in `ca.crt`. Prometheus verifies the exporter's certificate
-against the same CA and the name `demo1` (`DEMO1_METRICS_SERVER_NAME`), not the address, and
-`insecure_skip_verify` is never set.
+else. That narrows who can try; the control is the exporter, which serves TLS and accepts only the
+one client certificate pinned on demo1, edge1's own. There is no certificate authority: each side
+trusts exactly one certificate, the other side's. Prometheus verifies the exporter's certificate
+against the one pinned in `ca.crt` (demo1's server certificate) and the name `demo1`
+(`DEMO1_METRICS_SERVER_NAME`), not the address, and `insecure_skip_verify` is never set.
 
 The target carries `__scheme__: https`, which overrides the `node` job's scheme for it alone, and
 the job's `tls_config` names three files by path. Every private-network target stays plain http and
 ignores them. The files are `ca.crt`, `client.crt` and `client.key` in `/etc/branchleft/demo1-metrics-tls/`
 on edge1, mounted read-only at `DEMO1_METRICS_TLS_DIR`. The repository ships none of them and no
-key material: the owner makes the CA and both certificates, and the key must be readable by the
-container's user (`nobody`, uid 65534).
+key material. The `host_tls_identity` role (`ansible/roles/host_tls_identity/README.md`) makes them
+on edge1: `client.key` and `client.crt` are edge1's own key and self-signed certificate, made on
+the host, and `ca.crt` is demo1's server certificate, which the role writes once the owner has put
+it in `host_tls_identity_peer_cert` in `ansible/owner_vars/edge1.yml`. The key is readable by the
+container's user (`nobody`, uid 65534), which the role sets as the group, mode 0640.
 
 **Order matters.** Prometheus reads the three files when it loads its config, so a missing file
 stops it from starting, and with it every alert on edge1. The files are placed on edge1 first,
-then this config is delivered. `ci-config-validate.yml` stands `/dev/null` in for them, because
-`promtool check config` checks only that each named file exists.
+then this config is delivered: `ansible/checks/test_edge1_prometheus_tls_files.py` fails while the
+config names a file that `host_tls_identity` does not write on edge1, and while it names `ca.crt`
+with `host_tls_identity_peer_cert` still empty. `ci-config-validate.yml` stands `/dev/null` in for
+them, because `promtool check config` checks only that each named file exists.
 
 `expectedUp` is `false`, as for the tenant hosts, until the exporter is delivered to demo1 and a
 query for `up{host="demo1"}` returns `1`; the flip to `true` is its own reviewed change. The disk
