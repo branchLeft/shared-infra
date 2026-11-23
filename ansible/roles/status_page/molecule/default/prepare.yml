@@ -20,6 +20,7 @@
       loop:
         - /var/lib/status_page_standin
         - /var/lib/status_page_standin/www
+        - /var/lib/status_page_standin/www/api/v1/endpoints
 
     - name: Install the stand-in as the docker command
       ansible.builtin.copy:
@@ -56,6 +57,20 @@
         content: |
           {"status":"UP"}
         dest: /var/lib/status_page_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The page's statuses answer, for the uptime collector: one endpoint, two probes a minute apart
+    # that ended a minute ago, one passing and one failing. The server ignores the query string.
+    - name: Give the page a statuses answer with two recent probes
+      ansible.builtin.copy:
+        content: |
+          [{"name":"stand-in","key":"stand-in_endpoint","results":[
+          {"status":200,"success":true,"timestamp":"{{ '%Y-%m-%dT%H:%M:%SZ' | ansible.builtin.strftime((now(utc=true).timestamp() | int) - 120, utc=true) }}"},
+          {"status":500,"success":false,
+          "timestamp":"{{ '%Y-%m-%dT%H:%M:%SZ' | ansible.builtin.strftime((now(utc=true).timestamp() | int) - 60, utc=true) }}"}]}]
+        dest: /var/lib/status_page_standin/www/api/v1/endpoints/statuses
         owner: root
         group: root
         mode: '0644'

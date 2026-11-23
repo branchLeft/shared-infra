@@ -1,0 +1,75 @@
+---
+# The 90-day uptime: the collector program, its state directory, a oneshot service and a
+# timer that runs it. Reached only after the page answered 200 and the stack was recorded
+# healthy (the last task of main.yml), because a collector with no page has nothing to read.
+# The program is the repository's own file, delivered byte for byte, and not rewritten here.
+- name: Create the directory the collector program is installed into
+  ansible.builtin.file:
+    path: '{{ status_page_uptime_program_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the collector program
+  ansible.builtin.copy:
+    src: '{{ status_page_uptime_program }}'
+    dest: '{{ status_page_uptime_program_dir }}/{{ status_page_uptime_program }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+# The report is world-readable on purpose (it is the published figure), so the directory is
+# traversable; the samples directory below is root's alone.
+- name: Create the directory that holds the samples and the report
+  ansible.builtin.file:
+    path: '{{ status_page_uptime_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directory of the stored probe samples
+  ansible.builtin.file:
+    path: '{{ status_page_uptime_samples_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Render the collection service unit
+  ansible.builtin.template:
+    src: uptime-collect.service.j2
+    dest: '{{ status_page_uptime_unit_dir }}/{{ status_page_uptime_service }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Render the collection timer unit
+  ansible.builtin.template:
+    src: uptime-collect.timer.j2
+    dest: '{{ status_page_uptime_unit_dir }}/{{ status_page_uptime_timer }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart the uptime collection timer
+
+- name: Load queued unit changes before the timer is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no timer file on a fresh host, so there is nothing for systemd to enable
+# yet (ANS-10). The stat runs in check mode as it does in a real run.
+- name: Read back the collection timer unit file
+  ansible.builtin.stat:
+    path: '{{ status_page_uptime_unit_dir }}/{{ status_page_uptime_timer }}'
+  register: status_page_uptime_timer_stat
+
+- name: Enable and start the collection timer
+  ansible.builtin.systemd_service:
+    name: '{{ status_page_uptime_timer }}'
+    enabled: true
+    state: started
+  when: status_page_uptime_timer_stat.stat.exists
