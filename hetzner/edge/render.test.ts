@@ -1544,6 +1544,94 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 		}
 		respond @active_upload_by_pattern 403`;
 
+/** The tenant-media routes exactly as a Ghost site with a media bucket carries them. */
+const TENANT_MEDIA_ROUTE_LINES = `
+		@tenant_media_traversal {
+			path /content/images/* /content/media/* /content/files/*
+			expression \`{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)') || {http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)') || {http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')\`
+		}
+		respond @tenant_media_traversal 404
+		@tenant_media_resize {
+			method GET HEAD
+			path /content/images/size/*
+		}
+		@tenant_media {
+			method GET HEAD
+			path /content/images/* /content/media/* /content/files/*
+		}
+		route @tenant_media_resize {
+			rewrite * /branchleft-media-blog{http.request.uri.path}?
+			reverse_proxy https://hel1.your-objectstorage.com {
+				header_up Host {upstream_hostport}
+				header_up -Cookie
+				header_up -Authorization
+				header_down -x-amz-request-id
+				header_down -x-amz-version-id
+				header_down -x-amz-expiration
+				header_down -x-amz-storage-class
+				header_down -x-rgw-object-type
+				header_down -Strict-Transport-Security
+				@media_hit_resize status 2xx 304 416
+				handle_response @media_hit_resize {
+					header Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
+				@media_miss_resize status 403 404
+				handle_response @media_miss_resize {
+					rewrite * {http.request.orig_uri.path}
+					reverse_proxy 10.20.1.100:8101 {
+						@media_bounce status 301 302 307 308
+						handle_response @media_bounce {
+							rewrite * /branchleft-media-blog{http.request.uri.path}?
+							reverse_proxy https://hel1.your-objectstorage.com {
+								header_up Host {upstream_hostport}
+								header_up -Cookie
+								header_up -Authorization
+								header_down -x-amz-request-id
+								header_down -x-amz-version-id
+								header_down -x-amz-expiration
+								header_down -x-amz-storage-class
+								header_down -x-rgw-object-type
+								header_down -Strict-Transport-Security
+								@media_hit_retry status 2xx 304 416
+								handle_response @media_hit_retry {
+									header Cache-Control "public, max-age=31536000, immutable"
+									copy_response
+								}
+								@media_miss_retry status 403 404
+								handle_response @media_miss_retry {
+									respond 404
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		route @tenant_media {
+			rewrite * /branchleft-media-blog{http.request.uri.path}?
+			reverse_proxy https://hel1.your-objectstorage.com {
+				header_up Host {upstream_hostport}
+				header_up -Cookie
+				header_up -Authorization
+				header_down -x-amz-request-id
+				header_down -x-amz-version-id
+				header_down -x-amz-expiration
+				header_down -x-amz-storage-class
+				header_down -x-rgw-object-type
+				header_down -Strict-Transport-Security
+				@media_hit_plain status 2xx 304 416
+				handle_response @media_hit_plain {
+					header Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
+				@media_miss_plain status 403 404
+				handle_response @media_miss_plain {
+					respond 404
+				}
+			}
+		}`;
+
 /** The widget-file route exactly as the Ghost-backed blog's route carries it. */
 const WIDGET_ASSET_ROUTE_LINES = `
 		@widget_assets {
@@ -1640,7 +1728,7 @@ const BLOG_BLOCK = `
 		}
 		crowdsec @edge_untrusted
 		appsec @inspected
-		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}
+		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}${TENANT_MEDIA_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
 	handle_errors {
@@ -1887,7 +1975,8 @@ describe('the owner console and tenant portal routes', () => {
     it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
       const blog = blockOf(rendered, 'blog.branchleft.co.uk');
       expect(blog).toContain('reverse_proxy 10.20.1.100:8101');
-      expect(blog).not.toMatch(/respond [^@\n]/);
+      // The refusals in front of the proxy, not the media routes' own 404, which sit after them.
+      expect(blog.split('route @tenant_media_resize')[0]).not.toMatch(/respond [^@\n]/);
       expect(blog).not.toContain('/members/api/member');
       expect(blog).not.toContain('/ghost/signin');
       expect(blog).not.toContain('abort');
