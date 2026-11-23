@@ -75,6 +75,7 @@ class FakeGateway:
         self.masq_in_nft = False
         self.nft_counter = True
         self.nft_packets = True  # nft prints the packet count; False is the bare `counter masquerade` seen in CI
+        self.nft_duplicate = False  # the nft table holds the same MASQUERADE twice
         # What the world does.
         self.launder_outside = False  # the outside source gets answered
         self.garbage_probe = False  # the in-namespace probe prints nonsense
@@ -241,6 +242,8 @@ class FakeGateway:
                 else:
                     count = "counter "
                 lines.append(f'\t\tip saddr {SUBNET} oifname "{UPLINK}" {count}masquerade')
+                if self.nft_duplicate:
+                    lines.append(f'\t\tip saddr {SUBNET} oifname "{UPLINK}" {count}masquerade')
             lines += ["\t}", "}"]
             return 0, "\n".join(lines) + "\n", ""
         if a[0] == "iptables":
@@ -820,6 +823,19 @@ class MasqueradeHomeTests(unittest.TestCase):
         self.assertEqual(code, 2, out)
         self.assertIn("nothing was changed", out)
         self.assertEqual(host.mutations(), [])
+
+
+    def test_two_matching_nft_masquerades_are_refused_never_green(self):
+        # Two rules for the same subnet and uplink: the probe cannot tell which one carries traffic.
+        # Sabotage: change `len(found) > 1` to `> 1000`; this test goes red.
+        host = FakeGateway(probe)
+        host.nft_loaded = True
+        host.masq_in_nft = True
+        host.nft_duplicate = True
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("2 times; refusing to guess which one counts", out)
 
 
 class ProfileTests(unittest.TestCase):
