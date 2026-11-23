@@ -12,6 +12,12 @@ import {
   renderPageRoute,
   type PageRegisterEntry,
 } from './pageRegister';
+import {
+  hostsScrapedDirectly,
+  TENANT_TUNNEL_BIND_ADDRESS,
+  TENANT_TUNNEL_TARGETS,
+  type TunnelledHost,
+} from './tenantTunnel';
 
 /**
  * Renders the monitoring stack's Prometheus scrape configuration and alert
@@ -163,6 +169,14 @@ export const DB_BINLOG_ABSENT_FOR = '1h';
  */
 const OPS1_SERIES = 'host="ops1"';
 export const CONTROL_PLANE_BACKUP_STALE_SECONDS = 129600;
+/**
+ * The tenant database host's binary-log pull (ansible/roles/binlog_pull) runs on ops1 every 15m and its
+ * unit is stopped at 10m, so a healthy gap between two clean runs is under 25m. 1h is three runs in a
+ * row failed or missed. A gap or an unshipped log is held for 30m, two runs: the next pull ships a log
+ * that failed once, so one failed run is not a gap yet.
+ */
+export const BINLOG_PULL_STALE_SECONDS = 3600;
+export const BINLOG_PULL_GAP_FOR = '30m';
 
 /**
  * The scanner series reach Prometheus through a host's node_exporter textfile
@@ -307,6 +321,23 @@ function nodeTarget(host: MonitoredHost): string {
   return `      - targets: ['${address}']\n        labels: ${targetLabels(host)}`;
 }
 
+/** One tunnel's target on edge1's private address: its local port, labelled as the direct row would be. */
+function tunnelTarget(tunnel: TunnelledHost): string {
+  const address = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return `      - targets: ['${address}']\n        labels: ${targetLabels(tunnel)}`;
+}
+
+/** Rewrites a tunnel's local address back to the tenant host's own exporter address, so `instance` matches a direct scrape. */
+function tunnelRelabelRule(tunnel: TunnelledHost): string[] {
+  const localAddress = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return [
+    '      - source_labels: [__address__]',
+    `        regex: '${localAddress.replace(/\./g, '\\.')}'`,
+    '        target_label: instance',
+    `        replacement: '${tunnel.address}:${NODE_EXPORTER_PORT}'`,
+  ];
+}
+
 /** Every hostname in the registry, in registry order -- both a site's serving
  * hostnames and its redirect sources, since a redirect is still a public
  * endpoint someone can hit and expect a 2xx-after-redirect chain from. */
@@ -322,7 +353,10 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
   const targets = blackboxTargets(sites);
-  const nodeTargets = MONITORED_NODE_HOSTS.map(nodeTarget).join('\n');
+  const nodeTargets = [
+    ...hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(nodeTarget),
+    ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
+  ].join('\n');
 
   return `${[
     ...GENERATED_BANNER,
@@ -337,6 +371,11 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '',
     'rule_files:',
     '  - /etc/prometheus/alerts.yml',
+    '',
+    '# The demo wildcard TLS probe: rendered on the host from monitoring.env, see',
+    '# stack/render_alertmanager_config.py. An empty list until its base is set.',
+    'scrape_config_files:',
+    '  - /etc/prometheus/demo_tls_probe.yml',
     '',
     'scrape_configs:',
     '  - job_name: prometheus',
@@ -367,6 +406,8 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: node',
     '    static_configs:',
     nodeTargets,
+    '    relabel_configs:',
+    ...TENANT_TUNNEL_TARGETS.flatMap(tunnelRelabelRule),
     '',
     '  - job_name: mysqld',
     '    static_configs:',
@@ -656,6 +697,42 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            `journalctl -u branchleft-edge-ban-owner` say why. A failed',
     '            `cscli` query leaves the last file in place, so three missed',
     '            runs raise this.',
+    '',
+    // The edge lets a request through uninspected when its AppSec checker is
+    // slow or down (posture.md, RUNBOOK-edge.md section 10b). The signal is
+    // Caddy's own counter, `crowdsec_appsec_lapi_requests_failures_total`,
+    // which the bouncer keeps and the rendered Caddyfile exposes through
+    // `enable_caddy_metrics`. Why this signal, its limits, and how the
+    // threshold and `for:` were chosen are in RUNBOOK-monitoring.md, section
+    // "Responding to the AppSec fail-open alert".
+    //
+    // More than 5 failures in a 5-minute window, held for 10 minutes, so a
+    // short restart stays silent. owner_action routes it to the off-host
+    // mailbox, not a page: the edge keeps serving and the IP ban list and
+    // throttle still hold.
+    '      - alert: AppSecFailingOpen',
+    '        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5',
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes."',
+    '          description: >-',
+    '            Caddy asked the CrowdSec AppSec checker to inspect a request,',
+    '            got no answer inside one second, and served the request',
+    '            anyway (appsec_fail_open). This is designed behaviour, so',
+    '            nothing is down for visitors, but every site on edge1 is',
+    '            running without WAF inspection while it lasts. On edge1,',
+    '            `docker ps` shows whether the crowdsec container is running',
+    '            and `docker logs --since 15m` on it says why it is not',
+    '            answering; RUNBOOK-edge.md section 10b describes the',
+    '            fail-open behaviour. The alert clears 5 minutes after the',
+    '            last failure,',
+    '            once the 5-minute window holds none. The counter is',
+    '            crowdsec_appsec_lapi_requests_failures_total on the caddy',
+    '            scrape job; it counts refused connections and timeouts, not',
+    '            a checker that answers 401 or 500.',
     '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
@@ -1118,6 +1195,52 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            On ops1, read journalctl -u branchleft-control-plane-backup.service',
     '            for the reason; a run by hand with systemctl start clears it once',
     '            it ships. The previous proven copies are still on the host.',
+    '',
+    // The tenant database host's binary-log pull, from the textfile gauges the program the binlog_pull
+    // Ansible role installs writes on ops1 after every run. The gap rule is the control of the pull:
+    // a log that was skipped or failed leaves a hole or an unshipped log, and the pull publishes both
+    // counts, so the alert needs no second source. No absent(): the timer is off until the owner's
+    // apply turns it on. Warnings, same route as the group. See render.md#the-backup-rule-group.
+    '      - alert: BinlogPullGap',
+    '        expr: >-',
+    `          binlog_pull_gap_logs{${OPS1_SERIES}} > 0 or binlog_pull_unshipped_logs{${OPS1_SERIES}} > 0`,
+    `        for: ${BINLOG_PULL_GAP_FOR}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The tenant database host\'s binary logs on backup copy 1 have a gap or a log not yet shipped."',
+    '          description: >-',
+    '            binlog_pull_gap_logs counts sequence numbers missing from the',
+    '            shipped series and binlog_pull_unshipped_logs counts closed logs',
+    '            the database host holds that the last pull did not ship. Either',
+    '            above zero for 30 minutes, two pull periods, means a log failed to',
+    '            fetch, was cut short, or could not be put, and the next pull did',
+    '            not fix it. A restore to a time inside the missing log cannot be',
+    '            replayed. On ops1, read journalctl -u branchleft-binlog-pull.service',
+    "            and run the program's check command, which names the sequence",
+    '            numbers. binlog_pull_lost_logs above zero means the server no',
+    '            longer holds a missing log, so a later pull cannot fill it: take a',
+    '            fresh dump and restore from that instead. Warning, never page: the',
+    '            database host keeps its own binary logs for 7 days.',
+    '',
+    '      - alert: BinlogPullStale',
+    '        expr: >-',
+    `          time() - binlog_pull_last_success_timestamp_seconds{${OPS1_SERIES}} > ${BINLOG_PULL_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The binary-log pull from the tenant database host has not shipped everything for over an hour."',
+    '          description: >-',
+    '            binlog_pull_last_success_timestamp_seconds is written on ops1 by',
+    '            the pull after a run that shipped every closed log. The timer',
+    '            fires every 15 minutes and the unit is stopped at 10, so two',
+    '            healthy successes are under 25 minutes apart. 3600s (1h) fires',
+    '            after three runs in a row have failed or not run, and unlike',
+    '            BinlogPullGap it also sees a pull that cannot reach the database',
+    '            host at all. On ops1, read journalctl -u branchleft-binlog-pull.service;',
+    '            a stopped timer shows in systemctl list-timers. Warning, never',
+    '            page. Nothing fires before the first success is written, so a',
+    '            timer that has never run is not seen by this rule.',
     // The compose template's own units (hetzner/provision/branchleft-compose@.service), read from the
     // node exporter's systemd collector, which node-exporter.service limits to those instances and
     // switches the restart counter on for. Both are warnings, so email and never a page, and both are

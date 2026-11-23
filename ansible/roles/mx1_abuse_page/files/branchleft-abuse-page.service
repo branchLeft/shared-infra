@@ -1,0 +1,29 @@
+# Pages the owner's phone when a report reaches abuse@: one poll of the mailbox, one fixed notice
+# to the pager's abuse topic. Installed by the mx1_abuse_page role; started by its timer.
+[Unit]
+Description=branchLeft abuse-report page (post to the pager when abuse@ receives a message)
+Wants=network-online.target
+After=network-online.target docker.service
+# The role writes this file only when the host has its publish-only token, so a host without one
+# starts nothing and the unit stays inactive instead of failing every minute.
+ConditionPathExists=/etc/branchleft/mx1-abuse-page.env
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/branchleft/abuse-page/branchleft_abuse_page.py run
+UMask=0077
+TimeoutStartSec=2min
+MemoryMax=128M
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+# The administrator credential the program reads is under /root, so home stays readable.
+ProtectHome=read-only
+ReadWritePaths=/var/lib/branchleft/abuse-page
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6

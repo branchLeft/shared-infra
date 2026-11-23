@@ -266,6 +266,48 @@ toolbar from jsDelivr unless its configuration names other addresses. A tenant r
 - **Not here.** The demo edge (`ghost-platform`'s `demo-host`, vendored under
   `ansible/roles/demo1_build`) refuses a `file_server` outright and is a separate change.
 
+## `siteBlock`: Tenant media
+
+Ghost's S3 adapter links an upload as `<cdnUrl>/<key>` and answers a request for
+`/content/images/...` with a 301 to the same. With `cdnUrl` the storage host, a reader's browser
+contacts that host. A `backend: 'ghost'` site with `media` (`sites.ts`) answers the three upload
+prefixes itself, from the tenant's own bucket, so with `cdnUrl` set to the tenant's own origin
+(a `render-core` change, not this one) the reader contacts nothing else. Until then the route
+is inert for links Ghost still writes, and serves any request that does reach the hostname.
+
+- **Read.** Path-style, `https://<host>/<bucket><path>`; the key is the request path, which is
+  what Ghost wrote (`staticFileURLPrefix` is `content/images`, `content/media`, `content/files`).
+  `GET` and `HEAD` only; anything else falls through to Ghost as before. The bucket must already
+  allow anonymous reads of its objects, which is how the blog's images load today.
+- **What goes to the bucket.** The path only. The query is replaced with an empty one (an S3
+  query selects a version or a sub-resource), `Cookie` and `Authorization` are removed, and `Host`
+  is the storage host's. A `..` segment under the prefixes is a 404 before any of it
+  (`@tenant_media_traversal`). It reads the request three ways, because the bucket path is built
+  from the decoded path and Caddy's path matcher cleans its own copy: the URI as received (a `..`
+  after a slash or an encoded slash), the decoded path (a `..` however the separators were
+  written, so `a%2f..%2fb` is caught), and the decoded path for a leftover `%2e`, `%2f` or `%25`
+  (escaped twice: the edge's own rewrites read the path a second time and would turn it into a
+  dot segment). Ghost writes no `%` into an upload's name. `tenantMediaTraversal.test.ts` sends
+  these forms through the rendered lines under a real Caddy in front of an echoing upstream.
+- **What comes back.** `2xx`, `304` and `416` are passed on with `Cache-Control: public,
+max-age=31536000, immutable` (Ghost never overwrites an upload: it picks a new name, and a
+  resized copy is named by size and source) and with the bucket's request id, version id,
+  expiry date, storage class and `Strict-Transport-Security` removed. `nosniff`, HSTS and the
+  rest of the route's headers are the site's own. `403` and `404` are a 404: the bucket answers
+  a missing key `403`, not `404`. Any other status (a `5xx`) is passed on uncached.
+- **Resized copies.** `/content/images/size/...` is made by Ghost on first request and written
+  to the bucket, so a miss there is asked of Ghost once. Ghost then answers a redirect to the
+  stored copy; the edge follows it itself by reading the bucket again, and a second miss is a 404. Without that second read a missing original would be a redirect loop once `cdnUrl` is
+  the site's own origin. A miss anywhere else is a 404 and never reaches Ghost, for the same
+  reason.
+- **Order.** After the protection chain, the upload refusal (an uploaded `.svg` or `.html` is
+  still a 403) and the widget files, before `reverse_proxy`. A probe is throttled and seen by
+  CrowdSec, and the general throttle counts these requests like any other.
+- **Not here.** Any change to what Ghost writes as `cdnUrl`, and any rewrite of a URL already
+  stored in content: both are `branchLeft/workspace#3868`'s later steps and the second is the
+  owner's. The bucket's `Content-Type` is passed on as stored; a resized copy is stored as
+  `application/octet-stream` by Ghost's own `saveRaw`, which an `<img>` ignores.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of

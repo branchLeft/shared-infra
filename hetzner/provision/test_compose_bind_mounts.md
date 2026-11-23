@@ -11,6 +11,10 @@ a reason, and the test below fails a stale entry.
 by `render_alertmanager_config.py`, written 0600 on the host. Committing it
 would put those secrets in a public repository, which is why the template is
 what lives here.
+`prometheus/demo_tls_probe.yml` is written on the host the same way, from `DEMO_WILDCARD_BASE` in
+`monitoring.env` by `render_alertmanager_config.py` before every start, and is never committed: its base is
+owner-held. It is an empty scrape list when the base is unset.
+
 `prometheus/mx1-metrics-password` is the same shape: the `stalwart` scrape
 job's `basic_auth` password, written 0600 on the host by the same script from
 `STALWART_PROMETHEUS_SECRET`. Committing it would put a live credential in a

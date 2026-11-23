@@ -1,0 +1,82 @@
+---
+# Both halves on this one container, in the order a live pair of applies can land: the scraper
+# host's half first, then the target host's. Each half is run the way a pulled playbook runs it, as
+# a plain role entry, and told which host it is for by enrolled_host, which check_enrolment pins
+# per play on a real host. Facts are not gathered here, as in the pulled playbooks.
+#
+# The three values the owner's data commit fills in are made here from this container: the target
+# host's SSH host public key is the one prepare.yml's sshd presents, the endpoint is the loopback
+# address that sshd listens on, and the scraper host's public key is the one the scraper half has
+# just made. They are public values and are set as facts under no_log, so the only place a log may
+# show them is the role's own print of a public key. With them the tunnel comes up for real: the
+# unit dials the sshd, which holds the restricted key line, and the forwards listen.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look for the SSH host public key of the container's sshd
+      ansible.builtin.stat:
+        path: /etc/ssh/ssh_host_ed25519_key.pub
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: tenant_scrape_tunnel_scenario_host_key_stat
+      check_mode: false
+
+    - name: Read the SSH host public key of the container's sshd
+      ansible.builtin.slurp:
+        src: /etc/ssh/ssh_host_ed25519_key.pub
+      register: tenant_scrape_tunnel_scenario_host_key
+      when: tenant_scrape_tunnel_scenario_host_key_stat.stat.exists
+      check_mode: false
+      no_log: true
+
+    - name: Fill in the target host's key and endpoint, as the data commit does
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_target_host_key: "{{ tenant_scrape_tunnel_scenario_host_key.content | default('') | b64decode | trim }}"
+        tenant_scrape_tunnel_target_endpoint: '{{ scenario_endpoint }}'
+      no_log: true
+
+    - name: Run the scraper host's half
+      ansible.builtin.include_role:
+        name: branchleft.tenant_scrape_tunnel
+      vars:
+        enrolled_host: edge1
+
+    # The role makes the account with a locked password, as useradd does, which a real host's
+    # sshd accepts for a key login because PAM is on there. The test sshd has PAM off (prepare.yml),
+    # and with it off sshd refuses a locked account, so the field is set to the value that is
+    # not a hash and not a lock. It changes nothing else about the account.
+    - name: Let the test sshd accept a key login for the account the role made
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        password: '*'
+      no_log: true
+
+    - name: Look for the scraper host's public key
+      ansible.builtin.stat:
+        path: '{{ scenario_key_dir }}/id_ed25519.pub'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: tenant_scrape_tunnel_scenario_pub_stat
+      check_mode: false
+
+    - name: Read the scraper host's public key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/id_ed25519.pub'
+      register: tenant_scrape_tunnel_scenario_pub
+      when: tenant_scrape_tunnel_scenario_pub_stat.stat.exists
+      check_mode: false
+      no_log: true
+
+    - name: Fill in the scraper host's public key, as the data commit does
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_scraper_public_key: "{{ tenant_scrape_tunnel_scenario_pub.content | default('') | b64decode | trim }}"
+      no_log: true
+
+    - name: Run the target host's half
+      ansible.builtin.include_role:
+        name: branchleft.tenant_scrape_tunnel
+      vars:
+        enrolled_host: edget

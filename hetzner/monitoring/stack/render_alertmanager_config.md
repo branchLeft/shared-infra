@@ -72,3 +72,25 @@ on the host, including the CI deploy account.
 Only when running as root -- which is how the systemd ExecStartPre invokes
 this. Under CI, or a local render, there is no container to read the file and
 no privilege to chown with.
+
+## The demo wildcard TLS probe
+
+`DEMO_WILDCARD_BASE` in `/etc/branchleft/monitoring.env` is the lower-case domain
+the demo edge's wildcard certificate covers (the same value the demo host reads as
+`demo1_build_wildcard_base`). The script writes `prometheus/demo_tls_probe.yml`
+from `prometheus/demo_tls_probe.yml.tmpl` on every start, filling the probe's
+target as `probe.<base>:443`. Prometheus reads that file through
+`scrape_config_files`. An unset or empty base writes an empty scrape list, so no
+demo name is ever committed or left as a placeholder. A base that is not a
+lower-case domain of two or more labels disables the probe with a message; it
+never stops the stack from starting.
+
+## The mail host's publish token is optional
+
+`NTFY_MX1_TOKEN` fills `__NTFY_MX1_TOKEN__` in the ntfy server config, the token of the `mx1`
+machine user, whose only grant is write-only on the abuse topic. Unlike the four credentials
+above it never disables the pager: absent, malformed (not `tk_` plus 29 lowercase letters or
+digits) or equal to the pager's or the watcher's token, the renderer removes that one line from
+the rendered config, names the variable on stderr, and everything else renders as it would have.
+The mail host then holds no token, so it can publish nothing. With the pager itself disabled the
+locked config has no token line at all.

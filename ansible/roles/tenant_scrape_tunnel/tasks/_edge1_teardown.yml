@@ -1,0 +1,49 @@
+---
+# The scraper host's tunnel removed, because its data was emptied after the unit was installed.
+# It stops and disables the unit, then removes the unit, the target file, the pinned host key, the
+# key pair and the account, and nothing else. The key is not made again in this run: the next run
+# with the data still empty is a first apply, which makes a new key and prints it. Under --check
+# nothing is stopped or removed.
+- name: Report that the tunnel is being removed
+  ansible.builtin.debug:
+    msg: >-
+      tenant_scrape_tunnel teardown: tenant_scrape_tunnel_target_host_key and
+      tenant_scrape_tunnel_target_endpoint are empty and the tunnel unit is installed, so the
+      tunnel unit, its files, its key and its account are removed.
+
+- name: Stop and disable the tunnel unit
+  ansible.builtin.systemd_service:
+    name: '{{ tenant_scrape_tunnel_unit_name }}'
+    state: stopped
+    enabled: false
+  when: not ansible_check_mode
+
+- name: Remove the unit, its files and the key pair
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop: '{{ tenant_scrape_tunnel_scraper_files }}'
+
+- name: Reload systemd now the unit file is gone
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode
+
+# The key directory goes only when it is empty: whatever else is in it is not the role's to remove.
+- name: Look for anything left in the key directory
+  ansible.builtin.find:
+    paths: '{{ tenant_scrape_tunnel_key_dir }}'
+    file_type: any
+    hidden: true
+  register: tenant_scrape_tunnel_key_dir_left
+  check_mode: false
+
+- name: Remove the key directory when it is empty
+  ansible.builtin.file:
+    path: '{{ tenant_scrape_tunnel_key_dir }}'
+    state: absent
+  when: tenant_scrape_tunnel_key_dir_left.matched == 0 and not ansible_check_mode
+
+- name: Remove the tunnel account
+  ansible.builtin.include_tasks: _account_remove.yml
+  when: tenant_scrape_tunnel_passwd.rc == 0

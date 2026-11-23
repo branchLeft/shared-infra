@@ -72,9 +72,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # (after host_baseline for Docker), egress_nat (after the firewall role: it reads its table),
 # ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
-# the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
-# all: it refuses to run until its secret files exist), app1's host_inputs,
+# the deploy tooling installs), then edge1's node_exporter and tenant_scrape_tunnel (after the edge
+# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring
+# roles (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then
+# sweego_receiver (last of all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
@@ -106,6 +107,7 @@ APPLIED_ON_MAIN = {
         "deploy_tooling",
         "edge_stack",
         "node_exporter",
+        "tenant_scrape_tunnel",
         "exporters_and_collectors",
         "edge_ban_owner",
         "ntfy_pager",
@@ -164,6 +166,7 @@ APPLIED_ON_MAIN = {
         "demo1_build",
         "demo1_egress_spool",
         "spool_path_account",
+        "host_tls_identity",
         "node_exporter_public",
     ],
 }
@@ -479,6 +482,7 @@ class HostRoleLists(unittest.TestCase):
                 "deploy_tooling",
                 "edge_stack",
                 "node_exporter",
+                "tenant_scrape_tunnel",
                 "exporters_and_collectors",
                 "edge_ban_owner",
                 "ntfy_pager",
@@ -629,6 +633,7 @@ class HostRoleLists(unittest.TestCase):
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "host_tls_identity",
                 "node_exporter_public",
             ],
         )
@@ -651,7 +656,13 @@ class HostRoleLists(unittest.TestCase):
         path.write_text(listed.replace(row, "", 1), encoding="utf-8")
         self._assert_refused("demo1", "role broker_deploy is not on demo1's list")
         path.unlink()
-        for name in ("broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"):
+        for name in (
+            "broker_deploy",
+            "demo1_build",
+            "demo1_egress_spool",
+            "spool_path_account",
+            "host_tls_identity",
+        ):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
 
