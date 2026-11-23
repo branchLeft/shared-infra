@@ -1,0 +1,19 @@
+---
+# The entry a pulled playbook applies on either host. A pulled playbook names the role in a plain
+# `role:` entry with no variables and no tasks_from (check_enrolment R2), so this file is the whole
+# of what that entry runs. It chooses the half by the host's name in the play, which
+# check_enrolment pins to the one host the play is for, and it stops on any other name.
+- name: Install the scraper host's half of the tenant scrape tunnel
+  ansible.builtin.include_tasks: _edge1.yml
+  when: (enrolled_host | default('')) == tenant_scrape_tunnel_scraper_host
+
+- name: Install the target host's half of the tenant scrape tunnel
+  ansible.builtin.include_tasks: _edget.yml
+  when: (enrolled_host | default('')) == tenant_scrape_tunnel_target_host
+
+- name: Refuse a host that has no half of the tenant scrape tunnel
+  ansible.builtin.fail:
+    msg: >-
+      TENANT_SCRAPE_TUNNEL_HOST_NOT_ENROLLED: this role has a half for
+      {{ tenant_scrape_tunnel_scraper_host }} and for {{ tenant_scrape_tunnel_target_host }} only.
+  when: (enrolled_host | default('')) not in [tenant_scrape_tunnel_scraper_host, tenant_scrape_tunnel_target_host]

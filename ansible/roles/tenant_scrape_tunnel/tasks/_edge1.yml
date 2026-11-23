@@ -1,0 +1,28 @@
+---
+# The scraper host's half. It chooses between two ways through, by what is on the host and what
+# the data says: the removal of an installed tunnel whose data was emptied, or the install (which
+# is also the first apply, with the data still empty). The unit file is the sign that the tunnel
+# was ever installed: it is only written once the target's data is in.
+- name: Look up the tunnel account on the scraper host
+  ansible.builtin.include_tasks: _account_lookup.yml
+
+- name: Look for the tunnel unit
+  ansible.builtin.stat:
+    path: '{{ tenant_scrape_tunnel_unit_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: tenant_scrape_tunnel_unit_stat
+  check_mode: false
+
+- name: Note whether the tunnel unit is installed
+  ansible.builtin.set_fact:
+    tenant_scrape_tunnel_is_unit_installed: '{{ tenant_scrape_tunnel_unit_stat.stat.exists }}'
+
+- name: Remove the tunnel from the scraper host, its data having been emptied
+  ansible.builtin.include_tasks: _edge1_teardown.yml
+  when: tenant_scrape_tunnel_is_scraper_teardown | bool
+
+- name: Install the scraper host's half of the tunnel
+  ansible.builtin.include_tasks: _edge1_install.yml
+  when: not (tenant_scrape_tunnel_is_scraper_teardown | bool)

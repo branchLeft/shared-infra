@@ -135,18 +135,18 @@
             path: '{{ verify_dir }}'
           register: mail_reconcilers_verify_plain_dir
 
-        - name: Assert the nineteen programs are there, root's and 0755, and none the stack role owns
+        - name: Assert the twenty programs are there, root's and 0755, and none the stack role owns
           ansible.builtin.assert:
             that:
               - mail_reconcilers_verify_plain_dir.stat.isdir
               - mail_reconcilers_verify_plain_dir.stat.pw_name == 'root'
               - mail_reconcilers_verify_plain_dir.stat.mode == '0755'
-              - mail_reconcilers_verify_plain_found.matched == 19
+              - mail_reconcilers_verify_plain_found.matched == 20
               - mail_reconcilers_verify_plain_found.files | map(attribute='mode') | unique | list == ['0755']
               - mail_reconcilers_verify_plain_found.files | map(attribute='pw_name') | unique | list == ['root']
               - mail_reconcilers_verify_plain_found.files | map(attribute='path') | map('basename') | select('search', verify_foreign) | list | length == 0
             quiet: true
-            fail_msg: A plain apply did not leave exactly the nineteen programs, root's with mode 0755.
+            fail_msg: A plain apply did not leave exactly the twenty programs, root's with mode 0755.
 
     # 2. A tag without its matching confirmation is refused before any program runs, and
     # two tags with one confirmed step run only that step.

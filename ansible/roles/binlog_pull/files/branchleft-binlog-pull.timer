@@ -1,0 +1,12 @@
+# Starts branchleft-binlog-pull.service five minutes after boot and every 15 minutes after the
+# last start. Installed by the binlog_pull role, which keeps it off until told otherwise.
+[Unit]
+Description=Every 15 minutes: pull the tenant database host's closed binary logs
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

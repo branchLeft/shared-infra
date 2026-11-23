@@ -1,0 +1,497 @@
+---
+# Reads the host back. Each check names the control it proves, and module results are not trusted
+# on their own. In order:
+#   1  the account, and every file the two halves wrote: owner, mode and exact content, the
+#      content of the key line and the drop-in held to golden files and the rest to the values
+#      this scenario made
+#   2  the unit: its digest against the role's source and its pin, systemd's view, and the three
+#      forwards listening on the private address and on no other
+#   3  what the real sshd evaluates for the account and for another user
+#   4  connections to the real sshd with the tunnel's own key, and with a key no file lists: the
+#      three destinations are allowed; another port, another address, the sshd itself, a remote
+#      forward and a remote command are not
+#   5  the log of every run of this scenario read for a private key and for the files' content (ANS-16)
+# Nothing here changes the host, so the check-mode run that follows finds it as the converge left it.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # A line break for the expressions below. A string literal inside an expression does not
+    # process \n, so a break is written here, once, in a YAML double-quoted scalar.
+    tenant_scrape_tunnel_verify_nl: "\n"
+    tenant_scrape_tunnel_verify_scenario_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}"
+    tenant_scrape_tunnel_verify_private_key: '{{ scenario_key_dir }}/id_ed25519'
+    # Every file and directory the two halves write: path, owner, group and mode. The private key
+    # is the account's alone; the pinned host key is readable by the unit's user through its group.
+    tenant_scrape_tunnel_verify_expected_files:
+      - path: '{{ scenario_key_dir }}'
+        owner: root
+        group: root
+        mode: '0755'
+      - path: '{{ scenario_key_dir }}/id_ed25519'
+        owner: '{{ scenario_user }}'
+        group: '{{ scenario_user }}'
+        mode: '0600'
+      - path: '{{ scenario_key_dir }}/known_hosts'
+        owner: root
+        group: '{{ scenario_user }}'
+        mode: '0640'
+      - path: '{{ scenario_key_dir }}/target.env'
+        owner: root
+        group: root
+        mode: '0600'
+      - path: '{{ scenario_unit_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      - path: '{{ scenario_authorized_keys_dir }}'
+        owner: root
+        group: root
+        mode: '0755'
+      - path: '{{ scenario_authorized_keys_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      - path: '{{ scenario_dropin_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+    tenant_scrape_tunnel_verify_expected_permitopen: >-
+      {{ scenario_forwards | map(attribute='address') | map('regex_replace', '$', ':' ~ scenario_target_port) | list }}
+  tasks:
+    # ---- The account ----------------------------------------------------------
+    - name: Read the tunnel account back from the passwd database
+      ansible.builtin.command:
+        argv: [getent, passwd, '{{ scenario_user }}']
+      register: tenant_scrape_tunnel_verify_passwd
+      changed_when: false
+
+    - name: Assert the tunnel account has no login shell and no home directory
+      ansible.builtin.assert:
+        that:
+          - (tenant_scrape_tunnel_verify_passwd.stdout.split(':') | last | trim) == '/usr/sbin/nologin'
+          - tenant_scrape_tunnel_verify_passwd.stdout.split(':')[5] == '/nonexistent'
+        quiet: true
+
+    - name: Look for a path made from the account's name
+      ansible.builtin.command:
+        argv: [find, /etc, /usr/local, -iname, '*{{ scenario_user }}*']
+      register: tenant_scrape_tunnel_verify_named
+      changed_when: false
+
+    - name: Assert no path holds the account's name
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_named.stdout == ''
+        quiet: true
+
+    # ---- Owners and modes -------------------------------------------------------
+    # No stat below asks for a checksum: the checksum of a file that holds a pinned value is
+    # printed in the log, and the scan at the end looks for it (ANS-16).
+    - name: Read the owner and mode of what both halves wrote
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        get_checksum: false
+      loop: '{{ tenant_scrape_tunnel_verify_expected_files }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: tenant_scrape_tunnel_verify_modes
+
+    - name: Assert the owners and modes
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == item.item.owner
+          - item.stat.gr_name == item.item.group
+          - item.stat.mode == item.item.mode
+        quiet: true
+        fail_msg: 'The owner, group or mode of {{ item.item.path }} is not the expected one.'
+      loop: '{{ tenant_scrape_tunnel_verify_modes.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Read the target host's public host key and the scraper host's public key
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/ssh/ssh_host_ed25519_key.pub
+        - '{{ tenant_scrape_tunnel_verify_private_key }}.pub'
+      register: tenant_scrape_tunnel_verify_public
+      no_log: true
+
+    - name: Read the pinned known_hosts file and the target file back
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_key_dir }}/known_hosts'
+        - '{{ scenario_key_dir }}/target.env'
+      register: tenant_scrape_tunnel_verify_scraper_files
+      no_log: true
+
+    - name: Assert the target host's key is pinned under its alias and the target file holds the endpoint only
+      ansible.builtin.assert:
+        that:
+          - >-
+            (tenant_scrape_tunnel_verify_scraper_files.results[0].content | b64decode)
+            == ('edge-t ssh-ed25519 ' ~ tenant_scrape_tunnel_verify_host_body ~ tenant_scrape_tunnel_verify_nl)
+          - >-
+            (tenant_scrape_tunnel_verify_scraper_files.results[1].content | b64decode)
+            == ('TENANT_SCRAPE_EDGET_ENDPOINT=' ~ scenario_endpoint ~ tenant_scrape_tunnel_verify_nl)
+        quiet: true
+      vars:
+        tenant_scrape_tunnel_verify_host_body: '{{ (tenant_scrape_tunnel_verify_public.results[0].content | b64decode).split(" ")[1] }}'
+      no_log: true
+
+    # ---- The files of the target host ----------------------------------------
+    - name: Read the authorized key and the sshd drop-in back
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_authorized_keys_file }}'
+        - '{{ scenario_dropin_file }}'
+      register: tenant_scrape_tunnel_verify_target_files
+      no_log: true
+
+    # The golden line is the one the template must render for the scraper host's key: the options
+    # as the brief fixes them, then the key type and the key, with the key's comment dropped. The
+    # file holds a placeholder for the key body, which is made in this run.
+    - name: Assert the authorized key is the golden line, one line with no comment and no from=
+      ansible.builtin.assert:
+        that:
+          - >-
+            (tenant_scrape_tunnel_verify_target_files.results[0].content | b64decode)
+            == (lookup('ansible.builtin.file', tenant_scrape_tunnel_verify_scenario_dir ~ '/files/golden/authorized_keys', rstrip=false)
+            | replace('EXAMPLE_SCRAPER_KEY_BODY', tenant_scrape_tunnel_verify_scraper_body))
+        quiet: true
+      vars:
+        tenant_scrape_tunnel_verify_scraper_body: '{{ (tenant_scrape_tunnel_verify_public.results[1].content | b64decode).split(" ")[1] }}'
+      no_log: true
+
+    - name: Assert the sshd drop-in is the golden drop-in and ends the Match block
+      ansible.builtin.assert:
+        that:
+          - >-
+            (tenant_scrape_tunnel_verify_target_files.results[1].content | b64decode)
+            == lookup('ansible.builtin.file', tenant_scrape_tunnel_verify_scenario_dir ~ '/files/golden/sshd-drop-in.conf', rstrip=false)
+          - (tenant_scrape_tunnel_verify_target_files.results[1].content | b64decode).splitlines() | last == 'Match all'
+        quiet: true
+
+    # ---- The unit -------------------------------------------------------------
+    - name: Read the installed unit's digest back
+      ansible.builtin.stat:
+        path: '{{ scenario_unit_file }}'
+        checksum_algorithm: sha256
+      register: tenant_scrape_tunnel_verify_unit
+
+    - name: Load the role's constants
+      ansible.builtin.include_vars:
+        file: '{{ tenant_scrape_tunnel_verify_scenario_dir }}/../../vars/main.yml'
+        name: tenant_scrape_tunnel_verify_constants
+
+    # The pin is the role's own tripwire and the source is the file the role ships: the installed
+    # unit must be both, so a copy that went wrong or a pin that was not updated is seen here.
+    - name: Assert the installed unit is the role's file and has the pinned digest
+      ansible.builtin.assert:
+        that:
+          - >-
+            tenant_scrape_tunnel_verify_unit.stat.checksum
+            == (lookup('ansible.builtin.file', tenant_scrape_tunnel_verify_scenario_dir ~ '/../../files/branchleft-tenant-scrape.service', rstrip=false)
+            | hash('sha256'))
+          - tenant_scrape_tunnel_verify_unit.stat.checksum == tenant_scrape_tunnel_verify_constants.tenant_scrape_tunnel_unit_sha256
+        quiet: true
+
+    # The forwards listen only once a connection to the target is made, so they are waited for
+    # before the unit's state is read: a unit between two retries is not yet the tunnel.
+    - name: Wait for the tunnel's forwards to listen on the private address
+      ansible.builtin.include_tasks: tasks/wait_for_forwards.yml
+
+    - name: Read how systemd sees the unit
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - '{{ scenario_unit_name }}'
+          - --property=LoadState
+          - --property=UnitFileState
+          - --property=ActiveState
+          - --property=SubState
+          - --property=Result
+          - --property=User
+          - --property=NoNewPrivileges
+          - --property=ProtectSystem
+          - --property=ProtectHome
+          - --property=PrivateTmp
+          - --property=ProtectControlGroups
+          - --property=CapabilityBoundingSet
+      register: tenant_scrape_tunnel_verify_unit_state
+      changed_when: false
+
+    # Running is what the forwards' listeners already showed; the other lines read back what the
+    # container's drop-in (prepare.yml) left of the unit's sandbox, so it cannot have turned off
+    # more than the seccomp options it names.
+    - name: Assert systemd loaded the unit, it is enabled and running, and its sandbox is as shipped bar the seccomp options
+      block:
+        - name: Assert the unit's state and the options of its sandbox that a container can hold
+          ansible.builtin.assert:
+            that:
+              - "'LoadState=loaded' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'UnitFileState=enabled' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ActiveState=active' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'SubState=running' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'Result=success' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "('User=' ~ scenario_user) in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'NoNewPrivileges=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectSystem=strict' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectHome=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'PrivateTmp=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectControlGroups=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'CapabilityBoundingSet=' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+            quiet: true
+      rescue:
+        - name: Fail with the unit's status and journal
+          ansible.builtin.include_tasks: tasks/unit_diagnostics.yml
+          vars:
+            diagnose_reason: >-
+              The unit is not loaded, enabled and running as it should be: {{ tenant_scrape_tunnel_verify_unit_state.stdout_lines | join(', ') }}
+
+    - name: Assert nothing listens on the same ports of the loopback address
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ item.local_port }}'
+        state: stopped
+        timeout: 5
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.local_port }}'
+
+    # Nothing in the container answers on a destination address, so a connection through a
+    # forward ends at sshd's own dial of it: sshd logs that line only for a destination its
+    # PermitOpen allowed (a refused one is logged as denied). The listeners above were connected
+    # to once, and each forward leads to its own destination, so each address must have its line.
+    - name: Read what sshd logged of the connections the forwards carried
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --unit
+          - ssh
+          - --output
+          - cat
+          - --no-pager
+          - --grep
+          - 'connect_to [0-9.]+ port {{ scenario_target_port }}: failed'
+      register: tenant_scrape_tunnel_verify_carried
+      changed_when: false
+      failed_when: tenant_scrape_tunnel_verify_carried.rc not in [0, 1]
+      until: >-
+        scenario_forwards | map(attribute='address')
+        | reject('in', tenant_scrape_tunnel_verify_carried.stdout | default(''))
+        | list | length == 0
+      retries: 10
+      delay: 1
+
+    - name: Assert each forward carried a connection to its own destination
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_carried.stdout_lines | select('search', 'connect_to ' ~ item.address ~ ' port ') | list | length > 0
+        quiet: true
+        fail_msg: 'sshd logged no dial of {{ item.address }} for the forward on {{ item.local_port }}: the tunnel did not carry a connection to it.'
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.address }}'
+
+    # ---- What the real sshd evaluates -----------------------------------------
+    - name: Read the effective sshd settings for the tunnel account
+      ansible.builtin.command:
+        argv: [sshd, -T, -C, 'user={{ scenario_user }},host=localhost,addr=127.0.0.1']
+      register: tenant_scrape_tunnel_verify_sshd
+      changed_when: false
+
+    - name: Assert sshd applies one forward kind, the three destinations, no listener and no command
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_sshd.stdout_lines | select('match', '^permitopen ') | list | length == 1
+          - >-
+            (tenant_scrape_tunnel_verify_sshd.stdout_lines | select('match', '^permitopen ') | list | first).split(' ')[1:] | sort
+            == tenant_scrape_tunnel_verify_expected_permitopen | sort
+          - "'permitlisten none' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'allowtcpforwarding local' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'forcecommand /usr/sbin/nologin' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'authenticationmethods publickey' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "('authorizedkeysfile ' ~ scenario_authorized_keys_file) in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'gatewayports no' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'permituserrc no' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'permittty no' in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+        quiet: true
+
+    # The Match block ends at Match all, so the drop-in covers no one else.
+    - name: Read the effective sshd settings for another user
+      ansible.builtin.command:
+        argv: [sshd, -T, -C, 'user=root,host=localhost,addr=127.0.0.1']
+      register: tenant_scrape_tunnel_verify_sshd_other
+      changed_when: false
+
+    - name: Assert the tunnel account's restrictions do not apply to another user
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_sshd_other.stdout_lines | select('match', '^permitopen 10[.]20[.]1[.]') | list == []
+          - "'forcecommand /usr/sbin/nologin' not in tenant_scrape_tunnel_verify_sshd_other.stdout_lines"
+          - "'allowtcpforwarding yes' in tenant_scrape_tunnel_verify_sshd_other.stdout_lines"
+          - tenant_scrape_tunnel_verify_sshd_other.stdout_lines | select('search', 'branchleft-tenant-scrape') | list == []
+        quiet: true
+
+    # ---- Connections to the real sshd ----------------------------------------
+    - name: Forward to each destination on the exporter port with the tunnel's own key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ tenant_scrape_tunnel_verify_private_key }}'
+        attempt_target: '{{ item.address }}:{{ scenario_target_port }}'
+        attempt_expect: allowed
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.address }}'
+
+    # The case the brief names: the database exporter's port on a listed host.
+    - name: Forward to a listed address on a port that is not the exporter's, and to one beside the list
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ tenant_scrape_tunnel_verify_private_key }}'
+        attempt_target: '{{ item }}'
+        attempt_expect: refused
+      loop:
+        - '10.20.1.200:9104'
+        - '10.20.1.201:22'
+        - '10.20.1.211:9100'
+        - '127.0.0.1:22'
+
+    - name: Ask sshd to open a port of its own and send it to a listed destination
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ tenant_scrape_tunnel_verify_private_key }}'
+        attempt_target: '10.20.1.200:{{ scenario_target_port }}'
+        attempt_expect: no_remote_forward
+
+    - name: Ask for remote commands, which a restricted key on a nologin account never runs
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ tenant_scrape_tunnel_verify_private_key }}'
+        attempt_command: '{{ item }}'
+        attempt_expect: no_command
+      loop:
+        - touch /tmp/EXAMPLE_MARKER
+        - id
+
+    - name: Present a key that no file lists
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ scenario_client_key_dir }}/intruder'
+        attempt_target: '10.20.1.200:{{ scenario_target_port }}'
+        attempt_expect: turned_away
+
+    # ---- ANS-16: no private key, and no pinned value, in any log ----------------
+    # The scan starts at the prepare play. Molecule's own create play, before it, prints docker's
+    # description of the container. The scenario sets verbosity 3 and a log path (molecule.yml),
+    # so a task that handles a key or a pinned value without no_log or diff: false prints it into
+    # this log, in its result, its loop item, its diff or the message of a failure. The log holds
+    # every run above: the check run with --diff against the fresh host (prepare.yml makes it, so
+    # `molecule test` alone holds it too), the converge, the second converge, and this play.
+    # The scraper host's public key and the target host's are printed on purpose, because they
+    # are public: that, and the task names and the diff headers, show the scan reads a log that
+    # holds output.
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path).partition('PLAY [Prepare the instance]')[2] }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - item.needle in tenant_scrape_tunnel_verify_log
+        fail_msg: 'The log lacks {{ item.what }}, so an empty scan would prove nothing.'
+        quiet: true
+      loop:
+        - what: the name of the task that makes the key
+          needle: " : Generate the scraper host's key, once"
+        - what: the name of the task that pins the target host's key
+          needle: ' : Pin the target host key'
+        - what: the name of the task that writes the authorized key
+          needle: ' : Write the authorized key with the restrictions and the three destinations'
+        - what: a result censored by no_log
+          needle: '(censored due to no_log)'
+        - what: a diff header from the check run
+          needle: '+++ after: '
+        - what: the scraper host's public key, printed on purpose
+          needle: 'tenant_scrape_tunnel scraper_public_key: ssh-ed25519 '
+        - what: the target host's public host key, printed on purpose
+          needle: 'tenant_scrape_tunnel target_host_key: ssh-ed25519 '
+      loop_control:
+        label: '{{ item.what }}'
+
+    - name: Read the private key, to know what must not be in the log
+      ansible.builtin.slurp:
+        src: '{{ tenant_scrape_tunnel_verify_private_key }}'
+      register: tenant_scrape_tunnel_verify_private
+      no_log: true
+
+    - name: Work out which of the private key and the written files the log holds
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_verify_leaked: >-
+          {{ tenant_scrape_tunnel_verify_scan
+             | dict2items
+             | selectattr('value', 'in', tenant_scrape_tunnel_verify_log)
+             | map(attribute='key') | list }}
+        # The public key's body may be in the log only on the line the role prints it on. The body is
+        # base64, so it can hold + and /, which a pattern would read as syntax: it is escaped.
+        tenant_scrape_tunnel_verify_body_elsewhere: >-
+          {{ tenant_scrape_tunnel_verify_log.splitlines()
+             | select('search', tenant_scrape_tunnel_verify_scraper_body | regex_escape)
+             | reject('search', 'scraper_public_key: ') | list | length }}
+        tenant_scrape_tunnel_verify_body_on_print: >-
+          {{ tenant_scrape_tunnel_verify_log.splitlines()
+             | select('search', tenant_scrape_tunnel_verify_scraper_body | regex_escape)
+             | select('search', 'scraper_public_key: ') | list | length }}
+      vars:
+        tenant_scrape_tunnel_verify_private_text: '{{ tenant_scrape_tunnel_verify_private.content | b64decode }}'
+        tenant_scrape_tunnel_verify_scraper_body: '{{ (tenant_scrape_tunnel_verify_public.results[1].content | b64decode).split(" ")[1] }}'
+        tenant_scrape_tunnel_verify_key_lines: >-
+          {{ tenant_scrape_tunnel_verify_private_text.splitlines() | reject('match', '^-----') | list }}
+        tenant_scrape_tunnel_verify_known_hosts: '{{ tenant_scrape_tunnel_verify_scraper_files.results[0].content | b64decode }}'
+        tenant_scrape_tunnel_verify_target_env: '{{ tenant_scrape_tunnel_verify_scraper_files.results[1].content | b64decode }}'
+        tenant_scrape_tunnel_verify_authorized_keys: '{{ tenant_scrape_tunnel_verify_target_files.results[0].content | b64decode }}'
+        tenant_scrape_tunnel_verify_scan:
+          private_key_header: '-----BEGIN OPENSSH PRIVATE KEY-----'
+          # The role would read the key with slurp, which returns the file in base64: the
+          # file's first 33 characters are a whole number of base64 groups, so they encode
+          # the same way wherever the rest of the file goes.
+          private_key_header_base64: "{{ '-----BEGIN OPENSSH PRIVATE KEY-----'[:33] | b64encode }}"
+          private_key_line_1: '{{ tenant_scrape_tunnel_verify_key_lines[0] }}'
+          private_key_line_2: '{{ tenant_scrape_tunnel_verify_key_lines[1] }}'
+          private_key_line_3: '{{ tenant_scrape_tunnel_verify_key_lines[2] }}'
+          known_hosts_line: '{{ tenant_scrape_tunnel_verify_known_hosts | trim }}'
+          target_file_line: '{{ tenant_scrape_tunnel_verify_target_env | trim }}'
+          authorized_key_line: '{{ tenant_scrape_tunnel_verify_authorized_keys | trim }}'
+          known_hosts_base64: '{{ tenant_scrape_tunnel_verify_known_hosts | b64encode }}'
+          target_file_base64: '{{ tenant_scrape_tunnel_verify_target_env | b64encode }}'
+          authorized_key_base64: '{{ tenant_scrape_tunnel_verify_authorized_keys | b64encode }}'
+          # A stat or a copy reports the sha1 of a file unless it is told not to, and the target
+          # file has one of a few thousand contents: the checksum is the value.
+          known_hosts_sha1: '{{ tenant_scrape_tunnel_verify_known_hosts | hash("sha1") }}'
+          target_file_sha1: '{{ tenant_scrape_tunnel_verify_target_env | hash("sha1") }}'
+          authorized_key_sha1: '{{ tenant_scrape_tunnel_verify_authorized_keys | hash("sha1") }}'
+      no_log: true
+
+    - name: Assert no private key and no written file reached the log
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_leaked == []
+        fail_msg: 'The log holds these: {{ tenant_scrape_tunnel_verify_leaked }}.'
+        quiet: true
+
+    - name: Assert the scraper host's public key is in the log on the line the role prints it on, and nowhere else
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_body_on_print | int > 0
+          - tenant_scrape_tunnel_verify_body_elsewhere | int == 0
+        fail_msg: >-
+          The public key's body is on {{ tenant_scrape_tunnel_verify_body_elsewhere }} lines of the log besides the role's
+          own print, or the print is missing ({{ tenant_scrape_tunnel_verify_body_on_print }}).
+        quiet: true
