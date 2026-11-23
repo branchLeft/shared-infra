@@ -6,7 +6,7 @@
   "main": "index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run ${PRE_COMMIT:+--exclude 'edge/{ghostSetup,breakGlassToken,dockerHarness}.test.ts'}",
     "render": "vitest run -u",
     "postinstall": "cd ../hetzner-host && pnpm install --frozen-lockfile && pnpm run build"
   },

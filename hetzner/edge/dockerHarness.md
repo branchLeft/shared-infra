@@ -5,9 +5,12 @@ long comment block in that file, when any of them changes.
 
 ## What it is for
 
-Tests that start a container (the live-Caddy check in `ghostSetup.test.ts`) run
-inside a commit hook. The harness makes that hook fail in seconds with a message
-when the Docker engine is silent, instead of holding the commit. It is a
+Tests that start a container (the live-Caddy checks in `ghostSetup.test.ts` and
+`breakGlassToken.test.ts`, and the harness's own suite) run in CI on every pull
+request. They are not in the commit hook: the `test` script in `hetzner/package.json`
+leaves them out when `PRE_COMMIT` is set, and `hetzner/preCommitScope.test.ts`
+fails if the hook starts collecting one again. The harness makes a silent Docker
+engine fail in seconds with a message, instead of holding the CI job. It is a
 hang-breaker, not a correctness control: it decides nothing about the thing the
 test proves.
 
@@ -32,7 +35,7 @@ re-run when it is idle or raise the bound; if it was not, report the engine as
 wedged and do not retry in a loop.
 
 `ghostSetup.test.ts` derives its setup timeout from the exported limits, so
-raising the bound raises the hook's own timeout with it.
+raising the bound raises the suite's own timeout with it.
 
 ## Slots
 
