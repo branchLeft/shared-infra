@@ -36,14 +36,32 @@ here derives that prefix automatically.
 
 ## `AUTHORING_API_PATHS`
 
-Paths exempted from AppSec evaluation on a site flagged `injectionWafPreviewOnly`.
-Ghost's admin API is where author-written HTML, code samples and SQL arrive in a
-request body; the admin UI around it is a static bundle carrying none, so the
-prefix is the API and not `/ghost`.
+Paths exempted from AppSec evaluation on a site flagged `injectionWafPreviewOnly`
+**that has no verified sessions** (`trustedSession`). Ghost's admin API is where
+author-written HTML, code samples and SQL arrive in a request body, so that is
+the whole of the list: `/ghost/api/admin/*`. The Content API
+(`/ghost/api/content/`), which any client can call, and the rest of the
+`/ghost/api/` tree stay inspected, and so does the admin UI around the API (a
+static bundle carrying none). Only the unversioned admin form is listed: Caddy's
+`*` stops at a slash when it is not the last character, so a versioned form
+(`/ghost/api/<version>/admin/...`) could not be listed whole, and it stays
+inspected, which fails towards a false positive and not towards a hole.
+
+A site that sets `trustedSession` has no path exemption at all. A signed-in staff
+session is already exempt, because the edge verifies it ("Verified sessions"), and
+that is the whole of the exemption: every other client, anonymous or not, has its
+request to any path, the Content API and the pre-sign-in admin paths included,
+evaluated by AppSec. An Admin API key (an integration) does not verify, so a
+request authenticated that way is inspected too; no site uses one through the edge
+today, and one that did would need its own verified form.
 
 The exemption removes **all** AppSec evaluation on these paths, not only the
 injection rulesets -- the Caddy handler is per-request, so there is no way to
 exempt three rule families and keep a fourth.
+
+`render.test.ts` fails if an exempted path leaves the admin API or if a verified
+site renders a path exemption; `test_trusted_session_replay.py` proves an anonymous
+Content API request is refused where a verified one is not.
 
 ## `MEMBERS_MAGIC_LINK_ZONE`
 
@@ -914,8 +932,8 @@ a password change or suspending the user takes effect on the next request.
 **Handler order.** HSTS, the break-glass strip and the body cap, then both
 throttles (still applied to everyone, and they cap how many checks one address
 can cause), then `vars edge_trusted 0`, `log_append` and the check, then
-`crowdsec @edge_untrusted` and AppSec on unverified requests only (on an
-authoring site `@inspected` gains `not vars edge_trusted 1`), then the setup
+`crowdsec @edge_untrusted` and AppSec on unverified requests only (on every
+path, an authoring site included: it has no path exemption), then the setup
 refusal, the upload refusals and the upstream proxy, for everyone.
 
 **Keeping verified traffic out of every bucket.** A request that skips AppSec

@@ -28,9 +28,11 @@ export const GENERATED_BANNER = [
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
-// Why: exempts author-written HTML/code/SQL from AppSec on preview-only sites;
-// removes ALL AppSec evaluation (not just injection). See render.md §"AUTHORING_API_PATHS".
-const AUTHORING_API_PATHS = ['/ghost/api/*'];
+// Why: exempts author-written HTML/code/SQL from AppSec on an authoring site that
+// has no verified sessions, on Ghost's authenticated admin API only, never the
+// Content API; removes ALL AppSec evaluation on it. A site with verified
+// sessions has no path exemption at all. See render.md §"AUTHORING_API_PATHS".
+const AUTHORING_API_PATHS = ['/ghost/api/admin/*'];
 
 /**
  * Ghost's members send-magic-link route, both trailing-slash forms, case
@@ -822,7 +824,7 @@ export function protectionChain(
   if (options.appsec === 'all') {
     lines.push(`appsec${unlessVerified}`);
   } else if (options.appsec === 'except-authoring') {
-    // `@inspected` itself carries the verified-session condition on such a site.
+    // Only a site with no verified sessions: `@inspected` is its admin API path.
     lines.push('appsec @inspected');
   }
   return lines;
@@ -1212,14 +1214,11 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   const address = resolvePrivateAddress(upstream.host, upstream.port);
   const verification = sessionVerification(site, address);
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly && verification !== undefined) {
-    body.push(
-      '@inspected {',
-      `\tnot path ${AUTHORING_API_PATHS.join(' ')}`,
-      `\tnot vars ${TRUSTED_SESSION_VAR} 1`,
-      '}'
-    );
-  } else if (site.injectionWafPreviewOnly) {
+  // Only a site whose sessions the edge cannot verify keeps a path exemption: a
+  // verified session is the exemption for the rest (`unlessVerified` in
+  // `protectionChain`), so no anonymous request skips AppSec on any path.
+  const pathExemption = site.injectionWafPreviewOnly && verification === undefined;
+  if (pathExemption) {
     body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
   body.push(...sessionVerificationMatchers(site));
@@ -1257,7 +1256,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
-      appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
+      appsec: pathExemption ? 'except-authoring' : 'all',
       ...(site.backend === 'nextcloud' ? { rateLimitEvents: NEXTCLOUD_RATE_LIMIT_EVENTS } : {}),
       membersMagicLink: true,
       beforeAppsec: [
