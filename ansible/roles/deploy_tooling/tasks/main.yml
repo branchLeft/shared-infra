@@ -165,7 +165,7 @@
     label: '{{ item.path }}'
   notify: Reload systemd manager
 
-# The owner's ruling (22 Nov, branchLeft/workspace#2821): the tenant list is the one place a tenant's
+# The owner's ruling (22 Nov): the tenant list is the one place a tenant's
 # compose instance is enabled, and this role makes that enable. Enabled only, never started or
 # restarted: a start deploys a tenant's stack, and the deploy wrapper writes its first pin after this
 # role. tenant_compose starts each stack once it has a pin. An undefined list (a host with no tenant

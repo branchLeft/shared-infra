@@ -1,6 +1,6 @@
 """deploy_tooling enables each listed tenant's compose instance, and never starts or restarts one.
 
-Owner ruling, 22 Nov (branchLeft/workspace#2821): the tenant list is the one place a tenant's compose
+Owner ruling, 22 Nov: the tenant list is the one place a tenant's compose
 instance is enabled, and deploy_tooling makes that enable. A start or restart would deploy a stack
 before the deploy wrapper has written its first pin, so the task carries no state. An undefined list
 enables nothing. These tests read the role's tasks and vars only.

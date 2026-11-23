@@ -33,7 +33,7 @@ broken sudoers file locks every account out of `sudo`, so the role reads it and 
 anything but the one grant. It enables, and never starts or restarts, the compose instance of each
 tenant in the list `tenant_compose_stacks` (`branchleft-compose@<slug>`), and enables none when the
 list is undefined: a start or restart redeploys a tenant's stack, and tenant_compose starts it once
-it has a pin (branchLeft/workspace#2821). It does not edit the
+it has a pin. It does not edit the
 policy program, and it does not decide which host is which class: that belongs to the
 inventory or the play.
 
