@@ -153,7 +153,8 @@
 
     - name: Put an empty ledger in place, as the provisioning API does before any approval
       ansible.builtin.copy:
-        content: '{"approvals": []}{{ "\n" }}'
+        content: |
+          {"approvals": []}
         dest: '{{ scenario_approvals }}'
         owner: '{{ scenario_account }}'
         group: '{{ scenario_account }}'
@@ -195,14 +196,15 @@
         mode: '0600'
       loop:
         - dest: '{{ scenario_approvals }}'
-          content: >-
+          content: >
             {"approvals": [
             {"approvalId": "appr-1", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]},
             {"approvalId": "appr-2", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]},
             {"approvalId": "appr-3-stuck", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]}
-            ]}{{ "\n" }}
+            ]}
         - dest: '{{ scenario_run_state }}'
-          content: '{"at": "2026-01-01T00:00:00Z", "approvalId": "appr-1", "event": "run-complete"}{{ "\n" }}'
+          content: |
+            {"at": "2026-01-01T00:00:00Z", "approvalId": "appr-1", "event": "run-complete"}
       loop_control:
         label: '{{ item.dest }}'
 
