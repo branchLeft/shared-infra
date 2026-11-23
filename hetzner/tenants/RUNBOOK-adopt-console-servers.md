@@ -878,7 +878,7 @@ approving the apply`, holds the plan as JSON. Read the `op` and `urn` of each en
    [`ansible-enrol-host-for-ci-runbook.md`](https://github.com/branchLeft/ghost-platform-docs/blob/main/ansible-enrol-host-for-ci-runbook.md)
    in `ghost-platform-docs`, from its Part 0 to its Part 5. It replaces this step's earlier text, which
    sent you to `RUNBOOK-provision-host.md` sections 5 and 6 and to a first gated run. Do not run
-   `run-all.sh` or `app-host-isolation.sh` from that runbook on this host: the `appt1` playbook applies
+   that runbook's host-provisioning steps (its shared baseline and its app-host isolation steps) on this host: the `appt1` playbook applies
    `host_baseline`, `egress_nat` and `deploy_tooling`, which install the same files, and a hand copy
    would be a second writer of them. What the page needs before its Part 1: steps 1 to 5 of this
    section done, the gateway proof of main runbook step 7 passed, and shared-infra's `appt1` playbook
