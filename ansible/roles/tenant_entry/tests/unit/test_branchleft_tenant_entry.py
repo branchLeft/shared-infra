@@ -1798,11 +1798,15 @@ class RoleContractTests(unittest.TestCase):
         self.assertEqual(own["tenant_entry_node_base_url"], broker["broker_deploy_node_base_url"])
         self.assertTrue(str(own["tenant_entry_node_base_url"]).startswith("https://"))
         checksums = own["tenant_entry_node_checksums"]
-        assert isinstance(checksums, dict)
+        self.assertIsInstance(checksums, dict)
+        if not isinstance(checksums, dict):
+            self.fail("tenant_entry_node_checksums is not a mapping")
         for arch, digest in checksums.items():
             self.assertRegex(str(digest), r"\Asha256:[0-9a-f]{64}\Z", arch)
         machines = own["tenant_entry_node_arch_by_machine"]
-        assert isinstance(machines, dict)
+        self.assertIsInstance(machines, dict)
+        if not isinstance(machines, dict):
+            self.fail("tenant_entry_node_arch_by_machine is not a mapping")
         self.assertEqual(set(machines.values()), set(checksums))
 
     def test_the_sudoers_grant_and_the_forced_command_name_the_entry_program_only(self) -> None:
@@ -1814,7 +1818,10 @@ class RoleContractTests(unittest.TestCase):
         grants = [line for line in lines if "NOPASSWD" in line]
         self.assertEqual(
             grants,
-            ["{{ tenant_entry_user }} ALL=(root) NOPASSWD: {{ tenant_entry_program }} {{ tenant_entry_serve_flag }}"],
+            [
+                "{{ tenant_entry_user }} ALL=(root) NOPASSWD: "
+                "{{ tenant_entry_program }} {{ tenant_entry_serve_flag }}"
+            ],
         )
         for needle in ("node", "provision-owner", "docker", "platform-provision"):
             for line in [*lines, str(own["tenant_entry_key_options"])]:
