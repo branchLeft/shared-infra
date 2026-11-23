@@ -480,7 +480,16 @@ class RenderedRulesTests(unittest.TestCase):
         text = rendered(enforce=True, nat_source="10.20.1.0/24", uplink="ens3")
         nat = rules_of(text, "table ip branchleft_edge_nat {")
         masquerades = [rule for rule in nat if rule.endswith("masquerade")]
-        self.assertEqual(masquerades, ['ip saddr 10.20.1.0/24 oifname "ens3" masquerade'])
+        self.assertEqual(masquerades, ['ip saddr 10.20.1.0/24 oifname "ens3" counter masquerade'])
+
+    def test_the_masquerade_rule_carries_a_counter(self) -> None:
+        # The gateway probe reads this rule's packet counter to prove the masquerade carries traffic.
+        # Without `counter` the probe refuses on edge1, so a rendered rule with none fails here.
+        # Sabotage: delete `counter` from the template; this test goes red.
+        nat = rules_of(rendered(enforce=True, nat_source="10.20.1.0/24", uplink="ens3"), "table ip branchleft_edge_nat {")
+        masquerades = [rule for rule in nat if rule.endswith("masquerade")]
+        self.assertEqual(len(masquerades), 1, masquerades)
+        self.assertRegex(masquerades[0], r'^ip saddr \S+ oifname "[^"]+" counter masquerade$', masquerades[0])
 
     def test_the_uplink_is_never_a_literal_in_the_template(self) -> None:
         template = (ROLE / "templates" / "rules.nft.j2").read_text(encoding="utf-8")
