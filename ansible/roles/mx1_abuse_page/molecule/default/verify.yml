@@ -1,0 +1,231 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    mx1_abuse_page_vf: '{{ playbook_dir }}/../../files'
+  tasks:
+    - name: Read the installed program and the two units
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /opt/branchleft/abuse-page/branchleft_abuse_page.py
+        - /etc/systemd/system/branchleft-abuse-page.service
+        - /etc/systemd/system/branchleft-abuse-page.timer
+      register: mx1_abuse_page_vi
+
+    - name: Assert the three files are the role's own, byte for byte
+      ansible.builtin.assert:
+        that:
+          - >-
+            (mx1_abuse_page_vi.results[0].content | b64decode)
+            == lookup('ansible.builtin.file', mx1_abuse_page_vf + '/branchleft_abuse_page.py', rstrip=False)
+          - >-
+            (mx1_abuse_page_vi.results[1].content | b64decode)
+            == lookup('ansible.builtin.file', mx1_abuse_page_vf + '/branchleft-abuse-page.service', rstrip=False)
+          - >-
+            (mx1_abuse_page_vi.results[2].content | b64decode)
+            == lookup('ansible.builtin.file', mx1_abuse_page_vf + '/branchleft-abuse-page.timer', rstrip=False)
+        quiet: true
+        fail_msg: An installed file differs from the file in the role.
+
+    - name: Read the modes of the installed paths
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /opt/branchleft/abuse-page
+        - /opt/branchleft/abuse-page/branchleft_abuse_page.py
+        - /var/lib/branchleft/abuse-page
+        - /etc/systemd/system/branchleft-abuse-page.service
+        - /etc/systemd/system/branchleft-abuse-page.timer
+        - /etc/branchleft/mx1-abuse-page.env
+      register: mx1_abuse_page_verify_stats
+
+    - name: Assert each path is root's with the mode asked for
+      ansible.builtin.assert:
+        that:
+          - mx1_abuse_page_verify_stats.results | map(attribute='stat.pw_name') | unique | list == ['root']
+          - mx1_abuse_page_verify_stats.results | map(attribute='stat.gr_name') | unique | list == ['root']
+          - mx1_abuse_page_verify_stats.results | map(attribute='stat.mode') | list == ['0755', '0755', '0700', '0644', '0644', '0600']
+        quiet: true
+        fail_msg: A path is not root's or its mode is wrong; the state directory must be 0700 and the token file 0600.
+
+    # The file holds the key and the token on one line and nothing else. It is read under no_log
+    # and the assertion names no value.
+    - name: Read the token file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/mx1-abuse-page.env
+      register: mx1_abuse_page_verify_env
+      no_log: true
+
+    - name: Assert the token file holds the one line
+      ansible.builtin.assert:
+        that:
+          - (mx1_abuse_page_verify_env.content | b64decode) == 'NTFY_MX1_TOKEN=test-sentinel-mx1-page-token-0001\n'
+        quiet: true
+        fail_msg: The token file does not hold exactly the one NTFY_MX1_TOKEN line.
+      no_log: true
+
+    - name: Forget the file content, which holds the value
+      ansible.builtin.set_fact:
+        mx1_abuse_page_verify_env: {}
+      no_log: true
+
+    - name: Read the timer's enabled state
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, branchleft-abuse-page.timer]
+      register: mx1_abuse_page_verify_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the timer's active state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-abuse-page.timer]
+      register: mx1_abuse_page_verify_active
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the timer is on when the host has a token
+      ansible.builtin.assert:
+        that:
+          - mx1_abuse_page_verify_enabled.stdout == 'enabled'
+          - mx1_abuse_page_verify_active.stdout == 'active'
+        quiet: true
+        fail_msg: The timer is not enabled and active after a run with a token.
+
+    - name: Run the installed program's own check
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, -I, /opt/branchleft/abuse-page/branchleft_abuse_page.py, --check]
+      changed_when: false
+
+    # systemd reads the condition and the confinement from the installed service. The condition
+    # is what keeps a host without a token from failing every minute.
+    - name: Read what systemd has for the service's write paths
+      ansible.builtin.command:
+        argv:
+          [
+            systemctl,
+            show,
+            --property=ReadWritePaths,
+            --property=ProtectSystem,
+            branchleft-abuse-page.service,
+          ]
+      register: mx1_abuse_page_verify_show
+      changed_when: false
+
+    # systemctl show does not print a start condition as a property of its own, so the condition
+    # is read from the unit file systemd loaded.
+    - name: Read the service unit as systemd loaded it
+      ansible.builtin.command:
+        argv: [systemctl, cat, branchleft-abuse-page.service]
+      register: mx1_abuse_page_verify_cat
+      changed_when: false
+
+    - name: Assert the service is conditioned on the token file and confined to its state directory
+      ansible.builtin.assert:
+        that:
+          - "'ConditionPathExists=/etc/branchleft/mx1-abuse-page.env' in mx1_abuse_page_verify_cat.stdout_lines"
+          - "'ReadWritePaths=/var/lib/branchleft/abuse-page' in mx1_abuse_page_verify_show.stdout"
+          - "'ProtectSystem=strict' in mx1_abuse_page_verify_show.stdout"
+        quiet: true
+        fail_msg: The installed service lost its start condition or its confinement.
+
+    # ----- Each value the check must refuse, before anything is written -----
+    - name: Give the role each value that the check must refuse
+      ansible.builtin.include_tasks: tasks/refuse_token.yml
+      loop:
+        - name: a token of only spaces
+          token: '   '
+        - name: a token with a second line
+          token: "test-sentinel-mx1-page-token-0001\nNTFY_OTHER=test-sentinel-newline-0002"
+        - name: a token with a carriage return
+          token: "test-sentinel-mx1-page-token-0001\r"
+      loop_control:
+        loop_var: mx1_abuse_page_verify_try
+        label: '{{ mx1_abuse_page_verify_try.name }}'
+
+    # ----- The log of this scenario's Ansible runs -----
+    # A task that handles the token and lacks no_log prints it at verbosity 3, so the log of the
+    # run must not hold it. The canary is the control: a task without no_log given a known
+    # argument, which the log must show, so an empty scan proves something.
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        mx1_abuse_page_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'MX1_ABUSE_PAGE_LOG_CANARY' in mx1_abuse_page_verify_log"
+          - "'Write the token file when a token is given' in mx1_abuse_page_verify_log"
+        quiet: true
+        fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
+      no_log: true
+
+    - name: Assert the log holds none of the sentinel values
+      ansible.builtin.assert:
+        that:
+          - "'test-sentinel-mx1-page-token-0001' not in mx1_abuse_page_verify_log"
+          - "'test-sentinel-newline-0002' not in mx1_abuse_page_verify_log"
+        quiet: true
+        fail_msg: A sentinel value of the token is in the Ansible log, so a task that handles it lacks no_log.
+      no_log: true
+
+    - name: Forget the log content, which may hold the values
+      ansible.builtin.set_fact:
+        mx1_abuse_page_verify_log: ''
+      no_log: true
+
+# ----- No token means nothing posts -----
+# Applied with no token, the role must remove the file and turn the timer off: a token that is no
+# longer supplied stops being a page.
+- name: Verify the role holds the page off when no token is given
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with no token
+      ansible.builtin.include_role:
+        name: branchleft.mx1_abuse_page
+
+    - name: Look at the token file
+      ansible.builtin.stat:
+        path: /etc/branchleft/mx1-abuse-page.env
+        get_checksum: false
+      register: mx1_abuse_page_verify_off_env
+
+    - name: Read the timer's enabled state
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, branchleft-abuse-page.timer]
+      register: mx1_abuse_page_verify_off_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the timer's active state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-abuse-page.timer]
+      register: mx1_abuse_page_verify_off_active
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the token file is gone and the timer is disabled and stopped
+      ansible.builtin.assert:
+        that:
+          - not mx1_abuse_page_verify_off_env.stat.exists
+          - mx1_abuse_page_verify_off_enabled.stdout == 'disabled'
+          - mx1_abuse_page_verify_off_active.stdout == 'inactive'
+        quiet: true
+        fail_msg: A role applied with no token left the token file or the timer on.
+
+# The harness checks the instance once more after verify, in check mode with the converge play's
+# values, and expects no change. The case above left the page off, so put it back as converge
+# left it.
+- name: Leave the instance as the converge play left it
+  hosts: all
+  gather_facts: false
+  vars:
+    mx1_abuse_page_token: test-sentinel-mx1-page-token-0001
+  tasks:
+    - name: Apply the role with the token again
+      ansible.builtin.include_role:
+        name: branchleft.mx1_abuse_page

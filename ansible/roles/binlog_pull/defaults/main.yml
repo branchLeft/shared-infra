@@ -1,0 +1,15 @@
+---
+# The timer stays off. Turning it on starts a pull of every tenant's data off the database
+# host every 15 minutes: a production apply (README).
+binlog_pull_timer_enabled: false
+
+# False leaves the timer as it is on the host. Set true, together with
+# binlog_pull_timer_enabled false, to stop a running timer (README).
+binlog_pull_timer_may_disable: false
+
+# The server's own port. A tunnel's local port is the one reason to change it.
+binlog_pull_db_port: 3306
+
+# True makes each run flush the server's binary log first, so the log that was open becomes
+# closed and is shipped within 15 minutes. False ships only logs the server closed itself.
+binlog_pull_flush: true

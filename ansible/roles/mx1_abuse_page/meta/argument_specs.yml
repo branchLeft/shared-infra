@@ -1,0 +1,22 @@
+---
+argument_specs:
+  main:
+    short_description: Install the abuse-report page program and its timer on the mail host
+    description: >-
+      Installs the program that posts one fixed notice to the pager's abuse topic when abuse@
+      receives a message, its service and its timer. The one input is the mail host's
+      publish-only ntfy token. Given, the role writes it into a root-only file the program reads
+      and holds the timer on. Empty, the role removes that file and holds the timer off, so the
+      host posts nothing. The role never reads or generates a token, never starts a run, and
+      reads no mail.
+    author: branchLeft
+    options:
+      mx1_abuse_page_token:
+        type: str
+        required: false
+        no_log: true
+        description: >-
+          The publish-only access token of the mail host, the value of NTFY_MX1_TOKEN. Optional:
+          empty means the page is off. When given it must be a single line (a value of only
+          spaces is refused). Supplied by the caller from the host's private inputs file; the
+          role never reads or generates one.

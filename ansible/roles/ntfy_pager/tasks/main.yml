@@ -16,6 +16,17 @@
     label: '{{ item.key }}'
   no_log: true
 
+# The mail host's publish-only token is the one optional line. It is checked with the
+# others, before anything is written: a single line, never only spaces.
+- name: Check that the mail host token, when given, is a single line
+  ansible.builtin.assert:
+    that:
+      - ntfy_pager_mx1_token_value | string | length == 0 or ntfy_pager_mx1_token_value | string | trim | length > 0
+      - ntfy_pager_mx1_token_value | string is not search('[\r\n]')
+    quiet: true
+    fail_msg: 'NTFY_MX1_TOKEN must be a single line, and not only spaces.'
+  no_log: true
+
 # Section 2 of the runbook: the four NTFY_ lines go into this role's own secrets
 # file, /etc/branchleft/ntfy-pager.env. The runbook wrote them into the
 # monitoring file with grep -v and a mv of a temporary file; here each key is one
@@ -72,6 +83,32 @@
   no_log: true
   diff: false
   when: not ansible_check_mode or ntfy_pager_env_stat.stat.exists
+
+# The mail host's token is written or removed by one rule: given, it is the line; empty, there is no line, so a token that is no longer
+# supplied stops being a grant at the next render of the server config. Nothing
+# here restarts anything: monitoring_stack hashes the file and decides that.
+- name: Write the mail host token line into the pager secrets file when one is given
+  ansible.builtin.lineinfile:
+    path: '{{ ntfy_pager_env_file }}'
+    regexp: '^{{ ntfy_pager_mx1_env_name }}='
+    line: '{{ ntfy_pager_mx1_env_name }}={{ ntfy_pager_mx1_token_value }}'
+    create: false
+  no_log: true
+  diff: false
+  when:
+    - ntfy_pager_mx1_token_value | string | length > 0
+    - not ansible_check_mode or ntfy_pager_env_stat.stat.exists
+
+- name: Remove the mail host token line from the pager secrets file when none is given
+  ansible.builtin.lineinfile:
+    path: '{{ ntfy_pager_env_file }}'
+    regexp: '^{{ ntfy_pager_mx1_env_name }}='
+    state: absent
+  no_log: true
+  diff: false
+  when:
+    - ntfy_pager_mx1_token_value | string | length == 0
+    - not ansible_check_mode or ntfy_pager_env_stat.stat.exists
 
 # Section 3 of the runbook, reduced to the one file this role owns. The project
 # directory is also created by monitoring_stack, with the same owner, group and
