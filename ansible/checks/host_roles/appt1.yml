@@ -13,5 +13,5 @@
 - deploy_slot_keys
 - tenant_onboarding
 - tenant_entry
-- node_exporter
 - tenant_compose
+- node_exporter
