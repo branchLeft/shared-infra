@@ -1,0 +1,45 @@
+---
+# The certificates the owner might supply, made by the openssl program and not by this role, so the
+# role's checks are tried against a different maker. Every key is made in the container and dies
+# with it. `ext` is the extensions, separated by semicolons; `ca` names the fixture that signs it.
+host_tls_identity_prepare_fixtures:
+  - name: client-pin
+    cn: edge1-fixture
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=clientAuth'
+  - name: rogue-client
+    cn: edge1-fixture
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=clientAuth'
+  - name: server-pin
+    cn: demo1
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=serverAuth;subjectAltName=DNS:demo1'
+  - name: other-name-server
+    cn: other
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=serverAuth;subjectAltName=DNS:other'
+  - name: nameless-server
+    cn: demo1
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=serverAuth'
+  - name: server-for-demo1
+    cn: demo1
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=serverAuth;subjectAltName=DNS:demo1'
+  - name: both-usages
+    cn: edge1-fixture
+    days: 800
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=clientAuth,serverAuth'
+  - name: ca-client
+    cn: edge1-fixture
+    days: 800
+    ext: 'basicConstraints=critical,CA:TRUE;keyUsage=critical,digitalSignature,keyCertSign;extendedKeyUsage=clientAuth'
+  - name: short-client
+    cn: edge1-fixture
+    days: 30
+    ext: 'basicConstraints=critical,CA:FALSE;keyUsage=critical,digitalSignature;extendedKeyUsage=clientAuth'
+  - name: issuing-ca
+    cn: fixture-ca
+    days: 800
+    ext: 'basicConstraints=critical,CA:TRUE;keyUsage=critical,keyCertSign'

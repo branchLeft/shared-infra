@@ -1,0 +1,26 @@
+---
+# Reads the kernel's own listing of the two tables the role owns and keeps it as
+# edge_firewall_listing, or as an empty string when either table is not loaded.
+# Other tables on the host (Docker's, fail2ban's) are not read. The listing is the
+# stateless one (-s): counters and limit state change with every packet and would make
+# every run look like drift. check_mode is false because the read changes nothing and
+# later tasks need its result (ANS-10).
+- name: Read the loaded tables the role owns
+  ansible.builtin.command:
+    argv: '{{ item }}'
+  loop:
+    - ['{{ edge_firewall_nft_binary }}', -s, list, table, inet, '{{ edge_firewall_table }}']
+    - ['{{ edge_firewall_nft_binary }}', -s, list, table, ip, '{{ edge_firewall_nat_table }}']
+  register: edge_firewall_listing_result
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Keep the listing, or an empty one when a table is not loaded
+  ansible.builtin.set_fact:
+    edge_firewall_listing: >-
+      {{
+        edge_firewall_listing_result.results | map(attribute='stdout') | join(edge_firewall_newline)
+        if (edge_firewall_listing_result.results | map(attribute='rc') | select('ne', 0) | list | length) == 0
+        else ''
+      }}

@@ -116,6 +116,8 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "backup_restore_state_copy_tenant_endpoint",
         "backup_restore_state_copy_tenant_region",
         "backup_restore_state_copy_tenant_access_key_id",
+        "broker_tunnel_client_demo1_address",
+        "broker_tunnel_client_demo1_host_key",
     ),
     "app1": (
         "website_app1_smtp_host",
@@ -143,6 +145,12 @@ NOT_YET_ROUTED: Final[frozenset[str]] = frozenset()
 # fill. appt1 has no tenant yet, so its tenant list is absent until a tenant is claimed; app1's
 # stacks are required, and an empty answer there still refuses.
 OPTIONAL_BY_HOST: Final[dict[str, frozenset[str]]] = {"appt1": frozenset({STACKS_KEY})}
+
+# Optional inputs (host_inputs_optional_by_host) that the fill never asks for: each is added on
+# its own with --set once the owner turns its role on, and a file without it is complete.
+SET_ONLY: Final = frozenset(
+    {"broker_tunnel_client_demo1_address", "broker_tunnel_client_demo1_host_key"}
+)
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
 # pager keys look in the pager's own file first (the unit loads it later, so it wins), then in
@@ -229,6 +237,9 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "tenant_entry_bind_address": (Source(IPV4, ""),),
     "db_t1_tenant_entry_controller_key": (Source(KEYLINE, ""),),
     "db_t1_tenant_entry_controller_address": (Source(IPV4, ""),),
+    # The broker tunnel's two inputs have no live file: the owner types each once with --set.
+    "broker_tunnel_client_demo1_address": (Source(TYPED, ""),),
+    "broker_tunnel_client_demo1_host_key": (Source(TYPED, ""),),
     "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
 }
 
@@ -763,6 +774,8 @@ def collect(ctx: Context, host: str) -> Collected:
     from_live: list[str] = []
     pending: list[str] = []
     for key in HOSTS[host]:
+        if key in SET_ONLY:
+            continue
         for source in SOURCES[key]:
             if source.kind in (SLOTS, TYPED, ADDRESSES, KEYLINE, IPV4):
                 break

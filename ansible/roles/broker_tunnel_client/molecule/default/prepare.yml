@@ -1,0 +1,14 @@
+---
+# Test scaffolding, not role tasks. host_inputs makes /etc/branchleft first on ops1;
+# this stands in for it.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make /etc/branchleft as host_inputs does
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'

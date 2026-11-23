@@ -1,0 +1,71 @@
+---
+# What the role expects to find on the host, in place of the edge's containers: a stand-in for
+# the docker command line and the files it answers from. The verify play rewrites those files
+# for each case. The directories and names are the scenario's inventory variables
+# (molecule.yml), so this play and the verify play read one value.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the directories the stand-in answers from, one for the Caddy log
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ edge_ban_owner_test_dir }}'
+        - '{{ edge_ban_owner_test_dir }}/fake-root'
+        - '{{ edge_ban_owner_test_dir }}/fake-root/var'
+        - '{{ edge_ban_owner_test_dir }}/fake-root/var/log'
+        - '{{ edge_ban_owner_test_dir }}/fake-root/var/log/caddy'
+
+    # The stand-in is the unit tests' own file, copied from the role so that the test double has
+    # one home. It finds its fake-root beside itself, so it is named as the docker binary.
+    - name: Install the stand-in for the docker command line
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../tests/unit/fake_docker.py'
+        dest: '{{ edge_ban_owner_test_dir }}/docker'
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the stand-in's starting answers in place, no decision and a successful cscli
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ edge_ban_owner_test_dir }}/fake-root/{{ item.name }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - name: cscli.json
+          content: "[]\n"
+        - name: cscli.rc
+          content: "0\n"
+      loop_control:
+        label: '{{ item.name }}'
+
+    # The test container has no capability to make a mount namespace, so a unit that asks for
+    # one (PrivateTmp, ProtectSystem) cannot start in it. The drop-in switches off those two
+    # options for this scenario only; the verify play checks that the shipped unit file still
+    # asks for them. Every other option of the unit applies as shipped.
+    - name: Create the drop-in directory for the service
+      ansible.builtin.file:
+        path: '/etc/systemd/system/{{ edge_ban_owner_test_unit }}.service.d'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Switch off the mount namespace options for this scenario
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          PrivateTmp=false
+          ProtectSystem=no
+          ReadWritePaths=
+        dest: '/etc/systemd/system/{{ edge_ban_owner_test_unit }}.service.d/molecule-container.conf'
+        owner: root
+        group: root
+        mode: '0644'
