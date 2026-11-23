@@ -1245,12 +1245,15 @@ critical alerts only, over self-hosted ntfy). A critical alert goes to
 alerts keep their dead-man route as well, and an on-host critical alert pages
 the phone but never leaves mx1 by email. Warnings never page.
 
-The routes that send to the phone have their own pace: a ten-second group wait,
-a one-minute group interval (so a resolved notice and a new alert arrive within
-about a minute) and a 30-minute repeat while an alert is still firing. They do
-not inherit the root route's one-hour and 24-hour email intervals. The values
-and the reasons are in `monitoring/pageRegister.md`; `pageRegister.test.ts`
-reads them from the rendered route tree, since `amtool` cannot.
+The critical node and the page node have their own pace: a ten-second group
+wait, a one-minute group interval (so a resolved notice and a new alert arrive
+within about a minute) and a 30-minute repeat while an alert is still firing.
+They do not inherit the root route's one-hour and 24-hour email intervals. The
+owned-ban node (`EdgeBanIssued`) keeps main's timings instead, a 30-second group
+wait and a five-minute group interval, and inherits the root's 24-hour repeat;
+the 30-minute repeat does not apply to it. The values and the reasons are in
+`monitoring/pageRegister.md`; `pageRegister.test.ts` reads them from the
+rendered route tree, since `amtool` cannot.
 
 The pager's own death is caught by the external probe every public hostname
 gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical,

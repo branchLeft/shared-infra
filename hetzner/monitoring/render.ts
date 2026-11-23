@@ -1735,9 +1735,11 @@ export function renderAlertmanagerTemplate(
     '    - matchers:',
     '        - severity = "critical"',
     `      receiver: ${PAGE_RECEIVER_NAME}`,
-    // The page timings, not the root's email ones: this node alone sends to
-    // the phone, so a recovery notice and a re-page are not held for an hour
-    // or a day. The email routes below are siblings and keep the slow ones.
+    // The page timings, not the root's email ones: this node sends to the
+    // phone with the page node and the owned-ban node, so a recovery notice
+    // and a re-page are not held for an hour or a day. The owned-ban node
+    // keeps its own, shorter-than-root timings and inherits the 24-hour
+    // repeat. The email routes below are siblings and keep the slow ones.
     ...renderPageTimingLines(6),
     '      continue: true',
     '    - matchers:',
