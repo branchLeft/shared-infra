@@ -1,10 +1,11 @@
 """Pins on the hosts that apply the ci_jump role: edge1 and edge-t (the logical host edget).
 
-The role is one: it writes the jump account's key options and the sshd Match block from one
-destination list, and `molecule/default` proves over a real sshd that a destination not on the list
-is refused. That proof covers every host only if the role has no branch on the host and every jump
-host applies it as a plain role entry. This file holds both, and holds the two data rules the
-pipeline's route rests on (the 2 Nov ruling, ws#2894):
+The role is one: it writes the jump account's key options and the sshd Match block from the
+destination lists (the shared one, and the list a key may have of its own), and
+`molecule/default` proves over a real sshd that a destination not on the list is refused. That
+proof covers every host only if the role has no branch on the host and every jump host applies it
+as a plain role entry. This file holds both, and holds the two data rules the pipeline's route
+rests on (the 2 Nov ruling, ws#2894):
 
 * edge1's list may hold edge-t's public address and never a tenants private address, so the runner
   cannot be sent from edge1 straight to a tenants host and must go on through edge-t;
@@ -91,6 +92,15 @@ def _mapping(value: object) -> dict[str, object]:
 
 def _text_list(value: object) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _key_destinations(values: dict[str, object]) -> list[str]:
+    """The destinations the keys of a host's owner file carry of their own, key by key."""
+    keys = values.get("ci_jump_keys")
+    found: list[str] = []
+    for entry in keys if isinstance(keys, list) else []:
+        found.extend(_text_list(_mapping(entry).get("destinations")))
+    return found
 
 
 def _role_entries(root: Path, host: str) -> list[object]:
@@ -195,7 +205,7 @@ def _data_findings(root: Path) -> list[str]:
     private = set(tenants.values())
 
     edge1 = _owner_values(root, "edge1")
-    for address in _text_list(edge1.get(DESTINATIONS)):
+    for address in [*_text_list(edge1.get(DESTINATIONS)), *_key_destinations(edge1)]:
         try:
             ipaddress.IPv4Address(address)
         except ValueError:
@@ -234,7 +244,7 @@ def _second_hop_findings(root: Path) -> list[str]:
     own = str(edget.get(OWN_ADDRESS) or "")
     names = {ip: name for name, ip in tenants_host_ips(root).items()}
     found: list[str] = []
-    for address in _text_list(edget.get(DESTINATIONS)):
+    for address in [*_text_list(edget.get(DESTINATIONS)), *_key_destinations(edget)]:
         if address == own:
             continue
         name = names.get(address)
@@ -388,6 +398,32 @@ class Sabotage(unittest.TestCase):
             f"{DESTINATIONS}:\n  - '{tenants['edgeT']}'\n",
         )
         self._expect("a tenants private address")
+
+    def test_a_tenants_private_address_in_a_key_s_own_list_on_edge1_is_red(self) -> None:
+        tenants = tenants_host_ips(self.root)
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml",
+            "ci_jump_keys:\n",
+            f"ci_jump_keys:\n  - key: ssh-ed25519 AAAA\n    destinations: ['{tenants['dbT1']}']\n",
+        )
+        self._expect("a tenants private address")
+
+    def test_an_address_in_a_key_s_own_list_on_edget_that_is_no_tenants_host_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edget.yml",
+            "ci_jump_keys:\n",
+            "ci_jump_keys:\n  - key: ssh-ed25519 AAAA\n    destinations: ['192.0.2.7']\n",
+        )
+        self._expect("not a TENANTS_HOST_IPS address")
+
+    def test_a_tenants_host_in_a_key_s_own_list_on_edget_is_green(self) -> None:
+        tenants = tenants_host_ips(self.root)
+        self._edit(
+            f"{OWNER_VARS}/edget.yml",
+            "ci_jump_keys:\n",
+            f"ci_jump_keys:\n  - key: ssh-ed25519 AAAA\n    destinations: ['{tenants['dbT1']}']\n",
+        )
+        self.assertEqual([], problems(self.root))
 
     def test_a_public_address_in_edge1s_list_is_green(self) -> None:
         # 192.0.2.0/24 is documentation space: the stand-in for edge-t's public address.

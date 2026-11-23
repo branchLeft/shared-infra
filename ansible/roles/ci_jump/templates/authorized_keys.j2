@@ -1,3 +1,4 @@
 {% for entry in ci_jump_keys %}
-{{ ci_jump_fixed_options }}{% for destination in ci_jump_destinations %},permitopen="{{ destination }}:{{ ci_jump_port }}"{% endfor %},command="{{ ci_jump_forced_command }}" {{ entry.key.split(' ')[0] }} {{ entry.key.split(' ')[1] }}
+{% set listed = entry.destinations if entry.destinations is defined else ci_jump_destinations %}
+{{ ci_jump_fixed_options }}{% for destination in listed %},permitopen="{{ destination }}:{{ ci_jump_port }}"{% endfor %},command="{{ ci_jump_forced_command }}" {{ entry.key.split(' ')[0] }} {{ entry.key.split(' ')[1] }}
 {% endfor %}

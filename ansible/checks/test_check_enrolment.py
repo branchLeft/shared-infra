@@ -1034,7 +1034,7 @@ class Sabotage(unittest.TestCase):
             "ci_jump_manage_keys: true\n"
             "ci_jump_own_address: 10.0.0.2\n"
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
-            f"ci_jump_keys:\n  - key: {key} c\n"
+            f"ci_jump_keys:\n  - key: {key} c\n  - key: {key} d\n    destinations: [db-t1]\n"
             "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
         )
         self.assertEqual(check(self.root), [])
@@ -1240,19 +1240,39 @@ class Sabotage(unittest.TestCase):
         self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys: nothing")
         self._assert_one("R10 owner_vars/edget.yml: ci_jump_keys must be a list")
 
-    # R10: a ci_jump key entry is the key and nothing else, so a per-key destination list or a
-    # per-key option has no place in the file.
+    # R10: a ci_jump key entry is the key and, at most, the list of destinations that key alone
+    # has. No other per-key field has a place in the file, and an own list is never empty.
     def test_r10_owner_vars_ci_jump_entry_carries_more_than_a_key(self) -> None:
         self._inert_edget()
         self._edit(
             "owner_vars/edget.yml",
             "ci_jump_keys: []",
-            "ci_jump_keys:\n  - key: x\n    destinations: [db-t1]",
+            "ci_jump_keys:\n  - key: x\n    options: [no-pty]",
         )
-        self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry must hold exactly")
+        self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry must hold")
+        self._inert_edget()
+        self._edit(
+            "owner_vars/edget.yml",
+            "ci_jump_keys: []",
+            "ci_jump_keys:\n  - destinations: [db-t1]",
+        )
+        self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry must hold")
         self._inert_edget()
         self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys:\n  - key: 5")
         self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry needs a text key")
+
+    def test_r10_owner_vars_ci_jump_entry_destinations_are_a_non_empty_list_of_text(self) -> None:
+        for value in ("[]", "null", "db-t1", "[db-t1, 5]"):
+            with self.subTest(value=value):
+                self._inert_edget()
+                self._edit(
+                    "owner_vars/edget.yml",
+                    "ci_jump_keys: []",
+                    f"ci_jump_keys:\n  - key: x\n    destinations: {value}",
+                )
+                self._assert_one(
+                    "R10 owner_vars/edget.yml: a ci_jump_keys entry's destinations must be"
+                )
 
     # ops1's owner_vars file holds the step allow-list and the applications image the steps run
     # (wiring ws#2531), and nothing else. The positive control first: the real file passes, and it

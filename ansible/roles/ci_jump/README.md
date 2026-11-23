@@ -3,7 +3,7 @@
 Owns the two things that decide which private hosts the gated Ansible run may reach through a jump
 host: the jump account's root-owned `authorized_keys` file and the sshd drop-in whose `Match User`
 block gives the account its settings. Each key line allows port 22 of the named hosts and nothing
-else, and sshd's own `PermitOpen` for the account carries the same list, so adding a tenant host is
+else, and sshd's own `PermitOpen` for the account carries the union of the keys' lists, so adding a tenant host is
 one reviewed line in the host's `owner_vars` file and a gated run, not a hand edit on the jump
 host. The role works on any jump host: `edge1` and `edge-t`, each with its own
 `owner_vars/HOST.yml`, its own jump account and its own address. Nothing in the role is specific to
@@ -35,11 +35,19 @@ one host.
     then the key type and body, and nothing else (the key's comment is dropped);
   - `/etc/ssh/sshd_config.d/40-branchleft-jump.conf` holds the `Match User` block the private
     jump-host runbook documents (the key file as `AuthorizedKeysFile`, `AuthenticationMethods publickey`,
-    `AllowTcpForwarding local`, `PermitOpen` with the same destinations on port 22, and every
+    `AllowTcpForwarding local`, `PermitOpen` with the union of the keys' destinations on port 22, and every
     other forwarding and tty setting off, `ForceCommand /usr/sbin/nologin`), closed by `Match all`.
-    Both are made from the one list `ci_jump_destinations`, so the key lines' `permitopen` and the
-    block's `PermitOpen` cannot differ; `test_ci_jump_pins.py` proves both templates read that one
-    variable and render the same destinations.
+    Both are made from the same two variables, `ci_jump_destinations` and `ci_jump_keys`, so the key
+    lines' `permitopen` and the block's `PermitOpen` cannot differ; `test_ci_jump_pins.py` proves
+    both templates read only those and render what the module expects.
+  - **A key may have a list of its own.** An entry `{key, destinations}` makes that key's line
+    carry its `destinations` and no other: it reaches those hosts and none that only the shared
+    list holds. An entry with no `destinations` takes the shared `ci_jump_destinations`. sshd's
+    `PermitOpen` for the account cannot differ per key, so it holds the union of every key's list
+    and each key line narrows it to its own; the union adds nothing a key line does not name. A
+    key's own list need not hold the jump host's own address (only the shared list must), and an
+    empty or null one is refused, never read as the shared list. The plan prints each key's
+    wanted and live `permitopen` set by fingerprint.
   - **No path is made from the account's name.** The owner ruled that the account's
     name is not published. A path
     is printed by a lot of tooling, so the two files and the directory are named for the role's
@@ -122,7 +130,7 @@ one host.
   keys, so the role refuses rather than share.
 
 It does not create, edit or lock an account, install a package, or manage a key anywhere but the one
-file, and it takes no destination per key: every key line carries the same destinations. It writes
+file. It writes
 no file but the two above, the directory `/etc/ssh/authorized_keys.d` and the marker, and it
 removes the old hand-made layout only as the migration above says.
 
@@ -142,8 +150,8 @@ host's private inputs file through `host_inputs` and is in no file of this repos
 | `ci_jump_manage_keys`  | `false` | `false`: report only. `true`: guards, write, check, reload, read-back.                                               |
 | `ci_jump_user`         | none    | Optional input. The jump account, from `host_inputs`; never committed or printed. Needed only when the flag is true. |
 | `ci_jump_own_address`  | `''`    | The jump host's own private IPv4 address; it must be a destination.                                                  |
-| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22.                                                        |
-| `ci_jump_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on.                                          |
+| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22. The list of every key that has none of its own.        |
+| `ci_jump_keys`         | `[]`    | `{key}` or `{key, destinations}` entries: public keys, one per entry. Read only when the flag is on.                 |
 
 The port (22), the fixed options (`restrict,port-forwarding`), the forced command, the paths of the
 key file and the drop-in, the name of the sshd service and the accounts other roles own are constants

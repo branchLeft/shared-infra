@@ -6,7 +6,9 @@
   ci_jump_authorized_keys:
     action: report
     owned_accounts: '{{ ci_jump_owned_accounts }}'
-    destinations: '{{ ci_jump_destinations }}'
+    # The owner's list the report compares the host with is every list the owner wrote: the shared
+    # one and each key's own.
+    destinations: "{{ (ci_jump_destinations + (ci_jump_keys | map(attribute='destinations', default=[]) | flatten)) | unique | list }}"
     own_address: '{{ ci_jump_own_address }}'
   register: ci_jump_report
   changed_when: false

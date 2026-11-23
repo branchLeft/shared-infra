@@ -150,8 +150,8 @@ is not loaded there.
   allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
-  list of `{key}` entries with nothing else (a destination list per key is refused: the role
-  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose
+  list of `{key}` entries, each of which may also hold `destinations`, a non-empty list of text
+  (the hosts that key alone reaches); any other field, and an empty or null list, is refused. `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose
   `checks/host_roles/HOST.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the

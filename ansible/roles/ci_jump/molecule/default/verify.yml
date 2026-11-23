@@ -18,6 +18,10 @@
 #   4  the control: with another address on the list the same connection goes through, so the
 #      refusal in phase 1 is the configuration's doing; then the list is put back and it is
 #      refused again
+#   4b a key with a list of its own: the second key is given the unlisted address alone, and then
+#      reaches it and nothing else, while the first key keeps the shared list and no longer reaches
+#      the address the Match block now also permits for the second; the control adds the shared
+#      address to the second key's own list and it goes through, then the list is put back
 #   5  the report, run over the converged host: it names no account
 #   6  the role applied once more in check mode, then the log of every run (the check run of a host
 #      that still had the hand-made layout, the converge, the idempotence run and that check run)
@@ -332,6 +336,108 @@
       ansible.builtin.include_tasks: tasks/ssh_attempt.yml
       vars:
         attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+
+    # Phase 4b. The second key has a list of its own: the unlisted address and nothing else. sshd's
+    # PermitOpen for the account is the union of the two lists, so every address is permitted at
+    # the account's level and each key line is what narrows it to its own.
+    - name: Give the second key a list of its own, the unlisted address alone
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_second_destinations:
+          - '{{ scenario_unlisted }}'
+
+    - name: Read the key file and sshd's answer with the second key on its own list
+      ansible.builtin.command:
+        argv:
+          [/usr/sbin/sshd, -T, -C, 'user={{ scenario_jump_user }},host=x,addr={{ scenario_own }}']
+      register: ci_jump_scenario_verify_sshd_own
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Read the key file with the second key on its own list
+      ansible.builtin.slurp:
+        src: /etc/ssh/authorized_keys.d/branchleft-jump
+      register: ci_jump_scenario_verify_file_own
+      no_log: true
+
+    - name: Assert the second key's line names its own list only and sshd permits the union
+      ansible.builtin.assert:
+        that:
+          - (ci_jump_scenario_verify_file_own.content | b64decode).splitlines() | length == 2
+          - >-
+            (ci_jump_scenario_verify_file_own.content | b64decode).splitlines() | map('trim')
+            | select('search', 'permitopen="' ~ scenario_unlisted ~ ':22",command=') | list | length == 1
+          - >-
+            (ci_jump_scenario_verify_file_own.content | b64decode).splitlines() | map('trim')
+            | select('search', 'permitopen="' ~ scenario_listed ~ ':22"') | list | length == 1
+          - >-
+            ('permitopen ' ~ scenario_listed ~ ':22 ' ~ scenario_own ~ ':22 ' ~ scenario_unlisted ~ ':22')
+            in ci_jump_scenario_verify_sshd_own.stdout_lines
+        quiet: true
+        fail_msg: The key file or sshd's PermitOpen is not what a key with its own list needs.
+
+    - name: Forward to the second key's own address with the second key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: second
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: through
+
+    # The addresses the shared list holds, and sshd's account-level list also permits, are refused
+    # to the second key: its own line does not name them.
+    - name: Forward to the shared list's addresses with the second key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: second
+        attempt_target: '{{ item }}:22'
+        attempt_expect: refused
+      loop:
+        - '{{ scenario_listed }}'
+        - '{{ scenario_own }}'
+
+    # The first key is the one with the shared list: still through to it, and refused the address
+    # that only the second key's line names although sshd's account-level list now holds it.
+    - name: Forward to the shared list with the first key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ item }}:22'
+        attempt_expect: through
+      loop:
+        - '{{ scenario_listed }}'
+        - '{{ scenario_own }}'
+
+    - name: Forward to the second key's own address with the first key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+
+    - name: Put the shared list's first address on the second key's own list
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_second_destinations:
+          - '{{ scenario_unlisted }}'
+          - '{{ scenario_listed }}'
+
+    - name: Forward to that address with the second key, now on its own list
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: second
+        attempt_target: '{{ scenario_listed }}:22'
+        attempt_expect: through
+
+    - name: Put the second key back on the shared list
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+
+    - name: Forward to the second key's former own address with the second key, listed no longer
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: second
         attempt_target: '{{ scenario_unlisted }}:22'
         attempt_expect: refused
 
