@@ -2,7 +2,7 @@
 
 A host in a Hetzner project of its own (demo1) shares no private network with the monitoring host,
 so its exporter is scraped over its public address. That is safe only if the exporter serves TLS and
-refuses every client without a certificate the owner's CA signed, from its very first start. These
+refuses every client without the one pinned client certificate, from its very first start. These
 tests read the role's files and fail in seconds if the exporter could start in plain HTTP, switch
 the certificate check off, be downloaded rather than installed from the Debian archive, or carry
 key material. The Molecule scenario proves the same on a running exporter.

@@ -1,0 +1,22 @@
+---
+# Documentation values only: nothing here is a real value. The release is a
+# test-only copy of five placeholder files, written by prepare.yml, and the
+# scenario points the download URL at it and the pins at its checksums.
+media_backup_test_source_dir: /opt/test-source
+media_backup_source_base_url: file:///opt/test-source
+media_backup_release_files: '{{ media_backup_test_files }}'
+media_backup_test_files:
+  - path: infra/provisioning/scripts/media_backup_weekly.py
+    sha256: 5748e33c8ffdd15595d221975453062595506ec4ad0663f4a470f39ec53b222b
+  - path: infra/provisioning/scripts/media_backup_restore.py
+    sha256: 0ea5f46e9d3e495d596db27054c71f774278f7a989accf3586ae6cf9562c3b21
+  - path: infra/provisioning/scripts/shared_objectstorage.py
+    sha256: 70b83944cdfa1b3335a60f5d2a684048897eac6f6f233fd5697298612017c8c2
+  - path: infra/provisioning/scripts/backup_recipients.py
+    sha256: 962b8928565b7a921b835b14c6f152a0a4f65aecde6c9acb6c1dddd7a0b570a2
+  - path: db/provision/objectstorage.py
+    sha256: e203e886f0d49b81d0d8925a8de14a2c06a718514d4e898db7f2840838d3204d
+media_backup_max_requests_per_second: 25
+
+# Stand-in contents for the files the owner places. Not settings and not keys.
+media_backup_test_placeholder: placeholder text, not a setting and not a key

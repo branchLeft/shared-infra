@@ -1,0 +1,71 @@
+---
+# One refusal case: change one thing, run the step, require the refusal with its own
+# message and the tunnel's files exactly as before, then put the good state back.
+# Every register is reset first, so a case never reads the previous case's result.
+- name: 'Reset the result of the previous case ({{ case.name }})'
+  ansible.builtin.set_fact:
+    demo1_build_tunnel_test_case_failed: false
+    demo1_build_tunnel_test_case_msg: ''
+
+- name: 'Place the case key input ({{ case.name }})'
+  ansible.builtin.copy:
+    content: '{{ case.key | default(demo1_build_tunnel_test_good_key) }}'
+    dest: /etc/branchleft/broker-tunnel/ops1_public_key
+    owner: root
+    group: root
+    mode: "{{ case.mode | default('0600') }}"
+
+- name: 'Plant an earlier sshd drop-in ({{ case.name }})'
+  ansible.builtin.copy:
+    content: '{{ case.plant }}'
+    dest: /etc/ssh/sshd_config.d/40-case.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: case.plant is defined
+
+- name: 'Run the step ({{ case.name }})'
+  block:
+    - name: 'Make the broker tunnel account ({{ case.name }})'
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _broker_tunnel.yml
+  rescue:
+    - name: 'Keep the refusal ({{ case.name }})'
+      ansible.builtin.set_fact:
+        demo1_build_tunnel_test_case_failed: true
+        demo1_build_tunnel_test_case_msg: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: 'Assert the step refused with its own message ({{ case.name }})'
+  ansible.builtin.assert:
+    that:
+      - demo1_build_tunnel_test_case_failed
+      - case.expect in demo1_build_tunnel_test_case_msg
+    fail_msg: 'Case "{{ case.name }}" was not refused with "{{ case.expect }}": {{ demo1_build_tunnel_test_case_msg }}'
+
+- name: 'Read the tunnel files after the case ({{ case.name }})'
+  ansible.builtin.slurp:
+    src: '{{ item }}'
+  loop:
+    - /etc/ssh/branchleft-broker-tunnel/authorized_keys
+    - /etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf
+  register: demo1_build_tunnel_test_case_files
+
+- name: 'Assert the tunnel files are still the golden ones ({{ case.name }})'
+  ansible.builtin.assert:
+    that:
+      - (demo1_build_tunnel_test_case_files.results[0].content | b64decode) == demo1_build_tunnel_test_golden_keys
+      - (demo1_build_tunnel_test_case_files.results[1].content | b64decode) == demo1_build_tunnel_test_golden_dropin
+
+- name: 'Remove the planted drop-in ({{ case.name }})'
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d/40-case.conf
+    state: absent
+
+- name: 'Put the good key input back ({{ case.name }})'
+  ansible.builtin.copy:
+    content: '{{ demo1_build_tunnel_test_good_key }}'
+    dest: /etc/branchleft/broker-tunnel/ops1_public_key
+    owner: root
+    group: root
+    mode: '0600'

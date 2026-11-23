@@ -12,6 +12,7 @@ import {
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
   DB_DUMP_STALE_SECONDS,
+  EDGE_BAN_OWNER_ENABLED,
   ALERTMANAGER_PORT,
   BLACKBOX_EXPORTER_PORT,
   CADDY_METRICS_PORT,
@@ -37,6 +38,7 @@ import {
   renderPrometheusConfig,
 } from './render';
 import { EDGE_RULES, HOST_IPS, INTERNAL_RULES, TENANTS_HOST_IPS } from '@branchleft/hetzner-host';
+import { PAGE_REGISTER } from './pageRegister';
 
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
@@ -956,6 +958,7 @@ describe('the owner_action="true" label', () => {
       .filter((rule) => /\n\s+owner_action: "true"(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
+      'EdgeBanUnowned',
       'HostMemoryPressure',
       'HostCPUSaturated',
       'HostDiskSpaceLow',
@@ -1117,6 +1120,45 @@ describe('the demo wildcard TLS probe hand-off', () => {
     expect(rendered).toContain('scrape_config_files:\n  - /etc/prometheus/demo_tls_probe.yml');
     // The probe is not a static target: its name never appears in the committed config.
     expect(rendered).not.toContain('blackbox_demo_tls');
+  });
+});
+
+describe('the edge ban classifier toggle', () => {
+  const defaultsPath = join(
+    __dirname,
+    '..',
+    '..',
+    'ansible',
+    'roles',
+    'edge_ban_owner',
+    'defaults',
+    'main.yml'
+  );
+
+  it('equals edge_ban_owner_enabled in the role defaults', () => {
+    const found = /^edge_ban_owner_enabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/m.exec(
+      readFileSync(defaultsPath, 'utf8')
+    );
+    expect(
+      found,
+      'ansible/roles/edge_ban_owner/defaults/main.yml must set edge_ban_owner_enabled to true or false'
+    ).not.toBeNull();
+    expect(
+      EDGE_BAN_OWNER_ENABLED,
+      'EDGE_BAN_OWNER_ENABLED in hetzner/monitoring/render.ts must equal ' +
+        `edge_ban_owner_enabled in ansible/roles/edge_ban_owner/defaults/main.yml (${found?.[1]})`
+    ).toBe(found?.[1] === 'true');
+  });
+
+  it('is the mode the committed template is rendered in', () => {
+    expect(renderAlertmanagerTemplate()).toBe(
+      renderAlertmanagerTemplate(PAGE_REGISTER, EDGE_BAN_OWNER_ENABLED)
+    );
+  });
+
+  it('changes the template: the discard route and receiver exist only while the classifier is off', () => {
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, false)).toContain('receiver: discard');
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, true)).not.toContain('discard');
   });
 });
 

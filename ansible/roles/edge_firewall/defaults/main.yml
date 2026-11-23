@@ -1,0 +1,7 @@
+---
+# Monitor mode (false) loads the rules with the input policy accept and logs what the
+# default-drop would refuse; enforce mode (true) makes the input policy drop. The flip is an
+# owner-merged change: checks/check_enrolment.py pins this variable to edge1's play.
+# edge_firewall_nat_source has no default on purpose: it is the estate's subnet and has one
+# home, edge1's play vars (pinned by the same checks).
+edge_firewall_enforce: false

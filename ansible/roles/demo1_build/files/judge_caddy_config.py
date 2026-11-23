@@ -43,7 +43,8 @@ REFUSALS = {
     "http-shape": "The http app holds anything but its servers.",
     "servers": "The config does not hold exactly one server.",
     "server-listen": "The one server does not listen on port 443 alone (plain HTTP).",
-    "server-keys": "The one server holds a key beyond its listen and routes.",
+    "server-keys": "The one server holds a key beyond its listen, routes and errors.",
+    "server-errors": "The server's errors are not the one header-only route (nosniff).",
     "routes": "The one server does not hold exactly one route, the wildcard site.",
     "route-keys": "The route holds a key beyond its match, handle and terminal.",
     "route-match": "The route does not match exactly the wildcard host.",
@@ -62,6 +63,8 @@ REFUSALS = {
     "text-expression": "The candidate uses an expression matcher or a ph( call.",
 }
 
+# The headers the renderer's error block sets, as Caddy adapts them.
+ERROR_HEADERS = {"X-Content-Type-Options": ["nosniff"]}
 PLACEHOLDER = re.compile(r"\{(?:file|env)\.")
 IMPORT_WORD = re.compile(r"\bimport\b")
 # An import of a snippet defined in the text: one bare name and nothing else on the line.
@@ -87,6 +90,26 @@ FILE_READER_WORD = {
 # the one call that reads (CEL allows a space before the bracket); it is not a host name.
 EXPRESSION_WORD = re.compile(r"(?<![\w.-])expression(?![\w.-])")
 PH_CALL = re.compile(r"ph\s*\(")
+
+
+def error_routes(wildcard: str) -> dict[str, object]:
+    """Return the one `errors` value the renderer's site-level handle_errors adapts to.
+
+    The renderer sets X-Content-Type-Options: nosniff on error responses, and Caddy adapts that
+    to a server-level `errors` key holding one route for the wildcard host that does nothing but
+    set that header. The value is compared whole, never walked for what it might not hold: an
+    errors route that proxies, serves a file, rewrites, redirects, responds with a body or sets
+    any other header is a different value and is refused.
+    """
+    header = {"handler": "headers", "response": {"deferred": True, "set": ERROR_HEADERS}}
+    inner = {"handler": "subroute", "routes": [{"handle": [header]}]}
+    outer = {"handler": "subroute", "routes": [{"handle": [inner]}]}
+    route = {"match": [{"host": [wildcard]}], "handle": [outer], "terminal": True}
+    return {"routes": [route]}
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True)
 
 
 def internal_issuer_anywhere(node: object) -> bool:
@@ -226,8 +249,12 @@ def judge(config: object, base: str, token_file: str) -> str | None:
     server = next(iter(servers.values()))
     if not isinstance(server, dict) or server.get("listen") != [":443"]:
         return "server-listen"
-    if set(server) != {"listen", "routes"}:
+    if not {"listen", "routes"} <= set(server) <= {"listen", "routes", "errors"}:
         return "server-keys"
+    # The errors key is accepted only as the one header-only route the renderer emits.
+    # Compared as JSON text, so a 1 where the shape holds true (equal in Python) is not it.
+    if "errors" in server and _canonical(server["errors"]) != _canonical(error_routes(wildcard)):
+        return "server-errors"
     routes = server["routes"]
     if not isinstance(routes, list) or len(routes) != 1:
         return "routes"

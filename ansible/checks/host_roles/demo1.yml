@@ -7,3 +7,6 @@
 - demo1_build
 - demo1_egress_spool
 - spool_path_account
+# node_exporter_public last, so its waiting for the owner's certificate files holds nothing
+# back. demo1 takes the Debian-package exporter, which serves TLS to a verified client certificate only.
+- node_exporter_public

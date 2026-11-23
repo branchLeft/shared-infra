@@ -169,6 +169,19 @@ class SelectionTests(OfflineCase):
         self.assertEqual(after("--cert-oidc-issuer"), "https://token.actions.githubusercontent.com")
         self.assertIn("--deny-self-hosted-runners", argv)
 
+    def test_a_register_entry_in_another_repository_is_verified_against_that_repository(self) -> None:
+        # The repository handed to gh is the one that owns the register's signer, so an image
+        # built outside ghost-platform is not checked against ghost-platform.
+        website = {"ghcr.io/branchleft/ghost-tenant": "branchLeft/website/.github/workflows/ci.yml"}
+        run = Recorder()
+        with mock.patch.object(bd, "ATTESTED_IMAGES", website):
+            bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run)
+        argv = run.calls[0]
+        self.assertEqual(argv[argv.index("--repo") + 1], "branchLeft/website")
+        self.assertEqual(
+            argv[argv.index("--signer-workflow") + 1], "branchLeft/website/.github/workflows/ci.yml"
+        )
+
     def test_the_environment_holds_no_credential_and_no_registry_key(self) -> None:
         run = Recorder()
         bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run)

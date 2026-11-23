@@ -1,0 +1,11 @@
+[Unit]
+Description=Stand-in for the OpenSSH server (test only)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecReload=/bin/true
+
+[Install]
+WantedBy=multi-user.target
