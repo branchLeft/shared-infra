@@ -1166,9 +1166,14 @@ def deploy(
             return
 
         # Before the rollback restarts the unit and the status moves on.
-        diagnosis = restart_diagnosis(stack, run=run)
-        if diagnosis:
-            print(diagnosis, end="", file=sys.stderr)
+        # Any failure here, a closed stderr (BrokenPipeError) included, must not stop the rollback.
+        try:
+            diagnosis = restart_diagnosis(stack, run=run)
+            if diagnosis:
+                print(diagnosis, end="", file=sys.stderr)
+                sys.stderr.flush()
+        except Exception:
+            pass
 
         if previous is None:
             # Nothing to roll back to. The unit's EnvironmentFile for the pin

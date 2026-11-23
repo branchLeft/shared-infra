@@ -18,6 +18,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -370,6 +371,7 @@ class RedactionTests(unittest.TestCase):
 
     SECRET_LINES = {
         "env assignment": "DATABASE_URL=mysql://ghost:hunter2@db/ghost",
+        "unnamed setting": "FOO=hunter2",
         "named secret": "database__connection__password: hunter2",
         "secret flag": "docker login --password hunter2 ghcr.io",
         "bearer": "Authorization: Bearer hunter2hunter2",
@@ -593,6 +595,30 @@ class DeployTests(unittest.TestCase):
         self.assertIn("rolled back to", str(caught.exception))
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(bd.read_current_image(self.env_path()), previous)
+
+    def test_closed_stderr_does_not_stop_the_rollback(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        class ClosedPipe:
+            def write(self, _text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        run = FakeRun(
+            [1, (0, "Exited (1) 2 seconds ago"), 0, 0],
+            diagnosis={"journalctl": "Nov 23 08:45:11 host docker[9]: boom"},
+        )
+        with mock.patch.object(sys, "stderr", ClosedPipe()), self.assertRaises(
+            bd.DeployError
+        ) as caught:
+            self.deploy(VALID_IMAGE, run)
+        self.assertIn("rolled back to", str(caught.exception))
+        self.assertEqual(bd.read_current_image(self.env_path()), previous)
+        self.assertEqual(len(run.calls), 4)
+        self.assertEqual(run.calls[3], ["systemctl", "restart", "branchleft-compose@edge"])
 
     def test_successful_restart_prints_no_diagnosis(self):
         run = FakeRun([0])
