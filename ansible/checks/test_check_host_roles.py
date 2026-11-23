@@ -66,33 +66,40 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 
 # The last pull role in every enrolled playbook. Whatever follows it is the host's own roles.
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-# The roles a real playbook applies after the last pull role, in run order. edge1: host_inputs (the
-# loader goes first, R11), host_baseline, egress_nat (after host_baseline for its Docker and
-# iptables), ci_login, ci_jump (directly after ci_login; it only reports until the owner enables
-# it), deploy_verifier, deploy_tooling, edge_stack (it needs Docker from host_baseline and the
-# compose unit and wrapper deploy_tooling installs), node_exporter, tenant_scrape_tunnel (after the
-# edge stack and node_exporter; its edge1 half only reports until its data is filled),
-# exporters_and_collectors, ntfy_pager, monitoring_stack, then sweego_receiver last (it refuses to
-# run until its secret files exist). app1: host_inputs, host_baseline, breakglass_grant_host,
-# deploy_verifier, website_app1 and publicpress_website_app1 (both after Docker), deploy_tooling and
-# deploy_slot_keys (the slot keys need the wrapper), promote_host (the host applier of the
-# signed-image route, which hands each move to that wrapper), tenant_onboarding, export_bundler,
-# then node_exporter last (so a disk refusal holds nothing else back). db1: host_inputs,
-# host_baseline, deploy_verifier, deploy_tooling, db1_stack, db1_backup_timers, node_exporter,
-# db1_grants (after the timers that deliver the dump programs it checks). ops1: host_inputs,
-# ci_step_login (after host_baseline), breakglass_mint_host, safety_service, safety_channel_key,
-# deploy_verifier, deploy_tooling, control_plane, status_page (it binds the private address, so it
-# follows the drop's role), nextcloud_stack, backup_worker, backup_restore (it reads the worker's
-# variables), control_plane_db (it asserts the directory control_plane makes), node_exporter,
-# mail_collector_inputs, mail_collector, spool_paths (it reads mail_collector's descriptors), then
-# ring_controller_host last so its failure holds nothing back. demo1: host_inputs, then
-# broker_deploy (demo1_build reads what it leaves behind), then demo1_build, demo1_egress_spool and
-# spool_path_account. One test holds the real playbooks to these lists; fixtures start from the pull
-# roles alone.
+# The roles a real playbook applies after the pull roles: host_baseline (this change) and the
+# roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
+# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall
+# (after host_baseline for Docker), egress_nat (after the firewall role: it reads its table),
+# ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
+# edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
+# the deploy tooling installs), then edge1's node_exporter and tenant_scrape_tunnel (after the edge
+# stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring roles
+# (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then sweego_receiver
+# (last of all: it refuses to run until its secret files exist), app1's host_inputs,
+# host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
+# host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
+# order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
+# of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and
+# app1's export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back),
+
+# db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
+# first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
+# (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
+# the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
+# backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
+# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
+# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host,
+# then broker_tunnel_client last of all (inert until the owner seeds it), and demo1's
+# broker_deploy (first: demo1_build reads what it leaves behind), two build roles and
+# spool_path_account. ops1 and db1 also apply
+# deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
+# One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
         "host_inputs",
         "host_baseline",
+        "edge_firewall",
         "egress_nat",
         "ci_login",
         "ci_jump",
@@ -102,6 +109,7 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "tenant_scrape_tunnel",
         "exporters_and_collectors",
+        "edge_ban_owner",
         "ntfy_pager",
         "monitoring_stack",
         "sweego_receiver",
@@ -126,6 +134,7 @@ APPLIED_ON_MAIN = {
         "mail_collector",
         "spool_paths",
         "ring_controller_host",
+        "broker_tunnel_client",
     ],
     "app1": [
         "host_inputs",
@@ -161,7 +170,10 @@ APPLIED_ON_MAIN = {
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
-    "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
+    "edge1": (
+        "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n"
+        "    edge_firewall_nat_source: 10.20.1.0/24\n    edge_firewall_enforce: false\n"
+    ),
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
     "ops1": "    deploy_tooling_host_class: internal\n",
     "db1": "    deploy_tooling_host_class: internal\n",
@@ -443,7 +455,8 @@ class HostRoleLists(unittest.TestCase):
     # edge1 applies the loader first, then the NAT gateway (egress_nat) right after the baseline,
     # whose Docker and iptables its reconciler needs, then the edge stack after the CI login
     # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
-    # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
+    # then the three monitoring roles: the collectors, the edge ban owner (after the collectors,
+    # which create the textfile directory it writes to), the pager, and the monitoring stack last
     # (it hashes the pager's files and decides the one restart of its unit), then the Sweego
     # receiver after all of them, because it refuses to run until the owner has placed its secret
     # files and that refusal must not hold the roles before it back. The edge stack is
@@ -459,6 +472,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "edge_firewall",
                 "egress_nat",
                 "ci_login",
                 "ci_jump",
@@ -468,6 +482,7 @@ class HostRoleLists(unittest.TestCase):
                 "node_exporter",
                 "tenant_scrape_tunnel",
                 "exporters_and_collectors",
+                "edge_ban_owner",
                 "ntfy_pager",
                 "monitoring_stack",
                 "sweego_receiver",
@@ -478,6 +493,12 @@ class HostRoleLists(unittest.TestCase):
         self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
+        self.assertEqual(names.count("edge_firewall"), 1)
+        # The firewall role loads and confirms the masquerade table first; the reconciler that
+        # follows it reads that table and, finding it, inserts no masquerade of its own, so the
+        # order is the control.
+        self.assertLess(names.index("host_baseline"), names.index("edge_firewall"))
+        self.assertLess(names.index("edge_firewall"), names.index("egress_nat"))
         self.assertEqual(names.count("egress_nat"), 1)
         self.assertLess(names.index("host_baseline"), names.index("egress_nat"))
         self.assertLess(names.index("egress_nat"), names.index("ci_login"))
@@ -520,9 +541,10 @@ class HostRoleLists(unittest.TestCase):
                 "mail_collector",
                 "spool_paths",
                 "ring_controller_host",
+                "broker_tunnel_client",
             ],
         )
-        self.assertEqual(names[-1], "ring_controller_host")
+        self.assertEqual(names[-1], "broker_tunnel_client")
         # The step account follows the baseline directly, so no later role's failure holds back
         # the route a step is sent over.
         self.assertEqual(names.index("ci_step_login"), names.index("host_baseline") + 1)

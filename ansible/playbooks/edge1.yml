@@ -1,11 +1,11 @@
 ---
 # edge1: the first host under the gated pull. Two pull roles, in order: the
 # Ansible toolchain the host runs this playbook with, then the trigger that runs it.
-# After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
+# After them, the roles on edge1's list in checks/host_roles/edge1.yml that this playbook wires:
 # the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
 # the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
-# the host baseline, then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
-# is the estate's one gateway, and the switch is pinned to edge1 alone in checks/check_enrolment.py),
+# the host baseline, then the host firewall (edge_firewall, monitor mode; its two values are pinned
+# to edge1 in checks/check_enrolment.py), then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on; pinned there too),
 # the pipeline account the trigger is reached through, then the jump account's key options (ci_jump;
 # it only reports until the owner turns it on), then the deploy
 # tooling (as class gateway, which installs the common targets only), then the edge stack. The
@@ -15,7 +15,9 @@
 # delivery back: the node exporter (node_exporter) and the SNDS collector (exporters_and_collectors), the pager
 # (ntfy_pager), and the monitoring stack, last (monitoring_stack): the stack hashes the pager's
 # secrets file and renderer and decides the one restart of its unit, and the SNDS textfile
-# directory the collectors create should be in place before that restart. The Sweego receiver
+# directory the collectors create should be in place before that restart. The edge ban owner
+# (edge_ban_owner) runs after exporters_and_collectors because the textfile directory exists
+# by then. The Sweego receiver
 # (sweego_receiver) is last of all, for the same reason: it waits until the owner has placed
 # its two secret files and refuses a half-finished placement, and that refusal must not hold the
 # roles before it back.
@@ -35,6 +37,8 @@
     enrolled_host: edge1
     deploy_tooling_host_class: gateway
     egress_nat_gateway_enabled: true
+    edge_firewall_nat_source: 10.20.1.0/24
+    edge_firewall_enforce: false
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edge1.yml'
@@ -53,6 +57,7 @@
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/edge_firewall # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
@@ -62,6 +67,7 @@
     - role: ../roles/node_exporter # noqa: role-name[path]
     - role: ../roles/tenant_scrape_tunnel # noqa: role-name[path]
     - role: ../roles/exporters_and_collectors # noqa: role-name[path]
+    - role: ../roles/edge_ban_owner # noqa: role-name[path]
     - role: ../roles/ntfy_pager # noqa: role-name[path]
     - role: ../roles/monitoring_stack # noqa: role-name[path]
     - role: ../roles/sweego_receiver # noqa: role-name[path]

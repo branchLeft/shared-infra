@@ -1,0 +1,12 @@
+---
+# Runs the broker tunnel step of the role alone: the rest of demo1_build needs what
+# broker_deploy leaves, and the default scenario runs it (where no key is placed, so
+# the step is the stated skip).
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the broker tunnel account
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _broker_tunnel.yml

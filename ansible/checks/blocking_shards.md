@@ -31,9 +31,7 @@ The rules for the list:
   `host_baseline`, `tunnel_account`, `edge_firewall`, `egress_nat` and `deploy_tooling`.
   They stay. A test fails when one of their shards is not listed, and takes any new scenario
   of one of those roles in too. Taking one off needs an owner-approved edit to
-  `LOCKOUT_PATHS` in `test_blocking_shards.py` as well as to the list. `edge_firewall` is
-  named in the test before its role is merged; its shards must be listed in the pull request
-  that adds the role.
+  `LOCKOUT_PATHS` in `test_blocking_shards.py` as well as to the list.
 - A shard goes on the list by a reviewed pull request that cites the failing run that
   tripped it.
 - A shard comes off the list by a pull request that cites five passes in a row of the daily

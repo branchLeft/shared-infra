@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario starts from a host with no program and proves the check-mode plan of it
+# passes (check-fresh, and the plan inside converge.yml), then applies the role for real
+# and verifies what that left. The steps that plan a configured host and repeat the apply
+# are the default scenario's, which runs all eight steps.
+idempotence
+check-configured
+molecule-check

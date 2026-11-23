@@ -1,6 +1,7 @@
 ---
 - host_inputs
 - host_baseline
+- edge_firewall
 - egress_nat
 - ci_login
 - ci_jump
@@ -10,6 +11,7 @@
 - node_exporter
 - tenant_scrape_tunnel
 - exporters_and_collectors
+- edge_ban_owner
 - ntfy_pager
 - monitoring_stack
 - sweego_receiver

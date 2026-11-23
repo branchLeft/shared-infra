@@ -49,6 +49,36 @@
   loop: '{{ db1_backup_timers_recovery_files }}'
   when: not ansible_check_mode
 
+# Check mode skips the two fetches above, so on its own a plan would show no program
+# at all, on a fresh host and on a host whose pinned digest has moved alike (ANS-10).
+# These two tasks say what a real run would fetch: a program that is not on the host,
+# or is there with other bytes than the pinned ones, is reported as a change, which is
+# what get_url reports in a real run. They read the host as a real run does and change
+# nothing. Not a stand-in for the fetch: the real run fetches and checks the digest.
+- name: Look at each program a real run would fetch
+  ansible.builtin.stat:
+    path: '{{ (db1_backup_timers_recovery_dir if item in db1_backup_timers_recovery_files else db1_backup_timers_provision_dir) }}/{{ item }}'
+    follow: false
+    checksum_algorithm: sha256
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db1_backup_timers_provision_files + db1_backup_timers_recovery_files }}'
+  register: db1_backup_timers_fetch_stat
+  when: ansible_check_mode
+
+- name: Report each program a real run would fetch
+  ansible.builtin.debug:
+    msg: >-
+      db1_backup_timers, {{ item.item }}:
+      {{ 'would fetch it, it is not on the host' if not item.stat.exists
+      else ('would fetch it, the bytes on the host are not the pinned ones'
+      if item.stat.checksum != db1_backup_timers_program_sha256[item.item] else 'on the host with the pinned bytes') }}.
+  loop: '{{ db1_backup_timers_fetch_stat.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  changed_when: (not item.stat.exists) or item.stat.checksum != db1_backup_timers_program_sha256[item.item]
+  when: ansible_check_mode
+
 - name: Deliver the dump, prune and binlog-ship units
   ansible.builtin.copy:
     src: 'units/{{ item }}'

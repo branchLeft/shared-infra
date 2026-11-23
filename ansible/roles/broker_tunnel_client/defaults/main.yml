@@ -1,0 +1,6 @@
+---
+# No defaults. The two inputs, broker_tunnel_client_demo1_address and
+# broker_tunnel_client_demo1_host_key, come from host_inputs as optional keys and have no
+# default there (ANS-16): left out of the host's file they are unset, and the role treats
+# unset, like empty, as "not configured" (README, Interface).
+{}

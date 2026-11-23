@@ -16,6 +16,9 @@ argument_specs:
       identity, a bucket or a key, run the installers to install, take the first
       copy or run a drill. It reads backup_worker's bucket, endpoint, region,
       release directory, unit directory and patterns, and declares none of them.
+      It also gives the restore-drill unit an OnFailure= (a drop-in) that starts a
+      unit marking the failure for the monitoring stack's RestoreDrillUnitFailed
+      rule; this takes no input and holds no secret.
     author: branchLeft
     options:
       backup_restore_state_copy_recipient:
