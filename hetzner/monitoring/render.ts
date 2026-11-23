@@ -109,6 +109,13 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
   return ms / 1000;
 }
 
+/**
+ * Seconds after a tier-two match's reporting clock starts before the page
+ * fires: 20 hours, leaving 4 hours of the 24-hour window to act. Set here
+ * rather than inline so a change is one reviewed line.
+ */
+export const REPORTING_CLOCK_ALARM_SECONDS = 72000;
+
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
 
 // The classifier's two ways of going quiet: a last-run time more than 900
@@ -728,6 +735,28 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // The migration replica on db-t1, read through db1's tunnel. Every rule
     // is scoped to expected_up="true" so nothing fires before the tunnel is
     // installed. See render.md#the-replica-tunnel-rule-group.
+    // The reporting clock a tier-two match starts: 24 hours from the moment the
+    // match sealed. The alarm fires REPORTING_CLOCK_ALARM_SECONDS after the
+    // clock starts, so a person is paged before the 24 hours run out. The series
+    // exists only while the clock runs: a recorded report removes it, and a
+    // tier-one freeze never starts one, so neither can fire this rule. Routed
+    // as the page register's tier-two entry, never to the operational digest.
+    // Its metric name is a proposed contract, listed under EXTERNAL_METRICS in
+    // metricCrosscheck.ts, because no producer exports it yet.
+    '  - name: reporting-clock',
+    '    rules:',
+    '      - alert: TierTwoSafetyMatch',
+    `        expr: time() - scanning_storage_reporting_clock_started_timestamp_seconds > ${REPORTING_CLOCK_ALARM_SECONDS}`,
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "A tier-two match on {{ $labels.tenant }} has its reporting clock running with no report recorded."',
+    '          description: >-',
+    '            The reporting clock started when the match sealed and runs for 24',
+    '            hours. It stops only when a person records that the report was',
+    '            made, following the reporting runbook. Act now: the alarm fires',
+    '            before the 24 hours are up.',
+    '',
     '  - name: replica-tunnel',
     '    rules:',
     '      - alert: ReplicaTunnelDown',
