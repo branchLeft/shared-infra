@@ -1,0 +1,11 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is a comment.
+# The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario ends with the tunnel removed, so the host it leaves is the one a first apply
+# starts from, and the steps that run converge again or check a configured host would find an
+# enabled tunnel to make again: they are the default scenario's. The checks of the removal in check
+# mode are made by converge.yml itself, against the enabled host and against the removed one.
+check-fresh
+idempotence
+check-configured
+molecule-check

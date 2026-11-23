@@ -47,6 +47,9 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # Rendered on the host by render_alertmanager_config.py before every start,
+      # from DEMO_WILDCARD_BASE in monitoring.env: an empty scrape list when unset.
+      - ./prometheus/demo_tls_probe.yml:/etc/prometheus/demo_tls_probe.yml:ro
       # The stalwart job's basic_auth password_file. Not in the committed
       # tree: render_alertmanager_config.py writes it from
       # /etc/branchleft/monitoring.env before every start, the same way it

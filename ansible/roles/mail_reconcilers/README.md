@@ -7,11 +7,11 @@ standard sets for a role README (ANS-14).
 
 ## What the role does, and what it does not
 
-On a **plain apply** it makes `/root/mail-provision` (root, 0755) and places nineteen programs
+On a **plain apply** it makes `/root/mail-provision` (root, 0755) and places twenty programs
 from `mail/provision/` in it, each root-owned with mode 0755. It runs none of them, and a
 second plain apply reports no change. On a **step request** it runs one program by its wrapper:
-`configure` runs `40`, `mailboxes` runs `50`, `mint` runs one of `60`, `61`, `62`, `64`, `66`
-and `68`, and `collector` runs `67 --dry-run` and then `67`.
+`configure` runs `40`, `mailboxes` runs `50`, `mint` runs one of `60`, `61`, `62`, `64`, `66`,
+`68` and `69`, and `collector` runs `67 --dry-run` and then `67`.
 
 The programs hold the logic and its idempotence, so the role writes no marker and holds no
 secret. It decides whether a program may run, from what, and what is shown if it fails. It makes
@@ -28,7 +28,7 @@ and both are set on a request's command line, never in an inventory.
 
 - `mail_reconcilers_step`: `configure`, `mailboxes`, `mint` or `collector`.
 - `mail_reconcilers_credential`: for `mint` only, `website`, `blog`, `shim`, `alerting`,
-  `nextcloud` or `zitadel`.
+  `nextcloud`, `zitadel` or `portal`.
 
 The closed lists, paths, modes and patterns are in `vars/main.yml`, so an inventory cannot
 loosen them.
@@ -41,7 +41,7 @@ loosen them.
 
 ## What it changes on a host
 
-- `/root/mail-provision` and the nineteen programs, on every plain apply.
+- `/root/mail-provision` and the twenty programs, on every plain apply.
 - A step changes what its program changes through Stalwart's API; the programs write
   `/root/.stalwart-service-credentials` and `/root/.stalwart-mailbox-credentials`, which the role
   checks and never reads. `configure` and `collector` restart Stalwart when they change

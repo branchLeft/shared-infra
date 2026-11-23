@@ -686,6 +686,23 @@ zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFaili
 is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
 that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
 
+`AppSecFailingOpen` says the edge is serving requests the AppSec checker did not
+inspect (`appsec_fail_open`, `RUNBOOK-edge.md` section 10b). It reads
+`crowdsec_appsec_lapi_requests_failures_total` from the `caddy` job: the Caddy
+bouncer counts every AppSec call that errored or timed out, and serves the
+counter once the rendered Caddyfile sets `enable_caddy_metrics`. CrowdSec's own
+metrics cannot carry this signal -- a stopped CrowdSec has no metrics port, so
+`up{job="crowdsec"}` says the process is gone but not how much traffic went
+through uninspected -- and a log-derived counter would need a log shipper this
+stack does not have. The rule is `increase(...[5m]) > 5` held `for: 10m`, so it
+fires about 15 minutes after the checker stopped and stays silent for a restart
+or a stall under five minutes. It routes as `owner_action` (warning to the
+off-host mailbox), not as a page: the edge is serving and the ban list and
+throttle still hold. It does not count a checker that answers 401 or 500 (also
+fail-open, not a transport failure). Not yet proven in the lab with CrowdSec
+stopped on a running edge: `alert_rules_test.yml` proves the rule, the lab run
+proves the counter moves.
+
 `RateLimitDeclinesSustained` fires only when one key has kept being declined for
 30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
 last more than 20 minutes). An internet scanner that trips the throttle is the
@@ -1180,9 +1197,10 @@ same rule as every host above. Three things are true of them that are not true o
 
 **The tenants network is not the estate's network.** A network does not span hcloud projects and the
 tenants project reuses the estate's address range, so `10.20.1.200`, `.201` and `.210` mean nothing
-to the Prometheus on edge1: its scrape of them fails, quietly, until a path across the two projects
-exists. That path is a separate decision (branchLeft/workspace#1810 follow-up), and no flip below is
-made before it is in place and a query for the host returns `1`. Until then the disk, memory and
+to the Prometheus on edge1, which reads them through a restricted SSH tunnel to edge-t instead
+(branchLeft/workspace#3922, `ansible/roles/tenant_scrape_tunnel`, `hetzner/monitoring/tenantTunnel.ts`):
+its scrape fails, quietly, until that tunnel is applied, and no flip below is made before it is in
+place and a query for the host returns `1`. Until then the disk, memory and
 host-down alerts are proven by promtool only (`alert_rules_test.yml` and `alert_rules_memory_test.yml`,
 grep the host's address): the rules do not select on `host` or `expected_up`, so they evaluate for a
 tenant host the moment its series arrive, and `HostOrServiceDown` waits for the flip.
@@ -1231,6 +1249,8 @@ two. The sixth -- a stopped drain worker -- pages through its own
 Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
+A seventh, the abuse report, is posted by the mail host itself straight to
+the pager (`deliveryPath: 'ntfy_direct'`) and renders no route either.
 
 **The receiver is `ntfy-page`: a webhook to the self-hosted ntfy in this
 stack.** Alertmanager publishes over the stack's own network to
@@ -1252,6 +1272,17 @@ email and the rest of monitoring keep running, and page alerts reach nobody
 until the variables are fixed and the unit restarted. The install and phone
 steps, with the test page and its read-back, are in the ghost-platform-docs
 page `ntfy-pager-install-runbook.md`.
+
+**A report to abuse@ pages the phone through its own grant.** The mail host posts straight to
+the pager, not through Alertmanager. The server config gives the `mx1` machine user one
+publish-only grant on its own topic, `branchleft-abuse`, which the owner's login can read; the
+mail host cannot read it back, cannot write the page topic and has no other access. Its token
+is a fifth, optional line of the same file, `NTFY_MX1_TOKEN`, written by the `ntfy_pager` role
+from the optional input `ntfy_pager_mx1_token`; with none, or a malformed or reused one, the
+renderer drops that one token line, warns by name, and the pager and every other grant go on
+unchanged. On the mail host the `mx1_abuse_page` role polls abuse@ and posts one fixed notice
+(no sender, no message text, no tenant). The steps that make it live, and what good looks like at
+each, are the owner's and are in the pull request that added it.
 
 **Every `severity=critical` alert also pages the phone** (the owner's ruling:
 critical alerts only, over self-hosted ntfy). A critical alert goes to
@@ -1279,6 +1310,30 @@ the reaper, in the change that flips its flag; a rule carrying
 dormant entry reaches no phone. Nothing here is applied to the host: this
 section's change is to the committed register, and the rendered Alertmanager
 config is unchanged until the entry is switched on.
+
+## Responding to the AppSec fail-open alert
+
+`AppSecFailingOpen` fires when the edge serves requests without WAF inspection.
+Caddy waits one second for the CrowdSec AppSec checker, then lets the request
+through (`appsec_timeout 1s`, `appsec_fail_open`; `RUNBOOK-edge.md` section 10b).
+Nothing is down for visitors, so it is a warning routed to the owner's mailbox.
+
+**The signal.** `increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5`,
+held for 10 minutes. The counter is Caddy's, not CrowdSec's: CrowdSec cannot report
+its own absence (stopped, its metrics port is gone), and a log-derived counter would
+need a log shipper the stack does not have.
+
+**Limits.** Only transport failures count (refused connection, timeout). A checker
+answering 401 or 500 also fails open and is not counted; the first request shows
+that misconfiguration. An absent series never fires.
+
+**Timing.** The expression stays true for 5 minutes after the last failure, so the
+alert fires only for an outage of 5 minutes or more: about 15 minutes after a
+stopped checker. A CrowdSec restart or a deploy stays silent.
+
+**Response.** On edge1, `docker ps` shows whether the crowdsec container is running,
+and `docker logs --since 15m crowdsec` says why it is not answering. Bringing it back
+and reading its log is the owner's action.
 
 ## 17. Karma, the incident view
 

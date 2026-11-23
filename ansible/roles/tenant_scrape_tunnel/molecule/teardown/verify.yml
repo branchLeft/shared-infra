@@ -1,0 +1,174 @@
+---
+# Reads the host back after the removal. Nothing in the role's own results is trusted: each check
+# asks the host. The host is the one a first apply starts from, so nothing the two halves wrote is
+# left, the account is gone, the unit is gone from systemd, the forwards no longer listen, and the
+# test sshd still passes its own check, still runs and no longer holds the tunnel's settings. The
+# last check made by converge.yml, in check mode against this host, made nothing, which the absent
+# paths and the absent account show.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    tenant_scrape_tunnel_verify_scenario_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}"
+    tenant_scrape_tunnel_verify_gone_paths:
+      - '{{ scenario_key_dir }}'
+      - '{{ scenario_key_dir }}/id_ed25519'
+      - '{{ scenario_key_dir }}/id_ed25519.pub'
+      - '{{ scenario_key_dir }}/known_hosts'
+      - '{{ scenario_key_dir }}/target.env'
+      - '{{ scenario_unit_file }}'
+      - '{{ scenario_authorized_keys_dir }}'
+      - '{{ scenario_authorized_keys_file }}'
+      - '{{ scenario_dropin_file }}'
+  tasks:
+    # ---- The account and the files ------------------------------------------------
+    - name: Look for the tunnel account
+      ansible.builtin.command:
+        argv: [getent, passwd, '{{ scenario_user }}']
+      register: tenant_scrape_tunnel_verify_account
+      changed_when: false
+      failed_when: tenant_scrape_tunnel_verify_account.rc not in [0, 2]
+
+    - name: Assert the tunnel account is gone
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_account.rc == 2
+        quiet: true
+
+    - name: Look for what the two halves wrote
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop: '{{ tenant_scrape_tunnel_verify_gone_paths }}'
+      register: tenant_scrape_tunnel_verify_gone
+
+    - name: Assert none of it is left
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        quiet: true
+        fail_msg: '{{ item.item }} is still there after the removal.'
+      loop: '{{ tenant_scrape_tunnel_verify_gone.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look for a path made from the account's name
+      ansible.builtin.command:
+        argv: [find, /etc, /usr/local, -iname, '*{{ scenario_user }}*']
+      register: tenant_scrape_tunnel_verify_named
+      changed_when: false
+
+    - name: Assert no path holds the account's name
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_named.stdout == ''
+        quiet: true
+
+    # The connection the scraper host's unit held open to the account was open when its removal
+    # began, and a session's process keeps the title it was started with after the account is gone.
+    # The scraper host's unit is stopped by now and the connection is not remade, so a retry gives
+    # a connection that was only closing time to go.
+    - name: Look for a process of a session of the former tunnel account
+      ansible.builtin.command:
+        argv: [pgrep, -f, 'sshd: {{ scenario_user }}']
+      register: tenant_scrape_tunnel_verify_session
+      changed_when: false
+      failed_when: tenant_scrape_tunnel_verify_session.rc not in [0, 1]
+      until: tenant_scrape_tunnel_verify_session.rc == 1
+      retries: 10
+      delay: 1
+
+    # ---- The unit ---------------------------------------------------------------
+    - name: Read how systemd sees the unit
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - '{{ scenario_unit_name }}'
+          - --property=LoadState
+          - --property=ActiveState
+      register: tenant_scrape_tunnel_verify_unit
+      changed_when: false
+
+    - name: Assert systemd no longer knows the unit and it is not running
+      ansible.builtin.assert:
+        that:
+          - "'LoadState=not-found' in tenant_scrape_tunnel_verify_unit.stdout_lines"
+          - "'ActiveState=inactive' in tenant_scrape_tunnel_verify_unit.stdout_lines"
+        quiet: true
+
+    - name: Assert no forward listens on the private address any more
+      ansible.builtin.wait_for:
+        host: '{{ scenario_bind_address }}'
+        port: '{{ item.local_port }}'
+        state: stopped
+        timeout: 15
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.local_port }}'
+
+    # ---- sshd -------------------------------------------------------------------
+    - name: Check the whole sshd configuration
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+
+    - name: Read the state of the sshd service
+      ansible.builtin.command:
+        argv: [systemctl, is-active, ssh]
+      register: tenant_scrape_tunnel_verify_sshd_state
+      changed_when: false
+
+    - name: Wait for sshd to still listen on the address the scraper host dialled
+      ansible.builtin.wait_for:
+        host: '{{ scenario_endpoint }}'
+        port: 22
+        timeout: 15
+
+    - name: Read the effective sshd settings for the former tunnel account
+      ansible.builtin.command:
+        argv: [sshd, -T, -C, 'user={{ scenario_user }},host=localhost,addr=127.0.0.1']
+      register: tenant_scrape_tunnel_verify_sshd
+      changed_when: false
+
+    - name: Assert sshd applies none of the tunnel's settings to that name
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_sshd_state.stdout == 'active'
+          - tenant_scrape_tunnel_verify_sshd.stdout_lines | select('search', 'branchleft-tenant-scrape') | list == []
+          - "'forcecommand /usr/sbin/nologin' not in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - "'permitlisten none' not in tenant_scrape_tunnel_verify_sshd.stdout_lines"
+          - tenant_scrape_tunnel_verify_sshd.stdout_lines | select('match', '^permitopen 10[.]20[.]1[.]') | list == []
+        quiet: true
+
+    # ---- The log ------------------------------------------------------------------
+    # Both removals and both check runs are in this log (molecule.yml sets verbosity 3 and the
+    # path), so a task that handled the private key without no_log would print it here.
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path).partition('PLAY [Prepare the instance]')[2] }}"
+      no_log: true
+
+    - name: Assert the log holds the output of both removals and of the check runs
+      ansible.builtin.assert:
+        that:
+          - item.needle in tenant_scrape_tunnel_verify_log
+        fail_msg: 'The log lacks {{ item.what }}, so an empty scan would prove nothing.'
+        quiet: true
+      loop:
+        - what: the report of the target host's removal
+          needle: 'tenant_scrape_tunnel teardown: tenant_scrape_tunnel_scraper_public_key is empty'
+        - what: the report of the scraper host's removal
+          needle: 'tenant_scrape_tunnel teardown: tenant_scrape_tunnel_target_host_key and'
+        - what: the name of the task that removes the unit and the key pair
+          needle: ' : Remove the unit, its files and the key pair'
+        - what: a diff header from a check run
+          needle: '+++ after'
+      loop_control:
+        label: '{{ item.what }}'
+
+    - name: Assert no private key reached the log
+      ansible.builtin.assert:
+        that:
+          - "'-----BEGIN OPENSSH PRIVATE KEY-----' not in tenant_scrape_tunnel_verify_log"
+        quiet: true

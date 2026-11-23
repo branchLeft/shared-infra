@@ -21,6 +21,14 @@ export interface PrivateUpstream {
   port: number;
 }
 
+/** Where a Ghost site's uploads are stored: an S3-compatible host and one bucket on it. */
+export interface SiteMedia {
+  /** The object-storage host, a bare hostname (path-style: the bucket is the first path segment). */
+  host: string;
+  /** The tenant's own bucket, `branchleft-media-<slug>`. */
+  bucket: string;
+}
+
 export interface EdgeSite {
   /** This site's identifier in generated config and log output. */
   name: string;
@@ -60,6 +68,16 @@ export interface EdgeSite {
    * and what it leaves alone: `sites.md` section "What the site runs".
    */
   backend?: 'ghost' | 'nextcloud' | 'other';
+  /**
+   * A `ghost` site's media bucket. The edge then answers Ghost's upload paths
+   * (`/content/images/`, `/content/media/`, `/content/files/`) itself, reading
+   * the object from this bucket, so a reader's browser never contacts the
+   * storage host. Absent: those paths reach Ghost, whose S3 adapter redirects
+   * the browser to the bucket. The bucket name is derived from the tenant slug
+   * in `branchLeft/ghost-platform` and copied here by hand, like the port and
+   * the body ceiling. Why: `hetzner/edge/render.md`, "Tenant media".
+   */
+  media?: SiteMedia;
   /**
    * A signed-in session the edge verifies with the site itself before the
    * CrowdSec bouncer and AppSec. A request whose session the site confirms is

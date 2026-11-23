@@ -1,0 +1,102 @@
+---
+# The full enable, then the removal. The enable is the default scenario's own converge, imported so
+# it has one home. Then the removal is run in check mode against the enabled host and the host is
+# read to show the check removed nothing, then run for real, then run in check mode once more
+# against the host it left. verify.yml reads what the real run left, which also shows that the last
+# check made nothing. The check runs are second ansible-playbook runs with the command-line
+# --check, as the default scenario's prepare.yml makes its own, because the role's guards read the
+# flag and not a play keyword; they inherit Molecule's environment, so they log to the same file.
+- name: Enable both halves
+  ansible.builtin.import_playbook: ../default/converge.yml
+
+- name: Check the removal against the enabled host
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run remove.yml in check mode with a diff against the enabled host
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python }}'
+          - -m
+          - ansible.cli.playbook
+          - --inventory
+          - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+          - --check
+          - --diff
+          - '{{ playbook_dir }}/remove.yml'
+      changed_when: false
+
+# The check run prepare.yml makes of this whole file finds the host not yet enabled, so this play
+# reads nothing then.
+- name: Read the enabled host after the check
+  hosts: all
+  gather_facts: false
+  vars:
+    tenant_scrape_tunnel_scenario_enabled_paths:
+      - '{{ scenario_key_dir }}/id_ed25519'
+      - '{{ scenario_key_dir }}/id_ed25519.pub'
+      - '{{ scenario_key_dir }}/known_hosts'
+      - '{{ scenario_key_dir }}/target.env'
+      - '{{ scenario_unit_file }}'
+      - '{{ scenario_authorized_keys_file }}'
+      - '{{ scenario_dropin_file }}'
+  tasks:
+    - name: Read the host
+      when: not ansible_check_mode
+      block:
+        # A forward that listens shows a connection is open, which is what the removal of the
+        # target host's account must end. The wait is the default scenario's own.
+        - name: Wait for the tunnel's forwards to listen on the private address
+          ansible.builtin.include_tasks: ../default/tasks/wait_for_forwards.yml
+
+        - name: Look for what the enabled host holds
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            get_checksum: false
+          loop: '{{ tenant_scrape_tunnel_scenario_enabled_paths }}'
+          register: tenant_scrape_tunnel_scenario_held
+
+        - name: Look for the tunnel account
+          ansible.builtin.command:
+            argv: [getent, passwd, '{{ scenario_user }}']
+          register: tenant_scrape_tunnel_scenario_account
+          changed_when: false
+
+        - name: Read how systemd sees the unit
+          ansible.builtin.command:
+            argv: [systemctl, show, '{{ scenario_unit_name }}', --property=ActiveState]
+          register: tenant_scrape_tunnel_scenario_active
+          changed_when: false
+
+        - name: Assert the check run removed nothing
+          ansible.builtin.assert:
+            that:
+              - >-
+                tenant_scrape_tunnel_scenario_held.results | map(attribute='stat.exists') | select | list | length
+                == tenant_scrape_tunnel_scenario_enabled_paths | length
+              - tenant_scrape_tunnel_scenario_account.rc == 0
+              - "'ActiveState=active' in tenant_scrape_tunnel_scenario_active.stdout_lines"
+            quiet: true
+            fail_msg: The check run of the removal changed the enabled host.
+
+- name: Remove the tunnel from both halves
+  ansible.builtin.import_playbook: remove.yml
+
+- name: Check the removal against the host it left
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run remove.yml in check mode with a diff against the removed host
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python }}'
+          - -m
+          - ansible.cli.playbook
+          - --inventory
+          - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+          - --check
+          - --diff
+          - '{{ playbook_dir }}/remove.yml'
+      changed_when: false
