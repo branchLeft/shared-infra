@@ -48,7 +48,9 @@ class FlushOrder(unittest.TestCase):
 
     def test_there_is_one_flush_and_it_follows_both_includes(self) -> None:
         flushes = _indices(_is_flush)
-        self.assertEqual(len(flushes), 1, "tasks/main.yml must hold exactly one flush_handlers task")
+        self.assertEqual(
+            len(flushes), 1, "tasks/main.yml must hold exactly one flush_handlers task"
+        )
         isolation_at = _includes(ISOLATION)[0]
         watch_at = _includes(WATCH)[0]
         self.assertGreater(
