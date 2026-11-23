@@ -63,6 +63,11 @@ AppSec verdict is bounded (`appsec_timeout`) and then waived
 a stopped CrowdSec leaves the last decisions in force rather than refusing
 traffic. `render.test.ts` pins each of those three.
 
+The bouncer's own counters are served on the Caddy metrics listener
+(`enable_caddy_metrics`, also pinned in `render.test.ts`), because a waived
+verdict is otherwise invisible: `crowdsec_appsec_lapi_requests_failures_total`
+is what `AppSecFailingOpen` in `hetzner/monitoring` reads.
+
 ## rateLimit
 
 The general per-IP page-serving throttle. `off` renders no general
