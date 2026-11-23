@@ -1,0 +1,10 @@
+---
+# The three values the operator's data commit fills in, each empty until then. Empty means the
+# feature is off (see meta/argument_specs.yml): the scraper host only makes its key and prints
+# the public halves, and the target host makes nothing. Emptied again after they were filled, they
+# remove what was installed (README.md, "Turning the tunnel off"). All three are public data: a public
+# key, a host's public key and a DNS name or address. README.md, "Turning the tunnel on", says how
+# they are filled.
+tenant_scrape_tunnel_scraper_public_key: ''
+tenant_scrape_tunnel_target_host_key: ''
+tenant_scrape_tunnel_target_endpoint: ''

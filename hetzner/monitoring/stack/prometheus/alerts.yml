@@ -95,7 +95,7 @@ groups:
             than the literal address.
 
       - alert: EdgeBanIssued
-        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0
+        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() ((max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent_over_time(edge_ban_owner_last_run_timestamp_seconds[10m])))
         labels:
           severity: page
         annotations:
@@ -103,11 +103,70 @@ groups:
           description: >-
             A banned address gets 403 from every site on edge1 until the ban
             ends (10 minutes for a first ban, up to 4 hours for a repeat).
-            If it is you: from a network that is not banned, or over SSH to
-            edge1, `cscli decisions list` shows the ban and
+            This page means the address is one of yours: one that made a
+            verified Ghost staff request through the edge in the last 30
+            days, or a range holding one. A decision_id label, when there is
+            one, is the CrowdSec decision ID, so each owned ban is its own
+            alert. It also pages for every ban while the classifier is more
+            than 15 minutes stale or has reported nothing for 10 minutes,
+            when nothing says whose they are.
+            From a network that is not banned, or over SSH to edge1,
+            `cscli decisions list` shows the ban and
             `cscli decisions delete --ip ADDRESS` lifts it. The reason is the
             CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says
             what each one reads.
+
+      - alert: EdgeBanUnowned
+        expr: sum by (reason) (edge_ban_owned{owned="false"}) > 0
+        labels:
+          severity: warning
+          owner_action: "true"
+        annotations:
+          summary: "The edge is banning {{ $value }} other address(es), by {{ $labels.reason }}."
+          description: >-
+            None of them is an address that made a verified Ghost staff
+            request through the edge in the last 30 days, so this is email
+            only. If one is yours, `cscli decisions list` on edge1 shows the
+            ban and `cscli decisions delete --ip ADDRESS` lifts it. The
+            reason is the CrowdSec scenario that decided.
+
+      - alert: EdgeBanOwnerStale
+        expr: (max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent(edge_ban_owner_last_run_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The edge ban classifier has not reported for over 15 minutes."
+          description: >-
+            Until it runs again every ban pages, owned or not. On edge1,
+            `systemctl status branchleft-edge-ban-owner.timer` and
+            `journalctl -u branchleft-edge-ban-owner` say why. A failed
+            `cscli` query leaves the last file in place, so three missed
+            runs raise this.
+
+      - alert: AppSecFailingOpen
+        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+          owner_action: "true"
+        annotations:
+          summary: "The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes."
+          description: >-
+            Caddy asked the CrowdSec AppSec checker to inspect a request,
+            got no answer inside one second, and served the request
+            anyway (appsec_fail_open). This is designed behaviour, so
+            nothing is down for visitors, but every site on edge1 is
+            running without WAF inspection while it lasts. On edge1,
+            `docker ps` shows whether the crowdsec container is running
+            and `docker logs --since 15m` on it says why it is not
+            answering; RUNBOOK-edge.md section 10b describes the
+            fail-open behaviour. The alert clears 5 minutes after the
+            last failure,
+            once the 5-minute window holds none. The counter is
+            crowdsec_appsec_lapi_requests_failures_total on the caddy
+            scrape job; it counts refused connections and timeouts, not
+            a checker that answers 401 or 500.
 
       - alert: HostMemoryPressure
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75
@@ -179,6 +238,20 @@ groups:
             in branchLeft/ghost-platform carries the rotation.
             for: 10m rather than 5m because a MySQL restart during a db
             stack deploy produces mysql_up 0 legitimately for a minute or two.
+
+  - name: reporting-clock
+    rules:
+      - alert: TierTwoSafetyMatch
+        expr: time() - scanning_storage_reporting_clock_started_timestamp_seconds > 72000
+        labels:
+          severity: page
+        annotations:
+          summary: "A tier-two match on {{ $labels.tenant }} has its reporting clock running with no report recorded."
+          description: >-
+            The reporting clock started when the match sealed and runs for 24
+            hours. It stops only when a person records that the report was
+            made, following the reporting runbook. Act now: the alarm fires
+            before the 24 hours are up.
 
   - name: replica-tunnel
     rules:
@@ -498,6 +571,47 @@ groups:
             On ops1, read journalctl -u branchleft-control-plane-backup.service
             for the reason; a run by hand with systemctl start clears it once
             it ships. The previous proven copies are still on the host.
+
+      - alert: BinlogPullGap
+        expr: >-
+          binlog_pull_gap_logs{host="ops1"} > 0 or binlog_pull_unshipped_logs{host="ops1"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The tenant database host's binary logs on backup copy 1 have a gap or a log not yet shipped."
+          description: >-
+            binlog_pull_gap_logs counts sequence numbers missing from the
+            shipped series and binlog_pull_unshipped_logs counts closed logs
+            the database host holds that the last pull did not ship. Either
+            above zero for 30 minutes, two pull periods, means a log failed to
+            fetch, was cut short, or could not be put, and the next pull did
+            not fix it. A restore to a time inside the missing log cannot be
+            replayed. On ops1, read journalctl -u branchleft-binlog-pull.service
+            and run the program's check command, which names the sequence
+            numbers. binlog_pull_lost_logs above zero means the server no
+            longer holds a missing log, so a later pull cannot fill it: take a
+            fresh dump and restore from that instead. Warning, never page: the
+            database host keeps its own binary logs for 7 days.
+
+      - alert: BinlogPullStale
+        expr: >-
+          time() - binlog_pull_last_success_timestamp_seconds{host="ops1"} > 3600
+        labels:
+          severity: warning
+        annotations:
+          summary: "The binary-log pull from the tenant database host has not shipped everything for over an hour."
+          description: >-
+            binlog_pull_last_success_timestamp_seconds is written on ops1 by
+            the pull after a run that shipped every closed log. The timer
+            fires every 15 minutes and the unit is stopped at 10, so two
+            healthy successes are under 25 minutes apart. 3600s (1h) fires
+            after three runs in a row have failed or not run, and unlike
+            BinlogPullGap it also sees a pull that cannot reach the database
+            host at all. On ops1, read journalctl -u branchleft-binlog-pull.service;
+            a stopped timer shows in systemctl list-timers. Warning, never
+            page. Nothing fires before the first success is written, so a
+            timer that has never run is not seen by this rule.
   - name: compose-units
     rules:
       - alert: ComposeUnitRestartLoop

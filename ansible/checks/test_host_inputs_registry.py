@@ -293,6 +293,7 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_watcher_token",
                     "ntfy_pager_owner_password_hash",
                     "ntfy_pager_machine_password_hash",
+                    "ntfy_pager_mx1_token",
                     "ci_jump_user",
                 ],
                 "edget": ["ci_jump_user"],
@@ -317,6 +318,8 @@ class RealTree(unittest.TestCase):
                     "backup_restore_state_copy_tenant_endpoint",
                     "backup_restore_state_copy_tenant_region",
                     "backup_restore_state_copy_tenant_access_key_id",
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
                 ],
                 "db1": [
                     "db1_stack_exporter_password",
@@ -330,18 +333,26 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_password",
                     "deploy_slot_keys_slots",
                 ],
+                "mx1": ["mx1_abuse_page_token"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
 
-    def test_the_only_optional_input_is_the_jump_accounts_name(self) -> None:
+    def test_the_optional_inputs_are_pinned_per_host(
+        self,
+    ) -> None:
         # Pinned: an input the file may leave out is a role that runs without it, so each
         # addition is a decision that shows here. Every other input is required.
         self.assertEqual(
             optional_of(ROOT / "ansible"),
             {
-                "edge1": ["ci_jump_user"],
+                "edge1": ["ntfy_pager_mx1_token", "ci_jump_user"],
+                "ops1": [
+                    "broker_tunnel_client_demo1_address",
+                    "broker_tunnel_client_demo1_host_key",
+                ],
                 "edget": ["ci_jump_user"],
+                "mx1": ["mx1_abuse_page_token"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
         )
@@ -402,13 +413,15 @@ class Mutations(unittest.TestCase):
             "nextcloud_stack",
             "backup_worker",
             "backup_restore",
+            "mx1_abuse_page",
             "broker_deploy",
+            "broker_tunnel_client",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "edget", "ops1", "demo1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1", "mx1", "demo1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -473,16 +486,17 @@ class Mutations(unittest.TestCase):
     def test_an_optional_name_that_is_not_in_the_hosts_row_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/vars/main.yml",
-            "  edge1:\n    - ci_jump_user\n  edget:",
-            "  edge1:\n    - ci_jump_user\n    - monitoring_stack_smtp_password_x\n  edget:",
+            "  edge1:\n    - ntfy_pager_mx1_token\n    - ci_jump_user\n  edget:",
+            "  edge1:\n    - ntfy_pager_mx1_token\n    - ci_jump_user\n"
+            "    - monitoring_stack_smtp_password_x\n  edget:",
         )
         self._expect("monitoring_stack_smtp_password_x is not in the host's row")
 
     def test_an_optional_host_with_no_row_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/vars/main.yml",
-            "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  appt1:\n    - ci_jump_user\n\n# A value",
+            "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  mx1:\n    - mx1_abuse_page_token\n  appt1:\n    - ci_jump_user\n\n# A value",
         )
         self._expect("optional appt1: the host has no row")
 
@@ -491,8 +505,9 @@ class Mutations(unittest.TestCase):
         # it would stop the play, so the plan would fail the way the missing key did.
         self._edit(
             "roles/host_inputs/vars/main.yml",
-            "  edget:\n    - ci_jump_user\n\n# A value",
-            "  edget:\n    - ci_jump_user\n  db1:\n    - db1_stack_exporter_password\n\n# A value",
+            "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  mx1:\n    - mx1_abuse_page_token\n"
+            "  db1:\n    - db1_stack_exporter_password\n\n# A value",
         )
         self._expect("db1_stack_exporter_password is optional but role db1_stack requires it")
 

@@ -4,10 +4,20 @@ import type { EdgeSite } from '../../siteTypes';
 import {
   PAGE_RECEIVER_NAME,
   PAGE_REGISTER,
+  holdEdgeBanOwnerStale,
+  renderDiscardReceiverBlock,
+  renderEdgeBanOwnerStaleDiscardRoute,
+  renderOwnedEdgeBanRoute,
   renderPageReceiverBlock,
   renderPageRoute,
   type PageRegisterEntry,
 } from './pageRegister';
+import {
+  hostsScrapedDirectly,
+  TENANT_TUNNEL_BIND_ADDRESS,
+  TENANT_TUNNEL_TARGETS,
+  type TunnelledHost,
+} from './tenantTunnel';
 
 /**
  * Renders the monitoring stack's Prometheus scrape configuration and alert
@@ -105,7 +115,37 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
   return ms / 1000;
 }
 
+/**
+ * Seconds after a tier-two match's reporting clock starts before the page
+ * fires: 20 hours, leaving 4 hours of the 24-hour window to act. Set here
+ * rather than inline so a change is one reviewed line.
+ */
+export const REPORTING_CLOCK_ALARM_SECONDS = 72000;
+
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
+
+// The classifier's two ways of going quiet: a last-run time more than 900
+// seconds old (three timer periods), or no such series at all. `max` drops
+// the series' own labels so both branches are the same unlabelled alert and a
+// series appearing or vanishing does not restart `for`. The stale alert
+// reads the series as absent at once (its `for` is the hold); the
+// page-everything fallback reads it as absent only when no sample has been
+// seen for ten minutes, so one lost scrape does not page every ban.
+const EDGE_BAN_CLASSIFIER_LAST_RUN = 'edge_ban_owner_last_run_timestamp_seconds';
+const EDGE_BAN_CLASSIFIER_OLD = `max(time() - ${EDGE_BAN_CLASSIFIER_LAST_RUN}) > 900`;
+const EDGE_BAN_CLASSIFIER_STALE = `(${EDGE_BAN_CLASSIFIER_OLD}) or absent(${EDGE_BAN_CLASSIFIER_LAST_RUN})`;
+const EDGE_BAN_CLASSIFIER_STALE_HELD = `(${EDGE_BAN_CLASSIFIER_OLD}) or absent_over_time(${EDGE_BAN_CLASSIFIER_LAST_RUN}[10m])`;
+
+/**
+ * Whether the edge_ban_owner role is installed on edge1: it must equal
+ * `edge_ban_owner_enabled` in `ansible/roles/edge_ban_owner/defaults/main.yml`,
+ * and `render.test.ts` fails when they differ. While false there is no
+ * classifier, so `EdgeBanOwnerStale` would fire for ever and the Alertmanager
+ * template discards it instead of paging; every ban still pages through the
+ * fallback. The rules are the same either way. Flip both in one commit and
+ * run `pnpm run render`.
+ */
+export const EDGE_BAN_OWNER_ENABLED = false;
 
 /**
  * db1's own backup freshness rules select on the `host` label its node
@@ -129,6 +169,14 @@ export const DB_BINLOG_ABSENT_FOR = '1h';
  */
 const OPS1_SERIES = 'host="ops1"';
 export const CONTROL_PLANE_BACKUP_STALE_SECONDS = 129600;
+/**
+ * The tenant database host's binary-log pull (ansible/roles/binlog_pull) runs on ops1 every 15m and its
+ * unit is stopped at 10m, so a healthy gap between two clean runs is under 25m. 1h is three runs in a
+ * row failed or missed. A gap or an unshipped log is held for 30m, two runs: the next pull ships a log
+ * that failed once, so one failed run is not a gap yet.
+ */
+export const BINLOG_PULL_STALE_SECONDS = 3600;
+export const BINLOG_PULL_GAP_FOR = '30m';
 
 /**
  * The scanner series reach Prometheus through a host's node_exporter textfile
@@ -273,6 +321,23 @@ function nodeTarget(host: MonitoredHost): string {
   return `      - targets: ['${address}']\n        labels: ${targetLabels(host)}`;
 }
 
+/** One tunnel's target on edge1's private address: its local port, labelled as the direct row would be. */
+function tunnelTarget(tunnel: TunnelledHost): string {
+  const address = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return `      - targets: ['${address}']\n        labels: ${targetLabels(tunnel)}`;
+}
+
+/** Rewrites a tunnel's local address back to the tenant host's own exporter address, so `instance` matches a direct scrape. */
+function tunnelRelabelRule(tunnel: TunnelledHost): string[] {
+  const localAddress = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return [
+    '      - source_labels: [__address__]',
+    `        regex: '${localAddress.replace(/\./g, '\\.')}'`,
+    '        target_label: instance',
+    `        replacement: '${tunnel.address}:${NODE_EXPORTER_PORT}'`,
+  ];
+}
+
 /** Every hostname in the registry, in registry order -- both a site's serving
  * hostnames and its redirect sources, since a redirect is still a public
  * endpoint someone can hit and expect a 2xx-after-redirect chain from. */
@@ -288,7 +353,10 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
   const targets = blackboxTargets(sites);
-  const nodeTargets = MONITORED_NODE_HOSTS.map(nodeTarget).join('\n');
+  const nodeTargets = [
+    ...hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(nodeTarget),
+    ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
+  ].join('\n');
 
   return `${[
     ...GENERATED_BANNER,
@@ -303,6 +371,11 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '',
     'rule_files:',
     '  - /etc/prometheus/alerts.yml',
+    '',
+    '# The demo wildcard TLS probe: rendered on the host from monitoring.env, see',
+    '# stack/render_alertmanager_config.py. An empty list until its base is set.',
+    'scrape_config_files:',
+    '  - /etc/prometheus/demo_tls_probe.yml',
     '',
     'scrape_configs:',
     '  - job_name: prometheus',
@@ -333,6 +406,8 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: node',
     '    static_configs:',
     nodeTargets,
+    '    relabel_configs:',
+    ...TENANT_TUNNEL_TARGETS.flatMap(tunnelRelabelRule),
     '',
     '  - job_name: mysqld',
     '    static_configs:',
@@ -563,18 +638,15 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // Every ban the edge makes reaches the owner's phone, with the scenario
-    // that made it and never an address: CrowdSec's decision gauge carries no
-    // per-address label. A ban costs the person banned every site on the
-    // edge, the pager's own public name and the sign-in service included, so
-    // it cannot wait for the digest; the page route posts to ntfy over the
-    // stack's own network, not through the edge. One alert per scenario: a
-    // second ban by a scenario already firing raises the count in the next
-    // repeat, not a new page. Watch-only scenarios' simulated decisions are
-    // not in the gauge (test_crowdsec_replay.py asserts it), so a would-be
-    // ban never pages. Why: hetzner/edge/render.md, "Being told about a ban".
+    // An owned ban pages after the classifier's next run, up to ~5 minutes,
+    // and each owned ban is its own alert (decision_id), so a second ban of a
+    // scenario that is already paging is a new alert. Other bans go to email
+    // (EdgeBanUnowned). A stale classifier, or one missing for ten minutes,
+    // makes every ban page via the fallback branch; EdgeBanOwnerStale pages on
+    // its own. Text and labels never carry an address. Why, and the rest:
+    // hetzner/edge/render.md, "Being told about a ban".
     '      - alert: EdgeBanIssued',
-    '        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0',
+    `        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE_HELD}))`,
     '        labels:',
     '          severity: page',
     '        annotations:',
@@ -582,11 +654,85 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '          description: >-',
     '            A banned address gets 403 from every site on edge1 until the ban',
     '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
-    '            If it is you: from a network that is not banned, or over SSH to',
-    '            edge1, `cscli decisions list` shows the ban and',
+    '            This page means the address is one of yours: one that made a',
+    '            verified Ghost staff request through the edge in the last 30',
+    '            days, or a range holding one. A decision_id label, when there is',
+    '            one, is the CrowdSec decision ID, so each owned ban is its own',
+    '            alert. It also pages for every ban while the classifier is more',
+    '            than 15 minutes stale or has reported nothing for 10 minutes,',
+    '            when nothing says whose they are.',
+    '            From a network that is not banned, or over SSH to edge1,',
+    '            `cscli decisions list` shows the ban and',
     '            `cscli decisions delete --ip ADDRESS` lifts it. The reason is the',
     '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
     '            what each one reads.',
+    '',
+    // Not a page: a scanner the edge refused is the system working. Email
+    // reaches the off-host mailbox through the owner_action route and the
+    // on-host one through the warning route; neither is ntfy.
+    '      - alert: EdgeBanUnowned',
+    '        expr: sum by (reason) (edge_ban_owned{owned="false"}) > 0',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is banning {{ $value }} other address(es), by {{ $labels.reason }}."',
+    '          description: >-',
+    '            None of them is an address that made a verified Ghost staff',
+    '            request through the edge in the last 30 days, so this is email',
+    '            only. If one is yours, `cscli decisions list` on edge1 shows the',
+    '            ban and `cscli decisions delete --ip ADDRESS` lifts it. The',
+    '            reason is the CrowdSec scenario that decided.',
+    '',
+    '      - alert: EdgeBanOwnerStale',
+    `        expr: ${EDGE_BAN_CLASSIFIER_STALE}`,
+    '        for: 5m',
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "The edge ban classifier has not reported for over 15 minutes."',
+    '          description: >-',
+    '            Until it runs again every ban pages, owned or not. On edge1,',
+    '            `systemctl status branchleft-edge-ban-owner.timer` and',
+    '            `journalctl -u branchleft-edge-ban-owner` say why. A failed',
+    '            `cscli` query leaves the last file in place, so three missed',
+    '            runs raise this.',
+    '',
+    // The edge lets a request through uninspected when its AppSec checker is
+    // slow or down (posture.md, RUNBOOK-edge.md section 10b). The signal is
+    // Caddy's own counter, `crowdsec_appsec_lapi_requests_failures_total`,
+    // which the bouncer keeps and the rendered Caddyfile exposes through
+    // `enable_caddy_metrics`. Why this signal, its limits, and how the
+    // threshold and `for:` were chosen are in RUNBOOK-monitoring.md, section
+    // "Responding to the AppSec fail-open alert".
+    //
+    // More than 5 failures in a 5-minute window, held for 10 minutes, so a
+    // short restart stays silent. owner_action routes it to the off-host
+    // mailbox, not a page: the edge keeps serving and the IP ban list and
+    // throttle still hold.
+    '      - alert: AppSecFailingOpen',
+    '        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5',
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes."',
+    '          description: >-',
+    '            Caddy asked the CrowdSec AppSec checker to inspect a request,',
+    '            got no answer inside one second, and served the request',
+    '            anyway (appsec_fail_open). This is designed behaviour, so',
+    '            nothing is down for visitors, but every site on edge1 is',
+    '            running without WAF inspection while it lasts. On edge1,',
+    '            `docker ps` shows whether the crowdsec container is running',
+    '            and `docker logs --since 15m` on it says why it is not',
+    '            answering; RUNBOOK-edge.md section 10b describes the',
+    '            fail-open behaviour. The alert clears 5 minutes after the',
+    '            last failure,',
+    '            once the 5-minute window holds none. The counter is',
+    '            crowdsec_appsec_lapi_requests_failures_total on the caddy',
+    '            scrape job; it counts refused connections and timeouts, not',
+    '            a checker that answers 401 or 500.',
     '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
@@ -666,6 +812,28 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // The migration replica on db-t1, read through db1's tunnel. Every rule
     // is scoped to expected_up="true" so nothing fires before the tunnel is
     // installed. See render.md#the-replica-tunnel-rule-group.
+    // The reporting clock a tier-two match starts: 24 hours from the moment the
+    // match sealed. The alarm fires REPORTING_CLOCK_ALARM_SECONDS after the
+    // clock starts, so a person is paged before the 24 hours run out. The series
+    // exists only while the clock runs: a recorded report removes it, and a
+    // tier-one freeze never starts one, so neither can fire this rule. Routed
+    // as the page register's tier-two entry, never to the operational digest.
+    // Its metric name is a proposed contract, listed under EXTERNAL_METRICS in
+    // metricCrosscheck.ts, because no producer exports it yet.
+    '  - name: reporting-clock',
+    '    rules:',
+    '      - alert: TierTwoSafetyMatch',
+    `        expr: time() - scanning_storage_reporting_clock_started_timestamp_seconds > ${REPORTING_CLOCK_ALARM_SECONDS}`,
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "A tier-two match on {{ $labels.tenant }} has its reporting clock running with no report recorded."',
+    '          description: >-',
+    '            The reporting clock started when the match sealed and runs for 24',
+    '            hours. It stops only when a person records that the report was',
+    '            made, following the reporting runbook. Act now: the alarm fires',
+    '            before the 24 hours are up.',
+    '',
     '  - name: replica-tunnel',
     '    rules:',
     '      - alert: ReplicaTunnelDown',
@@ -1027,6 +1195,52 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            On ops1, read journalctl -u branchleft-control-plane-backup.service',
     '            for the reason; a run by hand with systemctl start clears it once',
     '            it ships. The previous proven copies are still on the host.',
+    '',
+    // The tenant database host's binary-log pull, from the textfile gauges the program the binlog_pull
+    // Ansible role installs writes on ops1 after every run. The gap rule is the control of the pull:
+    // a log that was skipped or failed leaves a hole or an unshipped log, and the pull publishes both
+    // counts, so the alert needs no second source. No absent(): the timer is off until the owner's
+    // apply turns it on. Warnings, same route as the group. See render.md#the-backup-rule-group.
+    '      - alert: BinlogPullGap',
+    '        expr: >-',
+    `          binlog_pull_gap_logs{${OPS1_SERIES}} > 0 or binlog_pull_unshipped_logs{${OPS1_SERIES}} > 0`,
+    `        for: ${BINLOG_PULL_GAP_FOR}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The tenant database host\'s binary logs on backup copy 1 have a gap or a log not yet shipped."',
+    '          description: >-',
+    '            binlog_pull_gap_logs counts sequence numbers missing from the',
+    '            shipped series and binlog_pull_unshipped_logs counts closed logs',
+    '            the database host holds that the last pull did not ship. Either',
+    '            above zero for 30 minutes, two pull periods, means a log failed to',
+    '            fetch, was cut short, or could not be put, and the next pull did',
+    '            not fix it. A restore to a time inside the missing log cannot be',
+    '            replayed. On ops1, read journalctl -u branchleft-binlog-pull.service',
+    "            and run the program's check command, which names the sequence",
+    '            numbers. binlog_pull_lost_logs above zero means the server no',
+    '            longer holds a missing log, so a later pull cannot fill it: take a',
+    '            fresh dump and restore from that instead. Warning, never page: the',
+    '            database host keeps its own binary logs for 7 days.',
+    '',
+    '      - alert: BinlogPullStale',
+    '        expr: >-',
+    `          time() - binlog_pull_last_success_timestamp_seconds{${OPS1_SERIES}} > ${BINLOG_PULL_STALE_SECONDS}`,
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "The binary-log pull from the tenant database host has not shipped everything for over an hour."',
+    '          description: >-',
+    '            binlog_pull_last_success_timestamp_seconds is written on ops1 by',
+    '            the pull after a run that shipped every closed log. The timer',
+    '            fires every 15 minutes and the unit is stopped at 10, so two',
+    '            healthy successes are under 25 minutes apart. 3600s (1h) fires',
+    '            after three runs in a row have failed or not run, and unlike',
+    '            BinlogPullGap it also sees a pull that cannot reach the database',
+    '            host at all. On ops1, read journalctl -u branchleft-binlog-pull.service;',
+    '            a stopped timer shows in systemctl list-timers. Warning, never',
+    '            page. Nothing fires before the first success is written, so a',
+    '            timer that has never run is not seen by this rule.',
     // The compose template's own units (hetzner/provision/branchleft-compose@.service), read from the
     // node exporter's systemd collector, which node-exporter.service limits to those instances and
     // switches the restart counter on for. Both are warnings, so email and never a page, and both are
@@ -1620,12 +1834,18 @@ export function renderAlertmanagerEmailTemplate(): string {
  * Alertmanager's config template, its placeholder tokens substituted by
  * `stack/render_alertmanager_config.py` on the host before every start.
  * See render.md#renderalertmanagertemplate for the token list and why
- * `register` defaults to the committed `PAGE_REGISTER`.
+ * `register` defaults to the committed `PAGE_REGISTER`. While the classifier
+ * is not installed (`edgeBanOwnerEnabled` false) the staleness alert is
+ * discarded rather than paged.
  */
 export function renderAlertmanagerTemplate(
-  register: readonly PageRegisterEntry[] = PAGE_REGISTER
+  register: readonly PageRegisterEntry[] = PAGE_REGISTER,
+  edgeBanOwnerEnabled: boolean = EDGE_BAN_OWNER_ENABLED
 ): string {
-  const pageRoute = renderPageRoute(register);
+  const routedRegister = edgeBanOwnerEnabled ? register : holdEdgeBanOwnerStale(register);
+  const pageRoute = renderPageRoute(routedRegister);
+  const ownedEdgeBanRoute = renderOwnedEdgeBanRoute(routedRegister);
+  const discardRoute = edgeBanOwnerEnabled ? '' : renderEdgeBanOwnerStaleDiscardRoute(register);
   return `${[
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
@@ -1728,6 +1948,13 @@ export function renderAlertmanagerTemplate(
     // `pageRegister.ts`. Empty when the register names no alertname to
     // route (every entry dormant or none delivered by Alertmanager), so no
     // stray route sits in the tree matching nothing.
+    // While the classifier is not installed its staleness alert is discarded
+    // here, before the generic route, which does not list it in that mode.
+    // The owned-ban child comes next and does not continue: the generic
+    // route below still lists EdgeBanIssued, so removing the child leaves
+    // the page in place with the old grouping rather than silencing it.
+    ...(discardRoute ? [discardRoute] : []),
+    ...(ownedEdgeBanRoute ? [ownedEdgeBanRoute] : []),
     ...(pageRoute ? [pageRoute] : []),
     '',
     // An alert whose cause is already firing adds nothing but another
@@ -1789,5 +2016,6 @@ export function renderAlertmanagerTemplate(
     // this stack sends, by design -- an operator clears it once the
     // underlying cause is fixed.
     '        send_resolved: false',
+    ...(discardRoute ? ['', renderDiscardReceiverBlock()] : []),
   ].join('\n')}\n`;
 }

@@ -1,0 +1,29 @@
+---
+# What a data commit that empties the three values makes the two halves do, on this one container:
+# the target host's half first, then the scraper host's, so the target's account is removed while the
+# scraper host's unit still holds a connection open to it. Each half is run as a plain role entry,
+# told which host it is for by enrolled_host, as converge.yml does. The values are emptied with
+# set_fact, which takes precedence over the role's defaults, as in converge.yml. It is a playbook of
+# its own so that converge.yml can run it for real and, as a second ansible-playbook run with the
+# command-line --check, in check mode (the role's guards read that flag).
+- name: Remove the tunnel
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Empty the target host's key and endpoint and the scraper host's key, as the removal commit does
+      ansible.builtin.set_fact:
+        tenant_scrape_tunnel_target_host_key: ''
+        tenant_scrape_tunnel_target_endpoint: ''
+        tenant_scrape_tunnel_scraper_public_key: ''
+
+    - name: Run the target host's half
+      ansible.builtin.include_role:
+        name: branchleft.tenant_scrape_tunnel
+      vars:
+        enrolled_host: edget
+
+    - name: Run the scraper host's half
+      ansible.builtin.include_role:
+        name: branchleft.tenant_scrape_tunnel
+      vars:
+        enrolled_host: edge1

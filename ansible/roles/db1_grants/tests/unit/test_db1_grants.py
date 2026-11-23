@@ -341,6 +341,57 @@ class ControlCoverageTests(unittest.TestCase):
         self.assertEqual(sorted(in_cases - in_tasks), [], "a case that names a refusal the role does not make")
 
 
+class CheckModeTests(unittest.TestCase):
+    """A plan of a host that does not hold the programs yet is not refused; a real run still is.
+
+    The role that delivers the programs skips its fetches in check mode, so on a host it has
+    not been applied to the plan finds no program directory and no program. The scenario
+    fresh_plan runs that plan; these read the tasks and fail on a refusal that is made in check
+    mode for a path that is not there, and on a refusal that stops being made in a real run.
+    """
+
+    def _tasks(self) -> list[dict]:
+        return yaml.safe_load((TASKS / "main.yml").read_text(encoding="utf-8"))
+
+    def _named(self, fragment: str) -> dict:
+        found = [task for task in self._tasks() if fragment in task["name"]]
+        self.assertEqual(len(found), 1, fragment)
+        return found[0]
+
+    def _when(self, task: dict) -> list[str]:
+        when = task.get("when", [])
+        return [when] if isinstance(when, str) else list(when)
+
+    def _decide(self, task: dict, exists: bool, check_mode: bool) -> bool:
+        """Evaluate the task's own `when` for one stat result, the way Ansible would."""
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        context = {"item": {"stat": {"exists": exists}}, "db1_grants_dump_stat": {"stat": {"exists": exists}},
+                   "db1_grants_backup_drift": True, "ansible_check_mode": check_mode}
+        return all(bool(env.compile_expression(condition)(**context)) for condition in self._when(task))
+
+    def test_a_missing_directory_or_program_is_refused_in_a_real_run_and_not_in_check_mode(self) -> None:
+        for fragment in ("Refuse a program directory that is not root", "Refuse a host that does not hold the provisioning program"):
+            task = self._named(fragment)
+            self.assertTrue(self._decide(task, exists=False, check_mode=False), f"{fragment}: not made in a real run")
+            self.assertFalse(self._decide(task, exists=False, check_mode=True), f"{fragment}: made in check mode")
+
+    def test_a_directory_or_program_that_is_there_is_checked_in_check_mode_too(self) -> None:
+        for fragment in ("Refuse a program directory that is not root", "Refuse a host that does not hold the provisioning program"):
+            task = self._named(fragment)
+            self.assertTrue(self._decide(task, exists=True, check_mode=True), f"{fragment}: skipped for a path that is there")
+
+    def test_the_dump_program_refusal_follows_the_same_rule(self) -> None:
+        task = self._named("Refuse to change the dump account without the pinned dump program")
+        self.assertTrue(self._decide(task, exists=False, check_mode=False))
+        self.assertFalse(self._decide(task, exists=False, check_mode=True))
+        self.assertTrue(self._decide(task, exists=True, check_mode=True))
+
+    def test_the_plan_says_which_paths_it_left_unchecked(self) -> None:
+        task = self._named("Note the paths a plan finds missing")
+        self.assertIn("ansible_check_mode", self._when(task))
+        self.assertIs(task.get("changed_when", False), False, "the note must not be a change")
+
+
 class HygieneTests(unittest.TestCase):
     """What must not be in a shipped file."""
 

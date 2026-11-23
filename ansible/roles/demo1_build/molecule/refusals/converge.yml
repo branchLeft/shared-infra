@@ -782,3 +782,117 @@
   ansible.builtin.import_playbook: refused_template.yml
   vars:
     converge_case: {}
+
+# The host scan (_secret_holders.yml) refuses a secret-bearing file the holder list does not
+# name, by its content, its name or where it sits, and names the path, never a value. The
+# control is the host as prepared, which holds only what the list names, and is accepted.
+- name: Accept the host as prepared, which holds only the files the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Case refused_secret_key, refuse a private key the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [key]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_token, refuse a token line the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [token]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_dir, refuse a file in the secrets directory the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [secret_dir]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# The broker tunnel key is named by a holder row, and the row accepts the file when it is there. Its control is the host as prepared, with the row present and
+# the file absent, which is accepted: an absent holder row or file is not an error.
+- name: Accept the broker tunnel key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tunnel]
+      accepted: true
+
+# The scan reads symlinks and the widened roots: a link named like a key that points at one
+# outside the roots, a key under /srv and under a user's own .ansible (only root's is excluded),
+# and each content shape the holder list has no row for.
+- name: Case refused_secret_link, refuse a link named like a key that points at a key outside the roots
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [link]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_srv, refuse a private key under /srv
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [srv]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_home_ansible, refuse a private key under a user's .ansible
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [home_ansible]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_forms, refuse each content shape the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [forms]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# The scan's cycle-3 rules: a client key under /etc/docker (the image stores are pruned by full path,
+# so /etc/docker is scanned), and a binary key file named *-key.bin, which grep cannot read and so
+# the name rule must find. Each is refused when no row names it.
+- name: Case refused_secret_docker, refuse a client key under /etc/docker the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [docker]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+- name: Case refused_secret_binkey, refuse a binary key file the holder list does not name
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [binkey]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
+# Root's authorized_keys is named by a holder row (an owner-approved row). Both key files are
+# accepted by their rows; the control above proves the host as prepared is accepted.
+- name: Accept root's authorised_keys and the ansible-ci account's authorised_keys, both listed
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [keys]
+      accepted: true
+
+# The broker verify key is named by a holder row, and the row accepts the file (the binary key name
+# rule finds it, and the row lists it).
+- name: Accept the broker request-signing verify key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [verify]
+      accepted: true
+
+# The CI key the pull trigger's route puts in root's authorized_keys is named by a holder row, and is
+# accepted; the control above proves an absent row is not an error, this proves the row accepts the file.
+- name: Accept the CI key in the ansible-ci account's authorized_keys, which the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [ci]
+      accepted: true

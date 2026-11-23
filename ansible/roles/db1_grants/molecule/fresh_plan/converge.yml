@@ -1,0 +1,71 @@
+---
+# The plan of a db1 that holds no program yet, then the real run once the programs are
+# delivered. Without the check-mode allowance the role refuses the plan
+# (db1_grants[program-dir]), and the plan of every host stops with it.
+#
+# Three plays. The first runs this same playbook with --check against the same
+# instance, because the role's own tasks read ansible_check_mode, which only the
+# command line's --check sets; the nested run skips this play because it is in check
+# mode. The second stands in for the role that delivers the programs on the real host
+# (db1_backup_timers): its fetches are skipped in check mode, so it is skipped here in
+# check mode too, and in a real run it places the programs. The third is the default
+# scenario's own converge, imported so the apply has one home.
+- name: Plan
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run this playbook in check mode against the same instance
+      ansible.builtin.command:
+        argv:
+          - '{{ ansible_playbook_python | dirname }}/ansible-playbook'
+          - --check
+          - --diff
+          - --inventory
+          - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+          - '{{ playbook_dir }}/converge.yml'
+      register: db1_grants_scenario_fresh_plan
+      changed_when: false
+      when: not ansible_check_mode
+
+    # The plan says that it did not check the paths that are not there yet, so a pass
+    # cannot come from a role that never reached the checks.
+    - name: Assert the plan passed and said which paths it did not check
+      ansible.builtin.assert:
+        that:
+          - "db1_grants_scenario_fresh_plan.stdout is search('db1_grants: check mode, 3 path[(]s[)] the role reads are not on the host yet')"
+          - db1_grants_scenario_fresh_plan.stdout is search('/opt/branchleft/db/provision')
+          - db1_grants_scenario_fresh_plan.stdout is not search('db1_grants[[]')
+        fail_msg: The check-mode plan of a host with no program did not pass, or did not say what it left unchecked.
+        quiet: true
+      when: not ansible_check_mode
+
+- name: Deliver the programs as the role that delivers them does
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../default/vars/test.yml
+  tasks:
+    - name: Make the program directory
+      ansible.builtin.file:
+        path: '{{ db1_grants_scenario_provision_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not ansible_check_mode
+
+    - name: Place the pinned programs
+      ansible.builtin.copy:
+        src: '{{ db1_grants_scenario_program_dir }}/{{ item }}'
+        dest: '{{ db1_grants_scenario_provision_dir }}/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - provision_tenant_db.py
+        - naming.py
+        - dump_nightly.py
+      when: not ansible_check_mode
+
+- name: Converge as the default scenario does
+  ansible.builtin.import_playbook: ../default/converge.yml

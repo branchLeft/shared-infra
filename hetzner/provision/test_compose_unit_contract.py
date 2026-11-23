@@ -190,6 +190,16 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "registered because the scan reads the path as a stack name. No Compose "
         "file exists for it anywhere."
     ),
+    "binlog-pull": (
+        "Not an instance of the template: `/opt/branchleft/binlog-pull` is the "
+        "directory the ansible/roles/binlog_pull role of branchLeft/shared-infra "
+        "installs its binary-log pull program into, and `/etc/branchleft/binlog-pull.env` "
+        "is its settings file, which a systemd oneshot service and timer of that "
+        "role run. It never starts through branchleft-compose@ or branchleft-deploy; "
+        "it dials the tenant database host's MySQL port over TLS. It is registered "
+        "because the scan reads the path as a stack name. No Compose file exists "
+        "for it anywhere."
+    ),
     "ntfy-pager": (
         "Not an instance of the template: `/etc/branchleft/ntfy-pager.env` is the "
         "secrets file of the ntfy pager, written by the ansible/roles/ntfy_pager "
@@ -197,6 +207,22 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "drop-in (the monitoring_stack role writes monitoring.env, and no two roles "
         "write one path). It is registered because the scan reads the path as a "
         "stack name. No Compose file exists for it anywhere."
+    ),
+    "abuse-page": (
+        "Not an instance of the template: `/opt/branchleft/abuse-page` is the "
+        "directory the ansible/roles/mx1_abuse_page role of branchLeft/shared-infra "
+        "installs its program into, which a systemd oneshot service and timer of "
+        "that role run on the mail host. It never starts through "
+        "branchleft-compose@ or branchleft-deploy. It is registered because the "
+        "scan reads the path as a stack name. No Compose file exists for it "
+        "anywhere."
+    ),
+    "mx1-abuse-page": (
+        "Not an instance of the template: `/etc/branchleft/mx1-abuse-page.env` is "
+        "the token file of the abuse-report page, written by the "
+        "ansible/roles/mx1_abuse_page role of branchLeft/shared-infra and read by "
+        "that role's program. It is registered because the scan reads the path as "
+        "a stack name. No Compose file exists for it anywhere."
     ),
     "mail-spool": (
         "An instance of the template on the demo host, and its Compose text is "
@@ -215,6 +241,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "because the scratch image cannot carry a healthcheck. It is registered "
         "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
         "exists for it."
+    ),
+    "status-uptime": (
+        "Not an instance of the template: `/opt/branchleft/status-uptime` is the directory "
+        "the ansible/roles/status_page role of branchLeft/shared-infra installs the 90-day "
+        "uptime collector into, which a systemd oneshot service and timer of that role run "
+        "against the status page. It never starts through branchleft-compose@ or "
+        "branchleft-deploy. It is registered because the scan reads the path as a stack "
+        "name. No Compose file exists for it anywhere."
     ),
     "dbt1": (
         "An instance of the template on the tenant database host, started through "

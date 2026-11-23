@@ -1,0 +1,166 @@
+---
+# Test scaffolding, not role tasks. What the scenario sets up before the role runs:
+#
+#  - nftables is made ABSENT. The role installs it, and it must mask the unit before it does:
+#    installing the package would otherwise start the unit, which loads the distribution's
+#    /etc/nftables.conf and begins with `flush ruleset`.
+#  - iptables in its nf_tables mode, the way Docker on Debian 13 uses it, with stand-ins for
+#    Docker's chains and rules (a DOCKER-USER chain, a DNAT rule, FORWARD policy DROP). They
+#    are the things a flush of the whole ruleset would remove, and the scenario proves they
+#    survive. The legacy masquerade rule of the reconciler the role replaces is there too.
+#  - addresses on the uplink: a public documentation address and one in the estate subnet,
+#    which are the two things the role reads from the host.
+#  - a stand-in for the sysctl command (a container's /proc/sys is read-only).
+#  - listeners for the flows the scenario opens and shuts.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the programs the scenario and Docker's stand-in rules need
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iproute2
+          - iputils-ping
+        state: present
+        update_cache: true
+
+    # The role must be the one that installs nftables (and masks its unit first), so the test
+    # starts from a host where the package is absent: otherwise a role that never masks the
+    # unit, or masks it after the install, would pass.
+    - name: Remove nftables, so that the role has to install it
+      ansible.builtin.apt:
+        name: nftables
+        state: absent
+        purge: true
+
+    - name: Read which iptables backend is in use
+      ansible.builtin.command:
+        argv: [iptables, --version]
+      register: edge_firewall_prepare_iptables
+      changed_when: false
+
+    # Docker's rules are nf_tables tables only under this backend, which is what a flush of
+    # the ruleset removes. Under the legacy backend this scenario would prove nothing.
+    - name: Assert iptables writes nf_tables tables
+      ansible.builtin.assert:
+        that:
+          - "'nf_tables' in edge_firewall_prepare_iptables.stdout"
+        quiet: true
+        fail_msg: 'iptables is not in its nf_tables mode here: {{ edge_firewall_prepare_iptables.stdout }}'
+
+    - name: Install a stand-in for the sysctl command
+      ansible.builtin.copy:
+        src: sysctl_standin.sh
+        dest: /usr/local/sbin/sysctl
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Read the interface the default route leaves through
+      ansible.builtin.include_tasks: tasks/read_uplink.yml
+
+    - name: Give the uplink an address in the estate subnet
+      ansible.builtin.command:
+        argv: [ip, addr, replace, 10.20.1.5/24, dev, '{{ edge_firewall_scenario_uplink_dev }}']
+      changed_when: true
+
+    - name: Give the uplink a public documentation address
+      ansible.builtin.command:
+        argv: [ip, addr, replace, 203.0.113.11/32, dev, '{{ edge_firewall_scenario_uplink_dev }}']
+      changed_when: true
+
+    # Stand-ins for what Docker keeps in iptables. Marker rules are chosen so that no flow
+    # the scenario tests matches them.
+    - name: Make Docker's stand-in chains and rules
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [iptables, -P, FORWARD, DROP]
+        - [iptables, -N, DOCKER-USER]
+        - [iptables, -A, DOCKER-USER, -s, 192.0.2.0/24, -j, ACCEPT]
+        - [iptables, -A, FORWARD, -j, DOCKER-USER]
+        - [iptables, -t, nat, -N, DOCKER]
+        - [iptables, -t, nat, -A, PREROUTING, -m, addrtype, --dst-type, LOCAL, -j, DOCKER]
+        - - iptables
+          - -t
+          - nat
+          - -A
+          - DOCKER
+          - '!'
+          - -i
+          - docker0
+          - -d
+          - 198.51.100.10/32
+          - -p
+          - tcp
+          - --dport
+          - '8443'
+          - -j
+          - DNAT
+          - --to-destination
+          - '172.17.0.2:8443'
+        - [iptables, -t, nat, -A, POSTROUTING, -s, 172.17.0.0/16, '!', -o, docker0, -j, MASQUERADE]
+      changed_when: true
+
+    # The masquerade rule the reconciler this role replaces inserted on edge1. The role must
+    # remove it, but only after its own NAT table is confirmed.
+    - name: Insert the legacy masquerade rule the old reconciler wrote
+      ansible.builtin.command:
+        argv:
+          - iptables
+          - -t
+          - nat
+          - -I
+          - POSTROUTING
+          - '1'
+          - -s
+          - 10.20.1.0/24
+          - -o
+          - '{{ edge_firewall_scenario_uplink_dev }}'
+          - -j
+          - MASQUERADE
+      changed_when: true
+
+    - name: Make the directory of the listeners
+      ansible.builtin.file:
+        path: /usr/local/lib/edge-firewall-test
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the listeners program
+      ansible.builtin.copy:
+        src: listeners.py
+        dest: /usr/local/lib/edge-firewall-test/listeners.py
+        owner: root
+        group: root
+        mode: '0755'
+
+    # 22 stands for sshd (the control port the guard connects to), 80 and 443 for Caddy, 2586,
+    # 3000, 6060 and 9091 for the ports published on the private address, and 9999 is a port
+    # nothing allows: open in monitor mode, shut in enforce mode. 127.0.0.1:8080 is the edge probe.
+    - name: Install the unit of the placeholder listeners
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/edge-firewall-listeners.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Placeholder listeners for the edge_firewall test
+
+          [Service]
+          ExecStart=/usr/bin/python3 /usr/local/lib/edge-firewall-test/listeners.py 0.0.0.0:22 0.0.0.0:80 0.0.0.0:443 \
+            0.0.0.0:2586 0.0.0.0:3000 0.0.0.0:6060 0.0.0.0:9091 0.0.0.0:9999 127.0.0.1:8080
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start the placeholder listeners
+      ansible.builtin.systemd_service:
+        name: edge-firewall-listeners.service
+        daemon_reload: true
+        enabled: true
+        state: started
