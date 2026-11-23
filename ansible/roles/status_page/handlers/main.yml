@@ -1,0 +1,13 @@
+---
+# The unit files this role installs are read by systemd, so the manager reloads first.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# A timer whose schedule changed keeps the old one until it is restarted. Not in a plan: the
+# unit may not exist yet on a fresh host, and the plan already shows the unit file as changed.
+- name: Restart the uptime collection timer
+  ansible.builtin.systemd_service:
+    name: '{{ status_page_uptime_timer }}'
+    state: restarted
+  when: not ansible_check_mode

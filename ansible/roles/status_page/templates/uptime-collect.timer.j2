@@ -1,0 +1,9 @@
+[Unit]
+Description=Record the status page's probe samples every {{ status_page_uptime_every_minutes }} minutes
+
+[Timer]
+OnCalendar=*:0/{{ status_page_uptime_every_minutes }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
