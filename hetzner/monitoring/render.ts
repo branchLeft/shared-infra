@@ -12,6 +12,12 @@ import {
   renderPageRoute,
   type PageRegisterEntry,
 } from './pageRegister';
+import {
+  hostsScrapedDirectly,
+  TENANT_TUNNEL_BIND_ADDRESS,
+  TENANT_TUNNEL_TARGETS,
+  type TunnelledHost,
+} from './tenantTunnel';
 
 /**
  * Renders the monitoring stack's Prometheus scrape configuration and alert
@@ -315,6 +321,23 @@ function nodeTarget(host: MonitoredHost): string {
   return `      - targets: ['${address}']\n        labels: ${targetLabels(host)}`;
 }
 
+/** One tunnel's target on edge1's private address: its local port, labelled as the direct row would be. */
+function tunnelTarget(tunnel: TunnelledHost): string {
+  const address = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return `      - targets: ['${address}']\n        labels: ${targetLabels(tunnel)}`;
+}
+
+/** Rewrites a tunnel's local address back to the tenant host's own exporter address, so `instance` matches a direct scrape. */
+function tunnelRelabelRule(tunnel: TunnelledHost): string[] {
+  const localAddress = `${TENANT_TUNNEL_BIND_ADDRESS}:${tunnel.localPort}`;
+  return [
+    '      - source_labels: [__address__]',
+    `        regex: '${localAddress.replace(/\./g, '\\.')}'`,
+    '        target_label: instance',
+    `        replacement: '${tunnel.address}:${NODE_EXPORTER_PORT}'`,
+  ];
+}
+
 /** Every hostname in the registry, in registry order -- both a site's serving
  * hostnames and its redirect sources, since a redirect is still a public
  * endpoint someone can hit and expect a 2xx-after-redirect chain from. */
@@ -330,7 +353,10 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
   const targets = blackboxTargets(sites);
-  const nodeTargets = MONITORED_NODE_HOSTS.map(nodeTarget).join('\n');
+  const nodeTargets = [
+    ...hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(nodeTarget),
+    ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
+  ].join('\n');
 
   return `${[
     ...GENERATED_BANNER,
@@ -375,6 +401,8 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '  - job_name: node',
     '    static_configs:',
     nodeTargets,
+    '    relabel_configs:',
+    ...TENANT_TUNNEL_TARGETS.flatMap(tunnelRelabelRule),
     '',
     '  - job_name: mysqld',
     '    static_configs:',
