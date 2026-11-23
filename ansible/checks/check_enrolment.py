@@ -92,7 +92,7 @@ STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
 # without its value, nor the value without the role (_check_host_tls_hosts).
 HOST_TLS_KEY = "host_tls_identity_peer_cert"
 HOST_TLS_ROLE = "host_tls_identity"
-HOST_TLS_HOSTS = frozenset(("demo1",))
+HOST_TLS_HOSTS = frozenset(("demo1", "edge1"))
 # The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
 # range and the difference between them (its _inputs.yml), so only the type is read here. edge1
 # only: the role refuses any other host, and the playbook lists it there alone.
