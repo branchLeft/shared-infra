@@ -67,7 +67,7 @@
                                   ]
                                 }
                               ],
-                              "match": [{ "path": ["/__gate/login"] }]
+                              "match": [{ "path": ["/__gate/login", "/__gate/enter"] }]
                             },
                             {
                               "group": "group4",
@@ -279,7 +279,7 @@
                                   ]
                                 }
                               ],
-                              "match": [{ "path": ["/__gate/login"] }]
+                              "match": [{ "path": ["/__gate/login", "/__gate/enter"] }]
                             },
                             {
                               "group": "group10",
