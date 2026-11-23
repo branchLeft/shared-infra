@@ -995,7 +995,9 @@ class QuietParser(argparse.ArgumentParser):
 
 def parse_args(argv: Sequence[str] | None, stream: TextIO) -> argparse.Namespace:
     parser = QuietParser(stream)
-    parser.add_argument("--host", required=True, help="edge1, edget, ops1, app1, appt1, dbt1 or mx1")
+    parser.add_argument(
+        "--host", required=True, help="edge1, edget, ops1, app1, appt1, dbt1 or mx1"
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--replace", action="store_true", help="replace an existing file")
     mode.add_argument("--set", dest="set_key", metavar="KEY", help="change one key, asked hidden")
