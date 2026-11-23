@@ -273,6 +273,10 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   // on db1 (lock gauges under tenant="db1-all-databases", and its own status gauges). None is a collector
   // this repo can scan; render.md, "The `backup` rule group", gives the hosts.
   state_copy_last_success_timestamp_seconds: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
+  // PROPOSED contract, not yet exported: the safety service's per-incident reporting clock. One series per running clock,
+  // labelled with its tenant, present from the seal until a recorded report removes it. No producer on main yet.
+  scanning_storage_reporting_clock_started_timestamp_seconds:
+    'proposed: scanning-storage adapter in branchLeft/ghost-platform, once the clock is exported (no producer yet)',
   state_copy_bucket_configured: 'state_copy.py, in branchLeft/ghost-platform, on ops1',
   backup_worker_lock_wait_seconds:
     'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',

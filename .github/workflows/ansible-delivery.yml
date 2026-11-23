@@ -122,7 +122,7 @@ jobs:
 
   delivery:
     needs: [queue-proof, select]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.2.5
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.2.7
     with:
       environment: ansible-hosts
       push-playbook: ansible/playbooks/demo1.yml
@@ -133,6 +133,7 @@ jobs:
       merge-group-check-name: Lint and test the Ansible roles
       shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
       skip-failed-hosts: true
+      continue-past-failed-apply: true
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}

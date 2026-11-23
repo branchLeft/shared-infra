@@ -215,6 +215,20 @@ groups:
             for: 10m rather than 5m because a MySQL restart during a db
             stack deploy produces mysql_up 0 legitimately for a minute or two.
 
+  - name: reporting-clock
+    rules:
+      - alert: TierTwoSafetyMatch
+        expr: time() - scanning_storage_reporting_clock_started_timestamp_seconds > 72000
+        labels:
+          severity: page
+        annotations:
+          summary: "A tier-two match on {{ $labels.tenant }} has its reporting clock running with no report recorded."
+          description: >-
+            The reporting clock started when the match sealed and runs for 24
+            hours. It stops only when a person records that the report was
+            made, following the reporting runbook. Act now: the alarm fires
+            before the 24 hours are up.
+
   - name: replica-tunnel
     rules:
       - alert: ReplicaTunnelDown
