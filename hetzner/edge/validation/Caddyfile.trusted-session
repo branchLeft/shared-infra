@@ -45,10 +45,6 @@ tenant-one.test {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -106,7 +102,7 @@ tenant-one.test {
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403
 		@uploads_by_path {
 			path /content/files/* /content/images/* /content/media/*

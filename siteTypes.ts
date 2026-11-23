@@ -41,9 +41,11 @@ export interface EdgeSite {
    */
   region?: string;
   /**
-   * Set for any site with an authenticated authoring surface: the edge then
-   * drops all AppSec rules on the admin API path prefix only. Why, and what
-   * it costs: `sites.md` section "The authoring exemption".
+   * Set for any site with an authenticated authoring surface. With
+   * `trustedSession` only a verified staff session skips AppSec; without it the
+   * edge drops all AppSec rules on the admin API path prefix only, never the
+   * Content API. Why, and what it costs: `sites.md` section "The authoring
+   * exemption".
    */
   injectionWafPreviewOnly?: boolean;
   /**

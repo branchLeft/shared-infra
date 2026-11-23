@@ -64,7 +64,8 @@ export const sites: EdgeSite[] = [
     backend: 'ghost',
     // A signed-in Ghost staff session, verified with this Ghost, is never
     // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
-    // sessions".
+    // sessions". It is the only AppSec exemption this site has: no path skips
+    // AppSec for any other client, the Content API included.
     trustedSession: 'ghost-staff',
   },
 
