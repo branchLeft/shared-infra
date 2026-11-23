@@ -164,6 +164,7 @@ APPLIED_ON_MAIN = {
         "demo1_build",
         "demo1_egress_spool",
         "spool_path_account",
+        "host_tls_identity",
         "node_exporter_public",
     ],
 }
@@ -629,6 +630,7 @@ class HostRoleLists(unittest.TestCase):
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "host_tls_identity",
                 "node_exporter_public",
             ],
         )
@@ -651,7 +653,13 @@ class HostRoleLists(unittest.TestCase):
         path.write_text(listed.replace(row, "", 1), encoding="utf-8")
         self._assert_refused("demo1", "role broker_deploy is not on demo1's list")
         path.unlink()
-        for name in ("broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"):
+        for name in (
+            "broker_deploy",
+            "demo1_build",
+            "demo1_egress_spool",
+            "spool_path_account",
+            "host_tls_identity",
+        ):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
 
