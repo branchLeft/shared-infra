@@ -159,7 +159,11 @@ def problems(
 
 
 def real_problems() -> list[str]:
-    """The problems of the files as they stand in this tree."""
+    """The problems of the files as they stand in this tree.
+
+    Raises:
+        TypeError: host_roles/edge1.yml is not a list.
+    """
     listed = _load(ANSIBLE / "checks" / "host_roles" / f"{HOST}.yml")
     if not isinstance(listed, list):
         message = f"host_roles/{HOST}.yml is not a list"
