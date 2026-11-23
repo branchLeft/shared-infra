@@ -71,7 +71,7 @@ endpoints:
       - '[STATUS] < 300'
   - name: id.publicpress.co.uk
     group: sites
-    url: https://id.publicpress.co.uk
+    url: https://id.publicpress.co.uk/.well-known/openid-configuration
     interval: 60s
     client:
       timeout: 10s

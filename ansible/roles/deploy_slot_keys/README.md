@@ -35,18 +35,25 @@ half. It does not install the deploy wrapper or the sudoers grant (those belong 
 On a host enrolled by first-boot configuration there is no such account, and the module
 fails closed there rather than make one.
 
+An undefined list means "no slots are declared here". The role installs the slot program and
+its files exactly as before, and skips the reconcile task in every mode. It never reads an
+undefined list as an empty one, so a host given no list keeps the slots it has. The skip is
+the reconcile task's `when`, and `checks/test_deploy_slot_keys_optional_slots.py` evaluates
+that expression for an undefined list, a declared one, and a sabotaged copy in which undefined
+means empty.
+
 An empty list means "not declared". It changes nothing and never revokes every slot, so a
 host that is handed a list that failed to load keeps the slots it has.
 
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the one input, and Ansible
-checks it when the role starts. It has no default (ANS-7): a host that is not told its
-slots is not given any.
+checks it when the role starts. It has no default (ANS-7), and it is optional: a host that is
+not told its slots gets the slot program installed and no slot change at all.
 
-| Variable                 | Default        | Meaning                                                                         |
-| ------------------------ | -------------- | ------------------------------------------------------------------------------- |
-| `deploy_slot_keys_slots` | none, required | The exact list of slots. Each entry has `stack`, `public_key`, `adopt_existing` |
+| Variable                 | Default        | Meaning                                                                                                                             |
+| ------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_slot_keys_slots` | none, optional | The exact list of slots, when defined. Each entry has `stack`, `public_key`, `adopt_existing`. Undefined installs the program only. |
 
 Each entry:
 

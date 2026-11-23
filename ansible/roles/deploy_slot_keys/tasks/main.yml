@@ -23,6 +23,10 @@
     mode: '{{ deploy_slot_keys_program_mode }}'
   register: deploy_slot_keys_program
 
+# An undefined slot list (a host that holds the program but has no slots of its own, appt1) skips
+# the reconcile in every mode. It is not read as an empty list: an empty list would revoke every
+# slot the host holds. Only a defined list reaches the module. The guard is tested by
+# checks/test_deploy_slot_keys_optional_slots.py, which evaluates this expression.
 - name: Make the deploy slots exactly the declared list
   deploy_slot_keys_reconcile:
     program_path: '{{ deploy_slot_keys_program_path }}'
@@ -31,7 +35,9 @@
   failed_when: false
   no_log: true
   diff: false
-  when: not (ansible_check_mode and deploy_slot_keys_program is changed)
+  when: >-
+    deploy_slot_keys_slots is defined
+    and not (ansible_check_mode and deploy_slot_keys_program is changed)
 
 # The module's own message is the rule that broke, never a value, so it is safe to show
 # although the task above is hidden. A refusal before the write changed nothing: the module

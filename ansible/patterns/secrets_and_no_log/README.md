@@ -430,7 +430,7 @@ wrong source. To add a secret option, add its row here.
 | `control_plane`            | `control_plane_env_content`               | none                      |
 | `control_plane`            | `control_plane_masterkey`                 | none                      |
 | `db1_stack`                | `db1_stack_exporter_password`             | host_inputs: db1          |
-| `db_t1_tenant_entry`       | `db_t1_tenant_entry_controller_key`       | none                      |
+| `db_t1_tenant_entry`       | `db_t1_tenant_entry_controller_key`       | host_inputs: dbt1         |
 | `monitoring_stack`         | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
 | `monitoring_stack`         | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |
