@@ -903,6 +903,61 @@ class ConfigTests(PagerCase):
         self.assertEqual(caught.exception.code, 2)
 
 
+class SecretsGateTests(PagerCase):
+    """--check-secrets-set decides whether a run installs nothing, pages, or fails."""
+
+    SECRETS = ("PAGER_APP_ID", "PAGER_APP_PRIVATE_KEY", "NTFY_PAGER_PUBLISH_TOKEN")
+
+    def gate(self, values: Mapping[str, str]) -> tuple[int, str, str, str]:
+        output = self.directory / f"github-output-{len(list(self.directory.glob('github-output-*')))}"
+        env = {**values, "GITHUB_OUTPUT": str(output)}
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = pager.main(["--check-secrets-set"], env=env)
+        written = output.read_text(encoding="utf-8") if output.exists() else ""
+        return code, stdout.getvalue(), stderr.getvalue(), written
+
+    def test_no_secret_set_is_green_and_not_configured(self) -> None:
+        for values in ({}, {name: "" for name in self.SECRETS}, {name: "  " for name in self.SECRETS}):
+            with self.subTest(values=values):
+                code, stdout, stderr, written = self.gate(values)
+                self.assertEqual(code, 0)
+                self.assertEqual(written, "configured=false\n")
+                self.assertIn("::notice::", stdout)
+                for name in self.SECRETS:
+                    self.assertIn(name, stdout)
+                self.assertEqual(stderr, "")
+
+    def test_all_secrets_set_is_configured(self) -> None:
+        code, stdout, stderr, written = self.gate({name: f"value-of-{name}" for name in self.SECRETS})
+        self.assertEqual(code, 0)
+        self.assertEqual(written, "configured=true\n")
+        self.assertEqual(stdout + stderr, "")
+
+    def test_some_secrets_set_fails_naming_only_the_unset_ones(self) -> None:
+        for kept in self.SECRETS:
+            with self.subTest(kept=kept):
+                values = {name: "" for name in self.SECRETS}
+                values[kept] = "SYNTHETIC-GATE-VALUE-0001"
+                code, stdout, stderr, written = self.gate(values)
+                self.assertEqual(code, 1)
+                self.assertIn("ERROR: PagerConfigError", stderr)
+                self.assertEqual(written, "")
+                self.assertNotIn("SYNTHETIC-GATE-VALUE-0001", stdout + stderr)
+                self.assertNotIn(kept, stderr)
+                for name in self.SECRETS:
+                    if name != kept:
+                        self.assertIn(name, stderr)
+
+    def test_flags_are_exclusive(self) -> None:
+        for argv in ([], ["--check-secrets-set", "--state-file", "x"]):
+            with self.subTest(argv=argv):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                    pager.main(argv, env={})
+                self.assertEqual(caught.exception.code, 2)
+
+
 class UrllibTransportTests(unittest.TestCase):
     """The real transport against a loopback server: no redirect is followed, a non-2xx is a value."""
 
@@ -1039,7 +1094,7 @@ class WorkflowTests(unittest.TestCase):
             for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
             if re.match(r"\s*(-\s+)?uses:", line)
         ]
-        self.assertEqual(len(uses_lines), len(self.steps()) - 1)
+        self.assertEqual(len(uses_lines), len([step for step in self.steps() if "uses" in step]))
         for line in uses_lines:
             self.assertRegex(line, r"uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
 
@@ -1059,14 +1114,20 @@ class WorkflowTests(unittest.TestCase):
         for step in self.steps():
             text = json.dumps(step)
             for name in ("PAGER_APP_ID", "PAGER_APP_PRIVATE_KEY"):
-                if name in text:
+                if name in text and step.get("id") != "gate":
                     self.assertTrue(str(step.get("uses", "")).startswith("actions/create-github-app-token@"))
                     self.assertIn(name, json.dumps(step["with"]))
                     self.assertNotIn("run", step)
             if "NTFY_PAGER_PUBLISH_TOKEN" in text:
-                self.assertEqual(step.get("id"), "pager")
+                self.assertIn(step.get("id"), ("gate", "pager"))
                 self.assertIn("NTFY_PAGER_PUBLISH_TOKEN", json.dumps(step["env"]))
                 self.assertNotIn("NTFY_PAGER_PUBLISH_TOKEN", str(step["run"]))
+        (gate,) = [step for step in self.steps() if step.get("id") == "gate"]
+        self.assertEqual(
+            gate["env"],
+            {name: "${{ secrets." + name + " }}" for name in SecretsGateTests.SECRETS},
+        )
+        self.assertEqual(gate["run"], "python3 .github/scripts/secret_alert_pager.py --check-secrets-set")
         (token_step,) = self.step_using("actions/create-github-app-token@")
         inputs = mapping(token_step["with"])
         self.assertEqual(inputs["app-id"], "${{ secrets.PAGER_APP_ID }}")
@@ -1085,6 +1146,23 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertTrue(str(environment_block["NTFY_BASE_URL"]).startswith("https://"))
         self.assertIn("python3 .github/scripts/secret_alert_pager.py", str(step["run"]))
+
+    def test_every_step_after_the_gate_waits_for_it(self) -> None:
+        """With no secrets set nothing but checkout and the gate may run: no token is minted,
+        no cache is read and nothing is sent."""
+        steps = self.steps()
+        (gate,) = [step for step in steps if step.get("id") == "gate"]
+        position = steps.index(gate)
+        self.assertEqual([step.get("uses", "").split("@")[0] for step in steps[:position]], ["actions/checkout"])
+        configured = "steps.gate.outputs.configured == 'true'"
+        for step in steps[position + 1 :]:
+            with self.subTest(step=step["name"]):
+                condition = str(step.get("if", ""))
+                # Save and verify wait for an output only the pager step can set.
+                self.assertTrue(configured in condition or condition == self.CONDITION, condition)
+        self.assertEqual(self.pager_step()["if"], "${{ " + configured + " }}")
+        (token_step,) = self.step_using("actions/create-github-app-token@")
+        self.assertEqual(token_step["if"], "${{ " + configured + " }}")
 
     def test_state_cache_is_saved_under_a_new_key_and_verified(self) -> None:
         pager_step = self.pager_step()

@@ -46,6 +46,7 @@ from urllib.parse import parse_qs, urlsplit
 
 NTFY_TOPIC = "branchleft-pages"
 PAGE_PRIORITY = 5
+PAGER_SECRET_NAMES = ("PAGER_APP_ID", "PAGER_APP_PRIVATE_KEY", "NTFY_PAGER_PUBLISH_TOKEN")
 PAGE_TAGS = ("rotating_light",)
 PAGE_TITLE = "ALERT_TITLE_PLACEHOLDER"
 PAGE_BODY = "ALERT_BODY_PLACEHOLDER"
@@ -603,6 +604,19 @@ class PagedStateStore:
             raise StateFileError("the state file path exists and is not a regular file")
 
 
+def _append_output(path: str, line: str) -> None:
+    """Append one line to the workflow output file.
+
+    Raises:
+        StateFileError: the output file cannot be written.
+    """
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError as failure:
+        raise StateFileError(f"the workflow output file cannot be written: {failure.strerror}") from failure
+
+
 class GithubOutputFile:
     """Tells the workflow that the state file changed, once, through GITHUB_OUTPUT."""
 
@@ -618,12 +632,30 @@ class GithubOutputFile:
         """
         if self.path is None or self.announced:
             return
-        try:
-            with open(self.path, "a", encoding="utf-8") as handle:
-                handle.write("state_changed=true\n")
-        except OSError as failure:
-            raise StateFileError(f"the workflow output file cannot be written: {failure.strerror}") from failure
+        _append_output(self.path, "state_changed=true")
         self.announced = True
+
+
+def check_secrets_set(env: Mapping[str, str], output_path: str | None) -> bool:
+    """Tell the workflow whether the owner has set the pager's three Actions secrets yet.
+
+    None set means the pager is not installed yet: the run skips every later step and ends
+    green, with a notice naming the secrets. All set means it goes on. Some set and some not
+    is a half-finished setup, which fails the run so it is seen. Only names are ever printed.
+
+    Raises:
+        PagerConfigError: some but not all of the secrets are set.
+        StateFileError: the workflow output file cannot be written.
+    """
+    missing = [name for name in PAGER_SECRET_NAMES if not env.get(name, "").strip()]
+    if 0 < len(missing) < len(PAGER_SECRET_NAMES):
+        raise PagerConfigError(f"some pager secrets are set and these are not: {', '.join(missing)}")
+    configured = not missing
+    if output_path is not None:
+        _append_output(output_path, f"configured={'true' if configured else 'false'}")
+    if not configured:
+        print(f"::notice::secret-alert-pager is not installed: these Actions secrets are unset: {', '.join(missing)}")
+    return configured
 
 
 @dataclasses.dataclass(frozen=True)
@@ -708,9 +740,23 @@ def main(
         SystemExit: the command line is wrong (argparse exits 2).
     """
     parser = argparse.ArgumentParser(description="Page the owner for new secret-scanning alerts.")
-    parser.add_argument("--state-file", type=pathlib.Path, required=True)
+    parser.add_argument("--state-file", type=pathlib.Path)
+    parser.add_argument(
+        "--check-secrets-set",
+        action="store_true",
+        help="only report through GITHUB_OUTPUT whether the pager's Actions secrets are set",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.check_secrets_set == (arguments.state_file is not None):
+        parser.error("give exactly one of --state-file and --check-secrets-set")
     environment = os.environ if env is None else env
+    if arguments.check_secrets_set:
+        try:
+            check_secrets_set(environment, environment.get("GITHUB_OUTPUT") or None)
+        except PagerError as failure:
+            print(f"ERROR: {type(failure).__name__}: {failure}", file=sys.stderr)
+            return 1
+        return 0
     try:
         config = load_config(environment, arguments.state_file)
         summary = run_pager(
