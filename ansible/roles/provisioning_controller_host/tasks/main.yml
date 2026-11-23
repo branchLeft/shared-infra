@@ -1,0 +1,490 @@
+---
+# The role makes the provisioning controller's host side on ops1: the service account, the ssh key
+# the controller reaches the tenant hosts with (root's, mode 0400, in a root-only directory) with
+# its public half beside it, a digest-pinned bundle when one is named, the pass program, the
+# controller's configuration and register file, the ssh client files, and the three units. It
+# starts nothing itself: the path unit and the timer are held disabled and stopped until
+# provisioning_controller_host_bundle_sha256 is set, and the service is started only by them.
+#
+# It touches only its own paths (vars/main.yml): /etc/branchleft/provisioning-controller, the
+# state and release directories, its three unit files and its account. It asserts its parents and
+# never changes them. Which host may apply it is the owner's list (checks/host_roles, R9); an
+# in-role host test would be no control, because under the pull inventory_hostname is localhost.
+#
+# The ssh key never leaves the host. No task reads, fetches, registers, copies or prints it: the
+# one module that makes it returns the public half only, and the unit hands the key to the account
+# through systemd (files/provisioning-controller.service). A test reads this file and fails on any
+# task that could move it, and the Molecule verify searches the instance for the key's text.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it and accepts an empty string, so
+# these reject both. Each input has its own task, so a refusal names the one input at fault. The
+# user names and host keys are set together or not at all, and a digest needs them all.
+- name: Refuse a bundle digest that is set and is not 64 lowercase hex digits
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_bundle_sha256 is string
+      - >-
+        provisioning_controller_host_bundle_sha256 | length == 0
+        or provisioning_controller_host_bundle_sha256 is match(provisioning_controller_host_sha256_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_bundle_sha256 must be empty or 64 lowercase hex digits.
+
+- name: Refuse a bundle URL that is set and is not an https URL with no credential
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_bundle_url is string
+      - >-
+        provisioning_controller_host_bundle_url | length == 0
+        or provisioning_controller_host_bundle_url is match(provisioning_controller_host_bundle_url_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
+
+# A digest names a bundle to run, and a bundle with nowhere to fetch it from cannot be run. The
+# missing input is named.
+- name: Refuse a bundle digest with no bundle URL
+  ansible.builtin.assert:
+    that: provisioning_controller_host_bundle_sha256 | length == 0 or provisioning_controller_host_bundle_url | length > 0
+    quiet: true
+    fail_msg: provisioning_controller_host_bundle_url is empty while provisioning_controller_host_bundle_sha256 is set.
+
+- name: Refuse an edge1 jump account name that is set and is not a plain account name
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_edge1_jump_user is string
+      - >-
+        provisioning_controller_host_edge1_jump_user | length == 0
+        or provisioning_controller_host_edge1_jump_user is match(provisioning_controller_host_user_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_edge1_jump_user must be empty or a lowercase account name. It is not shown here.
+  no_log: true
+
+- name: Refuse an edge-t jump account name that is set and is not a plain account name
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_edget_jump_user is string
+      - >-
+        provisioning_controller_host_edget_jump_user | length == 0
+        or provisioning_controller_host_edget_jump_user is match(provisioning_controller_host_user_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_edget_jump_user must be empty or a lowercase account name. It is not shown here.
+  no_log: true
+
+- name: Refuse an edge1 host key that is set and is not one ed25519 key
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_edge1_host_key is string
+      - >-
+        provisioning_controller_host_edge1_host_key | length == 0
+        or provisioning_controller_host_edge1_host_key is match(provisioning_controller_host_host_key_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_edge1_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+
+- name: Refuse an edge-t host key that is set and is not one ed25519 key
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_edget_host_key is string
+      - >-
+        provisioning_controller_host_edget_host_key | length == 0
+        or provisioning_controller_host_edget_host_key is match(provisioning_controller_host_host_key_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_edget_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+
+- name: Refuse an app-t1 host key that is set and is not one ed25519 key
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_app_t1_host_key is string
+      - >-
+        provisioning_controller_host_app_t1_host_key | length == 0
+        or provisioning_controller_host_app_t1_host_key is match(provisioning_controller_host_host_key_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_app_t1_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+
+- name: Refuse a db-t1 host key that is set and is not one ed25519 key
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_db_t1_host_key is string
+      - >-
+        provisioning_controller_host_db_t1_host_key | length == 0
+        or provisioning_controller_host_db_t1_host_key is match(provisioning_controller_host_host_key_pattern)
+    quiet: true
+    fail_msg: provisioning_controller_host_db_t1_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+
+# How many of the six route inputs are set. Only the count is held, never a value.
+- name: Count the route inputs that are set
+  ansible.builtin.set_fact:
+    provisioning_controller_host_route_inputs_set: >-
+      {{ [
+        provisioning_controller_host_edge1_jump_user,
+        provisioning_controller_host_edget_jump_user,
+        provisioning_controller_host_edge1_host_key,
+        provisioning_controller_host_edget_host_key,
+        provisioning_controller_host_app_t1_host_key,
+        provisioning_controller_host_db_t1_host_key,
+      ] | select | list | length }}
+  no_log: true
+
+- name: Refuse some of the six route inputs without the others
+  ansible.builtin.assert:
+    that: provisioning_controller_host_route_inputs_set | int in [0, 6]
+    quiet: true
+    fail_msg: >-
+      The two jump account names and the four host keys are set together or not at all, and some
+      but not all are set. The inputs are named in meta/argument_specs.yml.
+
+- name: Hold whether the route is configured
+  ansible.builtin.set_fact:
+    provisioning_controller_host_configured: '{{ provisioning_controller_host_route_inputs_set | int == 6 }}'
+
+- name: Refuse a bundle digest while the route inputs are unset
+  ansible.builtin.assert:
+    that: provisioning_controller_host_bundle_sha256 | length == 0 or provisioning_controller_host_configured
+    quiet: true
+    fail_msg: provisioning_controller_host_bundle_sha256 is set while the jump account names and host keys are not. Seed them first.
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ provisioning_controller_host_parents }}'
+  register: provisioning_controller_host_parent_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ provisioning_controller_host_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- The account. System, no login, no home: it owns the state and the files the controller
+# insists on owning, and nothing else.
+- name: Create the service group
+  ansible.builtin.group:
+    name: '{{ provisioning_controller_host_account }}'
+    system: true
+
+- name: Create the service account
+  ansible.builtin.user:
+    name: '{{ provisioning_controller_host_account }}'
+    group: '{{ provisioning_controller_host_account }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+# Read-only. A fresh host in check mode has no account yet, and a task that names it as an owner
+# would fail there, so the tasks that need it run when it exists. On an apply it always does.
+- name: Look for the service account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ provisioning_controller_host_account }}'
+    fail_key: false
+
+- name: Note whether the service account exists
+  ansible.builtin.set_fact:
+    provisioning_controller_host_account_present: '{{ getent_passwd[provisioning_controller_host_account] is not none }}'
+
+# --- Directories. The config and release directories are root's and world-readable: they hold
+# public text and root-owned programs. The state directory is the account's alone.
+- name: Make the directories the role owns
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ provisioning_controller_host_config_dir }}'
+    - '{{ provisioning_controller_host_base_dir }}'
+    - '{{ provisioning_controller_host_releases_dir }}'
+
+- name: Make the state directory, the entry inputs' directory and the escrow, the account's and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: '{{ provisioning_controller_host_account }}'
+    group: '{{ provisioning_controller_host_account }}'
+    mode: '0700'
+  loop:
+    - '{{ provisioning_controller_host_state_dir }}'
+    - '{{ provisioning_controller_host_inputs_dir }}'
+    - '{{ provisioning_controller_host_escrow_dir }}'
+  when: provisioning_controller_host_account_present
+
+# --- The ssh key. One module makes it inside one process and never returns a private byte, so
+# the task is hidden and its diff is off (ANS-16) although its arguments are only a path. The key
+# is root's with mode 0400 in a root-only directory and is made only when absent. The module's
+# refusal is a fixed code and a path, so it is read out by an assert below. The module derives the
+# public half itself and returns it: the role never reads the private file.
+- name: Look at the config directory the key lives under
+  ansible.builtin.stat:
+    path: '{{ provisioning_controller_host_config_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: provisioning_controller_host_config_stat
+
+- name: Note whether the key can be planned or made now
+  ansible.builtin.set_fact:
+    provisioning_controller_host_key_ready: '{{ provisioning_controller_host_config_stat.stat.isdir | default(false) }}'
+
+- name: Make the ssh key if it is absent
+  provisioning_controller_host_ssh_key:
+    directory: '{{ provisioning_controller_host_ssh_key_directory }}'
+    public_file: '{{ provisioning_controller_host_ssh_public_file }}'
+  register: provisioning_controller_host_ssh_key_result
+  failed_when: false
+  no_log: true
+  diff: false
+  when: provisioning_controller_host_key_ready
+
+# failed_when: false makes the failed flag false, so a refusal is read from the message: only a
+# failure carries one. The message is a fixed code and a path, so it is safe to show.
+- name: Stop if the key module refused
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_ssh_key_result.msg is not defined
+    fail_msg: >-
+      {{ provisioning_controller_host_ssh_key_result.msg | default('the key module returned no result') }}
+    quiet: true
+  when: provisioning_controller_host_key_ready
+
+# The public half is not secret. It is written from the module's own result, so the role never
+# reads the private file, and it is world-readable so the people who place it on the hops can
+# read it. On a fresh host the plan cannot know it yet, so this task is skipped there.
+- name: Write the public half of the ssh key
+  ansible.builtin.copy:
+    content: "{{ provisioning_controller_host_ssh_key_result.public_key }}\n"
+    dest: '{{ provisioning_controller_host_ssh_public_file }}'
+    owner: root
+    group: root
+    mode: '{{ provisioning_controller_host_ssh_public_mode }}'
+  when: provisioning_controller_host_ssh_key_result.public_key | default('', true) | length > 0
+
+# The recorded output of the apply: the public half, which an agent reads from the gated run's log
+# and places on the hops. On a fresh host the plan cannot know it, so it says so.
+- name: Record the public half of the ssh key
+  ansible.builtin.debug:
+    msg: >-
+      Provisioning controller ssh public half (authorized_keys line):
+      {{ provisioning_controller_host_ssh_key_result.public_key | default('not yet made', true) }}
+
+# --- The bundle, only when a digest is set. get_url holds the download to the digest, so a
+# wrong one stops the role here, before anything is unpacked and before the link moves. In check
+# mode a directory not yet made cannot take a download, so the fetch is skipped there.
+- name: Make the directory of this release
+  ansible.builtin.file:
+    path: '{{ provisioning_controller_host_release_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: provisioning_controller_host_bundle_sha256 | length > 0
+
+- name: Look at the release directory
+  ansible.builtin.stat:
+    path: '{{ provisioning_controller_host_release_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: provisioning_controller_host_release_stat
+  when: provisioning_controller_host_bundle_sha256 | length > 0
+
+- name: Download the bundle and hold it to its digest
+  ansible.builtin.get_url:
+    url: '{{ provisioning_controller_host_bundle_url }}'
+    dest: '{{ provisioning_controller_host_bundle_file }}'
+    checksum: 'sha256:{{ provisioning_controller_host_bundle_sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - provisioning_controller_host_bundle_sha256 | length > 0
+    - provisioning_controller_host_release_stat.stat.exists
+
+- name: Unpack the bundle, owned by root and closed to writes by anyone else
+  ansible.builtin.unarchive:
+    src: '{{ provisioning_controller_host_bundle_file }}'
+    dest: '{{ provisioning_controller_host_release_dir }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: 'u=rwX,go=rX'
+    extra_opts:
+      - --no-same-owner
+      - --no-same-permissions
+    creates: '{{ provisioning_controller_host_release_dir }}/{{ provisioning_controller_host_binary_relative }}'
+  when:
+    - provisioning_controller_host_bundle_sha256 | length > 0
+    - provisioning_controller_host_release_stat.stat.exists
+
+- name: Look at the bundle's program
+  ansible.builtin.stat:
+    path: '{{ provisioning_controller_host_release_dir }}/{{ provisioning_controller_host_binary_relative }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: provisioning_controller_host_binary_stat
+  when: provisioning_controller_host_bundle_sha256 | length > 0
+
+- name: Require the program to be a root-owned executable that no one else can write
+  ansible.builtin.assert:
+    that:
+      - provisioning_controller_host_binary_stat.stat.exists
+      - provisioning_controller_host_binary_stat.stat.isreg
+      - provisioning_controller_host_binary_stat.stat.uid == 0
+      - provisioning_controller_host_binary_stat.stat.xusr
+      - not provisioning_controller_host_binary_stat.stat.wgrp
+      - not provisioning_controller_host_binary_stat.stat.woth
+    quiet: true
+    fail_msg: The bundle has no bin/provisioning-controller that is a root-owned executable regular file no one else can write. current was not moved.
+  when:
+    - provisioning_controller_host_bundle_sha256 | length > 0
+    - not ansible_check_mode or provisioning_controller_host_binary_stat.stat.exists
+
+- name: Point current at this release
+  ansible.builtin.file:
+    path: '{{ provisioning_controller_host_current_link }}'
+    src: '{{ provisioning_controller_host_release_dir }}'
+    state: link
+    owner: root
+    group: root
+  when:
+    - provisioning_controller_host_bundle_sha256 | length > 0
+    - provisioning_controller_host_binary_stat.stat.exists
+
+# --- The two programs, root's, so the account cannot change what the unit or the controller runs
+# as itself: the pass over the approvals, and the controller's own steps (the register check and
+# the stack passphrase's escrow).
+- name: Install the pass program and the controller steps program
+  ansible.builtin.copy:
+    src: '{{ item.src }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - src: '{{ provisioning_controller_host_pass_source }}'
+      dest: '{{ provisioning_controller_host_pass_program }}'
+    - src: '{{ provisioning_controller_host_steps_source }}'
+      dest: '{{ provisioning_controller_host_steps_program }}'
+  loop_control:
+    label: '{{ item.dest }}'
+
+# --- The controller's files. The controller refuses a configuration, ledger or register that
+# another user owns, so each is the account's. The configuration holds the jump accounts' names
+# (the owner holds them out of the repository), so it is closed to everyone else and its task is
+# hidden with its diff off (ANS-16). It is written only when every route input is set, and with
+# none set the role says so, a stated skip and not a pass.
+- name: Say that the route is NOT configured while its inputs are unset
+  ansible.builtin.debug:
+    msg: >-
+      Provisioning controller route NOT configured: the jump account names and host keys are
+      unset. The configuration, the ssh client files and the pinned host keys are not written,
+      and the units stay off. This is a stated skip, not a pass.
+  when: not provisioning_controller_host_configured
+
+- name: Write the controller's configuration, closed to everyone but the account
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: '{{ provisioning_controller_host_config_file }}'
+    owner: '{{ provisioning_controller_host_account }}'
+    group: '{{ provisioning_controller_host_account }}'
+    mode: '0600'
+  no_log: true
+  diff: false
+  when:
+    - provisioning_controller_host_configured
+    - provisioning_controller_host_account_present
+
+- name: Write the tenant register, owned by the account
+  ansible.builtin.copy:
+    src: register.json
+    dest: '{{ provisioning_controller_host_register_file }}'
+    owner: '{{ provisioning_controller_host_account }}'
+    group: '{{ provisioning_controller_host_account }}'
+    mode: '0644'
+  when: provisioning_controller_host_account_present
+
+- name: Write the ssh client file and pin the hosts' keys
+  ansible.builtin.template:
+    src: '{{ item.src }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - src: ssh_config.j2
+      dest: '{{ provisioning_controller_host_ssh_config_file }}'
+    - src: known_hosts.j2
+      dest: '{{ provisioning_controller_host_known_hosts_file }}'
+  loop_control:
+    label: '{{ item.dest }}'
+  when: provisioning_controller_host_configured
+
+# --- The units. They are static files, never templated.
+# The service unit's diff is not shown: it names the ssh key to systemd with a directive whose
+# name the plan's secret scan would read as a credential assignment, and the directive cannot be
+# reworded (ANS-16, owner ruling: choice A). The path unit and the timer are delivered by the next
+# task, which shows their diff.
+- name: Install the unit whose diff is not shown
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ provisioning_controller_host_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ provisioning_controller_host_units | intersect(provisioning_controller_host_units_hidden) }}'
+  diff: false
+  notify: Reload systemd manager
+
+- name: Install the other units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ provisioning_controller_host_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ provisioning_controller_host_units | difference(provisioning_controller_host_units_hidden) }}'
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the tasks below would meet units
+# systemd has not read.
+- name: Load the units before the triggers are handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Look at the installed trigger units
+  ansible.builtin.stat:
+    path: '{{ provisioning_controller_host_unit_dir }}/{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ provisioning_controller_host_triggers }}'
+  register: provisioning_controller_host_trigger_stats
+
+# The one step that turns the controller on is a digest, and with none the path unit and the
+# timer are held disabled and stopped: the role owns these units, so it converges them either
+# way. A fresh host in check mode has no unit file yet and is skipped.
+- name: Hold the path unit and the timer to the state the digest asks for
+  ansible.builtin.systemd_service:
+    name: '{{ item.item }}'
+    enabled: '{{ provisioning_controller_host_bundle_sha256 | length > 0 }}'
+    state: "{{ 'started' if provisioning_controller_host_bundle_sha256 | length > 0 else 'stopped' }}"
+  loop: '{{ provisioning_controller_host_trigger_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: item.stat.exists

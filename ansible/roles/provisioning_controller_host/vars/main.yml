@@ -1,0 +1,123 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a mode the
+# controller depends on must not be moved by a play variable (ansible/README.md, variable
+# precedence). The role touches only the paths below and its three unit files.
+#
+# The service account owns the state directory and the files the controller refuses unless it
+# owns them, and nothing else on the host. The controller is not run as root: ops1 holds other
+# roles' root-only files and the owner's own data, and a non-root account cannot read them. It
+# does not own the ssh key either: that key is root's, and the unit hands it to the account as a
+# systemd-held file (files/provisioning-controller.service).
+provisioning_controller_host_account: provisioning-controller
+
+# The parents the role asserts and never makes or changes. /etc/branchleft is made by host_inputs
+# (R11); the other two are made by roles that run before this one on ops1.
+provisioning_controller_host_parents:
+  - /etc/branchleft
+  - /opt/branchleft
+  - /var/lib/branchleft
+
+provisioning_controller_host_config_dir: /etc/branchleft/provisioning-controller
+# The files the controller reads as the service account. It refuses a file another user owns, so
+# the role writes each of these owned by the account (the controller's trusted-file rule).
+provisioning_controller_host_config_file: /etc/branchleft/provisioning-controller/config.json
+provisioning_controller_host_register_file: /etc/branchleft/provisioning-controller/register.json
+# Read by ssh, which is run by the controller as the service account. Public text only.
+provisioning_controller_host_ssh_config_file: /etc/branchleft/provisioning-controller/ssh_config
+provisioning_controller_host_known_hosts_file: /etc/branchleft/provisioning-controller/known_hosts
+provisioning_controller_host_state_dir: /var/lib/branchleft/provisioning-controller
+# What the provisioning API records and the executor reads, and what the executor appends to. The
+# role makes neither: the API makes the first, the executor the second. The pass program reads both.
+provisioning_controller_host_approvals_file: /var/lib/branchleft/provisioning-controller/approvals.json
+provisioning_controller_host_run_state_file: /var/lib/branchleft/provisioning-controller/run-state.jsonl
+# The two files the app host's entry steps read (the controller's sshEntry.inputs). The role
+# names them and makes none: the controller's own steps write them as they run. The slot deploy
+# keys are not here: the controller makes them itself, in a directory of its own beside its run
+# state (slot-keys), and the role makes nothing for them.
+provisioning_controller_host_inputs_dir: /var/lib/branchleft/provisioning-controller/inputs
+provisioning_controller_host_secrets_file: /var/lib/branchleft/provisioning-controller/inputs/secrets.json
+provisioning_controller_host_stack_file: /var/lib/branchleft/provisioning-controller/inputs/stack.json
+# Where the stack passphrase of each tenant waits, one file each, for the escrow bucket's step.
+provisioning_controller_host_escrow_dir: /var/lib/branchleft/provisioning-controller/escrow
+
+provisioning_controller_host_base_dir: /opt/branchleft/provisioning-controller
+provisioning_controller_host_releases_dir: /opt/branchleft/provisioning-controller/releases
+provisioning_controller_host_current_link: /opt/branchleft/provisioning-controller/current
+provisioning_controller_host_release_dir: '{{ provisioning_controller_host_releases_dir }}/{{ provisioning_controller_host_bundle_sha256 }}'
+provisioning_controller_host_bundle_file: '{{ provisioning_controller_host_release_dir }}/bundle.tar.gz'
+# The contract with the bundle: a regular executable file at this path inside it. It takes
+# --config and --approval-id and nothing else (the controller's own command line).
+provisioning_controller_host_binary_relative: bin/provisioning-controller
+provisioning_controller_host_program: /opt/branchleft/provisioning-controller/current/bin/provisioning-controller
+# The program the units run: one pass over the recorded approvals. Installed by the role from
+# files/, root's, so the account cannot change what it runs as itself.
+provisioning_controller_host_pass_program: /opt/branchleft/provisioning-controller/provisioning-controller-pass
+provisioning_controller_host_pass_source: provisioning_controller_pass.py
+# The program the controller runs for its own `controller` steps that have no program of their
+# own: the register check and the stack passphrase's escrow. Root's, like the pass program.
+provisioning_controller_host_steps_program: /opt/branchleft/provisioning-controller/provisioning-controller-steps
+provisioning_controller_host_steps_source: provisioning_controller_steps.py
+provisioning_controller_host_steps_timeout_ms: 30000
+
+# The ssh key: root's, mode 0400, in a root-only directory. The module writes it; the names and
+# modes below are the same values, held equal to the module's by
+# tests/unit/test_provisioning_controller_host_ssh_key.py. The public half is not secret and is
+# written, world-readable, beside the directory.
+provisioning_controller_host_ssh_key_directory: /etc/branchleft/provisioning-controller/ssh
+provisioning_controller_host_ssh_key_name: id_ed25519
+provisioning_controller_host_ssh_key_directory_mode: '0700'
+provisioning_controller_host_ssh_key_mode: '0400'
+provisioning_controller_host_ssh_public_file: /etc/branchleft/provisioning-controller/ssh.pub
+provisioning_controller_host_ssh_public_mode: '0444'
+# Where the controller finds the key while a pass runs: the unit gives it to the account under
+# this name in the directory systemd makes for the run. Held equal to the unit's text by a test.
+# The controller reads the key from this path in its configuration, never from the path above.
+provisioning_controller_host_ssh_key_id: ssh-key
+provisioning_controller_host_ssh_key_runtime_path: /run/credentials/provisioning-controller.service/ssh-key
+
+# The route to the tenant hosts, from the estate's design: ops1 to edge1's jump account to edge-t's
+# jump account to the entry accounts on app-t1 and db-t1. The addresses are the estate's private
+# addresses. The jump accounts' names are inputs, never here. Held equal to the hosts' own roles'
+# values by tests where the estate has them.
+provisioning_controller_host_edge1_address: 10.20.1.10
+provisioning_controller_host_edget_address: 10.20.1.210
+provisioning_controller_host_app_t1_address: 10.20.1.201
+provisioning_controller_host_db_t1_address: 10.20.1.200
+provisioning_controller_host_app_entry_user: tenant-entry
+provisioning_controller_host_db_entry_user: tenantdb
+
+provisioning_controller_host_unit_dir: /etc/systemd/system
+# The PATH of the service unit, fixed in files/provisioning-controller.service and held equal to it
+# by a test. It names no directory an agent program could be put in by this role.
+provisioning_controller_host_unit_path: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+provisioning_controller_host_service_unit: provisioning-controller.service
+provisioning_controller_host_path_unit: provisioning-controller.path
+provisioning_controller_host_timer_unit: provisioning-controller.timer
+provisioning_controller_host_units:
+  - '{{ provisioning_controller_host_service_unit }}'
+  - '{{ provisioning_controller_host_path_unit }}'
+  - '{{ provisioning_controller_host_timer_unit }}'
+# The units whose diff the plan does not show: the service unit names the ssh key to systemd with a
+# directive whose name the plan's secret scan reads as a credential assignment, and the directive
+# cannot be reworded (ANS-16, owner ruling: choice A). The other two units are delivered by a task
+# that shows their diff. ansible/checks/test_plan_diff_scan.py fails if a file listed here has no
+# such line, or if a file left out of it has one.
+provisioning_controller_host_units_hidden:
+  - '{{ provisioning_controller_host_service_unit }}'
+# The two units the digest turns on: the path unit starts a pass when the API records an approval
+# and the timer starts one to resume a run that stopped. The service is started by neither's role
+# task, only by them.
+provisioning_controller_host_triggers:
+  - '{{ provisioning_controller_host_path_unit }}'
+  - '{{ provisioning_controller_host_timer_unit }}'
+
+# The shapes the inputs must have when set. They end in \Z, not $, so a trailing line break does
+# not pass. None admits a space, a quote, a backslash, a dollar sign or a hash (a user name and a
+# key line apart), so a value is one plain word. A URL carries no user name, password, query or
+# fragment.
+provisioning_controller_host_sha256_pattern: '^[0-9a-f]{64}\Z'
+provisioning_controller_host_bundle_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'
+provisioning_controller_host_user_pattern: '^[a-z_][a-z0-9_-]{0,31}\Z'
+# One ed25519 host key as ssh writes it: the type, a space, 68 base64 characters, no comment. The
+# first 24 are the fixed start of every ed25519 key blob.
+provisioning_controller_host_host_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA[A-Za-z0-9+/]{44}\Z'

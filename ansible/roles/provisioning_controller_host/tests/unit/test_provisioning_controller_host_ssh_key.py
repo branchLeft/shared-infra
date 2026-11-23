@@ -1,0 +1,984 @@
+"""Unit tests for provisioning_controller_host_ssh_key, the module that makes the ssh key.
+
+The key is a throwaway made by each test in a temporary directory. No value here is a real key,
+and the real key is never read. The sabotage controls, each red when its guard is removed:
+test_existing_key_is_never_overwritten (the guard that leaves an existing key alone),
+test_a_new_key_is_root_only_0400_in_a_0700_directory and
+test_the_key_is_never_wider_than_0400_at_any_moment (the creation mode), and
+test_a_key_another_account_owns_is_refused_before_it_is_read (the root-only rule).
+The README gives the command, with the library directory on PYTHONPATH.
+"""
+
+import base64
+import contextlib
+import dataclasses
+import hashlib
+import io
+import logging
+import os
+import stat
+import tempfile
+import unittest
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import cast
+from unittest import mock
+
+import provisioning_controller_host_ssh_key as scheme
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+    load_ssh_private_key,
+)
+from ruamel.yaml import YAML
+
+ROLE = Path(__file__).resolve().parents[2]
+
+# RFC 8032 section 7.1, tests 1 to 3: the seed and the public key it must give.
+RFC_VECTORS = (
+    (
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    ),
+    (
+        "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+    ),
+    (
+        "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+        "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+    ),
+)
+
+# Throwaway seeds, made by the test. Placeholders: nothing here was ever a real key.
+SEED = bytes(range(32))
+OTHER_SEED = bytes(range(100, 132))
+TEMP_NAME = ".id_ed25519.tmp-0123456789abcdef"
+
+
+def pem_of(seed: bytes) -> bytes:
+    """Return the OpenSSH text the module writes for a seed (its checked form, see below)."""
+    return scheme.private_openssh(seed)
+
+
+def public_pem_by_library(seed: bytes) -> str:
+    """Return the authorized_keys line the pinned library writes for a seed, with our comment."""
+    key = Ed25519PrivateKey.from_private_bytes(seed)
+    raw = key.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode()
+    return f"{raw} {scheme.COMMENT}"
+
+
+def pieces_of(seed: bytes) -> list[str]:
+    """Return every spelling of a seed a leak could take: the text's body, halves, base64, hex."""
+    body = pem_of(seed).decode("ascii").splitlines()[1]
+    return [
+        body,
+        body[:32],
+        body[20:50],
+        base64.b64encode(seed).decode("ascii"),
+        seed.hex(),
+        seed.hex()[:32],
+        seed.decode("latin-1"),
+    ]
+
+
+class DerivationTests(unittest.TestCase):
+    """The hand-written RFC 8032 derivation and the OpenSSH forms, against the RFC and a library."""
+
+    def test_rfc_8032_vectors(self) -> None:
+        for seed_hex, public_hex in RFC_VECTORS:
+            with self.subTest(seed=public_hex[:8]):
+                self.assertEqual(scheme.derive_public(bytes.fromhex(seed_hex)).hex(), public_hex)
+
+    def test_two_hundred_seeds_give_the_libraries_public_line(self) -> None:
+        for counter in range(200):
+            seed = hashlib.sha256(
+                b"provisioning-controller-ssh-key" + counter.to_bytes(4, "big")
+            ).digest()
+            with self.subTest(counter=counter):
+                self.assertEqual(
+                    scheme.public_line(scheme.derive_public(seed)), public_pem_by_library(seed)
+                )
+
+    def test_the_edge_seeds_agree_with_the_library(self) -> None:
+        for seed in (bytes(32), b"\xff" * 32, b"\x01" + bytes(31), bytes(31) + b"\x80"):
+            self.assertEqual(
+                scheme.public_line(scheme.derive_public(seed)), public_pem_by_library(seed)
+            )
+
+    def test_the_library_reads_the_modules_private_text_as_the_same_key(self) -> None:
+        """The reader ssh uses (OpenSSH format) accepts the text and finds the same pair."""
+        for seed in (SEED, OTHER_SEED, bytes(32), b"\xff" * 32):
+            with self.subTest(seed=seed[:2].hex()):
+                loaded = load_ssh_private_key(scheme.private_openssh(seed), password=None)
+                self.assertIsInstance(loaded, Ed25519PrivateKey)
+                key = cast(Ed25519PrivateKey, loaded)
+                self.assertEqual(
+                    key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()), seed
+                )
+                self.assertEqual(
+                    key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw),
+                    scheme.derive_public(seed),
+                )
+
+    def test_the_text_has_the_shape_ssh_keygen_writes(self) -> None:
+        text = scheme.private_openssh(SEED).decode("ascii")
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "-----BEGIN OPENSSH PRIVATE KEY-----")
+        self.assertEqual(lines[-1], "-----END OPENSSH PRIVATE KEY-----")
+        self.assertTrue(all(len(line) == 70 for line in lines[1:-2]))
+        self.assertTrue(text.endswith("\n"))
+
+    def test_the_text_is_a_function_of_the_seed_alone(self) -> None:
+        self.assertEqual(scheme.private_openssh(SEED), scheme.private_openssh(SEED))
+        self.assertNotEqual(scheme.private_openssh(SEED), scheme.private_openssh(OTHER_SEED))
+
+    def test_decode_accepts_only_the_canonical_text_of_one_ed25519_seed(self) -> None:
+        self.assertEqual(scheme.decode_seed(scheme.private_openssh(SEED)), SEED)
+        good = scheme.private_openssh(SEED)
+        bad = {
+            "empty": b"",
+            "no newline at the end": good[:-1],
+            "extra newline": good + b"\n",
+            "crlf": good.replace(b"\n", b"\r\n"),
+            "wrong header": good.replace(b"OPENSSH PRIVATE", b"PUBLIC", 1),
+            "pkcs8 form": b"-----BEGIN PRIVATE KEY-----\n" + good[36:],
+            "not base64": good[:40] + b"!" + good[41:],
+            "another comment": self.with_comment(SEED, "someone-else"),
+            "a public half that is not the seed's": self.with_public_of(SEED, OTHER_SEED),
+            "a passphrase cipher": self.with_cipher(SEED),
+        }
+        for label, data in bad.items():
+            with self.subTest(label):
+                self.assertIsNone(scheme.decode_seed(data))
+
+    @staticmethod
+    def armour(raw: bytes) -> bytes:
+        """Return the PEM text of raw bytes as the module wraps it."""
+        encoded = base64.b64encode(raw)
+        lines = [encoded[i : i + 70] for i in range(0, len(encoded), 70)]
+        return scheme.PRIVATE_HEADER + b"\n".join(lines) + b"\n" + scheme.PRIVATE_FOOTER
+
+    @classmethod
+    def raw_of(cls, seed: bytes) -> bytes:
+        """Return the decoded bytes of the module's text for a seed."""
+        text = scheme.private_openssh(seed)
+        body = text[len(scheme.PRIVATE_HEADER) : -len(scheme.PRIVATE_FOOTER)]
+        return base64.b64decode(b"".join(body.split(b"\n")))
+
+    @classmethod
+    def with_comment(cls, seed: bytes, comment: str) -> bytes:
+        """Return the text of the seed's key with another comment, padded to the same length."""
+        raw = cls.raw_of(seed)
+        old = scheme.COMMENT.encode("ascii")
+        new = comment.encode("ascii")[: len(old)].ljust(len(old), b"x")
+        return cls.armour(raw.replace(old, new))
+
+    @classmethod
+    def with_public_of(cls, seed: bytes, other: bytes) -> bytes:
+        """Return the text of the seed's key with another key's public half in its private part."""
+        raw = bytearray(cls.raw_of(seed))
+        old = scheme.derive_public(seed)
+        index = raw.rindex(old)
+        raw[index : index + 32] = scheme.derive_public(other)
+        return cls.armour(bytes(raw))
+
+    @classmethod
+    def with_cipher(cls, seed: bytes) -> bytes:
+        """Return the text of the seed's key whose cipher name is not none."""
+        raw = cls.raw_of(seed).replace(b"none", b"aes!", 1)
+        return cls.armour(raw)
+
+
+class HostCase(unittest.TestCase):
+    """A temporary parent that stands for the config directory, and settings for it."""
+
+    def setUp(self) -> None:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.root = Path(holder.name)
+        self.parent = self.root / "provisioning-controller"
+        self.parent.mkdir()
+        self.parent.chmod(0o755)
+        self.directory = self.parent / "ssh"
+        self.key = self.directory / scheme.KEY_NAME
+        self.public = self.parent / "ssh.pub"
+        self.settings = scheme.Settings(str(self.directory), str(self.public))
+        # The test cannot be root, so root is whoever the test runs as.
+        self.seams = scheme.Seams(
+            root_uid=os.getuid(),
+            effective_uid=os.getuid,
+            random_bytes=lambda count: SEED[:count],
+        )
+
+    def run_module(
+        self, *, check_mode: bool = False, seams: scheme.Seams | None = None
+    ) -> scheme.Result:
+        """Converge with the test's settings."""
+        return scheme.converge(
+            self.settings, check_mode=check_mode, seams=seams if seams is not None else self.seams
+        )
+
+    def make_directory(self, mode: int = 0o700) -> None:
+        """Make the key directory as it would be after a first run."""
+        self.directory.mkdir()
+        self.directory.chmod(mode)
+
+    def plant(self, path: Path, data: bytes, mode: int = 0o400) -> None:
+        """Put a file there, as an earlier run or a person would have."""
+        if not self.directory.exists():
+            self.make_directory()
+        path.unlink(missing_ok=True)
+        path.write_bytes(data)
+        path.chmod(mode)
+
+    def plant_key(self, seed: bytes = SEED, mode: int = 0o400) -> None:
+        """Put a valid key there."""
+        self.plant(self.key, scheme.private_openssh(seed), mode)
+
+    def snapshot(self) -> dict[str, tuple[int, int, bytes | None]]:
+        """Return every entry of the directory with its mode, inode and (for files) bytes."""
+        shot: dict[str, tuple[int, int, bytes | None]] = {}
+        for entry in sorted(self.directory.iterdir()):
+            info = entry.lstat()
+            body = entry.read_bytes() if stat.S_ISREG(info.st_mode) else None
+            shot[entry.name] = (stat.S_IMODE(info.st_mode), info.st_ino, body)
+        return shot
+
+    def assert_refused(self, code: str, path: Path) -> scheme.RefusalError:
+        """Require a refusal that is the code and the path and nothing else, and no change."""
+        before = self.snapshot() if self.directory.exists() else None
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module()
+        self.assertEqual(str(caught.exception), f"{code}: {path}")
+        if before is not None:
+            self.assertEqual(self.snapshot(), before)
+        return caught.exception
+
+    def assert_no_seed_in(self, text: str, seed: bytes = SEED) -> None:
+        """Require that no spelling of the seed is in the text."""
+        for piece in pieces_of(seed):
+            self.assertNotIn(piece, text)
+
+
+@contextlib.contextmanager
+def umask(value: int) -> Iterator[None]:
+    """Run with a umask, which can only narrow a mode, and restore it."""
+    previous = os.umask(value)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+class CreateTests(HostCase):
+    """The key is made when it is absent, in the shape the controller reads, and root-only."""
+
+    def test_generated_when_absent(self) -> None:
+        result = self.run_module()
+        self.assertTrue(result.created)
+        self.assertTrue(result.changed)
+        self.assertFalse(result.adopted)
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()), [scheme.KEY_NAME])
+        self.assertFalse(self.public.exists(), "the module never writes the public file")
+
+    def test_a_new_key_is_root_only_0400_in_a_0700_directory(self) -> None:
+        """The mode sabotage control: set the mode constant wider and this goes red."""
+        self.run_module()
+        info = self.key.stat()
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual(stat.S_IMODE(info.st_mode), 0o400)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
+        self.assertEqual(info.st_uid, self.seams.root_uid)
+        self.assertEqual(self.directory.stat().st_uid, self.seams.root_uid)
+        self.assertEqual(info.st_nlink, 1)
+        self.assertEqual((scheme.DIR_MODE, scheme.KEY_MODE), (0o700, 0o400))
+
+    def test_a_permissive_umask_does_not_widen_anything(self) -> None:
+        with umask(0):
+            self.run_module()
+        self.assertEqual(stat.S_IMODE(self.key.stat().st_mode), 0o400)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
+
+    def test_the_key_is_never_wider_than_0400_at_any_moment(self) -> None:
+        """The mode-safe open: the file has its final mode while it holds the first byte."""
+        seen: list[int] = []
+
+        def look() -> None:
+            for entry in self.directory.iterdir():
+                seen.append(stat.S_IMODE(entry.lstat().st_mode))
+
+        seams = dataclasses.replace(self.seams, after_temp_write=look, before_link=look)
+        with umask(0):
+            self.run_module(seams=seams)
+        self.assertGreaterEqual(len(seen), 2)
+        self.assertEqual(set(seen), {0o400})
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
+
+    def test_the_new_directory_is_never_wider_than_0700(self) -> None:
+        modes: list[int] = []
+        real_mkdir = os.mkdir
+
+        def watching_mkdir(path: str, mode: int = 0o777, **kwargs: int) -> None:
+            modes.append(mode)
+            real_mkdir(path, mode, **kwargs)
+
+        with umask(0), mock.patch.object(os, "mkdir", watching_mkdir):
+            self.run_module()
+        self.assertEqual(modes, [0o700])
+
+    def test_the_public_half_is_returned_as_one_authorized_keys_line(self) -> None:
+        result = self.run_module()
+        self.assertEqual(result.public_key, public_pem_by_library(SEED))
+        self.assertTrue(cast(str, result.public_key).startswith("ssh-ed25519 AAAA"))
+        self.assertNotIn("\n", cast(str, result.public_key))
+
+    def test_no_public_file_is_written_next_to_the_key(self) -> None:
+        """The world-readable copy is the role's, not the module's: the directory stays closed."""
+        self.run_module()
+        self.assertEqual([p.name for p in self.directory.iterdir()], [scheme.KEY_NAME])
+
+    def test_the_second_run_changes_nothing(self) -> None:
+        first = self.run_module()
+        before = self.snapshot()
+        second = self.run_module()
+        self.assertFalse(second.changed)
+        self.assertFalse(second.created)
+        self.assertFalse(second.adopted)
+        self.assertEqual(second.temp_cleaned, 0)
+        self.assertEqual(second.public_key, first.public_key)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_new_directory_is_made_not_adopted(self) -> None:
+        result = self.run_module()
+        self.assertTrue(result.directory_created)
+        self.assertFalse(result.adopted)
+
+    def test_existing_key_is_never_overwritten(self) -> None:
+        """The sabotage control: an existing key is byte-identical after every run."""
+        self.plant_key(OTHER_SEED)
+        before = self.snapshot()[scheme.KEY_NAME]
+        asked: list[int] = []
+
+        def new_seed(count: int) -> bytes:
+            """Offer a different seed, and note that a new one was wanted at all."""
+            asked.append(count)
+            return SEED[:count]
+
+        seams = dataclasses.replace(self.seams, random_bytes=new_seed)
+        for _ in range(3):
+            result = self.run_module(seams=seams)
+            self.assertFalse(result.created)
+            self.assertEqual(self.snapshot()[scheme.KEY_NAME], before)
+        self.assertEqual(self.key.read_bytes(), pem_of(OTHER_SEED))
+        self.assertEqual(asked, [])
+        # The public half is the existing key's, not a new key's.
+        self.assertEqual(result.public_key, public_pem_by_library(OTHER_SEED))
+
+    def test_an_existing_key_survives_a_lost_race_to_publish(self) -> None:
+        """Another writer publishes between our look and our link: its key stands."""
+
+        def publish_other_key() -> None:
+            self.key.write_bytes(pem_of(OTHER_SEED))
+            self.key.chmod(0o400)
+
+        seams = dataclasses.replace(self.seams, before_link=publish_other_key)
+        result = self.run_module(seams=seams)
+        self.assertFalse(result.created)
+        self.assertEqual(self.key.read_bytes(), pem_of(OTHER_SEED))
+        self.assertEqual(result.public_key, public_pem_by_library(OTHER_SEED))
+        self.assertEqual([p.name for p in self.directory.iterdir()], [scheme.KEY_NAME])
+
+    def test_an_interrupted_create_leaves_no_key_and_the_next_run_cleans_up(self) -> None:
+        def crash() -> None:
+            raise KeyboardInterrupt
+
+        crashing = dataclasses.replace(self.seams, after_temp_write=crash)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_module(seams=crashing)
+        self.assertFalse(self.key.exists())
+        orphans = [path.name for path in self.directory.iterdir()]
+        self.assertEqual(len(orphans), 1)
+        self.assertTrue(scheme.TEMP_NAME.fullmatch(orphans[0]))
+        result = self.run_module()
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertTrue(result.created)
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+        self.assertEqual([p.name for p in self.directory.iterdir()], [scheme.KEY_NAME])
+
+    def test_a_leftover_temp_file_is_cleaned_and_reported(self) -> None:
+        self.run_module()
+        self.plant(self.directory / TEMP_NAME, b"left behind")
+        result = self.run_module()
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertTrue(result.changed)
+        self.assertFalse((self.directory / TEMP_NAME).exists())
+        self.assertFalse(self.run_module().changed)
+
+    def test_a_planted_temp_symlink_is_refused(self) -> None:
+        self.run_module()
+        target = self.root / "elsewhere"
+        target.write_bytes(b"x")
+        (self.directory / TEMP_NAME).symlink_to(target)
+        self.assert_refused(scheme.E_TEMP, self.directory / TEMP_NAME)
+        self.assertEqual(target.read_bytes(), b"x")
+
+
+class AdoptTests(HostCase):
+    """A valid key with a narrower mode is adopted, its bytes untouched."""
+
+    def test_a_narrower_mode_is_adopted_once(self) -> None:
+        self.plant_key(OTHER_SEED, mode=0o600)
+        inode = self.key.stat().st_ino
+        first = self.run_module()
+        self.assertTrue(first.adopted)
+        self.assertTrue(first.changed)
+        self.assertEqual(stat.S_IMODE(self.key.stat().st_mode), 0o400)
+        self.assertEqual(self.key.read_bytes(), pem_of(OTHER_SEED))
+        self.assertEqual(self.key.stat().st_ino, inode)
+        second = self.run_module()
+        self.assertFalse(second.changed)
+        self.assertFalse(second.adopted)
+
+    def test_a_directory_with_another_mode_is_adopted(self) -> None:
+        self.plant_key()
+        self.directory.chmod(0o755)
+        result = self.run_module()
+        self.assertTrue(result.adopted)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+
+    def test_a_wider_mode_is_refused_not_adopted(self) -> None:
+        for mode in (0o440, 0o640, 0o604, 0o644, 0o660, 0o666):
+            with self.subTest(mode=oct(mode)):
+                self.plant_key(mode=mode)
+                self.assert_refused(scheme.E_KEY_MODE, self.key)
+                self.assertEqual(stat.S_IMODE(self.key.stat().st_mode), mode)
+                self.key.unlink()
+
+
+class RefusalTests(HostCase):
+    """Each way the key's place can be wrong is a refusal naming the path and nothing else."""
+
+    def test_a_key_another_account_owns_is_refused_before_it_is_read(self) -> None:
+        """The root-only control: remove the owner check and this goes red."""
+        # The content is not even a key, so a refusal for the owner proves the order. The test's
+        # own account stands in for the stranger by making root some other uid.
+        self.plant(self.key, b"not even a key")
+        stranger = dataclasses.replace(self.seams, root_uid=os.getuid() + 1)
+        fd = os.open(self.key, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            scheme.judge_key(fd, str(self.key), stranger)
+        self.assertEqual(str(caught.exception), f"{scheme.E_KEY_OWNER}: {self.key}")
+        # The same key, with root being this account, is judged on its content instead.
+        with self.assertRaises(scheme.RefusalError) as caught:
+            scheme.judge_key(fd, str(self.key), self.seams)
+        self.assertEqual(str(caught.exception), f"{scheme.E_KEY_FORM}: {self.key}")
+
+    def converge_open(self, seams: scheme.Seams, dfd: int) -> None:
+        """Run the work inside an already open directory, as converge does after its checks."""
+        scheme.converge_in_directory(
+            self.settings, seams, dfd, check_mode=False, result=scheme.Result()
+        )
+
+    def test_a_directory_another_account_owns_is_refused(self) -> None:
+        self.plant_key()
+        stranger = dataclasses.replace(self.seams, root_uid=os.getuid() + 1)
+        dfd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, dfd)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.converge_open(stranger, dfd)
+        self.assertEqual(str(caught.exception), f"{scheme.E_DIR_OWNER}: {self.directory}")
+
+    def test_the_module_refuses_to_run_as_anyone_but_root(self) -> None:
+        not_root = dataclasses.replace(self.seams, root_uid=os.getuid() + 1)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module(seams=not_root)
+        self.assertEqual(str(caught.exception), f"{scheme.E_NOT_ROOT}: {self.directory}")
+        self.assertFalse(self.directory.exists())
+
+    def test_a_key_that_has_gone_is_not_made_again_while_its_public_half_is_there(self) -> None:
+        """The lost-key control: remove the check and a new key is made, and this goes red."""
+        self.run_module()
+        first_public = self.run_module().public_key
+        self.key.unlink()
+        self.public.write_text(cast(str, first_public), encoding="ascii")
+        before = self.snapshot()
+        asked: list[int] = []
+
+        def new_seed(count: int) -> bytes:
+            asked.append(count)
+            return OTHER_SEED[:count]
+
+        seams = dataclasses.replace(self.seams, random_bytes=new_seed)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module(seams=seams)
+        self.assertEqual(str(caught.exception), f"{scheme.E_KEY_LOST}: {self.public}")
+        self.assertEqual(asked, [])
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.key.exists())
+
+    def test_a_key_directory_that_has_gone_is_not_made_again_either(self) -> None:
+        self.public.write_text("EXAMPLE_PUBLIC_HALF\n", encoding="ascii")
+        for check_mode in (False, True):
+            with (
+                self.subTest(check_mode=check_mode),
+                self.assertRaises(scheme.RefusalError) as caught,
+            ):
+                self.run_module(check_mode=check_mode)
+            self.assertEqual(str(caught.exception), f"{scheme.E_KEY_LOST}: {self.public}")
+            self.assertFalse(self.directory.exists())
+
+    def test_a_public_half_with_its_key_present_is_not_a_refusal(self) -> None:
+        self.run_module()
+        self.public.write_text("EXAMPLE_STALE_PUBLIC_HALF\n", encoding="ascii")
+        self.assertFalse(self.run_module().created)
+
+    def test_a_symlink_in_the_keys_place(self) -> None:
+        target = self.root / "real-key"
+        target.write_bytes(pem_of(SEED))
+        target.chmod(0o400)
+        self.make_directory()
+        self.key.symlink_to(target)
+        self.assert_refused(scheme.E_KEY_OPEN, self.key)
+        self.assertEqual(target.read_bytes(), pem_of(SEED))
+
+    def test_a_directory_in_the_keys_place(self) -> None:
+        self.make_directory()
+        self.key.mkdir()
+        self.assert_refused(scheme.E_KEY_TYPE, self.key)
+
+    def test_a_pipe_in_the_keys_place_does_not_hang(self) -> None:
+        self.make_directory()
+        os.mkfifo(self.key, 0o400)
+        self.assert_refused(scheme.E_KEY_TYPE, self.key)
+
+    def test_a_hard_linked_key(self) -> None:
+        self.plant_key()
+        os.link(self.key, self.root / "another-name")
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+
+    def test_a_key_that_is_too_big_is_not_read(self) -> None:
+        self.plant(self.key, b"A" * (scheme.MAX_KEY_FILE_BYTES + 1))
+        self.assert_refused(scheme.E_KEY_SIZE, self.key)
+
+    def test_text_that_is_not_the_canonical_pem(self) -> None:
+        good = scheme.private_openssh(OTHER_SEED)
+        cases = {
+            "short seed": scheme.private_openssh(OTHER_SEED[:31]),
+            "long seed": scheme.private_openssh(OTHER_SEED + b"x"),
+            "trailing newline": good + b"\n",
+            "no final newline": good[:-1],
+            "the old OpenSSH form": b"-----BEGIN OPENSSH PRIVATE KEY-----\n" + good[28:],
+            "empty": b"",
+        }
+        for name, data in cases.items():
+            with self.subTest(name):
+                self.plant(self.key, data)
+                error = self.assert_refused(scheme.E_KEY_FORM, self.key)
+                self.assert_no_seed_in(str(error), OTHER_SEED)
+                self.key.unlink()
+
+    def test_a_group_or_other_readable_key_is_refused_before_it_is_read(self) -> None:
+        for mode in (0o440, 0o404, 0o640):
+            with self.subTest(mode=oct(mode)):
+                # The content is not even valid, so a refusal for the mode proves the order.
+                self.plant(self.key, b"not a key", mode)
+                self.assert_refused(scheme.E_KEY_MODE, self.key)
+                self.key.unlink()
+
+    def test_a_parent_not_owned_by_root(self) -> None:
+        seams = dataclasses.replace(
+            self.seams, root_uid=os.getuid() + 1, effective_uid=lambda: os.getuid() + 1
+        )
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module(seams=seams)
+        self.assertEqual(str(caught.exception), f"{scheme.E_PARENT}: {self.parent}")
+        self.assertFalse(self.directory.exists())
+
+    def test_a_parent_writable_by_group_or_others(self) -> None:
+        for mode in (0o775, 0o757, 0o777):
+            with self.subTest(mode=oct(mode)):
+                self.parent.chmod(mode)
+                with self.assertRaises(scheme.RefusalError) as caught:
+                    self.run_module()
+                self.assertEqual(str(caught.exception), f"{scheme.E_PARENT}: {self.parent}")
+                self.assertFalse(self.directory.exists())
+
+    def test_a_missing_parent_and_a_parent_that_is_a_link(self) -> None:
+        self.parent.rmdir()
+        with self.assertRaises(scheme.RefusalError):
+            self.run_module()
+        real = self.root / "real-parent"
+        real.mkdir()
+        self.parent.symlink_to(real)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module()
+        self.assertEqual(str(caught.exception), f"{scheme.E_PARENT}: {self.parent}")
+        self.assertEqual(list(real.iterdir()), [])
+
+    def test_a_directory_that_is_a_link_or_a_file(self) -> None:
+        real = self.root / "real-directory"
+        real.mkdir()
+        self.directory.symlink_to(real)
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module()
+        self.assertEqual(str(caught.exception), f"{scheme.E_DIR}: {self.directory}")
+        self.assertEqual(list(real.iterdir()), [])
+        self.directory.unlink()
+        self.directory.write_bytes(b"a file")
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module()
+        self.assertEqual(str(caught.exception), f"{scheme.E_DIR}: {self.directory}")
+
+    def test_a_directory_holding_a_foreign_file_is_refused_and_not_adopted(self) -> None:
+        self.plant_key()
+        self.directory.chmod(0o755)
+        self.plant(self.directory / "ssh.pub", b"foreign", 0o644)
+        before = self.snapshot()
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module()
+        self.assertEqual(str(caught.exception), f"{scheme.E_FOREIGN}: {self.directory / 'ssh.pub'}")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o755)
+
+
+class RecoverTests(HostCase):
+    """A crash between the link and the unlink leaves a key with two names; the next run mends it.
+
+    The mend is allowed only when the extra name is a name in the key's own directory for the very
+    same file, and, when the public file is already there, only when it is the half derived from
+    this key. Anything else stays refused. The sabotage controls, each red when its guard is gone:
+    test_the_two_name_key_of_a_crash_is_mended (the extra-name allowance, set to zero) and
+    test_a_public_file_that_is_not_the_derived_half_stops_the_mend (the comparison, removed).
+    """
+
+    def leave_two_names(self) -> Path:
+        """Make a key and leave it with two names, as a crash between link and unlink does."""
+        self.run_module()
+        temp = self.directory / TEMP_NAME
+        os.link(self.key, temp)
+        self.assertEqual(self.key.stat().st_nlink, 2)
+        return temp
+
+    def crash_after_the_link(self) -> None:
+        """Run a first create that dies after the link and before the temporary name is removed."""
+        real_unlink = os.unlink
+
+        def die_on_the_temp(path: str, *, dir_fd: int | None = None) -> None:
+            if str(path).startswith(scheme.KEY_TEMP_PREFIX):
+                raise KeyboardInterrupt
+            real_unlink(path, dir_fd=dir_fd)
+
+        with mock.patch.object(os, "unlink", die_on_the_temp):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_module()
+
+    def test_the_two_name_key_of_a_crash_is_mended(self) -> None:
+        self.crash_after_the_link()
+        self.assertEqual(self.key.stat().st_nlink, 2)
+        inode = self.key.stat().st_ino
+        result = self.run_module()
+        self.assertTrue(result.changed)
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertFalse(result.created)
+        self.assertEqual(result.public_key, public_pem_by_library(SEED))
+        self.assertEqual(self.key.stat().st_nlink, 1)
+        self.assertEqual(self.key.stat().st_ino, inode)
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+        self.assertEqual([p.name for p in self.directory.iterdir()], [scheme.KEY_NAME])
+        self.assertFalse(self.run_module().changed)
+
+    def test_the_mend_is_accepted_when_the_public_file_is_the_derived_half(self) -> None:
+        temp = self.leave_two_names()
+        self.public.write_text(public_pem_by_library(SEED) + "\n", encoding="ascii")
+        result = self.run_module()
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertFalse(temp.exists())
+        self.assertEqual(self.key.stat().st_nlink, 1)
+        self.assertEqual(
+            self.public.read_text(encoding="ascii"), public_pem_by_library(SEED) + "\n"
+        )
+
+    def test_a_public_file_that_is_not_the_derived_half_stops_the_mend(self) -> None:
+        """The comparison control: drop the comparison and this goes red."""
+        temp = self.leave_two_names()
+        self.public.write_text(public_pem_by_library(OTHER_SEED) + "\n", encoding="ascii")
+        error = self.assert_refused(scheme.E_PUB_MISMATCH, self.public)
+        self.assert_no_seed_in(str(error))
+        self.assertTrue(temp.exists())
+        self.assertEqual(self.key.stat().st_nlink, 2)
+
+    def test_a_public_file_that_is_not_one_plain_file_of_the_exact_text_stops_the_mend(
+        self,
+    ) -> None:
+        self.leave_two_names()
+        good = public_pem_by_library(SEED)
+        elsewhere = self.root / "elsewhere"
+        elsewhere.write_text(good, encoding="ascii")
+        shapes: dict[str, Callable[[], object]] = {
+            "empty": lambda: self.public.write_bytes(b""),
+            "trailing text": lambda: self.public.write_text(good + "x", encoding="ascii"),
+            "no final newline": lambda: self.public.write_text(good[:-1], encoding="ascii"),
+            "too big": lambda: self.public.write_bytes(b"A" * 4096),
+            "a link to the right text": lambda: self.public.symlink_to(elsewhere),
+            "a directory": lambda: self.public.mkdir(),
+        }
+        for name, make in shapes.items():
+            with self.subTest(name):
+                make()
+                self.assert_refused(scheme.E_PUB_MISMATCH, self.public)
+                if self.public.is_dir() and not self.public.is_symlink():
+                    self.public.rmdir()
+                else:
+                    self.public.unlink()
+
+    def test_an_extra_name_for_another_file_is_not_a_mend(self) -> None:
+        # A copy with the same bytes under the temporary name is not the key's other name, so the
+        # key's second link (made elsewhere) stays unexplained and refused.
+        self.run_module()
+        os.link(self.key, self.root / "another-name")
+        self.plant(self.directory / TEMP_NAME, pem_of(SEED))
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+
+    def test_a_third_name_is_not_a_mend(self) -> None:
+        temp = self.leave_two_names()
+        os.link(self.key, self.root / "another-name")
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+        self.assertTrue(temp.exists())
+
+    def test_a_name_outside_the_directory_alone_is_not_a_mend(self) -> None:
+        self.run_module()
+        os.link(self.key, self.root / "another-name")
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+
+    def test_the_mend_is_planned_in_check_mode_and_not_done(self) -> None:
+        temp = self.leave_two_names()
+        before = self.snapshot()
+        result = self.run_module(check_mode=True)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertEqual(result.public_key, public_pem_by_library(SEED))
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(temp.exists())
+
+    def test_check_mode_refuses_a_mismatch_as_an_apply_does(self) -> None:
+        self.leave_two_names()
+        self.public.write_text(public_pem_by_library(OTHER_SEED) + "\n", encoding="ascii")
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module(check_mode=True)
+        self.assertEqual(str(caught.exception), f"{scheme.E_PUB_MISMATCH}: {self.public}")
+
+
+class CheckModeTests(HostCase):
+    """Check mode computes the plan and writes nothing."""
+
+    def test_a_fresh_host_would_create(self) -> None:
+        result = self.run_module(check_mode=True)
+        self.assertTrue(result.changed)
+        self.assertTrue(result.created)
+        self.assertIsNone(result.public_key)
+        self.assertFalse(self.directory.exists())
+
+    def test_an_existing_directory_without_a_key_would_create_and_writes_nothing(self) -> None:
+        self.make_directory()
+        result = self.run_module(check_mode=True)
+        self.assertTrue(result.created)
+        self.assertIsNone(result.public_key)
+        self.assertEqual(list(self.directory.iterdir()), [])
+
+    def test_a_configured_host_shows_no_change(self) -> None:
+        self.run_module()
+        before = self.snapshot()
+        result = self.run_module(check_mode=True)
+        self.assertFalse(result.changed)
+        self.assertIsNotNone(result.public_key)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_adopt_and_clean_up_are_planned_and_not_done(self) -> None:
+        self.plant_key(mode=0o600)
+        self.plant(self.directory / TEMP_NAME, b"left behind")
+        before = self.snapshot()
+        result = self.run_module(check_mode=True)
+        self.assertTrue(result.adopted)
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertFalse(result.created)
+        self.assertEqual(self.snapshot(), before)
+
+
+@dataclasses.dataclass
+class Outcome:
+    """What main() told the stand-in for the Ansible module: how it ended, and with what."""
+
+    how: str = ""
+    kwargs: dict[str, object] = dataclasses.field(default_factory=dict)
+
+
+class NoLeakTests(HostCase):
+    """The private bytes are in the key file and nowhere else: not a return, a refusal, a log."""
+
+    def run_capturing(self, run: Callable[[], object]) -> str:
+        """Run something and return everything it printed or logged, as one text."""
+        out, err = io.StringIO(), io.StringIO()
+        handler_stream = io.StringIO()
+        handler = logging.StreamHandler(handler_stream)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        previous = root.level
+        root.setLevel(logging.DEBUG)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                run()
+        finally:
+            root.removeHandler(handler)
+            root.setLevel(previous)
+        return out.getvalue() + err.getvalue() + handler_stream.getvalue()
+
+    def test_a_create_returns_prints_and_logs_no_part_of_the_seed(self) -> None:
+        results: list[scheme.Result] = []
+        printed = self.run_capturing(lambda: results.append(self.run_module()))
+        self.assert_no_seed_in(printed)
+        self.assert_no_seed_in(repr(results[0]))
+        self.assert_no_seed_in(repr(dataclasses.asdict(results[0])))
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+
+    def test_an_existing_key_returns_no_part_of_the_seed(self) -> None:
+        self.plant_key(OTHER_SEED)
+        results: list[scheme.Result] = []
+        printed = self.run_capturing(lambda: results.append(self.run_module()))
+        self.assert_no_seed_in(printed + repr(results[0]), OTHER_SEED)
+
+    def test_a_check_mode_run_returns_no_part_of_the_seed(self) -> None:
+        self.plant_key(OTHER_SEED, mode=0o600)
+        result = self.run_module(check_mode=True)
+        self.assert_no_seed_in(repr(result), OTHER_SEED)
+
+    def test_the_entry_point_returns_only_the_documented_keys(self) -> None:
+        self.plant_key(OTHER_SEED)
+        outcome = self.call_main()
+        self.assertEqual(outcome.how, "exit")
+        self.assertEqual(
+            sorted(outcome.kwargs),
+            ["adopted", "changed", "created", "public_key", "temp_cleaned"],
+        )
+        self.assert_no_seed_in(repr(outcome), OTHER_SEED)
+        self.assertEqual(outcome.kwargs["public_key"], public_pem_by_library(OTHER_SEED))
+
+    def test_the_entry_point_refuses_with_the_code_and_path_only(self) -> None:
+        self.plant(self.key, pem_of(OTHER_SEED) + b"\n")
+        outcome = self.call_main()
+        self.assertEqual(outcome.how, "fail")
+        self.assertEqual(outcome.kwargs, {"msg": f"{scheme.E_KEY_FORM}: {self.key}"})
+
+    def test_an_unexpected_error_is_named_by_its_type_and_not_its_message(self) -> None:
+        self.plant_key(OTHER_SEED)
+        text = pem_of(OTHER_SEED).decode("ascii")
+        with mock.patch.object(scheme, "converge", side_effect=ValueError(text)):
+            outcome = self.call_main()
+        self.assertEqual(outcome.kwargs, {"msg": f"{scheme.E_INTERNAL}: ValueError"})
+
+    def test_an_os_error_is_named_by_its_errno_only(self) -> None:
+        with mock.patch.object(scheme, "converge", side_effect=PermissionError(13, "denied /x")):
+            outcome = self.call_main()
+        self.assertEqual(outcome.kwargs, {"msg": f"{scheme.E_IO}: EACCES"})
+
+    def call_main(self) -> "Outcome":
+        """Run main() with a stand-in for the Ansible module and return what it was told."""
+        seen = Outcome()
+        test = self
+
+        class Finished(Exception):  # noqa: N818 - stops main() where Ansible would exit
+            """Raised by the stand-in's exit and fail, as the real ones end the process."""
+
+        class FakeModule:
+            """Takes the parameter the role passes, and records the one call main() makes."""
+
+            check_mode = False
+
+            def __init__(self, **_: object) -> None:
+                self.params = {
+                    "directory": str(test.directory),
+                    "public_file": str(test.public),
+                }
+
+            def exit_json(self, **kwargs: object) -> None:
+                seen.how, seen.kwargs = "exit", dict(kwargs)
+                raise Finished
+
+            def fail_json(self, **kwargs: object) -> None:
+                seen.how, seen.kwargs = "fail", dict(kwargs)
+                raise Finished
+
+        real_converge = scheme.converge
+
+        def converge_here(settings: scheme.Settings, *, check_mode: bool) -> scheme.Result:
+            return real_converge(settings, check_mode=check_mode, seams=test.seams)
+
+        with (
+            mock.patch.object(scheme, "AnsibleModule", FakeModule),
+            mock.patch.object(scheme, "converge", converge_here),
+            contextlib.suppress(Finished),
+        ):
+            scheme.main()
+        return seen
+
+
+class ArgumentTests(unittest.TestCase):
+    """The module checks its own argument before it touches anything."""
+
+    def test_accepted(self) -> None:
+        settings = scheme.settings_from_params(
+            "/etc/branchleft/provisioning-controller/ssh",
+            "/etc/branchleft/provisioning-controller/ssh.pub",
+        )
+        self.assertEqual(settings.directory, "/etc/branchleft/provisioning-controller/ssh")
+        self.assertEqual(settings.public_file, "/etc/branchleft/provisioning-controller/ssh.pub")
+
+    def test_refused(self) -> None:
+        directory = "/etc/branchleft/provisioning-controller/ssh"
+        public = "/etc/branchleft/provisioning-controller/ssh.pub"
+        for label, values in {
+            "relative directory": ("ssh", public),
+            "dot dot": ("/etc/branchleft/../x", public),
+            "trailing slash": (directory + "/", public),
+            "root": ("/", public),
+            "relative public file": (directory, "ssh.pub"),
+            "public file with dot dot": (directory, "/etc/branchleft/../x.pub"),
+            "public file inside the key directory": (directory, directory + "/ssh.pub"),
+        }.items():
+            with self.subTest(label), self.assertRaises(scheme.RefusalError) as caught:
+                scheme.settings_from_params(*values)
+            self.assertEqual(caught.exception.code, scheme.E_ARGS)
+
+
+class PinTests(unittest.TestCase):
+    """The role's constants equal the module's."""
+
+    @staticmethod
+    def load(relative: str) -> dict[str, object]:
+        """Read a YAML file of the role."""
+        return cast(dict[str, object], YAML(typ="safe").load(ROLE / relative))
+
+    def test_vars_equal_the_modules_constants(self) -> None:
+        values = self.load("vars/main.yml")
+        self.assertEqual(values["provisioning_controller_host_ssh_key_name"], scheme.KEY_NAME)
+        self.assertEqual(
+            values["provisioning_controller_host_ssh_key_directory_mode"],
+            format(scheme.DIR_MODE, "04o"),
+        )
+        self.assertEqual(
+            values["provisioning_controller_host_ssh_key_mode"], format(scheme.KEY_MODE, "04o")
+        )
+        self.assertEqual(
+            values["provisioning_controller_host_ssh_key_directory"],
+            "/etc/branchleft/provisioning-controller/ssh",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

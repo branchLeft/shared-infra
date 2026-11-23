@@ -1,0 +1,321 @@
+---
+# A digest is set and the route is configured, so the triggers are on and the controller can run.
+# The stand-in executor of prepare.yml stands for the bundle's program: it records each run it is
+# given and, for an approval that is not "stuck", the completion record the real one writes.
+#
+# The unit's own sandbox needs namespaces the test container does not give, so the units are
+# judged as installed and enabled (their text is held by the unit tests), and the pass is run
+# directly as the service account, which is what the unit runs.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Hold what the good bundle's digest names
+      ansible.builtin.stat:
+        path: '{{ scenario_fixture_dir }}/bundle-good.tar.gz'
+        checksum_algorithm: sha256
+      register: provisioning_controller_host_v_bundle
+
+    - name: Look at the link, the program, the configuration and the pinned host keys
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+      loop:
+        - '{{ scenario_current }}'
+        - '{{ scenario_releases }}/{{ provisioning_controller_host_v_bundle.stat.checksum }}/bin/provisioning-controller'
+        - '{{ scenario_config_file }}'
+        - '{{ scenario_config_dir }}/known_hosts'
+        - '{{ scenario_config_dir }}/ssh_config'
+      register: provisioning_controller_host_v_files
+
+    - name: Require the link, the program and the files to be what the role means
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_files.results[0].stat.islnk
+          - provisioning_controller_host_v_files.results[0].stat.lnk_source == scenario_releases ~ '/' ~ provisioning_controller_host_v_bundle.stat.checksum
+          - provisioning_controller_host_v_files.results[1].stat.pw_name == 'root'
+          - provisioning_controller_host_v_files.results[1].stat.mode == '0755'
+          # The configuration holds the jump accounts' names, so it is the account's alone.
+          - provisioning_controller_host_v_files.results[2].stat.mode == '0600'
+          - provisioning_controller_host_v_files.results[2].stat.pw_name == scenario_account
+          - provisioning_controller_host_v_files.results[3].stat.mode == '0644'
+          - provisioning_controller_host_v_files.results[4].stat.mode == '0644'
+        quiet: true
+
+    - name: Read the configuration as the service account, as the controller will
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_account }}', --, cat, '{{ scenario_config_file }}']
+      register: provisioning_controller_host_v_config_read
+      changed_when: false
+      no_log: true
+
+    - name: Parse the configuration
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_config: '{{ provisioning_controller_host_v_config_read.stdout | from_json }}'
+      no_log: true
+
+    - name: Require the configuration to name the route, the key's runtime path and the files it must
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_config.stateFile == scenario_run_state
+          - provisioning_controller_host_v_config.approvalsFile == scenario_approvals
+          - provisioning_controller_host_v_config.registerFile == scenario_config_dir ~ '/register.json'
+          - provisioning_controller_host_v_config.sshEntry.keyFile == scenario_key_runtime_path
+          - provisioning_controller_host_v_config.sshEntry.knownHostsFile == scenario_config_dir ~ '/known_hosts'
+          - provisioning_controller_host_v_config.sshEntry.sshConfigFile == scenario_config_dir ~ '/ssh_config'
+          - provisioning_controller_host_v_config.sshEntry.jumpHops | length == 2
+          - "provisioning_controller_host_v_config.sshEntry.jumpHops[0] == {'user': scenario_edge1_user, 'host': '10.20.1.10'}"
+          - "provisioning_controller_host_v_config.sshEntry.jumpHops[1] == {'user': scenario_edget_user, 'host': '10.20.1.210'}"
+          - "provisioning_controller_host_v_config.sshEntry.target == {'user': 'tenant-entry', 'host': '10.20.1.201'}"
+          - provisioning_controller_host_v_config.hosts.controller.argv[0] == scenario_steps_program
+          - provisioning_controller_host_v_config.hosts.controller.argv[2] == scenario_register
+          - provisioning_controller_host_v_config.hosts.controller.argv[4] == scenario_escrow_dir
+          - provisioning_controller_host_v_config.sshEntry.inputs | list | sort == ['secretsFile', 'stackFile']
+        quiet: true
+      no_log: true
+
+    - name: Read the pinned host keys and the ssh client file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_config_dir }}/known_hosts'
+        - '{{ scenario_config_dir }}/ssh_config'
+      register: provisioning_controller_host_v_ssh_files
+
+    - name: Require one pinned key for each of the four addresses and a client file that pins and names the key
+      ansible.builtin.assert:
+        that:
+          - >-
+            (provisioning_controller_host_v_ssh_files.results[0].content | b64decode).splitlines()
+            | select('match', '^10[.]20[.]1[.](10|210|201|200) ssh-ed25519 ') | list | length == 4
+          - "'StrictHostKeyChecking yes' in (provisioning_controller_host_v_ssh_files.results[1].content | b64decode)"
+          - "'BatchMode yes' in (provisioning_controller_host_v_ssh_files.results[1].content | b64decode)"
+          - "('IdentityFile ' ~ scenario_key_runtime_path) in (provisioning_controller_host_v_ssh_files.results[1].content | b64decode)"
+        quiet: true
+
+    # --- The triggers are on.
+    - name: Ask systemd for the three units
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - provisioning-controller.path
+        - provisioning-controller.timer
+        - provisioning-controller.service
+      register: provisioning_controller_host_v_systemd
+
+    - name: Require the path unit and the timer to be enabled and running, and the service not
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_systemd.results[0].status.UnitFileState == 'enabled'
+          - provisioning_controller_host_v_systemd.results[0].status.ActiveState == 'active'
+          - provisioning_controller_host_v_systemd.results[1].status.UnitFileState == 'enabled'
+          - provisioning_controller_host_v_systemd.results[1].status.ActiveState == 'active'
+          # The timer may have run the service already (its boot delay is past), and the container
+          # cannot give the unit's sandbox, so it may have failed. It is not running.
+          - provisioning_controller_host_v_systemd.results[2].status.ActiveState in ['inactive', 'failed']
+        quiet: true
+        fail_msg: >-
+          service state {{ provisioning_controller_host_v_systemd.results[2].status.ActiveState }}
+          {{ provisioning_controller_host_v_systemd.results[2].status.Result | default('') }}
+
+    # Held off again, so that writing the ledger below does not start the unit, whose sandbox the
+    # container cannot give. The role is not run again after this point.
+    - name: Stop the two triggers, leaving them enabled
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        state: stopped
+      loop:
+        - provisioning-controller.path
+        - provisioning-controller.timer
+
+    # --- The pass. First over a ledger that does not exist, then over an empty one: both are a
+    # clean no-op, which is what a host waiting on the provisioning API looks like.
+    - name: Run a pass with no ledger yet
+      ansible.builtin.command:
+        argv: &pass
+          - runuser
+          - -u
+          - '{{ scenario_account }}'
+          - --
+          - '{{ scenario_pass_program }}'
+          - --program
+          - '{{ scenario_current }}/bin/provisioning-controller'
+          - --config
+          - '{{ scenario_config_file }}'
+          - --approvals
+          - '{{ scenario_approvals }}'
+          - --state
+          - '{{ scenario_run_state }}'
+      register: provisioning_controller_host_v_pass_none
+      changed_when: false
+      failed_when: false
+
+    - name: Put an empty ledger in place, as the provisioning API does before any approval
+      ansible.builtin.copy:
+        content: '{"approvals": []}{{ "\n" }}'
+        dest: '{{ scenario_approvals }}'
+        owner: '{{ scenario_account }}'
+        group: '{{ scenario_account }}'
+        mode: '0600'
+
+    - name: Run a pass over the empty ledger
+      ansible.builtin.command:
+        argv: *pass
+      register: provisioning_controller_host_v_pass_empty
+      changed_when: false
+      failed_when: false
+
+    - name: Look for any invocation so far
+      ansible.builtin.stat:
+        path: '{{ scenario_invocations }}'
+      register: provisioning_controller_host_v_none_called
+
+    - name: Require both to be clean, to say nothing is pending and to have run nothing
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_pass_none.rc == 0
+          - "'0 approval(s) pending' in provisioning_controller_host_v_pass_none.stdout"
+          - provisioning_controller_host_v_pass_empty.rc == 0
+          - "'0 approval(s) pending' in provisioning_controller_host_v_pass_empty.stdout"
+          - not provisioning_controller_host_v_none_called.stat.exists
+        quiet: true
+        fail_msg: >-
+          pass none {{ provisioning_controller_host_v_pass_none.rc }} {{ provisioning_controller_host_v_pass_none.stderr }}
+          pass empty {{ provisioning_controller_host_v_pass_empty.rc }} {{ provisioning_controller_host_v_pass_empty.stdout }}
+          {{ provisioning_controller_host_v_pass_empty.stderr }}
+
+    # --- Three approvals recorded. One is complete already, one will complete, one will not.
+    - name: Record three approvals, one of them already complete
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.dest }}'
+        owner: '{{ scenario_account }}'
+        group: '{{ scenario_account }}'
+        mode: '0600'
+      loop:
+        - dest: '{{ scenario_approvals }}'
+          content: >-
+            {"approvals": [
+            {"approvalId": "appr-1", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]},
+            {"approvalId": "appr-2", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]},
+            {"approvalId": "appr-3-stuck", "tenantId": "demo-tenant", "approvedAt": "2026-01-01T00:00:00Z", "scopes": ["setup"]}
+            ]}{{ "\n" }}
+        - dest: '{{ scenario_run_state }}'
+          content: '{"at": "2026-01-01T00:00:00Z", "approvalId": "appr-1", "event": "run-complete"}{{ "\n" }}'
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Run the first pass
+      ansible.builtin.command:
+        argv: *pass
+      register: provisioning_controller_host_v_pass_one
+      changed_when: false
+      failed_when: false
+
+    - name: Read what the executor was run for
+      ansible.builtin.slurp:
+        src: '{{ scenario_invocations }}'
+      register: provisioning_controller_host_v_calls_one
+
+    - name: Run the second pass
+      ansible.builtin.command:
+        argv: *pass
+      register: provisioning_controller_host_v_pass_two
+      changed_when: false
+      failed_when: false
+
+    - name: Read what the executor was run for after both passes
+      ansible.builtin.slurp:
+        src: '{{ scenario_invocations }}'
+      register: provisioning_controller_host_v_calls_two
+
+    # The complete approval is never run, the one that completes is run once and not again, and the
+    # one that stops is taken up again by the next pass and makes it end with a failure.
+    - name: Require each approval to have been run exactly as often as it should
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_pass_one.rc == 1
+          - "'2 approval(s) pending' in provisioning_controller_host_v_pass_one.stdout"
+          - (provisioning_controller_host_v_calls_one.content | b64decode).splitlines() == ['appr-2', 'appr-3-stuck']
+          - provisioning_controller_host_v_pass_two.rc == 1
+          - "'1 approval(s) pending' in provisioning_controller_host_v_pass_two.stdout"
+          - (provisioning_controller_host_v_calls_two.content | b64decode).splitlines() == ['appr-2', 'appr-3-stuck', 'appr-3-stuck']
+        quiet: true
+        fail_msg: A completed approval was run again, a pending one was not run, or a stopped one was not taken up again.
+
+    # --- The controller's own steps, run as the account the controller runs as. The check passes
+    # for the register as delivered and refuses a step whose numbers differ, and the escrow makes
+    # a passphrase file once, mode 0600, and leaves it exactly as it was on the next call.
+    - name: Run the register check with the delivered entry's numbers, and with a wrong port
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - '{{ scenario_account }}'
+          - --
+          - '{{ scenario_steps_program }}'
+          - --register
+          - '{{ scenario_register }}'
+          - --escrow-dir
+          - '{{ scenario_escrow_dir }}'
+        stdin: '{{ item }}'
+      loop:
+        - >-
+          {"id": "confirm-register-assignment",
+          "inputs": {"slot": "demo-tenant", "port": 8101, "uid": 30001, "bucket": "branchleft-media-demo-tenant", "folder": "demo-tenant"}}
+        - >-
+          {"id": "confirm-register-assignment",
+          "inputs": {"slot": "demo-tenant", "port": 8102, "uid": 30001, "bucket": "branchleft-media-demo-tenant", "folder": "demo-tenant"}}
+        - >-
+          {"id": "confirm-register-assignment",
+          "inputs": {"slot": "other-tenant", "port": 8101, "uid": 30001, "bucket": "branchleft-media-demo-tenant", "folder": "demo-tenant"}}
+        - '{"id": "create-owner-account", "inputs": {}}'
+      register: provisioning_controller_host_v_confirm
+      changed_when: false
+      failed_when: false
+
+    - name: Require the delivered numbers to pass, and a wrong port, an unknown slot and an unserved step to be refused for good
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_confirm.results | map(attribute='rc') | list == [0, 3, 3, 3]
+        quiet: true
+
+    - name: Escrow the stack passphrase twice, and once with a name that is not the escrow's
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - '{{ scenario_account }}'
+          - --
+          - '{{ scenario_steps_program }}'
+          - --register
+          - '{{ scenario_register }}'
+          - --escrow-dir
+          - '{{ scenario_escrow_dir }}'
+        stdin: '{{ item }}'
+      loop:
+        - '{"id": "escrow-stack-passphrase", "inputs": {"secretName": "STACK_PASSPHRASE_demo-tenant"}}'
+        - '{"id": "escrow-stack-passphrase", "inputs": {"secretName": "STACK_PASSPHRASE_demo-tenant"}}'
+        - '{"id": "escrow-stack-passphrase", "inputs": {"secretName": "../config"}}'
+      register: provisioning_controller_host_v_escrow
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Look at the escrowed file between the two calls and after
+      ansible.builtin.stat:
+        path: '{{ scenario_escrow_dir }}/STACK_PASSPHRASE_demo-tenant'
+        checksum_algorithm: sha256
+      register: provisioning_controller_host_v_escrow_file
+
+    - name: Require one file, mode 0600, the account's, made by the first call and unchanged by the second, and nothing printed
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_escrow.results | map(attribute='rc') | list == [0, 0, 3]
+          - provisioning_controller_host_v_escrow.results | map(attribute='stdout') | join == ''
+          - provisioning_controller_host_v_escrow_file.stat.mode == '0600'
+          - provisioning_controller_host_v_escrow_file.stat.pw_name == scenario_account
+          - provisioning_controller_host_v_escrow_file.stat.size == 43
+        quiet: true
+      no_log: true

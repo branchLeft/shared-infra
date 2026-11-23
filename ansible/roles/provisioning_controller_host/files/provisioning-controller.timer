@@ -1,0 +1,14 @@
+# Starts a pass now and then, so that a run that stopped at a step (a host busy, a hop down) is
+# taken up again with no new approval. A pass over a ledger with nothing pending does nothing.
+# Installed by the provisioning_controller_host role, enabled only when the role is given a bundle
+# digest, and stopped and disabled again when the digest is cleared.
+[Unit]
+Description=Provisioning controller, resume tick
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+Unit=provisioning-controller.service
+
+[Install]
+WantedBy=timers.target
