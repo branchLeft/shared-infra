@@ -184,6 +184,9 @@
         status_code: 200
       changed_when: false
 
+    - name: Verify the 90-day uptime collector, its timer and its report
+      ansible.builtin.include_tasks: tasks/uptime.yml
+
     # The safety-class cases. A listen address outside the two the role allows
     # (loopback and ops1's private address) is refused twice: by the argument
     # specification (choices), and, with that validation switched off, by the

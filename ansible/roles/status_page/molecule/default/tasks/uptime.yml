@@ -1,0 +1,106 @@
+---
+# The 90-day uptime collector as the converge left it: the program, the state directories, the
+# two units, an enabled and active timer, and, once the service has really run against the
+# stand-in page, a report holding the probes the stand-in served.
+- name: Read the collector's files and directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /opt/branchleft/status-uptime
+    - /opt/branchleft/status-uptime/branchleft_status_uptime.py
+    - /var/lib/branchleft/status-uptime
+    - /var/lib/branchleft/status-uptime/samples
+    - /etc/systemd/system/branchleft-status-uptime-collect.service
+    - /etc/systemd/system/branchleft-status-uptime-collect.timer
+  register: status_page_verify_uptime_files
+  loop_control:
+    label: '{{ item }}'
+
+- name: Assert each has its owner, group and mode
+  ansible.builtin.assert:
+    that:
+      - status_page_verify_uptime_files.results | ansible.builtin.map(attribute='stat.exists') | ansible.builtin.min
+      - status_page_verify_uptime_files.results | ansible.builtin.map(attribute='stat.pw_name') | ansible.builtin.unique | ansible.builtin.list == ['root']
+      - status_page_verify_uptime_files.results | ansible.builtin.map(attribute='stat.gr_name') | ansible.builtin.unique | ansible.builtin.list == ['root']
+      - >-
+        status_page_verify_uptime_files.results | ansible.builtin.map(attribute='stat.mode') | ansible.builtin.list
+        == ['0755', '0755', '0755', '0750', '0644', '0644']
+    quiet: true
+    fail_msg: A collector file or directory is missing, or has the wrong owner, group or mode.
+
+- name: Assert the program on the host is the repository's file, byte for byte
+  ansible.builtin.assert:
+    that:
+      - status_page_verify_uptime_files.results[1].stat.checksum == (verify_repository_text | ansible.builtin.hash('sha256'))
+    quiet: true
+    fail_msg: The installed collector is not the file the repository holds.
+  vars:
+    verify_repository_text: "{{ lookup('ansible.builtin.file', verify_role_dir ~ '/files/branchleft_status_uptime.py', rstrip=false, lstrip=false) }}"
+
+# The units are checked by systemd's own parser, so a unit it would reject fails here and not
+# at the first apply. The program path in the service must exist on the host (the verifier reads
+# the file it names).
+- name: Have systemd check both units
+  ansible.builtin.command:
+    argv:
+      - systemd-analyze
+      - verify
+      - /etc/systemd/system/branchleft-status-uptime-collect.service
+      - /etc/systemd/system/branchleft-status-uptime-collect.timer
+  register: status_page_verify_uptime_analyze
+  changed_when: false
+
+- name: Assert systemd found nothing to say about either unit
+  ansible.builtin.assert:
+    that:
+      - status_page_verify_uptime_analyze.stderr == ''
+    quiet: true
+    fail_msg: 'systemd-analyze verify reported: {{ status_page_verify_uptime_analyze.stderr }}'
+
+- name: Ask systemd for the collection timer
+  ansible.builtin.systemd_service:
+    name: branchleft-status-uptime-collect.timer
+  register: status_page_verify_uptime_timer
+
+- name: Assert the collection timer is active and enabled, and starts the collect service
+  ansible.builtin.assert:
+    that:
+      - status_page_verify_uptime_timer.status.ActiveState == 'active'
+      - status_page_verify_uptime_timer.status.UnitFileState == 'enabled'
+      - status_page_verify_uptime_timer.status.Unit == 'branchleft-status-uptime-collect.service'
+    quiet: true
+    fail_msg: The status uptime collection timer is not active and enabled.
+
+# A oneshot service: the start returns when the program, then the report, have run, and fails
+# the play if either exited non-zero.
+- name: Run the collection service once, as the timer would
+  ansible.builtin.systemd_service:
+    name: branchleft-status-uptime-collect.service
+    state: started
+  changed_when: false
+
+- name: Read the report the service wrote
+  ansible.builtin.slurp:
+    src: /var/lib/branchleft/status-uptime/report.json
+  register: status_page_verify_uptime_report_raw
+
+- name: Read the report's file mode
+  ansible.builtin.stat:
+    path: /var/lib/branchleft/status-uptime/report.json
+  register: status_page_verify_uptime_report_stat
+
+- name: Assert the report holds the two probes the stand-in page served
+  ansible.builtin.assert:
+    that:
+      - verify_report.window_days == 90
+      - verify_report.endpoints | ansible.builtin.length == 1
+      - verify_report.endpoints[0].endpoint_key == 'stand-in_endpoint'
+      - verify_report.endpoints[0].samples == 2
+      - verify_report.endpoints[0].successes == 1
+      - verify_report.endpoints[0].uptime_percent == 50.0
+      - status_page_verify_uptime_report_stat.stat.mode == '0644'
+    quiet: true
+    fail_msg: 'The report is not the figure of the two probes served: {{ verify_report }}'
+  vars:
+    verify_report: '{{ status_page_verify_uptime_report_raw.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'

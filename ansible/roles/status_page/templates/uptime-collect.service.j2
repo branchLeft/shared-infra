@@ -1,0 +1,17 @@
+[Unit]
+Description=Record the status page's probe samples and write its 90-day uptime report
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Collect asks the page where it is published (its listen address, loopback or ops1's private
+# address), records each probe once, then the report is rewritten in one step. A failed
+# collection leaves the previous report in place and the timer running.
+ExecStart={{ status_page_uptime_python }} -I {{ status_page_uptime_program_dir }}/{{ status_page_uptime_program }} collect --url http://{{ status_page_listen_address }}:{{ status_page_port }}/api/v1/endpoints/statuses --dir {{ status_page_uptime_samples_dir }}
+ExecStartPost={{ status_page_uptime_python }} -I {{ status_page_uptime_program_dir }}/{{ status_page_uptime_program }} report --dir {{ status_page_uptime_samples_dir }} --out {{ status_page_uptime_report_file }}
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ status_page_uptime_state_dir }}
