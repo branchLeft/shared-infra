@@ -1,0 +1,19 @@
+# The tenant edge's CrowdSec overlay. Hand-maintained: nothing renders it. It carries the
+# same settings as the estate's (hetzner/edge/stack/crowdsec/config.yaml.local), whose
+# comments give the reasoning for each, and hetzner/edge-t/render.test.ts holds every
+# line below to the estate's, so the two cannot drift apart.
+cscli:
+  hub_branch: master
+
+crowdsec_service:
+  acquisition_dir: /etc/crowdsec-acquis.d
+
+config_paths:
+  simulation_path: /etc/crowdsec-remediation/simulation.yaml
+api:
+  server:
+    profiles_path: /etc/crowdsec-remediation/profiles.yaml
+
+db_config:
+  flush:
+    max_age: 30d
