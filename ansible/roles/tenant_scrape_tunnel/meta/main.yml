@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  namespace: branchleft
+  description: Opens a restricted SSH tunnel from the Prometheus host to the tenants base host, so the tenant hosts' node exporters can be scraped.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.6'

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Writes the monitoring stack's secret-bearing files from
 `/etc/branchleft/monitoring.env` and `/etc/branchleft/ntfy-pager.env` (the unit's
-drop-in loads both; the second holds the four `NTFY_` keys): `alertmanager.yml`,
+drop-in loads both; the second holds the four `NTFY_` keys and the optional
+`NTFY_MX1_TOKEN`): `alertmanager.yml`,
 `ntfy/server.yml` and `prometheus/mx1-metrics-password`. Why it is a plain string replace, and why its
 name is wider than its remit, is in `render_alertmanager_config.md`.
 """
@@ -34,6 +35,13 @@ NTFY_PLACEHOLDERS: dict[str, str] = {
     "__NTFY_MACHINE_PASSWORD_HASH__": "NTFY_MACHINE_PASSWORD_HASH",
 }
 NTFY_DISABLED_VALUE = "ntfy-not-configured"
+
+# The mail host's publish-only token is optional, unlike the four above: an absent
+# or unusable one leaves the pager and every other grant as they were and only
+# removes the mail host's token line, so the host can publish nothing. See
+# `mx1_token_problems`.
+NTFY_MX1_PLACEHOLDER = "__NTFY_MX1_TOKEN__"
+NTFY_MX1_VAR = "NTFY_MX1_TOKEN"
 
 # ntfy refuses a token that is not `tk_` plus 29 lowercase alphanumerics, and a
 # password slot holding anything but a bcrypt hash would put a plaintext
@@ -78,7 +86,38 @@ def render(template: str, env: dict[str, str]) -> str:
         rendered = rendered.replace(placeholder, env[var])
     for placeholder, value in ntfy_values.items():
         rendered = rendered.replace(placeholder, value)
+    if not problems and env.get(NTFY_MX1_VAR) and not mx1_token_problems(env):
+        rendered = rendered.replace(NTFY_MX1_PLACEHOLDER, env[NTFY_MX1_VAR])
+    else:
+        rendered = drop_mx1_token(rendered)
     return rendered
+
+
+def mx1_token_problems(env: dict[str, str]) -> list[str]:
+    """Why the mail host's publish token cannot be configured, or an empty list.
+
+    An absent token is not a problem: the grant is optional. A present one must
+    be shaped as ntfy requires and must differ from the other two tokens, so a
+    paste of the wrong one fails here and not as a mail host that can publish on
+    the page topic's credentials. Values are never echoed.
+    """
+    token = env.get(NTFY_MX1_VAR)
+    if not token:
+        return []
+    problems: list[str] = []
+    if not NTFY_TOKEN_PATTERN.fullmatch(token):
+        problems.append(
+            f"{NTFY_MX1_VAR} is malformed (a token is tk_ plus 29 lowercase letters or digits)"
+        )
+    for other in NTFY_TOKEN_VARS:
+        if token == env.get(other):
+            problems.append(f"{NTFY_MX1_VAR} and {other} must differ")
+    return problems
+
+
+def drop_mx1_token(text: str) -> str:
+    """The text without the line that holds the mail host's token placeholder."""
+    return "\n".join(line for line in text.split("\n") if NTFY_MX1_PLACEHOLDER not in line)
 
 
 def ntfy_problems(env: dict[str, str]) -> list[str]:
@@ -142,6 +181,59 @@ ALERTMANAGER_UID = int(os.environ.get("ALERTMANAGER_UID", "65534"))
 # because the two images are pinned and upgraded independently and a shared
 # constant would silently carry one image's uid onto the other.
 PROMETHEUS_UID = int(os.environ.get("PROMETHEUS_UID", "65534"))
+
+
+# The demo wildcard TLS probe. Its base is an owner-held value in monitoring.env,
+# never in a committed file: the template holds a token, and this writes the
+# scrape file Prometheus reads, beside it, on every start.
+DEMO_TLS_TEMPLATE_NAME = "demo_tls_probe.yml.tmpl"
+DEMO_TLS_OUTPUT_NAME = "demo_tls_probe.yml"
+DEMO_TLS_BASE_VAR = "DEMO_WILDCARD_BASE"
+DEMO_TLS_TOKEN = "__DEMO_WILDCARD_BASE__"
+DEMO_TLS_DISABLED = "scrape_configs: []\n"
+DEMO_TLS_BASE_PATTERN = re.compile(r"([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def render_demo_tls_probe(template: str, base: str | None) -> str:
+    """The scrape file for the given base. Unset or empty writes no scrape config.
+
+    Raises ValueError for a base that is not a lower-case domain of two or more
+    labels, so a typo cannot put a malformed name into the probe's target.
+    """
+    if not base:
+        return DEMO_TLS_DISABLED
+    if DEMO_TLS_BASE_PATTERN.fullmatch(base) is None:
+        raise ValueError(f"{DEMO_TLS_BASE_VAR} is not a lower-case domain of two or more labels")
+    return template.replace(DEMO_TLS_TOKEN, base)
+
+
+def write_demo_tls_probe(stack_dir: pathlib.Path, env: dict[str, str]) -> pathlib.Path:
+    """Writes the demo probe's scrape file. Never fatal: a bad base disables it.
+
+    A fatal error here would stop the whole monitoring stack at start, so a bad
+    base is reported and the probe is left out, as an unset base is.
+    """
+    prom_dir = stack_dir / "prometheus"
+    template_path = prom_dir / DEMO_TLS_TEMPLATE_NAME
+    output = prom_dir / DEMO_TLS_OUTPUT_NAME
+    # The same guard as the mx1 password: an unrendered start leaves an empty
+    # directory at this bind-mount source, and it must not stop the next start.
+    if output.is_dir() and not output.is_symlink():
+        output.rmdir()
+    base = env.get(DEMO_TLS_BASE_VAR)
+    try:
+        rendered = render_demo_tls_probe(template_path.read_text(), base)
+    except (OSError, ValueError) as exc:
+        print(f"render_alertmanager_config: {exc} -- the demo probe is disabled", file=sys.stderr)
+        rendered = DEMO_TLS_DISABLED
+    try:
+        output.write_text(rendered)
+        output.chmod(0o644)
+    except OSError as exc:
+        print(f"render_alertmanager_config: could not write {output}: {exc}", file=sys.stderr)
+        return output
+    print(f"render_alertmanager_config: wrote {output}")
+    return output
 
 
 def write_prometheus_password(stack_dir: pathlib.Path, env: dict[str, str]) -> pathlib.Path | None:
@@ -225,6 +317,15 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         ntfy_template = lock_ntfy_config(ntfy_template)
+    if not problems:
+        mx1_problems = mx1_token_problems(dict(os.environ))
+        if mx1_problems:
+            print(
+                "render_alertmanager_config: WARNING the mail host's abuse-report grant is "
+                "left without a token, so it can publish nothing (the pager is unaffected): "
+                + "; ".join(mx1_problems),
+                file=sys.stderr,
+            )
     ntfy_rendered = render(ntfy_template, dict(os.environ))
     ntfy_output = ntfy_dir / NTFY_OUTPUT_NAME
     # An unrendered start leaves Docker's empty directory at a bind-mount
@@ -236,6 +337,7 @@ def main(argv: list[str]) -> int:
     print(f"render_alertmanager_config: wrote {ntfy_output}")
 
     write_prometheus_password(stack_dir, dict(os.environ))
+    write_demo_tls_probe(stack_dir, dict(os.environ))
     return 0
 
 

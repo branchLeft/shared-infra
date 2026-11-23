@@ -557,7 +557,9 @@ refusal is not expected on a merged file.
 | 40   | `error`        | Invalid or unsafe configuration or state, a missing tool, a failed git command, or `io-error` or `internal-error` (see below). |
 
 The `reason` field of exit 20 is one of `bad-request`, `not-on-main`, `rollback`,
-`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, and for
+`unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, on a host that
+requires a release tag `release-tag-missing` and `too-many-release-tags` (see "The release-tag
+route"), and for
 step requests `step-mode-only` (a step with `--mode apply` or `--mode check`),
 `step-not-allowed` (the id is not on the host's allow-list, which may be empty) and
 `confirm-mismatch` (the word is not that step's word). On the bundle source (see "Push
@@ -685,7 +687,10 @@ unit test makes each of them.
   floor and the playbook, and has no `main` to compare with (see "Push receiver"). A commit
   made in the web interface on another branch and signed by the same key is applied if it
   descends from the floor. This is the owner's ruling, and the floor reset is a person's
-  step in the operator runbook.
+  step in the operator runbook. A host told to require a release tag does not have this
+  limit: it needs no `main`, because the owner's signature on the tag is the trust root (see
+  "The release-tag route"). The program has the route; no host's configuration turns it on
+  yet, so on every host this limit still stands.
 - **The floor of a bundle host is a seed.** The first floor comes from
   `pull_trigger_floor_seed`, a commit id chosen when the host is enrolled; the receiver
   refuses everything before then. A wrong seed that is newer than the commits to be pushed
@@ -934,6 +939,66 @@ caller input, so what these hold is that a declaration cannot make it do more.
 | L10 a name cannot trip the plan job's secret scan    | removing the word check                            | `test_a_name_with_a_word_the_plan_scan_reads_is_refused`                                                                        |
 | L11 a refusal runs nothing for the entry             | running the unit check before the field check      | `test_a_refused_entry_runs_nothing_and_is_named`                                                                                |
 | L12 the repository's own file has no refusal         | adding a command-like entry to `facts.json`        | `test_the_declared_file_of_the_repository_has_no_refusal`                                                                       |
+
+### The release-tag route
+
+`docs/pull-signer-trust.md` (T8) names the gap this closes: a host that takes a commit by
+push has no `main`, so any holder of the push or check key can name a commit of their own as
+`main`, and the commit signer's key (GitHub's) signs commits on every branch. The control is a
+trust root the host can check offline: a release tag signed by a key the owner holds.
+
+The program has two more configuration keys, both optional and absent from every host's
+configuration today (the role does not write them, and the trust files and
+`check_enrolment.py` do not yet carry them), so no host behaves differently:
+
+- `release_signers`: a list of `{format, key}`, as `signers` is. These keys are read for a tag
+  and for nothing else. A key of `signers` is never read for a tag.
+- `require_release_tag`: `true` or `false`. `true` with no release key is a refused
+  configuration (`config-invalid`), not a host that refuses every request.
+
+When it is `true`, the one admission method that both sources and every mode (apply, check
+and step) call requires, in place of the commit's own signature, that:
+
+1. a tag under `refs/tags/release/` was fetched (pull route) or carried in the bundle (push
+   route). The pull route empties its private namespace first, so a tag withdrawn at the
+   remote is gone on the next request;
+2. the ref is an annotated tag object whose own text names exactly this commit (a lightweight
+   tag, and a tag of a tag, are dropped) and a name of the shape `release/YYYYMMDD.N` in that
+   text, whatever the ref is called, so a tag signed for another purpose is not replayed;
+3. more than 64 such tags is `too-many-release-tags`, and not a cut: junk cannot crowd a real
+   tag out unseen. Fewer are each checked;
+4. the tag's own signature, read from the tag object's bytes and never from the commit,
+   is good and by a release key. An SSH signature must be made under the namespace `git`; an
+   OpenPGP signature is refused if its key is expired or revoked, or if any signature status
+   is bad. Anything else is `release-tag-missing`, which leaves the host as it was.
+
+The pull route keeps its ancestor-of-`main` test and its floor first. The push route keeps its
+floor. Neither reads the commit's signature in this mode.
+
+What is not built, and so not proved: the sender (`branchLeft/github-workflows`, `git bundle
+create`) does not yet put the tags in the bundle; no release key exists; the role, the trust
+files and `check_enrolment.py` do not carry the two keys; the `release/*` tag ruleset (standards
+tooling) and the tag trigger of the delivery do not exist. SSH user verification (the PIN) is the
+design's open spike question and is not enforced here. Until those are done and the owner has
+signed a release, nothing may set `require_release_tag`, because the host would refuse every
+push.
+
+| Control                                                  | Broken by                                           | Fails in                                                                                                     |
+| -------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| R1 a host that requires a tag refuses a commit with none | skipping the tag check                              | `test_a_commit_with_no_tag_is_refused...`, and every refusal case                                            |
+| R2 only a release key's signature counts                 | accepting the commit signers, or any good signature | `test_a_tag_signed_by_a_key_that_is_not_a_release_key_is_refused`                                            |
+| R3 the signature is read from the tag, not the commit    | reading the commit's signature                      | `test_a_commit_signed_by_a_release_key_with_no_tag_is_refused`                                               |
+| R4 the tag names exactly this commit, directly           | dropping the header test                            | `test_a_tag_that_names_another_commit...`, `test_a_tag_names_a_commit_directly_only_if_its_own_lines_say_so` |
+| R5 the name in the signed text has the release shape     | dropping the name test                              | `test_a_signed_tag_with_a_name_outside_the_release_shape_is_refused`                                         |
+| R6 an SSH signature is bound to the namespace `git`      | `check-novalidate` with another namespace           | `test_a_signature_made_under_another_ssh_namespace_is_refused`                                               |
+| R7 a tag changed after signing is refused                | not checking the signature                          | `test_a_tag_whose_message_was_changed_after_signing_is_refused`                                              |
+| R8 more than 64 candidates is its own refusal            | cutting the list in place of refusing               | `test_more_tags_than_the_limit_are_refused_as_their_own_reason...`                                           |
+| R9 a withdrawn tag is gone on the next fetch             | not emptying the namespace                          | `test_a_tag_withdrawn_at_the_remote_is_gone_on_the_next_request`                                             |
+| R10 a host not told to require a tag is unchanged        | reading tags without the flag                       | `test_a_host_that_is_not_told_to_require_a_tag_ignores_tags_and_reads_the_commit`                            |
+
+These are unit cases on real git, real tags and real SSH and OpenPGP signatures, on both
+sources. There is no Molecule scenario for this route yet, because no installed host takes the
+keys.
 
 ## How to change it safely
 

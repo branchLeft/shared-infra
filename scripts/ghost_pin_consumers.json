@@ -62,6 +62,22 @@
       ]
     },
     {
+      "name": "media_backup",
+      "host": "ops1",
+      "commit": {
+        "file": "ansible/roles/media_backup/defaults/main.yml",
+        "key": "media_backup_source_sha"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/media_backup/defaults/main.yml",
+          "key": "media_backup_release_files",
+          "shape": "path_field",
+          "prefix": ""
+        }
+      ]
+    },
+    {
       "name": "tenant_onboarding",
       "host": "app1 (role not yet in a playbook)",
       "commit": {

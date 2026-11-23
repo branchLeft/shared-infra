@@ -12,7 +12,9 @@ The samples live in one directory, one append-only file per endpoint, a line `<u
   sample once. A sample at or before the last one held for its endpoint is not appended, so
   reading the same result twice records it once, and the first reading of an instant stands.
 - `report` prints, for every endpoint, the samples in the last 90 days, how many passed, the
-  uptime that gives, and how much of the window the samples cover.
+  uptime that gives, and how much of the window the samples cover. With `--out FILE` it writes
+  the same document to that file in one step (a temporary file, then a rename), so a reader of the
+  file never sees half of it.
 
 The page keeps the last 100 results per endpoint (one a minute), so `collect` must run at least
 every 100 minutes to miss none. A stretch with no sample is not counted as up or down: it lowers
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -216,13 +219,25 @@ def _collect(url: str, directory: Path) -> int:
     return 0
 
 
-def _report(directory: Path, now: int) -> int:
+def _publish(path: Path, text: str) -> None:
+    """Write `text` to `path` in one step: a reader sees the old report or the new, not half."""
+    temporary = path.with_name(f".{path.name}.new")
+    temporary.write_text(text, encoding="ascii")
+    temporary.chmod(0o644)
+    os.replace(temporary, path)
+
+
+def _report(directory: Path, now: int, out: Path | None) -> int:
     document = {
         "window_days": WINDOW_DAYS,
         "generated_at": datetime.fromtimestamp(now, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "endpoints": [asdict(item) for item in uptimes(open_store(directory), now)],
     }
-    print(json.dumps(document, indent=2))
+    text = json.dumps(document, indent=2) + "\n"
+    if out is None:
+        sys.stdout.write(text)
+    else:
+        _publish(out, text)
     return 0
 
 
@@ -236,10 +251,14 @@ def main(argv: list[str]) -> int:
     report = commands.add_parser("report", help="print the 90-day uptime of every endpoint")
     report.add_argument("--dir", type=Path, default=DEFAULT_DIR)
     report.add_argument("--now", type=int, default=None, help="unix time; default is the clock")
+    report.add_argument(
+        "--out", type=Path, default=None, help="write the report here, not to stdout"
+    )
     args = parser.parse_args(argv)
     if args.command == "collect":
         return _collect(args.url, args.dir)
-    return _report(args.dir, int(datetime.now(UTC).timestamp()) if args.now is None else args.now)
+    now = int(datetime.now(UTC).timestamp()) if args.now is None else args.now
+    return _report(args.dir, now, args.out)
 
 
 if __name__ == "__main__":
