@@ -1,0 +1,71 @@
+---
+# Test scaffolding. Monitor mode: the role loads the same rules with the input policy accept
+# and the log rules in place, so a flow that enforce mode would shut still works, and the
+# rule that would have refused it counts the packet. Stage A of the rollout is this mode on
+# edge1.
+- name: Apply the role in monitor mode
+  ansible.builtin.include_role:
+    name: branchleft.edge_firewall
+  vars:
+    edge_firewall_enforce: false
+
+- name: Read the filter table in monitor mode, with its counters
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, list, table, inet, branchleft_edge]
+  register: edge_firewall_monitor_before
+  changed_when: false
+
+- name: Connect to a port nothing allows, on the host's own private address
+  ansible.builtin.wait_for:
+    host: '{{ edge_firewall_scenario_private_address }}'
+    port: 9999
+    state: started
+    timeout: 5
+
+- name: Read the filter table again
+  ansible.builtin.command:
+    argv: [/usr/sbin/nft, list, table, inet, branchleft_edge]
+  register: edge_firewall_monitor_after
+  changed_when: false
+
+- name: Read the legacy masquerade rule and the role's NAT table
+  ansible.builtin.command:
+    argv: '{{ item }}'
+  loop:
+    - - iptables
+      - -t
+      - nat
+      - -C
+      - POSTROUTING
+      - -s
+      - 10.20.1.0/24
+      - -o
+      - '{{ edge_firewall_scenario_uplink_dev }}'
+      - -j
+      - MASQUERADE
+    - [/usr/sbin/nft, list, table, ip, branchleft_edge_nat]
+  register: edge_firewall_monitor_nat
+  changed_when: false
+  failed_when: false
+
+# The counters of the rules that carry the log line, summed. The packet that reached port 9999
+# from the host's own estate address matches the estate rule, which counts it.
+- name: Assert monitor mode accepts, and counts what enforce mode would refuse
+  ansible.builtin.assert:
+    that:
+      - "'policy accept' in edge_firewall_monitor_before.stdout"
+      - "'policy drop' not in edge_firewall_monitor_before.stdout"
+      - '''log prefix "branchleft-fw would-drop: "'' in edge_firewall_monitor_before.stdout'
+      - edge_firewall_monitor_after_count | int > edge_firewall_monitor_before_count | int
+      - edge_firewall_monitor_nat.results[0].rc != 0
+      - edge_firewall_monitor_nat.results[1].rc == 0
+      - "'masquerade' in edge_firewall_monitor_nat.results[1].stdout"
+    quiet: true
+    fail_msg: >-
+      Monitor mode did not behave as monitor mode: the policy must be accept, the log rules
+      present, a packet to a closed port counted ({{ edge_firewall_monitor_before_count }} before,
+      {{ edge_firewall_monitor_after_count }} after), the legacy masquerade removed and the role's NAT table loaded.
+  vars:
+    edge_firewall_monitor_counter_pattern: 'counter packets ([0-9]+) bytes [0-9]+ limit rate'
+    edge_firewall_monitor_before_count: "{{ edge_firewall_monitor_before.stdout | regex_findall(edge_firewall_monitor_counter_pattern) | map('int') | sum }}"
+    edge_firewall_monitor_after_count: "{{ edge_firewall_monitor_after.stdout | regex_findall(edge_firewall_monitor_counter_pattern) | map('int') | sum }}"

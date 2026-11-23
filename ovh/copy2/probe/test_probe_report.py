@@ -97,6 +97,10 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn("NOT EVERYTHING", text)
 
     def test_leftovers_are_named_and_the_text_says_not_everything(self) -> None:
+        text = render_cleanup(["user-x"], [], "bucket A is in the stack but was not emptied first: KeyError")
+        self.assertNotIn("none remain", text)
+        self.assertIn("CLEANUP NEEDS A LOOK", text)
+
         text = render_cleanup(["user-x"], [Leftover("bucket", "zz-probe-a-r1a1")])
         self.assertIn("NOT EVERYTHING WAS DESTROYED: 1 resource(s) remain.", text)
         self.assertIn("| bucket | zz-probe-a-r1a1 |", text)

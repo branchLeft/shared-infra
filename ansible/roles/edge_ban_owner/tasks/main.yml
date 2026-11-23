@@ -1,0 +1,162 @@
+---
+# The inputs are refused before any task changes anything. The argument spec has already run,
+# and it coerces a wrong type rather than rejecting it, so the first assertion checks the type.
+# No message names a value: the options are not secrets, but a refusal never echoes what it
+# refused.
+- name: Refuse an option of the wrong type
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_enabled is boolean
+      - edge_ban_owner_docker_binary is string
+      - edge_ban_owner_compose_project is string
+      - edge_ban_owner_caddy_service is string
+      - edge_ban_owner_crowdsec_service is string
+      - edge_ban_owner_log_dir is string
+      - edge_ban_owner_log_stem is string
+      - edge_ban_owner_window_days is integer
+      - edge_ban_owner_state_dir is string
+      - edge_ban_owner_state_file is string
+      - edge_ban_owner_textfile_path is string
+      - edge_ban_owner_program_dir is string
+      - edge_ban_owner_program_name is string
+      - edge_ban_owner_unit_name is string
+      - edge_ban_owner_timer_calendar is string
+      - edge_ban_owner_unit_dir is string
+      - edge_ban_owner_start_timeout_seconds is integer
+    fail_msg: 'edge_ban_owner refused its input (rule: types): every option must have the type its argument spec gives.'
+    quiet: true
+
+- name: Refuse a path that is not absolute and plain
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_docker_binary is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_log_dir is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_state_dir is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_state_file is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_textfile_path is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_program_dir is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_unit_dir is match('^/[A-Za-z0-9._/-]+$')
+      - edge_ban_owner_state_file is not search('(^|/)[.][.]?(/|$)')
+      - edge_ban_owner_textfile_path is not search('(^|/)[.][.]?(/|$)')
+      - edge_ban_owner_program_dir is not search('(^|/)[.][.]?(/|$)')
+    fail_msg: >-
+      edge_ban_owner refused its input (rule: path shape): every path must be absolute, of
+      plain characters, with no . or .. component.
+    quiet: true
+
+- name: Refuse a name that is not one plain word
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_compose_project is match('^[A-Za-z0-9_-]+$')
+      - edge_ban_owner_caddy_service is match('^[A-Za-z0-9_-]+$')
+      - edge_ban_owner_crowdsec_service is match('^[A-Za-z0-9_-]+$')
+      - edge_ban_owner_log_stem is match('^[A-Za-z0-9_-]+$')
+      - edge_ban_owner_program_name is match('^[A-Za-z0-9_.-]+$')
+      - edge_ban_owner_unit_name is match('^[A-Za-z0-9_-]+$')
+    fail_msg: >-
+      edge_ban_owner refused its input (rule: names): each container label, the log stem, the
+      program file name and the unit name must be one plain name.
+    quiet: true
+
+- name: Refuse a window or a start timeout outside its range
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_window_days >= 1
+      - edge_ban_owner_window_days <= 30
+      - edge_ban_owner_start_timeout_seconds >= 60
+      - edge_ban_owner_start_timeout_seconds <= 600
+    fail_msg: >-
+      edge_ban_owner refused its input (rule: range): the window is 1 to 30 days (the log
+      retention) and the start timeout is 60 to 600 seconds.
+    quiet: true
+
+- name: Refuse an empty timer calendar
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_timer_calendar | length > 0
+    fail_msg: 'edge_ban_owner refused its input (rule: calendar): the timer calendar must not be empty.'
+    quiet: true
+
+# The role ships disabled. The inputs above are still checked, so a bad value is refused whether or
+# not the role is on; nothing below runs, and no handler is queued, until the toggle is true. The
+# type assertion above guarantees the toggle is a real boolean, so a string never reads as true.
+- name: Stop here while the role is disabled
+  ansible.builtin.meta: end_role
+  when: not edge_ban_owner_enabled
+
+# The state directory holds the addresses, so it is root-only. The textfile directory is shared
+# with the other textfile writers on the host and is root-owned, read by node_exporter. Both are
+# made here as directories; the files inside them are written by the program.
+- name: Create the state directory the classifier keeps its trusted addresses in
+  ansible.builtin.file:
+    path: '{{ edge_ban_owner_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create the textfile directory node_exporter reads
+  ansible.builtin.file:
+    path: '{{ edge_ban_owner_textfile_path | dirname }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directory the program is installed into
+  ansible.builtin.file:
+    path: '{{ edge_ban_owner_program_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The source is copied to a temporary file, the program's own check runs on that copy, and only a
+# copy that passes replaces the installed program. A program that fails its check is never
+# installed, the task fails, and the previous program stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ edge_ban_owner_program_name }}'
+    dest: '{{ edge_ban_owner_program_dir }}/{{ edge_ban_owner_program_name }}'
+    owner: root
+    group: root
+    mode: '0755'
+    validate: /usr/bin/python3 -I %s --check
+  notify: Restart the classifier timer
+
+- name: Render the classifier's oneshot service unit
+  ansible.builtin.template:
+    src: branchleft-edge-ban-owner.service.j2
+    dest: '{{ edge_ban_owner_unit_dir }}/{{ edge_ban_owner_unit_name }}.service'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+- name: Render the classifier's timer unit
+  ansible.builtin.template:
+    src: branchleft-edge-ban-owner.timer.j2
+    dest: '{{ edge_ban_owner_unit_dir }}/{{ edge_ban_owner_unit_name }}.timer'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# Queued handlers run here, before the timer is enabled, so the enable below starts the timer with
+# the unit file as it now is on disk.
+- name: Load queued unit changes and restart the timer before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file on a fresh host, so there is nothing for systemd to enable. The stat
+# runs in check mode as it does in a real run.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: '{{ edge_ban_owner_unit_dir }}/{{ edge_ban_owner_unit_name }}.timer'
+  register: edge_ban_owner_timer_unit
+
+- name: Enable and start the classifier timer
+  ansible.builtin.systemd_service:
+    name: '{{ edge_ban_owner_unit_name }}.timer'
+    enabled: true
+    state: started
+  when: edge_ban_owner_timer_unit.stat.exists
