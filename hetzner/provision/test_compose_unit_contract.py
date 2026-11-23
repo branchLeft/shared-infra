@@ -250,6 +250,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
         "exists for it."
     ),
+    "status-uptime": (
+        "Not an instance of the template: `/opt/branchleft/status-uptime` is the directory "
+        "the ansible/roles/status_page role of branchLeft/shared-infra installs the 90-day "
+        "uptime collector into, which a systemd oneshot service and timer of that role run "
+        "against the status page. It never starts through branchleft-compose@ or "
+        "branchleft-deploy. It is registered because the scan reads the path as a stack "
+        "name. No Compose file exists for it anywhere."
+    ),
     "dbt1": (
         "An instance of the template on the tenant database host, started through "
         "branchleft-deploy. Its Compose text is rendered from a Jinja template by the "
