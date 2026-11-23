@@ -1,0 +1,84 @@
+---
+argument_specs:
+  main:
+    short_description: Install the edge ban classifier, its unit and its timer on edge1
+    description: >-
+      Does nothing unless edge_ban_owner_enabled is true. When enabled, installs the edge ban
+      classifier program, its systemd service and its timer, creates the state directory
+      (root, 0700) and the textfile directory (root, 0755), and enables and starts the
+      timer. The classifier reads the edge's access log and CrowdSec through the
+      edge's containers, and writes one textfile with no address in it. The role takes no
+      secret.
+    author: branchLeft
+    options:
+      edge_ban_owner_enabled:
+        type: bool
+        description: >-
+          Whether the role installs the classifier. False installs nothing and changes nothing on
+          the host. Set it true only together with the constant of the same name in
+          hetzner/monitoring/render.ts.
+        default: false
+      edge_ban_owner_docker_binary:
+        type: str
+        description: Absolute path of the Docker command the classifier runs. The unit runs as root.
+        default: /usr/bin/docker
+      edge_ban_owner_compose_project:
+        type: str
+        description: The Compose project label that finds the edge's containers.
+        default: edge
+      edge_ban_owner_caddy_service:
+        type: str
+        description: The Compose service label of the Caddy container that holds the access log.
+        default: caddy
+      edge_ban_owner_crowdsec_service:
+        type: str
+        description: The Compose service label of the CrowdSec container that holds the decisions.
+        default: crowdsec
+      edge_ban_owner_log_dir:
+        type: str
+        description: Absolute path, inside the Caddy container, of the directory that holds the access log.
+        default: /var/log/caddy
+      edge_ban_owner_log_stem:
+        type: str
+        description: The access log's file stem, so the active file is this name with .log.
+        default: access
+      edge_ban_owner_window_days:
+        type: int
+        description: How many days back the classifier reads trusted requests. Whole number from 1 to 30, the log retention.
+        default: 30
+      edge_ban_owner_state_dir:
+        type: str
+        description: Absolute path of the root-only directory that holds the state file.
+        default: /var/lib/branchleft/edge-ban-owner
+      edge_ban_owner_state_file:
+        type: str
+        description: Absolute path of the root-only state file of trusted addresses. Written 0600.
+        default: /var/lib/branchleft/edge-ban-owner/trusted.json
+      edge_ban_owner_textfile_path:
+        type: str
+        description: Absolute path of the textfile node_exporter reads. Its directory must be a node_exporter textfile directory.
+        default: /var/lib/branchleft/snds-exporter/edge_ban_owner.prom
+      edge_ban_owner_program_dir:
+        type: str
+        description: Absolute path of the directory the program is installed into, made for this program only.
+        default: /usr/local/lib/branchleft-edge-ban-owner
+      edge_ban_owner_program_name:
+        type: str
+        description: The program's file name in its directory.
+        default: branchleft_edge_ban_owner.py
+      edge_ban_owner_unit_name:
+        type: str
+        description: The unit name without suffix. The service and the timer take this name.
+        default: branchleft-edge-ban-owner
+      edge_ban_owner_timer_calendar:
+        type: str
+        description: The systemd OnCalendar expression of the timer.
+        default: '*:0/5'
+      edge_ban_owner_unit_dir:
+        type: str
+        description: Absolute path of the directory the unit files are installed into.
+        default: /etc/systemd/system
+      edge_ban_owner_start_timeout_seconds:
+        type: int
+        description: The longest the service may run before systemd stops it. Whole number from 60 to 600.
+        default: 240

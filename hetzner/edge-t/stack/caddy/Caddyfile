@@ -7,6 +7,15 @@
 		protocols h1 h2
 		metrics
 	}
+	log {
+		output stderr
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
 	crowdsec {
 		api_url http://crowdsec:8080
 		api_key {env.CROWDSEC_BOUNCER_KEY}

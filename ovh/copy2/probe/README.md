@@ -29,7 +29,7 @@ A row is PASS, FAIL (the platform did something other than expected) or ERROR (t
 
 ## Destroying
 
-The destroy step has `if: always()`, so it runs after a failed check, a failed create and a cancelled run. It empties bucket A (Governance bypass, which P3 has just shown works), then runs `pulumi destroy` up to three times, then reads the stack's state. Any resource left in the state, or any pending operation, makes the job red and is printed by name in an error annotation and in the summary. The summary states plainly whether everything was destroyed.
+Before anything is created, `up` reads the project's roles with the same OVHcloud credential (`probe_preflight.py`), so a refused read fails the job with its HTTP status and creates nothing. The destroy step has `if: always()`, so it runs after a failed check, a failed create and a cancelled run. It empties bucket A (Governance bypass, which P3 has just shown works), then runs `pulumi destroy` up to three times, then reads the stack's state. Any resource left in the state, or any pending operation, makes the job red and is printed by name in an error annotation and in the summary. Bucket A is looked up in the stack's state first, so a bucket that was never created is not read through the outputs. Any note from the cleanup also makes the job red, and the summary then says the cleanup needs a look rather than that nothing remains. The summary states plainly whether everything was destroyed.
 
 If OVHcloud accepts the lock request that P5 sends to bucket B, P5 is a FAIL and bucket B is left with a one-day Governance default that cannot be removed: a lock, once set, stays. That does not stop the cleanup, because the lock is a bucket default and bucket B never holds an object: the probe writes nothing to B, the P4 write to B is sent with a credential that cannot reach it, and the lock-attempt credential has no object action. `pulumi destroy` then deletes B as it deletes A and C, which also carry a default lock and are empty (A after the bypass delete above). What is not verified: no OVHcloud call has been made, so whether OVHcloud deletes an empty bucket that carries a default lock, Compliance on C included, is an assumption the first run tests. If it refuses, the bucket stays in the state, the job is red, and the bucket is named in the error annotation and in the summary. An empty bucket costs nothing worth counting.
 
@@ -47,15 +47,16 @@ Its limit: "destroyed" means Pulumi's state is empty after the destroy. A resour
 
 ## Files
 
-| File               | What it holds                                                             |
-| ------------------ | ------------------------------------------------------------------------- |
-| `probe.py`         | The four steps: `gate`, `up`, `check`, `destroy`.                         |
-| `probe_checks.py`  | P1 to P6 over the `Ops` interface.                                        |
-| `probe_s3.py`      | `Ops`, `S3Error` and the boto3 adapter (the only import of boto3).        |
-| `probe_stack.py`   | The Pulumi CLI as an argv list, and reading the state.                    |
-| `probe_report.py`  | Results, the summary table, the cleanup text, secret scrubbing.           |
-| `fake_s3.py`       | An in-memory stand-in for the three buckets, with a switch per behaviour. |
-| `test_*.py`        | Offline tests. They import no third-party package and contact nothing.    |
-| `requirements.txt` | The hashed lock for the S3 client.                                        |
+| File                 | What it holds                                                             |
+| -------------------- | ------------------------------------------------------------------------- |
+| `probe.py`           | The four steps: `gate`, `up`, `check`, `destroy`.                         |
+| `probe_checks.py`    | P1 to P6 over the `Ops` interface.                                        |
+| `probe_s3.py`        | `Ops`, `S3Error` and the boto3 adapter (the only import of boto3).        |
+| `probe_stack.py`     | The Pulumi CLI as an argv list, and reading the state.                    |
+| `probe_preflight.py` | The role read before `up`, with the HTTP status on refusal.               |
+| `probe_report.py`    | Results, the summary table, the cleanup text, secret scrubbing.           |
+| `fake_s3.py`         | An in-memory stand-in for the three buckets, with a switch per behaviour. |
+| `test_*.py`          | Offline tests. They import no third-party package and contact nothing.    |
+| `requirements.txt`   | The hashed lock for the S3 client.                                        |
 
 Run the tests with `python3 -m unittest discover -s probe -p 'test_*.py'` from `ovh/copy2`.

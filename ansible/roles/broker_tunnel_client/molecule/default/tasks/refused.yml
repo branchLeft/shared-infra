@@ -1,0 +1,27 @@
+---
+# One refusal case: run the role with the case's inputs and require its own message.
+- name: 'Reset the result of the previous case ({{ case.name }})'
+  ansible.builtin.set_fact:
+    broker_tunnel_client_case_failed: false
+    broker_tunnel_client_case_msg: ''
+
+- name: 'Run the role ({{ case.name }})'
+  block:
+    - name: 'Apply the role ({{ case.name }})'
+      ansible.builtin.include_role:
+        name: branchleft.broker_tunnel_client
+      vars:
+        broker_tunnel_client_demo1_address: '{{ case.address }}'
+        broker_tunnel_client_demo1_host_key: '{{ case.host_key }}'
+  rescue:
+    - name: 'Keep the refusal ({{ case.name }})'
+      ansible.builtin.set_fact:
+        broker_tunnel_client_case_failed: true
+        broker_tunnel_client_case_msg: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: 'Assert the role refused with its own message ({{ case.name }})'
+  ansible.builtin.assert:
+    that:
+      - broker_tunnel_client_case_failed
+      - case.expect in broker_tunnel_client_case_msg
+    fail_msg: 'Case "{{ case.name }}" was not refused with "{{ case.expect }}".'

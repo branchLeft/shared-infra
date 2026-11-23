@@ -567,6 +567,7 @@ class NoGithubFetchTest(unittest.TestCase):
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
+                "node_exporter_public",
             ],
             playbook_roles(ROOT),
         )
