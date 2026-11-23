@@ -1636,8 +1636,7 @@ class SpoolSabotage(_SabotageBase):
             HOMES[3],
             "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
             "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
-            "  edget:\n    - ci_jump_user\n"
-            "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  edget:\n    - ci_jump_user\n  mx1:\n    - mx1_abuse_page_token\n\n# A value",
             "ci_jump_spool_user is not optional in its host_inputs row",
         )
 
