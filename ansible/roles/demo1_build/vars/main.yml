@@ -330,6 +330,163 @@ demo1_build_installed_pins: |-
 # One upstream snippet per slot in the edge fragment.
 demo1_build_edge_snippet_pattern: '(?m)^\(slot[0-9]+-upstream\) \{$'
 
+# The host scan (tasks/_secret_holders.yml). demo1 holds only the secrets listed here. A row names
+# a file, by path_regex (no anchors; the scan adds them), what it reaches, and who holds it. A row
+# names where a secret is, never its value. A file the scan finds that no row names is refused.
+# The reaches column says what a holder can reach. It does not say the value is worthless off the
+# host: a token works from any host that holds it, so the control is that it is on this host only.
+demo1_build_secret_holders:
+  - name: DNS-01 token for the demo wildcard
+    path_regex: '/etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard'
+    reaches: "the DNS provider's API for the demo zone only (the demo DNS project)"
+    owner: root
+    mode: '0600'
+  - name: Mail spool drain token
+    path_regex: '/etc/branchleft/mail-spool\.env'
+    reaches: "the mail spool's drain port, which listens on this host's private address only"
+    owner: root
+    mode: '0600'
+  - name: Per-slot environment file of a colour unit
+    path_regex: '/etc/branchleft/demo-[0-9]+-[ab]\.env'
+    reaches: 'the EnvironmentFile of one colour unit (its own process); the contents are not read by this role, and the owner confirms them on the host'
+    owner: root
+    mode: "owner's input"
+  - name: Per-slot Ghost staff token (broker admin keys)
+    path_regex: '/var/lib/branchleft/broker-slots/admin-keys/.+'
+    reaches: "that demo's Ghost Admin API as its owner's staff account; deleted at a slot reset"
+    owner: broker
+    mode: '0600'
+  - name: Spool path account's authorised key
+    path_regex: '/etc/ssh/branchleft-spool-path/authorized_keys'
+    reaches: "the spool path account's login from ops1; the private half is on ops1 only"
+    owner: root
+    mode: '0644'
+  - name: This host's sshd host key
+    path_regex: '/etc/ssh/ssh_host_[a-z0-9]+_key'
+    reaches: "this host's own sshd identity; clients trust it through their known_hosts, and it authenticates nothing outward"
+    owner: root
+    mode: '0600'
+  # The broker tunnel change is on main (_broker_tunnel.yml). The row names the file the tunnel
+  # installs, so the scan accepts it. A row for a file not yet present is not an error: the scan refuses
+  # only a file it finds that no row names, so an absent file is simply not found (the control case
+  # of molecule/refusals/refused_secret.yml proves it with this row in place).
+  - name: Broker tunnel account's authorised key
+    path_regex: '/etc/ssh/branchleft-broker-tunnel/authorized_keys'
+    reaches: "the brokertunnel login from ops1, forwarding only to the broker's port here; ops1's public key, private half on ops1 only"
+    owner: root
+    mode: '0644'
+
+  # The broker's request-signing verify key, written by broker_deploy (its README, the verify key
+  # section). The file is binary, so the content scan skips it; it is found by name (the binary key
+  # name rule in demo1_build_secret_name_core). It is the public key: it verifies, it cannot sign.
+  - name: Broker request-signing verify key
+    path_regex: '/etc/branchleft/broker-verify-key\.bin'
+    reaches: "the broker's check of request signatures; the public key only (it verifies and cannot sign), written from broker_deploy's carried hex"
+    owner: root
+    mode: '0640'
+
+  # The CI keys of demo1's ansible-ci account (enrol runbook Part 3; ansible-ci-jump-through-edge1
+  # runbook step 8.8, owner ruling demo1-ci-login-r2). Each key runs one forced command only.
+  - name: CI keys in the ansible-ci account's authorised keys
+    path_regex: '/home/ansible-ci/\.ssh/authorized_keys'
+    reaches: 'the forced-command pull trigger: each key runs one mode only (check or apply); the public key only, its private half in the CI secret'
+    owner: ansible-ci
+    mode: '0600'
+  # Root's own authorised keys (an owner-approved row). The file
+  # holds public keys only; the scan names it so a root login key is an owner-reviewed entry, not a
+  # silent one. Its reaches column is the login it grants root.
+  - name: Root's authorised keys
+    path_regex: '/root/\.ssh/authorized_keys'
+    reaches: "root's SSH login on this host: the public keys that may log in as root"
+    owner: root
+    mode: '0600'
+
+# The regex the scan's unlisted check reads: a found path that matches none of the rows is refused.
+demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(attribute='path_regex') | join('|')) ~ ')\\Z' }}"
+
+# The roots the scan reads. A root the host does not have is skipped. /root is read by file list
+# (see tasks/_secret_holders.yml), not grep, so its own .ansible can be pruned and no other .ansible is.
+demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /srv, /var/backups, /var/lib]
+
+# Directories the scan never enters, matched by full path and never by base name, so /etc/docker
+# (the client certificates in certs.d) is scanned. /var/lib/docker and /var/lib/containerd are the
+# container runtime's image stores, pinned by digest and not host secrets. /root/.ansible/tmp is
+# Ansible's module payload directory for root: the scan's own run writes there. No other path is pruned.
+# Every find in tasks/_secret_holders.yml takes this argument list ahead of its tests.
+demo1_build_secret_prune_argv:
+  [
+    '(',
+    '-path',
+    '/var/lib/docker',
+    '-o',
+    '-path',
+    '/var/lib/containerd',
+    '-o',
+    '-path',
+    '/root/.ansible/tmp',
+    ')',
+    '-prune',
+    '-o',
+  ]
+
+# Every file in these directories is a secret, whatever its name or content.
+demo1_build_secret_holder_dirs:
+  [/etc/branchleft/secrets, /var/lib/branchleft/broker-slots/admin-keys]
+
+# File and link names, matched against the basename: an authorised-keys file, a private key by its
+# usual name or extension, a binary key file named *-key.bin (the content scan skips binary files,
+# so it can only be found by name), and a netrc.
+# .pem is not a name rule: the CA bundle under /etc/ssl/certs is .pem files, most of them links, and a
+# PEM private key is caught by its header in the content scan.
+demo1_build_secret_name_core:
+  [
+    'authorized_keys2?',
+    'id_[A-Za-z0-9_-]*[A-Za-z0-9]',
+    '.*\.(key|p12|pfx|jks)',
+    '.*[-_.]key\.bin',
+    '\.netrc',
+  ]
+# The same names as an ERE, for find -regex (which matches the whole path, so the basename follows a slash).
+demo1_build_secret_name_find_regex: "{{ '.*/(' ~ (demo1_build_secret_name_core | join('|')) ~ ')' }}"
+
+# A link whose target is a holder directory's file, or a secret-named file anywhere, is a secret link.
+demo1_build_secret_link_dir_regex: "{{ '^(?:' ~ (demo1_build_secret_holder_dirs | join('|')) ~ ')/' }}"
+demo1_build_secret_link_name_regex: "{{ '(^|/)(?:' ~ (demo1_build_secret_name_core | join('|')) ~ ')$' }}"
+
+# Content, matched case-insensitively and read only for a match, never printed. The strict set
+# holds in any file: a PEM and a PGP private key header, a shell export of a secret name, a bare
+# KEY=value line whose name holds a secret word, an AWS secret access key, a GitHub, Pulumi or
+# registry token shape. The config set holds in config-named files only (see the includes below),
+# where a spaced, indented, YAML or JSON key with a secret name is a secret line.
+demo1_build_secret_content_strict:
+  - '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'
+  - '-----BEGIN PGP PRIVATE KEY BLOCK-----'
+  - '^[[:space:]]*export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
+  - '^[A-Za-z_][A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*=[^[:space:]]+'
+  - 'aws_secret_access_key[[:space:]]*=[[:space:]]*[^[:space:]]+'
+  - 'gh[pousr]_[A-Za-z0-9]{36,}'
+  - 'github_pat_[A-Za-z0-9_]{22,}'
+  - 'pul-[0-9a-f]{40}'
+  - '"auth"[[:space:]]*:[[:space:]]*"[A-Za-z0-9+/=]{16,}"'
+demo1_build_secret_content_config:
+  - '^[[:space:]]*[A-Za-z0-9_]*(token|secret|password|api_?key|credential|private_?key)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*[^[:space:]]+'
+  - '^[[:space:]]*-?[[:space:]]*[A-Za-z0-9_-]*(token|secret|password|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*[[:space:]]*:[[:space:]]*[^[:space:]]+'
+  - '"[A-Za-z0-9_-]*(token|secret|password|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*"[[:space:]]*:[[:space:]]*"[^"]+"'
+demo1_build_secret_content_strict_regex: "{{ demo1_build_secret_content_strict | join('|') }}"
+demo1_build_secret_content_config_regex: "{{ demo1_build_secret_content_config | join('|') }}"
+
+# The config-named files the config set reads, as grep globs and as a regex for /root's file list.
+demo1_build_secret_config_includes:
+  - '--include=*.yml'
+  - '--include=*.yaml'
+  - '--include=*.json'
+  - '--include=*.env'
+  - '--include=*.conf'
+  - '--include=*.ini'
+  - '--include=*.cfg'
+  - '--include=*.toml'
+demo1_build_secret_config_name_regex: '\.(yml|yaml|json|env|conf|ini|cfg|toml)$'
+
 # The broker tunnel account (_broker_tunnel.yml). ops1 holds one ssh -L forward to
 # the broker through it (owner ruling control=a). Constants, not inputs: the grant is
 # ghost-platform's demo-host/provision/render_broker_tunnel.py, and the templates

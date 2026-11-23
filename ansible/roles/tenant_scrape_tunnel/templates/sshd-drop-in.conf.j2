@@ -1,0 +1,18 @@
+# Written by the tenant_scrape_tunnel role. The account may hold a key-authenticated local
+# forward to each tenant host's node exporter and run no command.
+Match User {{ tenant_scrape_tunnel_user }}
+    AuthorizedKeysFile {{ tenant_scrape_tunnel_authorized_keys_file }}
+    AuthenticationMethods publickey
+    AllowTcpForwarding local
+    PermitOpen {{ tenant_scrape_tunnel_destinations | map(attribute='address') | join(':' ~ tenant_scrape_tunnel_target_port ~ ' ') }}:{{ tenant_scrape_tunnel_target_port }}
+    PermitListen none
+    GatewayPorts no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ tenant_scrape_tunnel_nologin }}
+# Ends the Match block, so the lines after this drop-in are not read as part of it.
+Match all

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DISCARD_RECEIVER_NAME,
+  NTFY_ABUSE_TOPIC,
   NTFY_PAGE_TOPIC,
   NTFY_PAGE_URL,
   NTFY_PAGER_TOKEN_PLACEHOLDER,
@@ -24,7 +25,7 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly ten entries -- the Alertmanager ones, the drain worker outside them, the secret-scanning page sent by a workflow, and the dormant abuse-report', () => {
+  it('has exactly ten entries -- the Alertmanager ones, the drain worker and the abuse report outside them, and the secret-scanning page sent by a workflow', () => {
     expect(PAGE_REGISTER).toHaveLength(10);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
@@ -34,13 +35,13 @@ describe('PAGE_REGISTER', () => {
       'edge-ban',
       'edge-ban-owner-stale',
       'drain-worker-stopped',
+      'abuse-report',
       'stopped-demo-reaper',
       'secret-scanning-alert',
-      'abuse-report',
     ]);
   });
 
-  it('routes seven entries through Alertmanager, the drain worker through Healthchecks.io, and the secret-scanning page through a workflow', () => {
+  it('routes seven entries through Alertmanager, the drain worker through Healthchecks.io, the abuse report straight to ntfy and the secret-scanning page through a workflow', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -51,9 +52,9 @@ describe('PAGE_REGISTER', () => {
       'edge-ban',
       'edge-ban-owner-stale',
       'stopped-demo-reaper',
-      'abuse-report',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
+    expect(byPath('ntfy_direct')).toEqual(['abuse-report']);
     expect(byPath('github-workflow')).toEqual(['secret-scanning-alert']);
   });
 
@@ -62,70 +63,9 @@ describe('PAGE_REGISTER', () => {
     expect(drainWorker?.alertName).toBeNull();
   });
 
-  it('marks exactly appeal-latency-breach, stopped-demo-reaper and abuse-report dormant', () => {
+  it('marks exactly appeal-latency-breach and stopped-demo-reaper dormant', () => {
     const dormant = PAGE_REGISTER.filter((entry) => entry.dormant).map((entry) => entry.id);
-    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper', 'abuse-report']);
-  });
-});
-
-/**
- * The abuse-report entry is registered before its mx1 arrival producer lands,
- * so it is dormant: it must not page, must not appear in the route, and must
- * carry a ruleExemption so that flipping it live is not refused for lacking a
- * Prometheus rule. The page names only that a report arrived, so the entry is
- * not tenant-scoped.
- */
-describe('the abuse-report entry', () => {
-  const abuse = PAGE_REGISTER.find((entry) => entry.id === 'abuse-report');
-
-  it('is registered through Alertmanager, not tenant-scoped, dormant, with a named exemption', () => {
-    expect(abuse).toBeDefined();
-    expect(abuse?.alertName).toBe('AbuseReportReceived');
-    expect(abuse?.deliveryPath).toBe('alertmanager');
-    expect(abuse?.tenantScoped).toBe(false);
-    expect(abuse?.dormant).toBe(true);
-    expect((abuse?.ruleExemption ?? '').trim()).not.toBe('');
-  });
-
-  it('is left out of the alertnames the page route matches', () => {
-    expect(pageAlertNames(PAGE_REGISTER)).not.toContain('AbuseReportReceived');
-  });
-
-  it('does not appear in the rendered page route or the rendered Alertmanager config', () => {
-    expect(renderPageRoute(PAGE_REGISTER)).not.toContain('AbuseReportReceived');
-    expect(renderAlertmanagerTemplate()).not.toContain('AbuseReportReceived');
-  });
-
-  it('would page if switched on, and needs no Prometheus rule because its exemption names the producer', () => {
-    const live = PAGE_REGISTER.map((entry) =>
-      entry.id === 'abuse-report' ? { ...entry, dormant: false } : entry
-    );
-    expect(pageAlertNames(live)).toContain('AbuseReportReceived');
-    expect(renderPageRoute(live)).toContain('AbuseReportReceived');
-    expect(renderAlertmanagerTemplate(live)).toContain('AbuseReportReceived');
-    expect(findLiveEntriesWithoutPageRule('groups: []\n', live)).not.toContain(
-      'AbuseReportReceived'
-    );
-  });
-
-  it('refuses a severity: page rule under its alertname while it is dormant', () => {
-    const rules = [
-      'groups:',
-      '  - name: g',
-      '    rules:',
-      '      - alert: AbuseReportReceived',
-      '        expr: vector(1)',
-      '        labels:',
-      '          severity: page',
-      '',
-    ].join('\n');
-    expect(findUnregisteredPageSeverityAlerts(rules, PAGE_REGISTER)).toEqual([
-      'AbuseReportReceived',
-    ]);
-  });
-
-  it('carries no work-item reference in its shipped text', () => {
-    expect(`${abuse?.name} ${abuse?.reason}`).not.toMatch(/#\d|workspace/i);
+    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper']);
   });
 });
 
@@ -502,12 +442,22 @@ describe('the ntfy server config', () => {
     expect(active).not.toMatch(/upstream-base-url/);
   });
 
-  it('grants the two publishers write-only and the owner read-only, on the one topic', () => {
+  it('grants the two publishers write-only and the owner read-only, on the page topic', () => {
     expect(active).toContain(`'alertmanager:${NTFY_PAGE_TOPIC}:write-only'`);
     expect(active).toContain(`'watcher:${NTFY_PAGE_TOPIC}:write-only'`);
     expect(active).toContain(`'owner:${NTFY_PAGE_TOPIC}:read-only'`);
-    const grants = active.match(/^\s+- '[a-z]+:[^:']+:(read-only|write-only|read-write)'$/gm) ?? [];
-    expect(grants).toHaveLength(3);
+  });
+
+  it('gives the mail host one grant, write-only on the abuse topic, and nothing on the page topic', () => {
+    expect(active).toContain(`'mx1:${NTFY_ABUSE_TOPIC}:write-only'`);
+    expect(active).toContain(`'owner:${NTFY_ABUSE_TOPIC}:read-only'`);
+    const grants =
+      active.match(/^\s+- '[a-z0-9]+:[^:']+:(read-only|write-only|read-write)'$/gm) ?? [];
+    expect(grants).toHaveLength(5);
+    const mx1 = grants.filter((line) => line.includes("'mx1:"));
+    expect(mx1).toHaveLength(1);
+    expect(mx1[0]).not.toContain(NTFY_PAGE_TOPIC);
+    expect(mx1[0]).toContain('write-only');
   });
 
   it('commits only placeholders for every secret', () => {
@@ -518,6 +468,7 @@ describe('the ntfy server config', () => {
       '__NTFY_WATCHER_TOKEN__',
       '__NTFY_OWNER_PASSWORD_HASH__',
       '__NTFY_MACHINE_PASSWORD_HASH__',
+      '__NTFY_MX1_TOKEN__',
     ]) {
       expect(active).toContain(token);
     }
@@ -781,16 +732,11 @@ describe('findLiveEntriesWithoutPageRule', () => {
     expect(findLiveEntriesWithoutPageRule(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
   });
 
-  it('gives each of the three live Alertmanager entries, and the dormant abuse report, a named exemption', () => {
+  it('gives each of the three live Alertmanager entries a named exemption today, since no rule raises them', () => {
     const exempt = PAGE_REGISTER.filter((entry) => entry.ruleExemption !== undefined).map(
       (entry) => entry.alertName
     );
-    expect(exempt).toEqual([
-      'TierTwoSafetyMatch',
-      'TenantFailedUnsafe',
-      'ReadersCannotRead',
-      'AbuseReportReceived',
-    ]);
+    expect(exempt).toEqual(['TierTwoSafetyMatch', 'TenantFailedUnsafe', 'ReadersCannotRead']);
     for (const entry of PAGE_REGISTER) {
       expect(entry.ruleExemption ?? 'none').not.toMatch(/#\d|workspace/i);
     }
@@ -1055,7 +1001,6 @@ describe('the classifier gate in the page register helpers', () => {
       'appeal-latency-breach',
       'edge-ban-owner-stale',
       'stopped-demo-reaper',
-      'abuse-report',
     ]);
     expect(pageAlertNames(held)).not.toContain('EdgeBanOwnerStale');
     expect(pageAlertNames(held)).toContain('EdgeBanIssued');

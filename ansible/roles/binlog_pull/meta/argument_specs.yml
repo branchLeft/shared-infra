@@ -1,0 +1,60 @@
+---
+argument_specs:
+  main:
+    short_description: Install the program that pulls the tenant database host's closed binary logs and hold its timer to a variable
+    description: >-
+      Installs the program that fetches the closed binary logs of the tenant database
+      host over TLS, seals each to the estate recipient with age and puts the ciphertext
+      and a manifest to backup copy 1, with its service and timer. The role writes the
+      environment file and the database CA from the four private inputs below, makes the
+      program's directory and the ledger directory, installs the program after its own
+      check, and keeps the timer off unless binlog_pull_timer_enabled is true. The
+      program reads the estate recipient and copy 1's put key from the state-copy
+      environment file at run time. The role never creates the database account, a key,
+      a bucket or a firewall rule, and never starts a pull.
+    author: branchLeft
+    options:
+      binlog_pull_db_host:
+        type: str
+        required: true
+        description: The tenant database host's address or name, as ops1 reaches it. Private.
+      binlog_pull_db_user:
+        type: str
+        required: true
+        description: >-
+          The account only ops1 may use (host-restricted, TLS required) with the
+          replication-client, replication-slave and reload rights. Private.
+      binlog_pull_db_password:
+        type: str
+        required: true
+        no_log: true
+        description: The account's login value, set by the owner. One line of letters, digits and / + = _ . - .
+      binlog_pull_db_ca_pem:
+        type: str
+        required: true
+        no_log: true
+        description: The certificate authority that signed the database host's TLS certificate. Public data, held out of the repository.
+      binlog_pull_db_port:
+        type: int
+        default: 3306
+        description: The database host's port, or the local port of a tunnel to it.
+      binlog_pull_flush:
+        type: bool
+        default: true
+        description: >-
+          True flushes the server's binary log at the start of each pull so the log that was
+          open is shipped within the period. Needs the reload right.
+      binlog_pull_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          True enables and starts the 15 minute timer, and is refused while the state-copy
+          environment file or the backup worker's staged release is not on the host. False
+          leaves a timer as it is on the host unless binlog_pull_timer_may_disable is true.
+          True is a production apply.
+      binlog_pull_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          True, together with binlog_pull_timer_enabled false, stops and disables the timer.
+          With false a timer that is on is left alone.

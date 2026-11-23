@@ -455,6 +455,91 @@ After a first apply it prints the commit as `floor=<40 hex>` and then
 `verdict=unchanged exit=0 changed=0`. A unit test compares this block with the command
 the push scenario runs, so the two cannot differ.
 
+### The look: what the host shows after a check
+
+An issue whose finish line is a host stays "Merged, not live" until someone has seen the change
+work there. The look is the one way an agent can: after a check run, the program prints a
+fixed, small set of read-only facts about the host, one line each, keyed by the issue that
+wants it to be seen. The lines appear in the host's section of the plan job summary (and of
+the nightly drift check), so a run can be cited in a `Live:` line.
+
+What it is not: a way to run anything. The caller still sends one commit and nothing else. The
+facts are declared in `ansible/tools/look/facts.json` of the commit being checked, which is
+signed, on `main`, and merges like code. A fact asks for one of three kinds, each with exactly
+its own fields, and the program (this file, the owner's) holds the list of kinds and the places a
+file fact may read. A new kind, or a new directory, is a change to this program.
+
+```json
+{
+  "facts": [
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-db1",
+      "playbook": "ansible/playbooks/db1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    }
+  ]
+}
+```
+
+Every entry has `issue` (a workspace issue number), `name` (a lowercase word of letters, digits
+and hyphen, unique in the file), `playbook` (the host's playbook; only that host looks) and
+`kind`, then the fields of its kind:
+
+| Kind          | Fields                              | Result printed                                                                                                                            |
+| ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_sha256` | `path`                              | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                          |
+| `unit_active` | `unit`                              | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown` |
+| `http_status` | `port`, `url_path`, optional `host` | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed     |
+
+A file fact reads only below `/etc/systemd/system/`, `/usr/local/bin/`, `/usr/local/lib/` and
+`/usr/local/sbin/` (the places the roles put programs and unit files, and no place that holds a
+secret, because a digest of a short secret can be guessed). A link out of those directories is
+`outside-root`. `host` is the name sent in the `Host` header; the connection is to the loopback
+address whatever it says. A `GET` that changes state is a fault of the declaration, caught at
+review: pick a path that only reads.
+
+A run prints, after the playbook's own output and only for a check:
+
+```text
+look issue=4082 name=pull-trigger-program-db1 kind=file_sha256 result=<64 hex digits>
+look-refused entry=2 reason=path-not-allowed
+look-summary declared=3 here=1 refused=1 file=ok
+```
+
+`here` is the number of facts for this host's playbook. A commit with no look file prints
+nothing. The look runs when the playbook ended by itself (a failed playbook too, not a
+timeout or a stop), and it never changes the verdict, the exit status or the summary line the
+workflow reads. An apply and a step print no look: nothing reads an apply's standard error
+except on failure, and a step is narrow.
+
+Refusals, each a fixed word that repeats nothing from the file. Of the whole file: `file-not-json`
+(not JSON, or a key repeated), `file-shape` (not exactly `{"facts": [...]}`), `file-too-large`
+(over 64 KiB), `file-too-many` (over 64 entries), `file-not-regular` (the path is a link or a
+directory in the commit) and `file-unreadable` (git could not give it). Of one entry, the others
+standing: `entry-shape`, `unknown-kind` (not one of the three), `unknown-field` (a field the kind
+does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-issue`, `bad-name`
+(also a name holding a word the plan job's secret scan reads, which would fail the plan of every
+host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
+four directories, or not a plain name), `bad-unit` (not a plain unit name), `bad-port`,
+`bad-url-path` (a query, a fragment, `..`, a doubled slash), `bad-host-name`, `line-shape` (a line
+that is not of the one shape, which is not printed) and `look-fault` (the look itself failed;
+the run is as it would have been without it).
+
+Every value on a line is a number from the file's `issue`, a name that passed its pattern, a
+digest, a three-digit status or a word from the lists above, and a final check admits only
+that shape, so nothing a host holds can reach the log. A unit's reply that is not a known word
+is `unknown`, and the text is dropped. The whole look has 120 seconds, a unit 10 and a `GET` 5,
+and a stop request ends it (`skipped-time`).
+
+How an agent uses it: add a fact for the issue to `ansible/tools/look/facts.json` in the change
+that delivers the behaviour (or in a later one), merge it like any change, wait for the gated
+delivery of that commit, then read the next plan or nightly drift run's job summary at a commit
+that holds the delivery: the host's section ends with the `look` line. Quote that run and the
+line in the `Live:` comment. The unit tests fail a declaration that any host would refuse, so a
+refusal is not expected on a merged file.
+
 ### Exit codes
 
 | Exit | Verdict        | Meaning                                                                                                                        |
@@ -831,6 +916,27 @@ The playbook-link, checkout and lock controls are those of the pull route and ar
 by the default scenario and in "How to test it". `check` on this source changes nothing
 and does not move the floor (a unit test and the push scenario).
 
+### The controls of the look, and how each is shown to fail
+
+Each was broken on purpose in the program, seen to fail by the named test, restored, and seen
+to pass; the record is in the pull request that added the look. The look is read-only and has no
+caller input, so what these hold is that a declaration cannot make it do more.
+
+| Control                                              | Broken by                                          | Fails in                                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| L1 only the three kinds exist                        | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                          |
+| L2 an entry has exactly its kind's fields            | accepting a field the kind does not name           | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`, `test_a_command_like_entry_is_refused_and_runs_nothing` |
+| L3 a file fact reads only below the four directories | accepting any absolute path                        | `test_a_file_outside_the_four_directories_or_not_plain_is_refused`                                                              |
+| L4 a unit is a plain unit name                       | accepting any text as a unit                       | `test_a_unit_that_is_not_a_plain_unit_name_is_refused`                                                                          |
+| L5 the GET goes to the loopback address only         | connecting to the name given for the `Host` header | `test_the_host_header_is_the_declared_name_but_the_connection_is_loopback`                                                      |
+| L6 a unit's reply is one of a closed list of words   | printing the reply as it came                      | `test_a_unit_answer_that_is_not_a_known_word_is_not_repeated`                                                                   |
+| L7 only a line of the one shape is printed           | dropping the shape check                           | `test_a_line_that_is_not_of_the_one_shape_is_not_printed`                                                                       |
+| L8 an apply and a step print no look                 | printing the look for every mode                   | `test_an_apply_and_a_failed_playbook_print_no_look`                                                                             |
+| L9 a fault in the look cannot change a verdict       | removing the guard around the look                 | `test_a_fault_in_the_look_never_changes_the_verdict`                                                                            |
+| L10 a name cannot trip the plan job's secret scan    | removing the word check                            | `test_a_name_with_a_word_the_plan_scan_reads_is_refused`                                                                        |
+| L11 a refusal runs nothing for the entry             | running the unit check before the field check      | `test_a_refused_entry_runs_nothing_and_is_named`                                                                                |
+| L12 the repository's own file has no refusal         | adding a command-like entry to `facts.json`        | `test_the_declared_file_of_the_repository_has_no_refusal`                                                                       |
+
 ### The release-tag route
 
 `docs/pull-signer-trust.md` (T8) names the gap this closes: a host that takes a commit by
@@ -900,6 +1006,8 @@ keys.
    exit-code table in this README together. Every sentence a refusal can give is
    fixed text in the `Why` enumeration, so that no text from a caller reaches a log;
    keep it that way.
+   The look keeps its own fixed words (`LookWhy`) and its own closed lists, and a unit test
+   holds this README to them.
 3. Keep every task able to run under `--check --diff`, and keep the role idempotent.
 4. A control is changed only with its proof: weaken the control in a copy, see the
    named assertion in `verify.yml` or the unit test fail, restore it, see it pass.

@@ -4,7 +4,8 @@
  * and why alerts group on the cause, is in `pageRegister.md`.
  */
 
-export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks' | 'github-workflow';
+export type PageRegisterDeliveryPath =
+  'alertmanager' | 'healthchecks' | 'ntfy_direct' | 'github-workflow';
 
 export interface PageRegisterEntry {
   /** Stable slug -- the identity a future change argues about, never renamed. */
@@ -22,10 +23,13 @@ export interface PageRegisterEntry {
   /**
    * How this entry's page actually reaches a phone. Every entry but one routes
    * through this stack's own Alertmanager; the drain worker's dead-man's
-   * switch pages through its own Healthchecks.io check directly, and the
-   * secret-scanning page is posted to ntfy by a scheduled workflow. Neither
-   * of those two renders an Alertmanager route -- they are listed here only
-   * so the register still names every path that can reach the phone.
+   * switch pages through its own Healthchecks.io check directly, so this
+   * entry renders no Alertmanager route at all. The mail host's abuse-report
+   * page (`ntfy_direct`) is posted by mx1 itself to the pager with a
+   * publish-only grant on a topic of its own, and the secret-scanning page
+   * (`github-workflow`) is posted to ntfy by a scheduled workflow. Neither
+   * renders an Alertmanager route -- they are listed here only so the register
+   * still names every path that can reach the phone.
    */
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
@@ -146,6 +150,20 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     tenantScoped: false,
   },
   {
+    id: 'abuse-report',
+    name: 'A report reached abuse@',
+    reason:
+      'A report of abusive or harmful material is a notice that is never to be read ' +
+      'days late. The mail host posts straight to the pager, with a publish-only grant ' +
+      'on its own topic (`NTFY_ABUSE_TOPIC`), when abuse@ receives a message; the page ' +
+      'says only that a report arrived, with no sender, no message text and no tenant. ' +
+      'It never becomes an Alertmanager alert.',
+    alertName: null,
+    deliveryPath: 'ntfy_direct',
+    dormant: false,
+    tenantScoped: false,
+  },
+  {
     id: 'stopped-demo-reaper',
     name: 'A stopped demo reaper',
     reason:
@@ -171,23 +189,6 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     dormant: false,
     tenantScoped: false,
   },
-  {
-    id: 'abuse-report',
-    name: 'A report to the abuse mailbox',
-    reason:
-      'Dormant: a report of abusive or harmful material must reach the owner within ' +
-      'minutes, not on the digest. The arrival producer on mx1 is an owner-authorised ' +
-      'patch, so the entry stays dormant until that patch lands. Flip `dormant` to false ' +
-      'in the same change that lands the producer.',
-    alertName: 'AbuseReportReceived',
-    deliveryPath: 'alertmanager',
-    dormant: true,
-    tenantScoped: false,
-    ruleExemption:
-      'Raised on mx1 when a message reaches the abuse role mailbox, not by a Prometheus ' +
-      'rule: this stack scrapes no metric for a mailbox arrival, so the rendered rules ' +
-      'carry no rule for it and cannot.',
-  },
 ] as const;
 
 /** The receiver Alertmanager route-tree tests and CI's `amtool` step verify
@@ -198,6 +199,11 @@ export const PAGE_RECEIVER_NAME = 'ntfy-page';
  * all access by default, so knowing the name grants nothing -- only the
  * publisher token and the owner's login can write or read it. */
 export const NTFY_PAGE_TOPIC = 'branchleft-pages';
+
+/** The topic the mail host publishes an abuse-report page to, and the only
+ * topic its grant covers: write-only for the `mx1` machine user, read-only for
+ * the owner's login. Not a secret, for the reason `NTFY_PAGE_TOPIC` is not. */
+export const NTFY_ABUSE_TOPIC = 'branchleft-abuse';
 
 /** Where Alertmanager reaches ntfy: the Compose service name on the stack's
  * own network, never the public hostname, so a page does not depend on the

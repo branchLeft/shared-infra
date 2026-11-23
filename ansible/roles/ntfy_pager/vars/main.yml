@@ -32,6 +32,13 @@ ntfy_pager_env_names:
   owner_password_hash: NTFY_OWNER_PASSWORD_HASH
   machine_password_hash: NTFY_MACHINE_PASSWORD_HASH
 
+# The fifth line, the mail host's publish-only token. It is optional, so it is
+# not in the list below that every value is checked and written from: it has its
+# own tasks, which write it when it is given and remove it when it is not. The
+# monitoring_stack role does not list it in its "configured" keys either, so a
+# pager without a mail host token is still a configured pager.
+ntfy_pager_mx1_env_name: NTFY_MX1_TOKEN
+
 # The four lines, each key with the input that carries its value. The check
 # that each value is a non-empty single line and the write both loop over this
 # one list, so a line cannot be written without being checked.
@@ -56,3 +63,8 @@ ntfy_pager_env_lines:
 # scenario of monitoring_stack asserts that the two constants are equal and that
 # the drop-in names the file.
 ntfy_pager_env_file: /etc/branchleft/ntfy-pager.env
+
+# The optional input, read once. It has no default (a row input of the loader may not: the loader
+# leaves an absent one unset), so the role reads it through this name and an absent or empty
+# token is the same thing: the page is off.
+ntfy_pager_mx1_token_value: "{{ ntfy_pager_mx1_token | default('') }}"
