@@ -37,14 +37,16 @@ STANDARDS_TEMPLATE = [
     ("/.standards.mode", [OWNER]),
     ("/.docs-lint*", [OWNER]),
     ("/.standards-db-tooling", [OWNER]),
-    ("/.github/", [OWNER]),
+    ("/.github/CODEOWNERS", [OWNER]),
+    ("/.github/workflows/standards.yml", [OWNER]),
+    ("/.github/workflows/docs-lint.yml", [OWNER]),
 ]
 
 # The kinds of path CODEOWNERS may release by a pattern. Everything else it releases is one file,
 # named in full, so a new gate test is the owner's until a line names it.
 RELEASE_KINDS: frozenset[str] = frozenset(
     {
-        "*.md",  # every document; README, CLAUDE.md, .claude/ and /.github/ are owned again
+        "*.md",  # every document; README, CLAUDE.md and .claude/ are owned again
         "/ansible/checks/offline/",  # the offline render fixtures
         "/scripts/nvmrc-node-exec.*",
     }
@@ -54,8 +56,19 @@ RELEASE_KINDS: frozenset[str] = frozenset(
 GUARDRAIL_PATHS = [
     ".github/CODEOWNERS",
     ".github/workflows/ci.yml",
+    ".github/workflows/ci-config-validate.yml",
+    ".github/workflows/ansible.yml",
+    ".github/workflows/ansible-delivery.yml",
+    ".github/workflows/ansible-supersede.yml",
+    ".github/workflows/ansible-environment-probe.yml",
+    ".github/workflows/ovh-copy2-probe.yml",
+    ".github/workflows/publish-edge-caddy.yml",
+    ".github/workflows/publish-hetzner-host.yml",
+    ".github/workflows/tenants-state-rewrap.yml",
+    ".github/workflows/verify-package-attestations.yml",
+    ".github/workflows/docs-lint.yml",
     ".github/actions/ci-skip/action.yml",
-    ".github/dependabot.yml",
+    ".github/actions/ansible-venv/action.yml",
     "CLAUDE.md",
     ".claude/.gitignore",
     "ansible/checks/test_codeowners.py",
@@ -107,7 +120,6 @@ GUARDRAIL_PATHS = [
     ".docs-lintignore",
     ".standards-db-tooling",
     ".github/workflows/standards.yml",
-    ".github/workflows/ci.md",
 ]
 
 # Human-facing documents and the owner's words.
@@ -121,6 +133,15 @@ DOCUMENT_PATHS = [
 # Paths released to agents: the owner has extended trust here, and the gated apply still stands
 # between a merge and a host. Each is a file in the repository.
 RELEASED_PATHS = [
+    ".github/dependabot.yml",
+    ".github/workflows/ci.md",
+    ".github/workflows/ansible-drift-check.yml",
+    ".github/workflows/ansible-offline.yml",
+    ".github/workflows/crowdsec-hub-pin-check.yml",
+    ".github/workflows/ghost-pin-lag.yml",
+    ".github/workflows/secret-alert-pager.yml",
+    ".github/scripts/secret_alert_pager.py",
+    ".github/scripts/test_secret_alert_pager.py",
     "sites.ts",
     "hetzner/edge/render.ts",
     "hetzner/edge/render.test.ts",
@@ -238,7 +259,7 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(RELEASED_PATHS)
 
     def test_a_new_file_in_a_gate_directory_is_the_owners_before_it_is_listed(self) -> None:
-        # A new check or gate test, or a new CI script, fails closed; and so does a workflow.
+        # A new check or gate test, or a new CI script, fails closed.
         self.assert_owned(
             [
                 "ansible/checks/check_a_new_gate.py",
@@ -247,7 +268,6 @@ class CodeownersTests(unittest.TestCase):
                 "ansible/trust/newhost.yml",
                 "scripts/a_new_ci_script.py",
                 "hetzner/aNewGuard.guard.test.ts",
-                ".github/workflows/a_new_workflow.yml",
             ]
         )
 
@@ -259,18 +279,51 @@ class CodeownersTests(unittest.TestCase):
                 "ansible/roles/a_new_role/tasks/main.yml",
                 "ansible/roles/a_new_role/library/a_new_module.py",
                 "mail/a_new_program.py",
+                ".github/workflows/a_new_workflow.yml",
             ]
         )
 
+    def test_a_workflow_that_gates_a_deploy_or_emits_a_required_check_is_owned(self) -> None:
+        # A workflow nothing names is released, so one that adds an approval environment, or a
+        # job a required check is named after, would slip out of the owner's review. This reads
+        # every workflow: any that waits on an environment, or emits a required job, must be owned.
+        required_jobs = (
+            "Type check",
+            "Type check (mail)",
+            "Lint + test (mail/provision)",
+            "Type check (hetzner)",
+            "Type check + test (hetzner-host)",
+            "Lint + test (hetzner/provision)",
+            "Validate (edge Caddy config)",
+            "Test (scripts)",
+            "Audit (Pulumi secrets + state backends)",
+            "Validate (monitoring stack config)",
+            "Lint and test the Ansible roles",
+        )
+        workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        self.assertGreaterEqual(len(workflows), 10)
+        emitted: set[str] = set()
+        for workflow in workflows:
+            text = workflow.read_text(encoding="utf-8")
+            names = {m.strip("'\"") for m in re.findall(r"^    name: (.+?)\s*$", text, re.MULTILINE)}
+            emitted |= names
+            gates = bool(re.search(r"^    +environment:", text, re.MULTILINE)) or bool(
+                names & set(required_jobs)
+            )
+            if gates:
+                with self.subTest(workflow=workflow.name):
+                    self.assertEqual([OWNER], owners_of(f".github/workflows/{workflow.name}", self.rules))
+        self.assertEqual(set(required_jobs) - emitted, set(), "a required job no workflow emits")
+
     def test_documents_are_not_the_owners_but_the_instructions_and_readme_are(self) -> None:
         # Every tracked markdown file, derived from the checkout so a new document needs no line
-        # here. The owned ones are the top README, CLAUDE.md, and what sits in .claude/ or .github/.
+        # here. The owned ones are the top README, CLAUDE.md, and what sits in .claude/.
         documents = [
             f
             for f in repository_files()
             if f.endswith(".md")
             and f not in {"README.md", "CLAUDE.md"}
-            and not f.startswith((".github/", ".claude/"))
+            and not f.startswith(".claude/")
         ]
         self.assertGreaterEqual(len(documents), 100)
         self.assert_unowned(documents)
