@@ -849,7 +849,10 @@ class TenantStackCase(unittest.TestCase):
 
 
 # The second shape of the scan's SHAPES (host_output_scan.py at github-workflows v1.2.7).
-VARIABLE_REFERENCE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(:?\?[^}]*)?\}", re.IGNORECASE | re.ASCII)
+VARIABLE_REFERENCE = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(:?\?[^}]*)?\}",
+    re.IGNORECASE | re.ASCII,
+)
 
 
 class FailureMessageCase(unittest.TestCase):
@@ -894,7 +897,8 @@ class FailureMessageCase(unittest.TestCase):
         self.assertEqual([], found, "\n".join(found))
 
     def test_control_a_message_with_an_assignment_is_found(self) -> None:
-        self.assertTrue(CREDENTIAL_ASSIGNMENT.search("holds no SHIM_DRAIN_TOKEN= line with a value"))
+        message = "holds no SHIM_DRAIN_TOKEN= line with a value"
+        self.assertTrue(CREDENTIAL_ASSIGNMENT.search(message))
 
 
 if __name__ == "__main__":
