@@ -153,7 +153,9 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/requirements.txt", "released: a hash-locked pin", False),
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
-    Sample(".github/workflows/ansible-drift-check.yml", "released: reports drift, gates nothing", False),
+    Sample(
+        ".github/workflows/ansible-drift-check.yml", "released: reports drift, gates nothing", False
+    ),
     Sample(".github/workflows/secret-alert-pager.yml", "released: a scheduled pager", False),
     Sample(".github/dependabot.yml", "released: update settings", False),
     Sample("hetzner/dns/zonecheck.py", "released: a checker", False),

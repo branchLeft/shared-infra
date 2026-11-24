@@ -304,14 +304,16 @@ class CodeownersTests(unittest.TestCase):
         emitted: set[str] = set()
         for workflow in workflows:
             text = workflow.read_text(encoding="utf-8")
-            names = {m.strip("'\"") for m in re.findall(r"^    name: (.+?)\s*$", text, re.MULTILINE)}
+            found = re.findall(r"^    name: (.+?)\s*$", text, re.MULTILINE)
+            names = {m.strip("'\"") for m in found}
             emitted |= names
             gates = bool(re.search(r"^    +environment:", text, re.MULTILINE)) or bool(
                 names & set(required_jobs)
             )
             if gates:
                 with self.subTest(workflow=workflow.name):
-                    self.assertEqual([OWNER], owners_of(f".github/workflows/{workflow.name}", self.rules))
+                    path = f".github/workflows/{workflow.name}"
+                    self.assertEqual([OWNER], owners_of(path, self.rules))
         self.assertEqual(set(required_jobs) - emitted, set(), "a required job no workflow emits")
 
     def test_documents_are_not_the_owners_but_the_instructions_and_readme_are(self) -> None:
