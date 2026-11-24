@@ -1,15 +1,15 @@
-"""Run the unit tests of ansible/checks in one of two parts, on every core of the runner.
+"""Run the unit tests of ansible/checks in one of two parts, two worker processes at a time.
 
 The tests of the checks took 7 to 12 minutes in one step, the longest leg of the full lint, and
-they ran one after the other in one process: a hosted runner has four cores and three of them
-sat idle. `main` runs every test module except the ones named in SLOW_MODULES; `slow` runs only
-those. Both parts together are every `test_*.py` in this directory, exactly once: a new module
-needs no entry here and runs in `main`. The parts are chosen by file, and each file is loaded by
-its own `discover` call, so a module that fails to import is reported as a failed test in the
-part it belongs to, never dropped.
+they ran one after the other in one process, and a hosted runner has cores to spare. `main`
+runs every test module except the ones named in SLOW_MODULES; `slow` runs only those. Both
+parts together are every `test_*.py` in this directory, exactly once: a new module needs no
+entry here and runs in `main`. The parts are chosen by file, and each file is loaded by its own
+`discover` call, so a module that fails to import is reported as a failed test in the part it
+belongs to, never dropped.
 
 Within a part the tests are split into slices (at most SLICE_SIZE tests of one module each) and
-the slices run side by side, one `python run_check_tests.py --worker` process per core at a time.
+the slices run side by side, two `python run_check_tests.py --worker` processes at a time.
 A slice is run by unittest exactly as a serial run would run its tests. The run fails closed:
 a slice whose process exits non-zero, writes no result, or ran a different number of tests than
 it was given fails the run, and so does a total that differs from the number of tests collected.
@@ -53,6 +53,13 @@ SLICE_SIZE = 8
 DURATIONS = 10
 
 JOBS_VARIABLE = "CHECK_TESTS_JOBS"
+
+# The workers started when the variable is not set. A hosted runner reports four cores, but the
+# tests start ansible-playbook and other heavy processes, and more than two workers slowed each
+# test by more than they gained. Measured on the runner, same tests, "Test the checks" and
+# "Test the slow checks" in seconds: 1 worker 381 and 169; 2 workers 223 and 97; 3 workers 199
+# and 166; 4 workers 265 and 174.
+DEFAULT_JOBS = 2
 
 
 def all_modules(directory: Path = CHECKS) -> list[str]:
@@ -116,14 +123,14 @@ def slices(test_ids: Iterable[str], size: int = SLICE_SIZE) -> list[list[str]]:
 
 
 def jobs_from(environment: dict[str, str]) -> int:
-    """The number of worker processes: CHECK_TESTS_JOBS, else one per core."""
+    """The number of worker processes: CHECK_TESTS_JOBS, else DEFAULT_JOBS or the cores if fewer."""
     raw = environment.get(JOBS_VARIABLE, "")
     if raw:
         try:
             return max(1, int(raw))
         except ValueError:
             return 1
-    return max(1, min(3, os.cpu_count() or 1))  # EXPERIMENT: 3 workers
+    return max(1, min(DEFAULT_JOBS, os.cpu_count() or 1))
 
 
 @dataclass
