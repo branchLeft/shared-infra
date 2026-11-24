@@ -63,6 +63,21 @@ JUMP_VARS = frozenset(
 # keys, nor the keys without the role.
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
+# The second ci_jump account, the spool account whose key opens the spool hosts' ssh port and
+# nothing else (the role's README, "The second account: spool"). Only edge-t carries it: ops1
+# reaches the tenants' spool hosts through edge-t, so edge1 has no second account and its
+# owner_vars file may not hold these keys. A host in SPOOL_JUMP_HOSTS must be a jump host. The
+# keys are optional in the file: with none the role's defaults leave the account switched off, and
+# the account's name is, as the first account's is, a host input and in no file here.
+SPOOL_JUMP_VARS = frozenset(
+    (
+        "ci_jump_spool_keys",
+        "ci_jump_spool_manage_keys",
+        "ci_jump_spool_destinations",
+        "ci_jump_spool_port",
+    )
+)
+SPOOL_JUMP_HOSTS = frozenset(("edget",))
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
 # The control plane's image pin, the value that moves the image ops1 runs. It is the one
 # key an owner file may leave out: without it the control_plane role keeps the image the deploy
@@ -120,7 +135,8 @@ MAIL_COLLECTOR_KEYS = (
 )
 # Keys a host's file may omit, by host. Every other allowed key is required.
 OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {
-    "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS
+    "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS,
+    **{host: SPOOL_JUMP_VARS for host in SPOOL_JUMP_HOSTS},
 }
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
@@ -132,6 +148,7 @@ _BASE_OWNER_KEYS = {
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
     | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
+    | (SPOOL_JUMP_VARS if host in SPOOL_JUMP_HOSTS else frozenset())
     | (frozenset((HOST_TLS_KEY,)) if host in HOST_TLS_HOSTS else frozenset())
     for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS, *HOST_TLS_HOSTS)
 }
@@ -829,15 +846,42 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
         isinstance(item, str) for item in destinations
     ):
         problems.append("ci_jump_destinations must be a list of text entries")
-    keys = doc.get("ci_jump_keys", [])
+    problems.extend(_jump_list_problems(doc, "ci_jump_keys"))
+    return problems
+
+
+def _jump_list_problems(doc: dict[str, object], name: str) -> list[str]:
+    """The shape of one list of {key} entries, the first account's or the second's."""
+    problems: list[str] = []
+    keys = doc.get(name, [])
     if not isinstance(keys, list):
-        problems.append("ci_jump_keys must be a list of {key} entries")
-        return problems
+        return [f"{name} must be a list of {{key}} entries"]
     for entry in keys:
         if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
-            problems.append(f"a ci_jump_keys entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+            problems.append(f"a {name} entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
         elif not isinstance(entry["key"], str):
-            problems.append("a ci_jump_keys entry needs a text key")
+            problems.append(f"a {name} entry needs a text key")
+    return problems
+
+
+def _spool_key_problems(doc: dict[str, object]) -> list[str]:
+    """The shape of the second jump account's values. Which destinations and keys are acceptable
+    is the role's rule alone (library/ci_jump_authorized_keys.py), so only the types are read."""
+    problems: list[str] = []
+    if "ci_jump_spool_manage_keys" in doc and not isinstance(
+        doc["ci_jump_spool_manage_keys"], bool
+    ):
+        problems.append("ci_jump_spool_manage_keys must be a bool")
+    destinations = doc.get("ci_jump_spool_destinations", [])
+    if not isinstance(destinations, list) or not all(
+        isinstance(item, str) for item in destinations
+    ):
+        problems.append("ci_jump_spool_destinations must be a list of text entries")
+    # A bool is an int in Python, so it is refused by name: true would read as port 1.
+    port = doc.get("ci_jump_spool_port", 22)
+    if isinstance(port, bool) or not isinstance(port, int):
+        problems.append("ci_jump_spool_port must be a whole number")
+    problems.extend(_jump_list_problems(doc, "ci_jump_spool_keys"))
     return problems
 
 
@@ -903,6 +947,7 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     problems.extend(_mail_collector_problems(doc))
     problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
+    problems.extend(_spool_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])
@@ -956,6 +1001,10 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
     findings.extend(
         f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
         for host in sorted(JUMP_HOSTS - applying)
+    )
+    findings.extend(
+        f"R10 {host} is in SPOOL_JUMP_HOSTS but is not in JUMP_HOSTS"
+        for host in sorted(SPOOL_JUMP_HOSTS - JUMP_HOSTS)
     )
 
 

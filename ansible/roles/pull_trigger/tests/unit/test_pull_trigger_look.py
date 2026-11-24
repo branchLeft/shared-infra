@@ -9,6 +9,7 @@ and an apply or a step prints no look.
 
 import contextlib
 import hashlib
+import http.client
 import http.server
 import io
 import json
@@ -99,8 +100,30 @@ def refusals_of(text: str, roots: Sequence[str] = trigger.LOOK_FILE_ROOTS) -> li
     return [item.why.value for item in trigger.parse_look(text, roots).refusals]
 
 
+def declare_http(test: unittest.TestCase, *ports: int) -> None:
+    """Declare the loopback ports the test's http facts may GET, until the test ends."""
+    for name in ("demo-http", "demo-miss"):
+        patcher = mock.patch.dict(trigger.LOOK_HTTP_PORTS, {name: frozenset(ports)})
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+
 class ParseTests(unittest.TestCase):
     """What the file may hold: one closed list of kinds, each with exactly its own fields."""
+
+    def setUp(self) -> None:
+        """Declare the port the shared http fact names, so only the tests below vary it."""
+        declare_http(self, 8080)
+
+    def test_an_http_fact_whose_service_is_not_declared_is_refused(self) -> None:
+        with mock.patch.dict(trigger.LOOK_HTTP_PORTS, {}, clear=True):
+            self.assertEqual(["service-not-declared"], refusals_of(declaration(HTTP_FACT)))
+
+    def test_an_http_fact_naming_a_port_its_service_does_not_declare_is_refused(self) -> None:
+        self.assertEqual(
+            ["port-not-allowed"], refusals_of(declaration(with_fact(HTTP_FACT, port=8081)))
+        )
+        self.assertEqual([], refusals_of(declaration(HTTP_FACT)))
 
     def test_each_kind_with_its_own_fields_is_accepted(self) -> None:
         parsed = trigger.parse_look(declaration(UNIT_FACT, FILE_FACT, HTTP_FACT))
@@ -530,7 +553,9 @@ class LookerTests(unittest.TestCase):
         self.addCleanup(thread.join, 5)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        return int(server.server_address[1])
+        port = int(server.server_address[1])
+        declare_http(self, port)
+        return port
 
     def test_an_http_fact_prints_only_the_status_of_one_get_to_loopback(self) -> None:
         port = self.serve()
@@ -564,14 +589,31 @@ class LookerTests(unittest.TestCase):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             closed = int(probe.getsockname()[1])
+        declare_http(self, closed)
         parsed = self.facts(with_fact(HTTP_FACT, port=closed))
         self.assertEqual("unreachable", self.looker().result(parsed.facts[0]))
         with socket.socket() as silent:
             silent.bind(("127.0.0.1", 0))
             silent.listen(1)
+            declare_http(self, int(silent.getsockname()[1]))
             parsed = self.facts(with_fact(HTTP_FACT, port=int(silent.getsockname()[1])))
             with mock.patch.object(trigger, "LOOK_HTTP_SECONDS", 0.3):
                 self.assertEqual("timeout", self.looker().result(parsed.facts[0]))
+
+    def test_a_port_the_service_does_not_declare_is_never_connected_to(self) -> None:
+        port = self.serve()
+        fact = trigger.LookFact(
+            issue=7,
+            name="demo-http",
+            playbook=PLAY,
+            kind=trigger.LookKind.HTTP_STATUS,
+            port=port,
+            url_path="/health",
+        )
+        with mock.patch.dict(trigger.LOOK_HTTP_PORTS, {"demo-http": frozenset()}):
+            with mock.patch.object(http.client, "HTTPConnection") as connection:
+                self.assertEqual("port-not-allowed", trigger.Looker._http_status(fact))
+        connection.assert_not_called()
 
     def test_a_refused_entry_runs_nothing_and_is_named(self) -> None:
         marker = self.root / "marker"

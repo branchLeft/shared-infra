@@ -45,10 +45,11 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1), dbt1 (db-t1) and mx1. appt1 and dbt1 have only
-typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
-space-separated) and for dbt1 its address. edget has one input, `ci_jump_user`, typed because it
-exists nowhere on the host. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
+seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1), dbt1 (db-t1) and mx1. appt1 and dbt1 have
+only typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
+space-separated) and for dbt1 its address. edget has two inputs, `ci_jump_user` and
+`ci_jump_spool_user` (the names of its two jump accounts), each typed because it exists nowhere on
+the host; the second is added later with `--set ci_jump_spool_user` when the spool tunnels are wanted. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:
