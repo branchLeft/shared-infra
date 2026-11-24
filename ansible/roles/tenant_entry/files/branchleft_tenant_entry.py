@@ -1027,14 +1027,22 @@ def step_restack(host: Host, slug: str) -> list[str]:
 
 
 def restart_colour(host: Host, slug: str) -> str:
-    """Restart the tenant's unit if it is running, so the new file is read. Never starts one."""
-    active = host.runner([host.paths.systemctl, "is-active", unit_name(slug)], None)
-    if active.stdout.strip() != "active":
-        return "not restarted: not running, the file is read at its next start"
-    outcome = host.runner([host.paths.systemctl, "restart", unit_name(slug)], None)
-    if outcome.returncode != 0:
-        fail("restart", detail_of(outcome))
-    return "restarted"
+    """Queue a restart of the tenant's unit if it is running, so the new file is read.
+
+    `try-restart` restarts only a unit that is running, so nothing is started here. `--no-block`
+    queues the job and returns at once: a unit's start can outlast the step timeout, and the
+    reply says `deferred` rather than waiting on it or failing while systemd is still starting it.
+    The state read after the queue says which case it was.
+    """
+    queued = host.runner([host.paths.systemctl, "try-restart", "--no-block", unit_name(slug)], None)
+    if queued.returncode != 0:
+        fail("restart", detail_of(queued))
+    state = host.runner([host.paths.systemctl, "is-active", unit_name(slug)], None).stdout.strip()
+    if state == "failed":
+        fail("restart", "the unit is in a failed state")
+    if state in ("active", "activating", "deactivating", "reloading"):
+        return "deferred: restart queued, the new file is read when the unit starts"
+    return "not restarted: not running, the file is read at its next start"
 
 
 def step_key(host: Host, slug: str) -> list[str]:

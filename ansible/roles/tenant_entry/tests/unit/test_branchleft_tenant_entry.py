@@ -39,6 +39,7 @@ OWNER_EMAIL = "owner@example.invalid"
 TEMPLATE = "GHOST_DB_PASSWORD=\nGHOST_OWNER_EMAIL=\n"
 VALUES = {"GHOST_DB_PASSWORD": CANARY, "GHOST_OWNER_EMAIL": OWNER_EMAIL}
 CONTAINER_ID = "a" * 64
+DEFERRED = "deferred: restart queued, the new file is read when the unit starts"
 IMAGE_DIGEST = "sha256:" + "b" * 64
 PIN = f"IMAGE=ghcr.io/branchleft/ghost-tenant@{IMAGE_DIGEST}\n"
 BIND = "10.20.2.30"
@@ -173,8 +174,13 @@ class FakeHost:
         self.claims: dict[str, int] = {}
         self.enabled: set[str] = set()
         self.running: set[str] = set()
+        # `try-restart` queued on a running unit; `restart` is a plain start-or-restart, which the
+        # program must never use for a stopped unit. Both are recorded, so a test tells them apart.
         self.restarted: list[str] = []
+        self.started: list[str] = []
         self.restart_returncode = 0
+        # A unit state the fake reports from `is-active` whatever else is true (e.g. "activating").
+        self.states: dict[str, str] = {}
         self.volume_returncode = 0
         self.secrets_stderr = ""
         self.secrets_returncode = 0
@@ -225,14 +231,25 @@ class FakeHost:
         return entry.Outcome(0, "written\nkey GHOST_DB_PASSWORD\n", "")
 
     def systemctl(self, args: list[str]) -> entry.Outcome:
-        unit = args[1]
+        unit = args[-1]
         if args[0] == "enable":
             self.enabled.add(unit)
             return entry.Outcome(0, "", "")
+        if args[0] == "try-restart":
+            self.case.assertEqual(args[1:-1], ["--no-block"])
+            if unit in self.running:
+                self.restarted.append(unit)
+            if self.restart_returncode:
+                return entry.Outcome(self.restart_returncode, "", "EXAMPLE restart refusal")
+            return entry.Outcome(0, "", "")
         if args[0] == "restart":
-            self.restarted.append(unit)
-            return entry.Outcome(self.restart_returncode, "", "EXAMPLE restart refusal")
+            self.started.append(unit)
+            self.running.add(unit)
+            return entry.Outcome(0, "", "")
         if args[0] == "is-active":
+            if unit in self.states:
+                state = self.states[unit]
+                return entry.Outcome(0 if state == "active" else 3, state + "\n", "")
             if unit in self.running:
                 return entry.Outcome(0, "active\n", "")
             return entry.Outcome(3, "inactive\n", "")
@@ -1617,7 +1634,8 @@ class RestackTests(EntryTestCase):
         before = self.compose.read_text()
         code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
         self.assertEqual(
-            (code, out, err), (entry.EXIT_DONE, "compose.yml replaced\nrestarted\n", "")
+            (code, out, err),
+            (entry.EXIT_DONE, f"compose.yml replaced\n{DEFERRED}\n", ""),
         )
         self.assertNotEqual(self.compose.read_text(), before)
         environment = jmap(self.document(), "services", "ghost-a", "environment")
@@ -1651,7 +1669,8 @@ class RestackTests(EntryTestCase):
         inode = self.compose.stat().st_ino
         code, out, err = self.restack()
         self.assertEqual(
-            (code, out, err), (entry.EXIT_DONE, "compose.yml already in place\nrestarted\n", "")
+            (code, out, err),
+            (entry.EXIT_DONE, f"compose.yml already in place\n{DEFERRED}\n", ""),
         )
         self.assertEqual(self.host.files(), before)
         self.assertEqual(self.compose.stat().st_ino, inode)
@@ -1664,12 +1683,31 @@ class RestackTests(EntryTestCase):
         self.assertTrue(err.startswith("failed: restart\n"), err)
 
     def test_a_unit_that_is_not_running_is_not_started(self) -> None:
-        # Guard: restart runs only when is-active says active; a restart would start a stopped unit.
+        # Guard: the restart is `try-restart`, which acts only on a running unit. A plain `restart`
+        # would start a stopped one; the fake records that as `started`, and a sabotage of the
+        # program to `restart` turns this case red.
         self.host.running.discard(self.unit)
         code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
         self.assertEqual(code, entry.EXIT_DONE, err)
         self.assertIn("not restarted: not running", out)
+        self.assertEqual(self.host.started, [])
+        self.assertNotIn(self.unit, self.host.running)
         self.assertEqual(self.host.restarted, [])
+
+    def test_a_unit_still_starting_is_deferred_not_a_failed_timeout(self) -> None:
+        # Guard: --no-block returns at once, so a start that outlasts the step timeout is reported
+        # as deferred, not as `failed: timeout`. Only a unit in a failed state fails the request.
+        self.host.states[self.unit] = "activating"
+        code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
+        self.assertEqual((code, err), (entry.EXIT_DONE, ""))
+        self.assertIn(DEFERRED, out)
+        self.assertEqual(self.host.started, [])
+
+    def test_a_unit_in_a_failed_state_fails_the_restart_step(self) -> None:
+        self.host.states[self.unit] = "failed"
+        code, out, err = self.restack()
+        self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
+        self.assertTrue(err.startswith("failed: restart\n"), err)
 
     def test_a_slug_never_claimed_here_is_refused(self) -> None:
         self.host.hand_made_tenant(OTHER)
