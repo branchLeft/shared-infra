@@ -7,7 +7,6 @@ Each test names the rule it proves. The last class pins the workflow that runs t
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import subprocess
 import unittest
@@ -19,17 +18,13 @@ SCRIPTS = pathlib.Path(__file__).resolve().parent
 WORKFLOW = SCRIPTS.parent / ".github" / "workflows" / "ansible-supersede.yml"
 
 
-def _load_module() -> Any:
-    """Import the script by path: its filename has hyphens."""
-    path = SCRIPTS / "cancel-superseded-ansible-delivery.py"
-    spec = importlib.util.spec_from_file_location("cancel_superseded_ansible_delivery", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-script = _load_module()
+script = load_script(
+    SCRIPTS / "cancel-superseded-ansible-delivery.py",
+    "cancel_superseded_ansible_delivery",
+)
 
 APPLY = "delivery / Apply the planned commit (after approval)"
 PLAN = "delivery / Plan the apply (check mode on each host)"

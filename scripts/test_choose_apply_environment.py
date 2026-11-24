@@ -4,7 +4,6 @@
 `production-free` is reached by exactly one input combination; each test below
 changes one input from that combination and expects `production`."""
 
-import importlib.util
 import itertools
 import os
 import pathlib
@@ -16,14 +15,10 @@ import unittest
 SCRIPT = pathlib.Path(__file__).resolve().parent / "choose-apply-environment.py"
 
 
-def _load_module():
-    spec = importlib.util.spec_from_file_location("choose_apply_environment", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-chooser = _load_module()
+chooser = load_script(SCRIPT, "choose_apply_environment")
 
 GOOD = {
     "spend_verdict": "FREE",
