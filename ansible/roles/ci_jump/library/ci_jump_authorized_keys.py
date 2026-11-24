@@ -1151,9 +1151,7 @@ def plan_result(
     lines = plan_lines(
         host, name, settings, dests, parsed_keys, legacy_files, own_lists, profile=profile
     )
-    pending = is_pending(
-        host, name, dests, parsed_keys, legacy_files, own_lists, profile=profile
-    )
+    pending = is_pending(host, name, dests, parsed_keys, legacy_files, own_lists, profile=profile)
     return lines, pending
 
 

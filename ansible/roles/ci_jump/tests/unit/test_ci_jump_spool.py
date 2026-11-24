@@ -330,7 +330,9 @@ class SpoolProfile(unittest.TestCase):
             "E-USER-FORBIDDEN",
         )
         self.assertEqual(
-            jump._checked_inputs(SPOOL_USER, OWN, [SPOOL_HOST], [KEY_A], owned, profile)[0],  # noqa: SLF001
+            jump._checked_inputs(  # noqa: SLF001
+                SPOOL_USER, OWN, [SPOOL_HOST], [KEY_A], owned, profile
+            )[0],
             SPOOL_USER,
         )
 
@@ -432,7 +434,11 @@ class SpoolPlanAndReadBack(unittest.TestCase):
         self.assertEqual(
             refusal_code(
                 lambda: jump.check_files(
-                    host, SPOOL_USER, [SPOOL_HOST], [("ssh-ed25519", body(KEY_A))], profile=spool_profile()
+                    host,
+                    SPOOL_USER,
+                    [SPOOL_HOST],
+                    [("ssh-ed25519", body(KEY_A))],
+                    profile=spool_profile(),
                 )
             ),
             "E-READBACK-MISMATCH",
@@ -442,7 +448,11 @@ class SpoolPlanAndReadBack(unittest.TestCase):
         self.assertEqual(
             refusal_code(
                 lambda: jump.check_files(
-                    host, SPOOL_USER, [SPOOL_HOST], [("ssh-ed25519", body(KEY_A))], profile=spool_profile()
+                    host,
+                    SPOOL_USER,
+                    [SPOOL_HOST],
+                    [("ssh-ed25519", body(KEY_A))],
+                    profile=spool_profile(),
                 )
             ),
             "E-READBACK-MISMATCH",
