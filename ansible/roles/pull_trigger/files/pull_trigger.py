@@ -78,6 +78,10 @@ MAX_SPOOL_BYTES: Final = 400 * 1024 * 1024
 SPOOL_NAME: Final = "spool"
 QUARANTINE_NAME: Final = "quarantine"
 QUARANTINE_REF: Final = "refs/pull-trigger/head"
+# The ref the pushing workflow puts in the bundle beside HEAD: the tip of ``main`` as its checkout
+# knows it. The receiver unpacks it as ``MAIN_REF`` and asks the same question of it as the pull
+# route asks of the fetched tip.
+BUNDLE_MAIN_REF: Final = "refs/remotes/origin/main"
 BUNDLE_HEADERS: Final = (b"# v2 git bundle\n", b"# v3 git bundle\n")
 BUNDLE_SUMMARY_PREFIX: Final = "push-receiver"
 PULL_SUMMARY_PREFIX: Final = "pull-trigger"
@@ -283,6 +287,7 @@ class Why(enum.Enum):
     STEP_WORD_WRONG = "the confirmation word is not the one on the allow-list"
     COMMIT_UNKNOWN = "the commit is not in the history of main"
     COMMIT_NOT_ANCESTOR = "the commit is not an ancestor of the tip of main"
+    MAIN_ABSENT = "there is no tip of main to compare the commit with"
     COMMIT_OLDER = "the commit is older than the last one applied here"
     SIGNATURE_ABSENT = "the commit carries no signature"
     SIGNATURE_BAD = "the signature does not verify, or its key is expired or revoked"
@@ -1589,6 +1594,27 @@ class Repository:
         head = self._git.object_bytes("tag", tag_id).split(b"\n", 2)
         return head[:2] == [f"object {commit}".encode(), b"type commit"]
 
+    def require_ancestor_of_main(self, commit: str) -> None:
+        """Refuse a commit that is not an ancestor of the tip of main held under ``MAIN_REF``.
+
+        Both sources ask this one question of the repository they read the commit from: the
+        pull route of the tip it just fetched, the bundle route of the tip the bundle carried.
+        The repository may still hold an object from an earlier fetch (for example a commit that
+        main has since moved away from), so presence is not enough, and a repository with no tip
+        of main refuses everything.
+
+        Raises:
+            NotOnMainError: The commit is unknown here, there is no tip of main, or the commit
+                is not an ancestor of the tip.
+            GitError: git fails for another reason.
+        """
+        if not self.has_commit(commit):
+            raise NotOnMainError(Why.COMMIT_UNKNOWN)
+        if not self.has_commit(MAIN_REF):
+            raise NotOnMainError(Why.MAIN_ABSENT)
+        if not self.is_ancestor(commit, MAIN_REF):
+            raise NotOnMainError(Why.COMMIT_NOT_ANCESTOR)
+
 
 class Cache(Repository):
     """A root-owned bare repository holding only what was fetched from main."""
@@ -1633,21 +1659,6 @@ class Cache(Repository):
             if ref.startswith(RELEASE_REF_PREFIX):
                 self._git.output("update-ref", "-d", ref)
 
-    def require_ancestor_of_main(self, commit: str) -> None:
-        """Refuse a commit that is not an ancestor of the fetched tip of main.
-
-        The cache may still hold an object from an earlier fetch (for example a
-        commit that main has since moved away from), so presence is not enough.
-
-        Raises:
-            NotOnMainError: The commit is unknown here or is not an ancestor of the tip.
-            GitError: git fails for another reason.
-        """
-        if not self.has_commit(commit):
-            raise NotOnMainError(Why.COMMIT_UNKNOWN)
-        if not self.is_ancestor(commit, MAIN_REF):
-            raise NotOnMainError(Why.COMMIT_NOT_ANCESTOR)
-
 
 class Quarantine(Repository):
     """A per-run bare repository that a bundle is unpacked into before anything trusts it.
@@ -1664,8 +1675,16 @@ class Quarantine(Repository):
             start = handle.read(max(len(header) for header in BUNDLE_HEADERS))
         return start.startswith(BUNDLE_HEADERS)
 
+    def carries_main(self, bundle: Path) -> bool:
+        """Say whether the bundle names the tip of main beside its HEAD."""
+        listed = self._git.attempt("bundle", "list-heads", str(bundle), BUNDLE_MAIN_REF)
+        return listed.returncode == 0 and listed.stdout.strip() != ""
+
     def admit(self, bundle: Path, commit: str, release_tags: bool = False) -> None:
         """Unpack the bundle here and require its HEAD to be the requested commit.
+
+        The tip of main the bundle carries is unpacked too, as ``MAIN_REF``, when it has one.
+        Whether the commit is on it is asked after, by ``require_ancestor_of_main``.
 
         The bundle needs a bundle header and must verify (a complete history). Its objects must
         unpack and pass git's object check, made by the fetch and by ``git fsck``, so the guard
@@ -1695,6 +1714,19 @@ class Quarantine(Repository):
         )
         if fetched.returncode != 0:
             raise BadBundleError(Why.BUNDLE_UNPACK)
+        if self.carries_main(bundle):
+            carried = self._git.attempt(
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--force",
+                "--quiet",
+                "--",
+                str(bundle),
+                f"+{BUNDLE_MAIN_REF}:{MAIN_REF}",
+            )
+            if carried.returncode != 0:
+                raise BadBundleError(Why.BUNDLE_UNPACK)
         if self._git.attempt("fsck", "--strict", "--no-dangling", "--no-progress").returncode != 0:
             raise BadBundleError(Why.BUNDLE_FSCK)
         head = self._git.attempt("rev-parse", "--verify", "--quiet", f"{QUARANTINE_REF}^{{commit}}")
@@ -2684,10 +2716,12 @@ class Trigger:
     def _admitted_bundle(self, mode: Mode, commit: str, spool: Path) -> Verdict:
         """Admit the bundle into a quarantine, then verify and run as the pull route does.
 
-        The signature is checked, then the floor; the role README gives the floor rules.
+        The commit must be an ancestor of the tip of main the bundle carries, then the signature
+        is checked, then the floor; the role README gives the floor rules.
 
         Raises:
             BadBundleError: The bundle is refused by the quarantine.
+            NotOnMainError: The bundle carries no tip of main, or the commit is not behind it.
             NoFloorError: The host has no floor.
             RollbackError: The commit does not equal or descend from the floor.
             PlaybookNotAllowedError: The playbook is not a regular file in the commit.
@@ -2698,6 +2732,7 @@ class Trigger:
             git = Git(self._tools, directory, self._workspace.home, protocols="file")
             quarantine = Quarantine(git)
             quarantine.admit(spool, commit, release_tags=self._config.require_release_tag)
+            quarantine.require_ancestor_of_main(commit)
             self._require_authority(git, quarantine, commit)
             floor = self._workspace.last_applied()
             if floor is None:

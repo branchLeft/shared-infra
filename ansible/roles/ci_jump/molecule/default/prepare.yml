@@ -180,6 +180,11 @@
           KbdInteractiveAuthentication no
           PubkeyAuthentication yes
           StrictModes yes
+          # OpenSSH 9.8 and later penalise a source after refused attempts and reset its next
+          # connections before key exchange. The harness reads that reset as no answer, so a
+          # probe after a run of denials failed for no reason the key line decided. Penalties are
+          # off here so each key's verdict is its own; the production role does not set this.
+          PerSourcePenalties no
           Match User {{ scenario_other_user }}
             AllowTcpForwarding no
           Match all
