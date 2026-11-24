@@ -9,6 +9,7 @@ import copy
 import http.client
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -65,22 +66,47 @@ METRICS_SCRAPE_SOURCES = ("46.225.95.167",)
 # Reasoning: see configure_stalwart.md, "HTTP endpoint policy".
 HTTP_USE_X_FORWARDED = False
 
-HTTP_ENDPOINT_POLICY = {
-    "match": {
-        **{
-            str(index): {
-                "if": (
-                    f"listener == 'https' && path == '{METRICS_PATH}' "
-                    f"&& remote_ip == '{source}'"
-                ),
-                "then": "200",
-            }
-            for index, source in enumerate(METRICS_SCRAPE_SOURCES)
-        },
-        str(len(METRICS_SCRAPE_SOURCES)): {"if": "listener == 'https'", "then": "421"},
-    },
-    "else": "200",
-}
+# Reasoning: see configure_stalwart.md, "Diagnostic JMAP route".
+DIAGNOSTIC_PATH = "/jmap"
+DIAGNOSTIC_SOURCES_ENV = "STALWART_DIAGNOSTIC_SOURCES"
+MAX_DIAGNOSTIC_SOURCES = 2
+_IPV4_RE = re.compile(r"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$")
+
+
+def parse_diagnostic_sources(raw: str) -> tuple[str, ...]:
+    """The source addresses allowed to reach the JMAP path on the public
+    listener, from a comma-separated list of single IPv4 addresses. Empty
+    means the route is closed. Refuses anything else (a range, IPv6, an
+    unspecified or loopback address, more than MAX_DIAGNOSTIC_SOURCES) rather
+    than guess, because a malformed value would otherwise widen or silently
+    drop a live access-control rule."""
+    items = [item.strip() for item in raw.split(",") if item.strip()]
+    if len(items) > MAX_DIAGNOSTIC_SOURCES or len(set(items)) != len(items):
+        raise ValueError(f"{DIAGNOSTIC_SOURCES_ENV} takes 1 to {MAX_DIAGNOSTIC_SOURCES} distinct addresses")
+    for item in items:
+        if not _IPV4_RE.match(item) or item.startswith(("0.", "127.", "255.")):
+            raise ValueError(f"{DIAGNOSTIC_SOURCES_ENV}: {item!r} is not a single public-looking IPv4 address")
+    return tuple(items)
+
+
+def build_http_endpoint_policy(diagnostic_sources: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Allow rules first (first match wins), the blanket 421 last. The
+    diagnostic rules pin both the path and one source address each."""
+    allowances = [
+        f"listener == 'https' && path == '{METRICS_PATH}' && remote_ip == '{source}'"
+        for source in METRICS_SCRAPE_SOURCES
+    ] + [
+        f"listener == 'https' && path == '{DIAGNOSTIC_PATH}' && remote_ip == '{source}'"
+        for source in diagnostic_sources
+    ]
+    match: dict[str, Any] = {
+        str(index): {"if": condition, "then": "200"} for index, condition in enumerate(allowances)
+    }
+    match[str(len(allowances))] = {"if": "listener == 'https'", "then": "421"}
+    return {"match": match, "else": "200"}
+
+
+HTTP_ENDPOINT_POLICY = build_http_endpoint_policy()
 
 # Reasoning: see configure_stalwart.md, "Prometheus exporter".
 METRICS_SECRET_VARIABLE = "STALWART_PROMETHEUS_SECRET"
@@ -219,7 +245,9 @@ def plan_listener_changes(listeners: list[dict[str, Any]]) -> dict[str, Any]:
     return args
 
 
-def plan_http_change(http_singletons: list[dict[str, Any]]) -> dict[str, Any]:
+def plan_http_change(
+    http_singletons: list[dict[str, Any]], diagnostic_sources: tuple[str, ...] = ()
+) -> dict[str, Any]:
     """Pure diff: return the x:Http/set arguments needed so the Http
     singleton carries this platform's endpoint policy, or an empty dict if
     it already does. `allowedEndpoints` and `useXForwarded` are managed --
@@ -228,7 +256,7 @@ def plan_http_change(http_singletons: list[dict[str, Any]]) -> dict[str, Any]:
     else on the object are left as found.
     """
     target = {
-        "allowedEndpoints": HTTP_ENDPOINT_POLICY,
+        "allowedEndpoints": build_http_endpoint_policy(diagnostic_sources),
         "useXForwarded": HTTP_USE_X_FORWARDED,
     }
     if not http_singletons:
@@ -567,12 +595,16 @@ def _reconcile_domains(auth: tuple[str, str], acme_provider_id: str | None) -> b
 
 def _reconcile_http_access(auth: tuple[str, str]) -> bool:
     http_singletons = _jmap_call(auth, "x:Http/get", {"ids": ["singleton"]})["list"]
-    http_args = plan_http_change(http_singletons)
+    sources = parse_diagnostic_sources(os.environ.get(DIAGNOSTIC_SOURCES_ENV, ""))
+    http_args = plan_http_change(http_singletons, sources)
     if not http_args:
         print("configure_stalwart: HTTP access-control rule already up to date, no-op")
         return False
     _jmap_call(auth, "x:Http/set", http_args)
-    print("configure_stalwart: set the HTTP access-control rule (webadmin off 443, metrics path open to edge1 only)")
+    print(
+        "configure_stalwart: set the HTTP access-control rule (webadmin off 443, metrics path open to edge1 only, "
+        + (f"{DIAGNOSTIC_PATH} open to {len(sources)} diagnostic source(s))" if sources else f"{DIAGNOSTIC_PATH} closed)")
+    )
     return True
 
 
@@ -670,6 +702,8 @@ def _wait_for_stalwart_ready(
 
 
 def main() -> int:
+    # Validated before the first write, so a bad value cannot leave a half-applied run.
+    parse_diagnostic_sources(os.environ.get(DIAGNOSTIC_SOURCES_ENV, ""))
     if os.path.exists(CREDENTIALS_PATH):
         auth = _load_credentials()
     else:

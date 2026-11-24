@@ -76,6 +76,13 @@ authoring.invalid {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec @inspected
 		respond @ghost_setup 403
@@ -121,6 +128,13 @@ http://edge-probe.invalid:8080 {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec
@@ -169,6 +183,13 @@ http://edge-probe.invalid:8080 {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec

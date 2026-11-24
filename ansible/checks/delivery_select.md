@@ -1,8 +1,9 @@
 # delivery_select.py: which shards a delivery runs
 
-The `select` job of `ansible-delivery.yml` runs this program on a push to `main` and passes
-its two answers to the call of the reusable workflow: `shards` (`true` when any shard must
-run) and `directories` (the `role-directories` input, one directory per line). The files it
+`delivery_prepare.py` runs this program on a push to `main`, inside the discover job of the
+reusable workflow (its `prepare-command` input), and the workflow takes its two answers:
+`shards` (`true` when any shard must run) and `directories` (the globs it tests in place of the
+`role-directories` input, one directory per line). The files it
 asks `ci_select.py` about are those changed since a base commit, with the pull request rules
 (`ci_select.select`, event `pull_request`), so a delivery and the gate read one rulebook.
 On top of them, a change to `ansible-delivery.yml` or to `delivery_select.py` runs every
@@ -21,16 +22,18 @@ it), so a change to it alone selects none.
   confirm step that is skipped, failed, missing or unreadable on a skipped-lint run, is no
   pass. No such commit within reach selects every shard.
 - **A failure selects every shard, never none.** Any error in the program (git, GitHub, the
-  shard list, the rules, a bad argument) prints every role and pattern and exits 0. If the
-  program cannot run at all, or prints anything but a verdict and a directory list, the
-  step writes `shards=true` with `roles/*` and `patterns/*` itself. `check_delivery.py` pins
-  that fallback and forbids a literal `shards=false` in the step.
+  shard list, the rules, a bad argument) prints every role and pattern and exits 0. If
+  `delivery_prepare.py` cannot run at all, or prints an answer without both its `shards` and
+  its `tested` line, the discover job of the reusable workflow writes `shards=true` and
+  `tested=false` itself and tests the `role-directories` the caller passed, which is every role
+  and pattern (`check_delivery.py` pins that input to `roles/*` and `patterns/*`).
 - **No shard means the lint and the shards are skipped, on two conditions.** The call sets
-  `skip-rerun-after-merge-group` to `needs.select.outputs.shards == 'false'` and
-  `needs.queue-proof.outputs.tested == 'true'`: the select job found no file any shard reads,
-  and the merge queue passed this exact commit (its lint and unit tests). A merge that skipped
-  the queue has no queue run, so with no shard it still runs the lint and every role. The
-  `directories` answer is then the full globs, which the reusable workflow lists and ignores.
+  `skip-rerun-after-merge-group` to the boolean `true`, and the reusable workflow then skips
+  only when the preparation said `shards=false` (this program found no file any shard reads)
+  and `tested=true` (the merge queue passed this exact commit: its lint and unit tests). A merge
+  that skipped the queue has no queue run, so with no shard it still runs the lint and every
+  role. The `directories` answer is then the full globs, which the reusable workflow lists and
+  ignores.
 - The job names it reads (`Discover the Ansible checks`, `Lint the Ansible inputs`,
   `Molecule: ...`) are the reusable workflow's. A rename there reads as no pass, which selects
   every shard. The daily scheduled run of `ansible.yml` still runs every shard and covers drift.

@@ -656,8 +656,9 @@ Deploying it, verifying detect-only, and turning enforcement on:
 [`RUNBOOK-edge.md`](RUNBOOK-edge.md).
 
 The live-Caddy check in `edge/ghostSetup.test.ts` starts a container through a
-small harness, `edge/dockerHarness.ts`, so a silent Docker engine fails the
-hook in seconds instead of holding the commit. Its bound on one engine step
+small harness, `edge/dockerHarness.ts`, so a silent Docker engine fails the CI
+job in seconds. These Docker-backed suites run in CI only, not in the commit
+hook (`PRE_COMMIT` leaves them out of the `test` script). Its bound on one engine step
 (30 s, set with `BRANCHLEFT_DOCKER_STEP_MS`), its slot rules and the limits it
 leaves in place are in [`edge/dockerHarness.md`](edge/dockerHarness.md).
 

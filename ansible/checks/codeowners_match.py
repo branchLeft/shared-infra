@@ -91,10 +91,39 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/checks/check_delivery.py", "gate: a CI gate check", True),
     Sample("ansible/checks/check_enrolment.py", "gate: the host-role check", True),
     Sample("ansible/checks/host_roles/edge1.yml", "gate: a host's role allowlist", True),
-    Sample("ansible/checks/test_check_delivery.py", "gate: a kept gate's test", True),
+    Sample("ansible/checks/check_secret_no_log.py", "gate: the secret no_log check", True),
+    Sample("ansible/checks/ci_select.py", "gate: the choice of shards a CI run executes", True),
     Sample("ansible/harness/run_harness.py", "gate: the Ansible harness", True),
     Sample("scripts/assert-no-hetzner-deletes.py", "gate: the delete guard a secret job", True),
     Sample("scripts/choose-apply-environment.py", "gate: the apply approval routing", True),
+    Sample("scripts/ci_skip.py", "gate: the CI skip decision", True),
+    Sample(
+        "scripts/test_ci_skip.py",
+        "gate: the skip machinery's test, run in required jobs",
+        True,
+    ),
+    Sample(
+        "scripts/trace_reads.py",
+        "gate: the skip machinery's read trace, run in required jobs",
+        True,
+    ),
+    Sample(
+        "ansible/checks/test_plan_diff_scan.py",
+        "gate: the check against a hidden changed file",
+        True,
+    ),
+    Sample(
+        "ansible/checks/test_step_allowlist.py",
+        "gate: the step allow-list check",
+        True,
+    ),
+    Sample("scripts/audit-pulumi-secrets.py", "gate: the Pulumi secrets audit", True),
+    Sample(
+        "scripts/json.py",
+        "gate: a new script; credentialed scripts import scripts/ first",
+        True,
+    ),
+    Sample("scripts/tenants_state_rewrap.py", "gate: a script run with state keys", True),
     Sample("hetzner/scripts/check-crowdsec-hub-pin.py", "gate: a script gating a write step", True),
     Sample("hetzner/scripts/test_check_crowdsec_hub_pin.py", "gate: that script's test", True),
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
@@ -106,10 +135,8 @@ SAMPLES: tuple[Sample, ...] = (
         "ansible/roles/deploy_verifier/files/branchleft-verify-image.py", "gate: the verifier", True
     ),
     Sample("hetzner/scripts/lib/proof_harness.py", "gate: what the owned proofs import", True),
-    Sample("hetzner/estate.guard.test.ts", "guard: a Pulumi guard test", True),
     Sample("hetzner/projectGuard.ts", "guard: the project guard", True),
-    Sample("hetzner/projectGuard.test.ts", "guard: the project guard test", True),
-    Sample("ovh/copy2/configGuard.test.ts", "guard: a config guard test", True),
+    Sample("ovh/copy2/configGuard.ts", "guard: the config guard", True),
     Sample("ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py", "guard", True),
     # Human-facing documents and the owner's words.
     Sample("README.md", "doc: the readme", True),
@@ -150,13 +177,24 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/requirements.txt", "released: a hash-locked pin", False),
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
+    Sample("ansible/checks/test_check_delivery.py", "released: a gate's test", False),
+    Sample("hetzner/estate.guard.test.ts", "released: a guard's test", False),
+    Sample("hetzner/projectGuard.test.ts", "released: a guard's test", False),
+    Sample("ovh/copy2/configGuard.test.ts", "released: a guard's test", False),
+    Sample(
+        "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
+        "released: the verifier's test",
+        False,
+    ),
     Sample("hetzner/dns/zonecheck.py", "released: a checker", False),
     Sample("hetzner/scripts/probe-object-storage.py", "released: a probe", False),
     Sample("hetzner/scripts/check-address-plan-drift.py", "released: a read-only checker", False),
 )
 
 # Samples that stand for a file the repository does not hold, so they are not looked up on disk.
-PENDING: frozenset[str] = frozenset({"ansible/library/x.py", "hetzner/edge/publicpress/index.html"})
+PENDING: frozenset[str] = frozenset(
+    {"ansible/library/x.py", "hetzner/edge/publicpress/index.html", "scripts/json.py"}
+)
 
 
 def mismatches(rules: list[Rule], samples: Sequence[Sample] = SAMPLES) -> list[Sample]:

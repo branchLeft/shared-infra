@@ -3,10 +3,11 @@
 The merge queue runs the lint and the unit tests only, so a queue run proves nothing about the
 containers, and the delivery is the run that tests the merged tree in them. The delivery skips
 its lint and Molecule re-run only when this proof is true and `delivery_select.py` found no
-shard called for; `check_delivery.py` holds the input `skip-rerun-after-merge-group` at that
-exact expression. The job `queue-proof` of `ansible-delivery.yml`
-reads the runs of `ansible.yml` for the pushed commit and `merge_group_proof.py` answers
-`tested=true` only for a run that has all of:
+shard called for; `check_delivery.py` holds the input `skip-rerun-after-merge-group` at the
+boolean `true`, and the reusable workflow applies the two conditions. `delivery_prepare.py`,
+which the discover job of the reusable workflow runs (it is a step of a job that runs anyway,
+not a job of its own), reads the runs of `ansible.yml` for the pushed commit and
+`merge_group_proof.judge` answers `tested=true` only for a run that has all of:
 
 - the workflow `.github/workflows/ansible.yml`, the event `merge_group`, the pushed commit as head;
 - a head branch that starts with `gh-readonly-queue/`;
@@ -19,10 +20,11 @@ the queue has no queue run, so it gets `tested=false`. An unreadable, truncated 
 answer is `false` too. A false answer means the delivery re-tests, with the lint and the shards
 the selection names, whatever the selection says.
 
-`check_delivery.py` fixes the shape of the proof job and the two inputs the delivery passes
-(`skip-rerun-after-merge-group`, held at the two-condition expression, and
-`merge-group-check-name`, the gate job's name in `ansible.yml`, which the reusable workflow
-reads only while the skip is on), and of the `select` job, its outputs, its step and its fallback.
+`check_delivery.py` fixes the three inputs the delivery passes for this: `prepare-command`
+(`ansible/checks/delivery_prepare.py`), `skip-rerun-after-merge-group` (the boolean `true`) and
+`merge-group-check-name` (the gate job's name in `ansible.yml`, which the reusable workflow
+reads only while the skip is on). It also allows the one call and no job before it: a job
+before the call is a wait for a runner.
 
 `check_delivery.py` also fixes the push route of both callers. The push list is the
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
