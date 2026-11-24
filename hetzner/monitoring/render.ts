@@ -345,9 +345,11 @@ function tunnelRelabelRule(tunnel: TunnelledHost): string[] {
 export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
   return sites.flatMap((site) =>
     // A signed object gateway answers 404 at `/` by design; its health path is
-    // the one the edge forwards for a probe.
-    site.hostnames.map((hostname) =>
-      site.signedObjectGateway === true ? `https://${hostname}/healthz` : `https://${hostname}`
+    // the one the edge forwards for a probe. A site with a public path allow-list
+    // names its own probe path for the same reason.
+    site.hostnames.map(
+      (hostname) =>
+        `https://${hostname}${site.probePath ?? (site.signedObjectGateway === true ? '/healthz' : '')}`
     )
   );
 }

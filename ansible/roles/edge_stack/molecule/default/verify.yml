@@ -45,6 +45,7 @@
       p13: refusals
       p14: refusals
       p15: refusals
+      p15t: refusals
       p16: refusals
       p17: refusals
       p18: refusals
@@ -59,6 +60,7 @@
       p29: services
       p30: services
     edge_stack_verify_real_stack: '{{ playbook_dir }}/../../files/stack'
+    edge_stack_verify_real_tenant_stack: '{{ playbook_dir }}/../../files/stack-tenant'
     edge_stack_verify_dir: /opt/branchleft/edge
     # Read directly from the repository, not through the role's link, as the stack is.
     edge_stack_verify_dropin_source: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/edge.override.conf'
@@ -1048,6 +1050,62 @@
               A file in no class, or a link, in the stack directory was not refused before anything was called.
               It said '{{ edge_stack_verify_runs['p15' ~ item].msg }}'.
           loop: [a, b, c]
+
+    # ----- p15t: the profile decides which stack is accepted -----
+    # The tenant profile takes the tenant stack and refuses the estate's (its Nextcloud
+    # profile and verified-session parser are in no class of it), and the estate profile
+    # refuses the tenant's (it lacks files the estate classes name). Both stop before anything is
+    # called or changed. The third run is a check-mode plan of the real tenant stack: it is not
+    # refused, so the refusals above are the profile's doing and not a broken stack.
+    - name: Case p15t, a stack that is the other profile's is refused, and the tenant stack is not
+      tags: [p15t]
+      when: edge_stack_verify_homes.p15t == edge_stack_verify_part
+      block:
+        - name: Return to the converged host
+          ansible.builtin.include_tasks: tasks/reset.yml
+
+        - name: Apply the tenant profile to the estate's stack
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p15ta
+            edge_stack_verify_run_profile: tenant
+            edge_stack_verify_run_tenant_source: '{{ edge_stack_verify_real_stack }}'
+
+        - name: Apply the estate profile to the tenant's stack
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p15tb
+            edge_stack_verify_run_source: '{{ edge_stack_verify_real_tenant_stack }}'
+
+        - name: Plan the tenant profile against the tenant's stack
+          ansible.builtin.include_tasks: tasks/run_role.yml
+          vars:
+            edge_stack_verify_run_name: p15tc
+            edge_stack_verify_run_profile: tenant
+            edge_stack_verify_run_check: true
+
+        - name: Assert each stack of the other profile was refused before anything was called or changed
+          ansible.builtin.assert:
+            that:
+              - edge_stack_verify_runs['p15t' ~ item].failed
+              - edge_stack_verify_runs['p15t' ~ item].msg is search('in no class|lacks a named file')
+              - edge_stack_verify_runs['p15t' ~ item].new == []
+              - edge_stack_verify_runs['p15t' ~ item].after.stamps == edge_stack_verify_runs['p15t' ~ item].before.stamps
+            quiet: true
+            fail_msg: >-
+              A stack that belongs to the other profile was not refused before anything was called.
+              It said '{{ edge_stack_verify_runs['p15t' ~ item].msg }}'.
+          loop: [a, b]
+
+        - name: Assert the tenant profile accepts the tenant stack, and plans only its own files
+          ansible.builtin.assert:
+            that:
+              - not edge_stack_verify_runs.p15tc.failed
+              - edge_stack_verify_runs.p15tc.new == []
+              - edge_stack_verify_runs.p15tc.after.stamps == edge_stack_verify_runs.p15tc.before.stamps
+            quiet: true
+            fail_msg: >-
+              The tenant profile did not plan against the tenant stack ({{ edge_stack_verify_runs.p15tc.msg }}).
 
     # ----- p16: the pin must be exactly one IMAGE line holding a digest -----
     - name: Case p16, pins the role refuses, and a pin that changes while the role waits for the lock

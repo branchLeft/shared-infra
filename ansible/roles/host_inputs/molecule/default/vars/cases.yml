@@ -292,7 +292,7 @@ host_inputs_verify_cases:
   - name: a host with no row
     kind: content
     content: '{{ host_inputs_test_json }}'
-    host: appt1
+    host: unlisted1
     code: no-host-row
   - name: an empty host name
     kind: content

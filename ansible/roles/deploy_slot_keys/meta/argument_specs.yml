@@ -13,11 +13,13 @@ argument_specs:
       deploy_slot_keys_slots:
         type: list
         elements: dict
-        required: true
+        required: false
         description: >-
-          The exact set of slots the host holds, with no default. A stack that is on the
-          host and not in the list is revoked. An empty list means the set is not declared:
-          it changes nothing and never revokes every slot. At most one entry per stack and
+          The exact set of slots the host holds, with no default. When it is undefined the
+          role installs the slot program and does nothing else: it never reads it as an
+          empty set and never revokes. When it is defined, a stack that is on the host and
+          not in the list is revoked. An empty list means the set is not declared: it
+          changes nothing and never revokes every slot. At most one entry per stack and
           one entry per key; the program refuses a key that is also the host-level key.
         options:
           stack:

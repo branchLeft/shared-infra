@@ -29,8 +29,8 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly nine entries -- the Alertmanager ones, the drain worker and the abuse report outside them', () => {
-    expect(PAGE_REGISTER).toHaveLength(9);
+  it('has exactly ten entries -- the Alertmanager ones, the drain worker and the abuse report outside them, and the secret-scanning page sent by a workflow', () => {
+    expect(PAGE_REGISTER).toHaveLength(10);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
@@ -41,10 +41,11 @@ describe('PAGE_REGISTER', () => {
       'drain-worker-stopped',
       'abuse-report',
       'stopped-demo-reaper',
+      'secret-scanning-alert',
     ]);
   });
 
-  it('routes seven entries through Alertmanager, the drain worker through Healthchecks.io and the abuse report straight to ntfy', () => {
+  it('routes seven entries through Alertmanager, the drain worker through Healthchecks.io, the abuse report straight to ntfy and the secret-scanning page through a workflow', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -58,6 +59,7 @@ describe('PAGE_REGISTER', () => {
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
     expect(byPath('ntfy_direct')).toEqual(['abuse-report']);
+    expect(byPath('github-workflow')).toEqual(['secret-scanning-alert']);
   });
 
   it('carries no Alertmanager alertname for the drain worker -- it never becomes an alert here', () => {
@@ -124,6 +126,72 @@ describe('the stopped-demo-reaper entry', () => {
 
   it('carries no work-item reference in its shipped text', () => {
     expect(`${reaper?.name} ${reaper?.reason}`).not.toMatch(/#\d|workspace/i);
+  });
+});
+
+/**
+ * The secret-scanning page is posted to ntfy by a scheduled workflow, not by
+ * Alertmanager. Its entry must therefore leave every Alertmanager check and
+ * route exactly as it found them: these tests prove it, and that the checks
+ * still bite on an Alertmanager entry with the same shape.
+ */
+describe('the secret-scanning-alert entry', () => {
+  const SECRET_ENTRY_ID = 'secret-scanning-alert';
+  const withoutSecretEntry = PAGE_REGISTER.filter((entry) => entry.id !== SECRET_ENTRY_ID);
+  const secretEntries = PAGE_REGISTER.filter((entry) => entry.id === SECRET_ENTRY_ID);
+  const alertmanagerRouteMatcher =
+    'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"';
+
+  it('is delivered by a workflow, with no Alertmanager alertname, live and not tenant-scoped', () => {
+    const entry = PAGE_REGISTER.find((candidate) => candidate.id === SECRET_ENTRY_ID);
+    expect(entry?.deliveryPath).toBe('github-workflow');
+    expect(entry?.alertName).toBeNull();
+    expect(entry?.dormant).toBe(false);
+    expect(entry?.tenantScoped).toBe(false);
+  });
+
+  it('renders a page route byte-identical to the one the register renders without it', () => {
+    expect(renderPageRoute(PAGE_REGISTER)).toBe(renderPageRoute(withoutSecretEntry));
+  });
+
+  it('renders the same alertname matcher the committed Alertmanager template carries', () => {
+    const template = readFileSync(
+      join(__dirname, 'stack', 'alertmanager', 'alertmanager.yml.tmpl'),
+      'utf8'
+    );
+    expect(renderPageRoute(holdEdgeBanOwnerStale(PAGE_REGISTER))).toContain(
+      alertmanagerRouteMatcher
+    );
+    expect(template).toContain(alertmanagerRouteMatcher);
+  });
+
+  it('puts no secret-related word into the rendered page route', () => {
+    expect(renderPageRoute(PAGE_REGISTER)).not.toMatch(/secret/i);
+  });
+
+  it('is left out of pageAlertNames, which equals the list without it', () => {
+    expect(pageAlertNames(PAGE_REGISTER)).toEqual(pageAlertNames(withoutSecretEntry));
+    expect(pageAlertNames(PAGE_REGISTER)).not.toContain(SECRET_ENTRY_ID);
+    expect(pageAlertNames(PAGE_REGISTER).some((name) => /secret/i.test(name))).toBe(false);
+  });
+
+  it('is not reported by findLiveEntriesWithoutPageRule, even with no rules at all', () => {
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', secretEntries)).toEqual([]);
+  });
+
+  it('is still reported when an Alertmanager entry beside it has no rule -- the check can fail', () => {
+    const unraised: PageRegisterEntry = {
+      id: 'fixture-only',
+      name: 'fixture only',
+      reason: 'exists only to prove the rule check still bites',
+      alertName: 'FixtureOnlyPageAlert',
+      deliveryPath: 'alertmanager',
+      dormant: false,
+      tenantScoped: true,
+    };
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', [...secretEntries, unraised])).toEqual([
+      'FixtureOnlyPageAlert',
+    ]);
   });
 });
 
@@ -790,6 +858,20 @@ describe('findLiveEntriesWithoutPageRule', () => {
       live({ id: 'b', alertName: null, deliveryPath: 'healthchecks' }),
     ];
     expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([]);
+  });
+
+  it('leaves a GitHub-workflow entry alone even with an alertname, and still reports an Alertmanager one', () => {
+    const register = [
+      live({
+        id: 'workflow',
+        alertName: 'SyntheticWorkflowAlert',
+        deliveryPath: 'github-workflow',
+      }),
+      live({ id: 'control', alertName: 'SyntheticAlertmanagerAlert' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([
+      'SyntheticAlertmanagerAlert',
+    ]);
   });
 
   it('reports every offender, in register order', () => {

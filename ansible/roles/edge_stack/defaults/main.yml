@@ -1,6 +1,10 @@
 ---
 # None of the role's inputs is a secret. The README says what each is for.
 edge_stack_source_dir: '{{ role_path }}/files/stack'
+# Which edge the role delivers: `estate` (edge1, the default) or `tenant` (edge-t). The profile
+# picks the stack directory below and the class lists in vars/main.yml (README, "Profiles").
+edge_stack_profile: estate
+edge_stack_tenant_source_dir: '{{ role_path }}/files/stack-tenant'
 edge_stack_lock_timeout: 600
 edge_stack_crowdsec_wait_tries: 24
 edge_stack_crowdsec_wait_interval: 5
