@@ -72,9 +72,10 @@ CAPABILITY_SPEC = (
     "argument_specs:\n  main:\n    options:\n      target_path:\n        type: path\n"
     "        required: true\n      mode:\n        type: str\n        default: '0644'\n"
 )
+# The task's own vars keyword, beside include_role (Ansible rejects vars inside the mapping).
 CALLER_INCLUDE = (
-    "- ansible.builtin.include_role:\n    name: cap\n    vars:\n      target_path: /etc/x\n"
-    "      mode: '0600'\n"
+    "- ansible.builtin.include_role: {name: cap}\n  vars:\n    target_path: /etc/x\n"
+    "    mode: '0600'\n"
 )
 
 
@@ -105,12 +106,33 @@ class CapabilityRoles(unittest.TestCase):
         self._capability()
         self._write(
             "roles/a/tasks/main.yml",
-            "- ansible.builtin.include_role:\n    name: cap\n    vars:\n"
-            "      target_path: /etc/x\n",
+            "- ansible.builtin.include_role: {name: cap}\n  vars: {target_path: /etc/x}\n",
         )
         findings = check(self.root)
         self.assertEqual(1, len(findings), findings)
         self.assertIn("mode", findings[0])
+
+    def test_vars_inside_the_include_role_mapping_is_refused(self) -> None:
+        self._capability()
+        self._write(
+            "roles/a/tasks/main.yml",
+            "- ansible.builtin.include_role:\n    name: cap\n    vars:\n      target_path: /etc/x\n"
+            "      mode: '0600'\n",
+        )
+        findings = check(self.root)
+        self.assertEqual(1, len(findings), findings)
+        self.assertIn("vars", findings[0])
+
+    def test_vars_on_an_enclosing_block_are_not_counted(self) -> None:
+        self._capability()
+        self._write(
+            "roles/a/tasks/main.yml",
+            "- block:\n    - ansible.builtin.include_role: {name: cap}\n"
+            "  vars: {target_path: /etc/x, mode: '0600'}\n",
+        )
+        findings = check(self.root)
+        self.assertEqual(1, len(findings), findings)
+        self.assertIn("does not give every input", findings[0])
 
     def test_a_capability_include_with_no_vars_is_refused_when_inputs_exist(self) -> None:
         self._capability()

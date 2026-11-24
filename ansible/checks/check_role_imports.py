@@ -8,6 +8,9 @@ a playbook. The molecule/ directories are playbooks and may name roles. The chec
 literal keys of tasks/, handlers/ and meta/; a role loaded through a templated name is not
 seen, and a templated include_role name is refused.
 
+The inputs are the task's own ``vars`` keyword beside include_role; a ``vars`` inside the
+include_role mapping, or on an enclosing block, is refused. "Restarts" is read from notify and
+service-module tasks only: a restart through command, shell or a Compose tool is review only.
 Review only, not checked here: that a capability role writes only the paths its inputs name.
 """
 
@@ -96,10 +99,16 @@ def _restarts(role: Path) -> list[str]:
     return found
 
 
-def _include_problem(scan: Scan, args: object) -> str | None:
-    """Return why an include_role is refused, or None when it names a capability role fully."""
+def _include_problem(scan: Scan, args: object, task: dict[object, object]) -> str | None:
+    """Return why an include_role is refused, or None when it names a capability role fully.
+
+    The inputs are the task's own ``vars`` keyword, beside ``include_role``: Ansible rejects a
+    ``vars`` inside the include_role mapping. A ``vars`` on an enclosing block is not counted.
+    """
     if not isinstance(args, dict):
         return f"{scan.where}: include_role must name its role and inputs as a mapping"
+    if "vars" in args:
+        return f"{scan.where}: include_role takes vars as a task keyword, not inside its mapping"
     name = args.get("name")
     role = _role_dir(scan.root, name)
     if role is None:
@@ -107,7 +116,7 @@ def _include_problem(scan: Scan, args: object) -> str | None:
     inputs = _inputs(role)
     if inputs is None:
         return f"{scan.where}: include_role names {name}, which is not a capability role"
-    given = args.get("vars")
+    given = task.get("vars")
     given_names = set(given) if isinstance(given, dict) else set()
     missing = sorted(inputs - given_names)
     if missing:
@@ -128,7 +137,7 @@ def _walk(node: object, scan: Scan) -> None:
         for key, value in node.items():
             name = _short(key)
             if name == "include_role" and key != "roles":
-                problem = _include_problem(scan, value)
+                problem = _include_problem(scan, value, node)
                 if problem is not None:
                     scan.findings.append(problem)
             elif name in ROLE_LOADERS or key == "roles":
