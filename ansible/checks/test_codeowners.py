@@ -251,7 +251,7 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(RELEASED_PATHS)
 
     def test_a_new_file_in_a_gate_directory_is_the_owners_before_it_is_listed(self) -> None:
-        # A new check script, host allowlist, trust file or script fails closed; and so does a workflow.
+        # A new check, host allowlist, trust file or script fails closed; and so does a workflow.
         self.assert_owned(
             [
                 "ansible/checks/check_a_new_gate.py",
