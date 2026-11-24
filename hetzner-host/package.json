@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@pulumi/pulumi": "^3.275.0"
+    "@pulumi/pulumi": "^3.276.0"
   },
   "peerDependencies": {
     "@pulumi/hcloud": "1.43.4"

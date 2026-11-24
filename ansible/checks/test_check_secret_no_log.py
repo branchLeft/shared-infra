@@ -345,7 +345,7 @@ class SecretNoLogTest(unittest.TestCase):
     def test_h2_sub_option_guard(self) -> None:
         subs = checker.sub_option_secrets(ROOT)
         self.assertEqual(subs["tenant_compose"], {"tenant_compose_stacks": {"secrets_env_text"}})
-        self.assertEqual(subs["ci_jump"], {"ci_jump_keys": {"key"}})
+        self.assertEqual(subs["ci_jump"], {"ci_jump_keys": {"key"}, "ci_jump_spool_keys": {"key"}})
         self.assertEqual(subs["deploy_slot_keys"], {"deploy_slot_keys_slots": {"public_key"}})
         self.assertEqual(subs["compose_stack"], {"compose_stack_secret_files": {"content"}})
         self.assertEqual(subs["secrets_and_no_log"], {"secrets_and_no_log_secrets": {"value"}})

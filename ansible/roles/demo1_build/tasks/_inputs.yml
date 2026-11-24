@@ -70,3 +70,14 @@
     fail_msg: >-
       The Caddy image must be empty or a name pinned by its digest: <name>@sha256: and 64 hex digits,
       with no tag. A tag alone can be re-pointed, and an image ID is not found by a digest lookup.
+
+- name: Refuse a sidecar digest that is not a bare sha256 digest
+  ansible.builtin.assert:
+    that:
+      - demo1_build_sidecar_digest is string
+      - demo1_build_sidecar_digest is match(demo1_build_sidecar_digest_pattern)
+    quiet: true
+    fail_msg: >-
+      The sidecar digest must be sha256: and 64 lower-case hex digits and nothing else: no name, no
+      tag and no line break. The wrapper believes the pin file only when its one line is exactly
+      {{ demo1_build_sidecar_image_variable }}={{ demo1_build_sidecar_image_name }}@sha256:<64 hex digits>.

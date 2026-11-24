@@ -896,3 +896,56 @@
     converge_case:
       plant: [ci]
       accepted: true
+
+# The sidecar digest. The role writes it into the one line the wrapper and the colour units
+# read, so the input check takes a bare lower-case sha256 digest and nothing else. The control
+# is the digest the role ships; each refused value is one way the line would stop being the
+# wrapper's: a tag, the name with or without its registry host, capitals, a short or long
+# digest, a trailing line break. The check runs alone, and nothing is written at the pin path.
+- name: Accept the sidecar digest the role ships
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: the shipped digest
+      digest: sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954
+      accepted: true
+
+- name: Refuse a tag in place of a digest
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: a tag
+      digest: latest
+      expect: 'The sidecar digest must be sha256:'
+
+- name: Refuse the image name and its registry host in front of the digest
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: a registry host and a name
+      digest: ghcr.io/branchleft/drain-sidecar@sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954
+      expect: 'The sidecar digest must be sha256:'
+
+- name: Refuse a digest in capitals
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: capitals
+      digest: sha256:D181D72055AB1E0C30C11C65595E1B79206FD5CDF519AB06D17271107EB0B954
+      expect: 'The sidecar digest must be sha256:'
+
+- name: Refuse a digest one digit short
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: sixty-three digits
+      digest: sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b95
+      expect: 'The sidecar digest must be sha256:'
+
+- name: Refuse a digest with a line break after it
+  ansible.builtin.import_playbook: refused_sidecar_digest.yml
+  vars:
+    converge_case:
+      name: a trailing line break
+      digest: "sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954\n"
+      expect: 'The sidecar digest must be sha256:'

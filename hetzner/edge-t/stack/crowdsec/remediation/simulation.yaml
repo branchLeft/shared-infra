@@ -1,0 +1,5 @@
+# Generated from hetzner/edge-t/render.ts and hetzner/edge-t/render.md.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+simulation: false
+exclusions:
+  - crowdsecurity/crowdsec-appsec-outofband

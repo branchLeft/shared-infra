@@ -63,6 +63,28 @@ edge_stack_crowdsec_files:
 # directory the role prunes.
 edge_stack_acquis_dir: crowdsec/acquis.d
 
+# The tenant profile (README, "Profiles"): the classes of hetzner/edge-t/stack. It has no
+# verified-session parser and no Nextcloud profile, so those two files are in no class of
+# it and a stack that holds one is refused. The tasks take these in place of the two
+# estate lists above when edge_stack_profile is `tenant`. ansible/roles/edge_stack/tests/unit/
+# test_tenant_profile.py holds this list to the tenant stack directory.
+edge_stack_tenant_crowdsec_files:
+  - crowdsec/config.yaml.local
+  - crowdsec/appsec-configs/ghost-admin-previews.yaml
+  - crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
+  - crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+  - crowdsec/scenarios/http-admin-interface-probing.yaml
+  - crowdsec/remediation/profiles.yaml
+  - crowdsec/remediation/simulation.yaml
+edge_stack_tenant_dirs:
+  - caddy
+  - crowdsec
+  - crowdsec/acquis.d
+  - crowdsec/appsec-configs
+  - crowdsec/postoverflows
+  - crowdsec/scenarios
+  - crowdsec/remediation
+
 # The directories of the stack; the project directory is created before them.
 edge_stack_dirs:
   - caddy
