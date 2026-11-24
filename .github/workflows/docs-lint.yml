@@ -15,5 +15,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # On a push to main, docs-lint is skipped when the merge queue already ran it green on
+  # this exact commit (scripts/queue_proof.py). Pull requests and the queue always run it.
+  queue-proof:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tested: ${{ steps.judge.outputs.tested }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the merge queue runs of this workflow for the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: gh api "repos/$REPO/actions/workflows/docs-lint.yml/runs?head_sha=$SHA&per_page=100" > "$RUNNER_TEMP/runs.json" || echo '{}' > "$RUNNER_TEMP/runs.json"
+
+      - name: Judge the proof
+        id: judge
+        env:
+          SHA: ${{ github.sha }}
+        run: python3 scripts/queue_proof.py --runs "$RUNNER_TEMP/runs.json" --sha "$SHA" --workflow .github/workflows/docs-lint.yml >> "$GITHUB_OUTPUT"
+
   docs-lint:
+    needs: queue-proof
+    # Fail open: a skipped or unreadable proof leaves tested unset, so the check runs in full.
+    # !cancelled(), not always(): a cancelled run does not start the gate job.
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
     uses: branchLeft/github-workflows/.github/workflows/docs-lint.yml@v1.2.2
