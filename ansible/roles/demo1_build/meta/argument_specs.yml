@@ -27,7 +27,7 @@ argument_specs:
           together with the files under files/ghost-platform and every checksum
           in demo1_build_release_files. It must be at or after the commit that
           moved the drain flags to /var/lib/branchleft-broker/drain-flags.
-        default: 595bcce0ee2bb1c7f8de565cf008060ea43122cf
+        default: 922fc9d997fc5780bec9fc9a4f30c2dc743fe85a
       demo1_build_release_files:
         type: list
         elements: dict
@@ -48,11 +48,11 @@ argument_specs:
             description: The 64-character lower-case sha256 of the file under files/ghost-platform, which is the file at the pinned commit.
         default:
           - path: demo-host/provision/branchleft_slot.py
-            sha256: 338ed8ad8a4e74ea2be7cebbbb05a4766a66367fab5b8ec8e9df4fc30fc2c39f
+            sha256: 612bcfc2edc1b358fe0d7b89b2d77313f734db3ffdd60ef20767902780bf5dc5
           - path: demo-host/provision/demo_go_live.py
-            sha256: deab5c8c780de0c23ad8ce4459ef33ae5ee5f6e577fe5b7311a77d045b332677
+            sha256: ef033f14770bb76c3de3759729bf7bd54e97e2b5db930b96a5f237e95c90ffcb
           - path: demo-host/provision/demo_sidecar.py
-            sha256: f3d0373bd80d4ef7f58b60d3c555825b39283f272eb71d26dcb91610cfa7ae66
+            sha256: 038dd55e6316b12a8c04c9c2dd3846c44668be401952aaa44c8576bbdca6c6c3
           - path: demo-host/provision/demo_uid_claims.py
             sha256: 2d2536eb516ed5fab1e743cd1fa974ac6339c9334b529db7d94c47cc19152230
           - path: demo-host/provision/health_router.py
@@ -62,7 +62,7 @@ argument_specs:
           - path: demo-host/provision/render_demo_edge.py
             sha256: 8b42f5de63114d201844539c449b1466d0b504422724821351a2e6c712d619b0
           - path: demo-host/provision/render_demo_site.py
-            sha256: 2f2841c8b612af87bc9f92c38acd7f932a2284d831f9bddbc1fff87f8c9d010f
+            sha256: 3061099001ad08f232e3341d332395936e1bde0288aaf15b4ed80d35bf7482ac
           - path: demo-host/provision/render_router_unit.py
             sha256: 3a0f71cc61e45e416f983ef86c02f1b419565a6c34511d1a60f35092454dab3a
           - path: demo-host/provision/render_slot_sudoers.py
@@ -129,3 +129,16 @@ argument_specs:
           image that is not loaded, the production candidate is not staged, and
           the plan and apply say so.
         default: 'demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'
+      demo1_build_sidecar_digest:
+        type: str
+        description: >-
+          The manifest digest of the attested drain sidecar image, sha256: and 64
+          lower-case hex digits and nothing else. The role writes it to
+          /etc/branchleft/demo-sidecar.image.env as one line,
+          DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@<digest>, root:root, mode 0644.
+          The colour units start the sidecar from that reference with --pull never, and
+          the slot wrapper tags a pushed image with the sidecar's name only when its id
+          is this digest. The name is the host's own label (no registry host) and is a
+          constant of the role, not an input. The file must exist before the signed
+          sidecar push.
+        default: sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954

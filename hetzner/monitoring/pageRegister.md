@@ -17,26 +17,28 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+## Entries delivered by a workflow
+
+The `github-workflow` delivery path is for a page that a scheduled workflow
+posts straight to ntfy, rather than one raised by Alertmanager or sent by a
+Healthchecks.io check. Such an entry has no `alertName`, so it renders no
+Alertmanager route, is not in `pageAlertNames`, and is not checked by
+`findLiveEntriesWithoutPageRule`, which looks at Alertmanager entries only.
+Its producer is `.github/workflows/secret-alert-pager.yml`. The entry is
+registered so that the page is a reviewed entry in this list, not a silent
+route that exists only in the workflow.
+
 ## Dormant entries
 
 An entry marked `dormant` renders no route and is left out of
-`pageAlertNames`, so it cannot page. Three entries are dormant today:
-appeal latency, until a target is set for how long an appeal may wait, the
-abuse report (below), and
+`pageAlertNames`, so it cannot page. Two entries are dormant today:
+appeal latency, until a target is set for how long an appeal may wait, and
 the stopped demo reaper (`stopped-demo-reaper`, alertname
 `StoppedDemoReaper`), until the reaper that ends a demo at the close of its
 lease exists and the threshold for how long it may stay silent is set. The
 reaper entry is not tenant-scoped: a stopped reaper is an estate-wide
 condition, so its page carries no `tenant` label of its own and groups with
 the other estate-wide alerts.
-
-The abuse-report entry (`abuse-report`, alertname `AbuseReportReceived`) is
-dormant until its producer lands. The producer is mx1's arrival path for the
-abuse role mailbox, an owner-authorised patch, so no Prometheus rule raises it
-and its entry carries a `ruleExemption` saying so. The page names only that a
-report arrived: its labels carry no sender, no message text and no tenant, and
-the entry is not tenant-scoped. Flipping `dormant` to false belongs in the same
-change that lands the producer.
 
 Registering the reaper first is deliberate -- the register is the reviewed
 list of what may page, so the owner's decision that a stopped reaper pages
@@ -74,9 +76,29 @@ Healthchecks-delivered entries are not checked. `pageRegister.test.ts` runs it
 against the real register and the real rendered rules, and against the reaper
 entry flipped to live with no rule, which must report it.
 
-One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
-three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
+Two `severity: page` rules come from the edge's ban classifier on edge1, and their
+entries carry no exemption. `EdgeBanIssued` pages for each ban on an owned address
+(`edge_ban_owned{owned="true"}`, one sample per decision id); `EdgeBanOwnerStale` pages
+when the classifier has not run for over 15 minutes, once that has lasted 5 minutes.
+`EdgeBanIssued` also pages every ban while the classifier is stale (at once) or has
+reported and then been absent for 10 minutes; a classifier that has never reported
+pages at once. While the role is disabled (`EDGE_BAN_OWNER_ENABLED` is `false`),
+`EdgeBanOwnerStale` is routed to the `discard` receiver, not to a page. A ban on any other address is
+`EdgeBanUnowned`, a warning that goes to email and is not registered. Each of the other three live Alertmanager entries carries a
+`ruleExemption`: the tier-two safety
 match and the failed-unsafe tenant have no producer yet: the platform is planned to raise them, and nothing does today. The
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop
 that entry's exemption in the same change.
+
+## A page that never becomes an alert: the abuse report
+
+The `abuse-report` entry has `deliveryPath: 'ntfy_direct'` and no alertname. The mail host posts
+it straight to the pager with a publish-only grant on a topic of its own (`NTFY_ABUSE_TOPIC`),
+so it renders no Alertmanager route, no rule raises it, and neither direction of the
+rule-and-register check applies to it, as for the Healthchecks-delivered entry. It is listed so
+the register still names every path that can reach the phone. Its contract is the page's content:
+it says only that an abuse report arrived, with no sender, no message text and no tenant. The
+register has no label schema, so no test can enforce that; the producer's own tests do
+(`ansible/roles/mx1_abuse_page`), and `pageRegister.test.ts` pins that the server config gives the
+mail host one grant, write-only, on this topic and none on the page topic.

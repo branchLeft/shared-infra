@@ -213,9 +213,13 @@ to resolve deliberately rather than have it guessed at.
 
 An image this host deploys is checked for its build attestation before the
 lock, the pin write or any restart. `ATTESTED_IMAGES` is the register: each
-attested image name and the one workflow whose attestation it must carry, both
-under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
-ghost-platform's `scripts/verify-image-attestation.sh`, always with
+attested image name and the one workflow whose attestation it must carry. The
+repository the attestation must come from is the one that owns that workflow
+(`attested_repo`, the first two parts of the signer path): `branchLeft/ghost-platform`
+for the tenant, portal and Percona images, `branchLeft/website` for the website image.
+A register signer that is not `owner/repo/.github/workflows/<file>` stops the deploy
+rather than being checked against a guessed repository. The check runs `VERIFIER`,
+the host copy of ghost-platform's `scripts/verify-image-attestation.sh`, always with
 `--bundle-from-oci`, and any non-zero exit refuses the deploy.
 
 It fails closed. A missing verifier, an unknown digest, an unsigned image and
@@ -227,16 +231,16 @@ An image name outside the register is refused, not passed unverified, unless
 `UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
 exemption list: each stack that pins through this wrapper today, with the image
 names it runs that no workflow attests yet, its own and its third-party sidecars
-(`website`, `publicpress-website`, `edge`, `db`, `control-plane`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
-the register, so it is verified. It is keyed by stack as well as by name, so an exemption
+(`publicpress-website`, `edge`, `db`, `control-plane`, `mail-spool`). `dbt1` and `website` are not listed: their images, percona-server and
+website, are in the register, so they are verified. It is keyed by stack as well as by name, so an exemption
 does not open the other stacks: a tenant slot key cannot pin the edge image, and
 cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
 stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
 `ghcr.io/branchleft/portal-apps`, `ghcr.io/branchleft/percona-server`, the
 database image of `db-t1`, signed by the Percona image workflow, and
 `ghcr.io/branchleft/mysqld-exporter`, the `db` stack's exporter sidecar, signed by
-`mysqld-exporter-image.yml`). Exempt images skip the verifier; adding
-an entry is a reviewed diff, and the way to remove one is to register the image
+`mysqld-exporter-image.yml`, and `ghcr.io/branchleft/website`, signed by `branchLeft/website`'s `ci.yml`).
+Exempt images skip the verifier; adding an entry is a reviewed diff, and the way to remove one is to register the image
 in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
 names it. This holds for every image a stack's Compose files name, not only the pin
 (`verify_compose_images`, below).
@@ -468,7 +472,7 @@ this module; a file written by any account but root is refused.
 and not group or world writable; the files are regular, singly linked, non-empty and under 4 MiB, opened
 without following a link or blocking on a FIFO; the manifest hashes to the digest. The bytes read are
 copied into a private directory and gh reads the copies, so nothing changes between check and use. gh then
-verifies the repository, the signing workflow from `ATTESTED_IMAGES`, `refs/heads/main`, the OIDC issuer
+verifies the repository that owns the signing workflow (`attested_repo`), the signing workflow from `ATTESTED_IMAGES`, `refs/heads/main`, the OIDC issuer
 and a hosted runner, exactly as the online verifier does. Its environment is the online one without
 `DOCKER_CONFIG`: no registry key and no GitHub credential.
 
@@ -527,3 +531,31 @@ words as stderr). A caller that hides the wrapper's output, such as the `tenant_
 The line holds no secret: the error text names the image reference and the signing
 workflow, which are public. Logging is best effort and never changes the exit status, so a host
 with no `logger` still refuses the same way. A successful deploy and a usage error write no line.
+
+## Restart diagnosis
+
+When `systemctl restart branchleft-compose@<stack>` fails, the only account of why is the host
+journal, and CI receives only this script's stderr: a failed tenant deploy used to read "restart
+failed; rolled back" with no cause, and no agent can log in to read one. Straight after the failed
+restart, before the rollback restarts the unit and moves its status on, `restart_diagnosis` runs
+`systemctl status` and `journalctl -u <unit> -n 50` and prints them to stderr as one labelled block,
+which the deploy account's ssh session returns to the CI log.
+
+The log is public, so every line goes through `redact_diagnostic_line` first. It redacts, in order:
+private-key blocks, authorization and cookie headers, bearer/basic/token credentials, credentials in
+URLs, known token shapes (GitHub, AWS, Slack, JWT), any field or flag whose name says secret, password,
+token, key, auth or session, then every other `NAME=value` assignment (the unit's environment) except
+exit facts (`code`, `status`, `signal`, `result` with a short plain value), and finally any unbroken
+32-character token that mixes letters and digits. The inner text of docker's own logfmt `msg=` and
+`error=` fields is kept, with its assignments redacted, because that message is the diagnosis. An
+image digest after `sha256:` is kept: it is public and is the thing being diagnosed. A line starting
+`::` would be read by the runner as a workflow command, so `::` is broken up.
+
+The block is bounded: 30 status lines, 50 journal lines, 400 characters a line, 8 KiB in all, keeping
+the end, where the failure is. Reading is best effort: a missing `journalctl`, a timeout or an empty
+journal prints nothing and changes neither the exit status nor the rollback. A rollback that also
+fails is not diagnosed a second time; its lines follow the first in the same journal.
+
+The redaction is a deny list on a log that is read by strangers, so a new kind of secret-shaped line
+is added to `RedactionTests.SECRET_LINES`, which fails on a leak and, in
+`test_the_redaction_test_is_sensitive_to_the_redactor`, on a redactor that does nothing.

@@ -1,0 +1,123 @@
+---
+# Reads the host back after converge: the account, both files against the golden
+# copies rendered by ghost-platform's render_broker_tunnel.py, their owners and
+# modes, and sshd's effective settings. Then the refusal cases, each of which must
+# leave the installed files exactly as they were.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    demo1_build_tunnel_test_good_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f ops1-broker-tunnel\n"
+    demo1_build_tunnel_test_golden_keys: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/golden/authorized_keys', rstrip=false) }}"
+    demo1_build_tunnel_test_golden_dropin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/golden/50-branchleft-broker-tunnel.conf', rstrip=false) }}"
+  tasks:
+    - name: Read the account back
+      ansible.builtin.command:
+        argv: [getent, passwd, brokertunnel]
+      register: demo1_build_tunnel_test_passwd
+      changed_when: false
+
+    - name: Read the account's password state back
+      ansible.builtin.command:
+        argv: [passwd, --status, brokertunnel]
+      register: demo1_build_tunnel_test_passwd_status
+      changed_when: false
+
+    - name: Assert the account has no shell, no home and a locked password
+      ansible.builtin.assert:
+        that:
+          - (demo1_build_tunnel_test_passwd.stdout.split(':') | last) == '/usr/sbin/nologin'
+          - (demo1_build_tunnel_test_passwd.stdout.split(':'))[5] == '/nonexistent'
+          - (demo1_build_tunnel_test_passwd_status.stdout.split())[1] == 'L'
+
+    - name: Read the installed files
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/ssh/branchleft-broker-tunnel/authorized_keys
+        - /etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf
+      register: demo1_build_tunnel_test_files
+
+    - name: Assert both files are byte for byte what ghost-platform renders
+      ansible.builtin.assert:
+        that:
+          - (demo1_build_tunnel_test_files.results[0].content | b64decode) == demo1_build_tunnel_test_golden_keys
+          - (demo1_build_tunnel_test_files.results[1].content | b64decode) == demo1_build_tunnel_test_golden_dropin
+
+    - name: Assert the one key opens only the broker
+      ansible.builtin.assert:
+        that:
+          - (demo1_build_tunnel_test_files.results[0].content | b64decode).split('\n') | select | list | length == 1
+          - (demo1_build_tunnel_test_files.results[0].content | b64decode).startswith('restrict,port-forwarding,permitopen="127.0.0.1:8090" ssh-ed25519 ')
+          - (demo1_build_tunnel_test_files.results[0].content | b64decode) is not search('permitopen="(?!127\.0\.0\.1:8090")')
+
+    - name: Look at the installed files' owners and modes
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /etc/ssh/branchleft-broker-tunnel
+        - /etc/ssh/branchleft-broker-tunnel/authorized_keys
+        - /etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf
+      register: demo1_build_tunnel_test_stats
+
+    - name: Assert each is root's and not writable by anyone else
+      ansible.builtin.assert:
+        that:
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - not item.stat.wgrp
+          - not item.stat.woth
+          - not item.stat.islnk
+      loop: '{{ demo1_build_tunnel_test_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read sshd's effective settings for the account
+      ansible.builtin.command:
+        argv: [sshd, -T, -C, 'user=brokertunnel,host=localhost,addr=192.0.2.1']
+      register: demo1_build_tunnel_test_effective
+      changed_when: false
+
+    - name: Assert sshd opens only the broker for the account
+      ansible.builtin.assert:
+        that:
+          - "'permitopen 127.0.0.1:8090' in demo1_build_tunnel_test_effective.stdout_lines"
+          - "'allowtcpforwarding local' in demo1_build_tunnel_test_effective.stdout_lines"
+          - "'permitlisten none' in demo1_build_tunnel_test_effective.stdout_lines"
+          - "'forcecommand /usr/sbin/nologin' in demo1_build_tunnel_test_effective.stdout_lines"
+
+    # The control case first: the good key, with nothing planted, is accepted. A
+    # step that refused everything would otherwise pass every refusal below.
+    - name: Run the step again with the good key, which must pass
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _broker_tunnel.yml
+
+    - name: Run each refusal case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop:
+        - name: a key with options in front
+          key: "permitopen=\"*:*\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n"
+          expect: must hold one line
+        - name: a second, unrestricted key on a second line
+          key: '{{ demo1_build_tunnel_test_good_key }}{{ demo1_build_tunnel_test_good_key }}'
+          expect: must hold one line
+        - name: an RSA key
+          key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ\n"
+          expect: must hold one line
+        - name: a key input any user can read
+          mode: '0644'
+          expect: must be a regular file
+        - name: an earlier drop-in that widens PermitOpen for the account
+          plant: "Match User brokertunnel\n    PermitOpen any\nMatch all\n"
+          expect: did not pass its check or read-back
+        - name: an earlier drop-in that allows remote forwarding for the account
+          plant: "Match User brokertunnel\n    AllowTcpForwarding yes\nMatch all\n"
+          expect: did not pass its check or read-back
+        - name: an sshd configuration that fails its check
+          plant: "Match User brokertunnel\n    NotAKeyword yes\nMatch all\n"
+          expect: did not pass its check or read-back
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'

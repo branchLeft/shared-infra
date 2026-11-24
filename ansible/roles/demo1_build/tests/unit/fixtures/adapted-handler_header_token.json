@@ -13,7 +13,7 @@
                   "handler": "subroute",
                   "routes": [
                     {
-                      "group": "group11",
+                      "group": "group14",
                       "handle": [
                         {
                           "handler": "subroute",
@@ -26,15 +26,19 @@
                                     "deferred": true,
                                     "set": {
                                       "Content-Security-Policy": ["default-src 'self'"],
+                                      "X-Content-Type-Options": ["nosniff"],
                                       "X-Robots-Tag": ["noindex, nofollow"]
                                     }
                                   }
                                 },
-                                { "handler": "request_body", "max_size": 10485760 }
+                                {
+                                  "handler": "request_body",
+                                  "max_size": 10485760
+                                }
                               ]
                             },
                             {
-                              "group": "group3",
+                              "group": "group4",
                               "handle": [
                                 {
                                   "handler": "subroute",
@@ -50,10 +54,10 @@
                                   ]
                                 }
                               ],
-                              "match": [{ "path": ["/__gate/login"] }]
+                              "match": [{ "path": ["/__gate/login", "/__gate/enter"] }]
                             },
                             {
-                              "group": "group3",
+                              "group": "group4",
                               "handle": [
                                 {
                                   "handler": "subroute",
@@ -68,9 +72,17 @@
                                                 {
                                                   "handle_response": [
                                                     {
-                                                      "match": { "status_code": [2] },
+                                                      "match": {
+                                                        "status_code": [2]
+                                                      },
                                                       "routes": [
-                                                        { "handle": [{ "handler": "vars" }] }
+                                                        {
+                                                          "handle": [
+                                                            {
+                                                              "handler": "vars"
+                                                            }
+                                                          ]
+                                                        }
                                                       ]
                                                     }
                                                   ],
@@ -95,7 +107,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -111,7 +126,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -119,6 +137,70 @@
                                                   "path_regexp": {
                                                     "name": "membersImportByPattern",
                                                     "pattern": "(?i)^/ghost/api/(?:(?:v[0-9]+|canary)/)?admin/members/upload/?$"
+                                                  }
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "subroute",
+                                                  "routes": [
+                                                    {
+                                                      "handle": [
+                                                        {
+                                                          "handler": "static_response",
+                                                          "status_code": 403
+                                                        }
+                                                      ],
+                                                      "match": [
+                                                        {
+                                                          "path": [
+                                                            "*.js",
+                                                            "*.mjs",
+                                                            "*.cjs",
+                                                            "*.html",
+                                                            "*.htm",
+                                                            "*.shtml",
+                                                            "*.xhtml",
+                                                            "*.xht",
+                                                            "*.xml",
+                                                            "*.xsl",
+                                                            "*.xslt",
+                                                            "*.css",
+                                                            "*.svg",
+                                                            "*.svgz",
+                                                            "*.kml",
+                                                            "*.gpx"
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "path": [
+                                                    "/content/files/*",
+                                                    "/content/images/*",
+                                                    "/content/media/*"
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "path_regexp": {
+                                                    "name": "activeUploadByPattern",
+                                                    "pattern": "(?i)^/+content/+(?:files|images|media)/.*\\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$"
                                                   }
                                                 }
                                               ]
@@ -140,10 +222,14 @@
                                                     }
                                                   },
                                                   "load_balancing": {
-                                                    "selection_policy": { "policy": "first" }
+                                                    "selection_policy": {
+                                                      "policy": "first"
+                                                    }
                                                   },
                                                   "upstreams": [
-                                                    { "dial": "127.0.0.1:9300" },
+                                                    {
+                                                      "dial": "127.0.0.1:9300"
+                                                    },
                                                     { "dial": "127.0.0.1:9301" }
                                                   ]
                                                 }
@@ -163,7 +249,7 @@
                       "match": [{ "host": ["demo-0.site-fixture.invalid"] }]
                     },
                     {
-                      "group": "group11",
+                      "group": "group14",
                       "handle": [
                         {
                           "handler": "subroute",
@@ -176,15 +262,19 @@
                                     "deferred": true,
                                     "set": {
                                       "Content-Security-Policy": ["default-src 'self'"],
+                                      "X-Content-Type-Options": ["nosniff"],
                                       "X-Robots-Tag": ["noindex, nofollow"]
                                     }
                                   }
                                 },
-                                { "handler": "request_body", "max_size": 10485760 }
+                                {
+                                  "handler": "request_body",
+                                  "max_size": 10485760
+                                }
                               ]
                             },
                             {
-                              "group": "group8",
+                              "group": "group10",
                               "handle": [
                                 {
                                   "handler": "subroute",
@@ -200,10 +290,10 @@
                                   ]
                                 }
                               ],
-                              "match": [{ "path": ["/__gate/login"] }]
+                              "match": [{ "path": ["/__gate/login", "/__gate/enter"] }]
                             },
                             {
-                              "group": "group8",
+                              "group": "group10",
                               "handle": [
                                 {
                                   "handler": "subroute",
@@ -218,9 +308,17 @@
                                                 {
                                                   "handle_response": [
                                                     {
-                                                      "match": { "status_code": [2] },
+                                                      "match": {
+                                                        "status_code": [2]
+                                                      },
                                                       "routes": [
-                                                        { "handle": [{ "handler": "vars" }] }
+                                                        {
+                                                          "handle": [
+                                                            {
+                                                              "handler": "vars"
+                                                            }
+                                                          ]
+                                                        }
                                                       ]
                                                     }
                                                   ],
@@ -245,7 +343,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -261,7 +362,10 @@
                                             },
                                             {
                                               "handle": [
-                                                { "handler": "static_response", "status_code": 403 }
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
                                               ],
                                               "match": [
                                                 {
@@ -269,6 +373,70 @@
                                                   "path_regexp": {
                                                     "name": "membersImportByPattern",
                                                     "pattern": "(?i)^/ghost/api/(?:(?:v[0-9]+|canary)/)?admin/members/upload/?$"
+                                                  }
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "subroute",
+                                                  "routes": [
+                                                    {
+                                                      "handle": [
+                                                        {
+                                                          "handler": "static_response",
+                                                          "status_code": 403
+                                                        }
+                                                      ],
+                                                      "match": [
+                                                        {
+                                                          "path": [
+                                                            "*.js",
+                                                            "*.mjs",
+                                                            "*.cjs",
+                                                            "*.html",
+                                                            "*.htm",
+                                                            "*.shtml",
+                                                            "*.xhtml",
+                                                            "*.xht",
+                                                            "*.xml",
+                                                            "*.xsl",
+                                                            "*.xslt",
+                                                            "*.css",
+                                                            "*.svg",
+                                                            "*.svgz",
+                                                            "*.kml",
+                                                            "*.gpx"
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "path": [
+                                                    "/content/files/*",
+                                                    "/content/images/*",
+                                                    "/content/media/*"
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "static_response",
+                                                  "status_code": 403
+                                                }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "path_regexp": {
+                                                    "name": "activeUploadByPattern",
+                                                    "pattern": "(?i)^/+content/+(?:files|images|media)/.*\\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$"
                                                   }
                                                 }
                                               ]
@@ -290,10 +458,14 @@
                                                     }
                                                   },
                                                   "load_balancing": {
-                                                    "selection_policy": { "policy": "first" }
+                                                    "selection_policy": {
+                                                      "policy": "first"
+                                                    }
                                                   },
                                                   "upstreams": [
-                                                    { "dial": "127.0.0.1:9302" },
+                                                    {
+                                                      "dial": "127.0.0.1:9302"
+                                                    },
                                                     { "dial": "127.0.0.1:9303" }
                                                   ]
                                                 }
@@ -313,7 +485,7 @@
                       "match": [{ "host": ["demo-1.site-fixture.invalid"] }]
                     },
                     {
-                      "group": "group11",
+                      "group": "group14",
                       "handle": [
                         {
                           "handler": "subroute",
@@ -342,7 +514,44 @@
               ],
               "terminal": true
             }
-          ]
+          ],
+          "errors": {
+            "routes": [
+              {
+                "match": [{ "host": ["*.site-fixture.invalid"] }],
+                "handle": [
+                  {
+                    "handler": "subroute",
+                    "routes": [
+                      {
+                        "handle": [
+                          {
+                            "handler": "subroute",
+                            "routes": [
+                              {
+                                "handle": [
+                                  {
+                                    "handler": "headers",
+                                    "response": {
+                                      "deferred": true,
+                                      "set": {
+                                        "X-Content-Type-Options": ["nosniff"]
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "terminal": true
+              }
+            ]
+          }
         }
       }
     },

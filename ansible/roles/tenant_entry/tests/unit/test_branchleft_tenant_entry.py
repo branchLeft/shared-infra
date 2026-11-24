@@ -8,6 +8,7 @@ and the case beside it fails. Placeholders only; no value here is a real name, k
 
 import base64
 import dataclasses
+import errno
 import fcntl
 import inspect
 import io
@@ -15,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -486,7 +488,11 @@ class ClaimTests(EntryTestCase):
         self.host.claim()
         self.assertEqual(self.host.claims, {SLUG: 30000})
 
-    def test_a_timeout_with_an_unreadable_listing_still_frees_the_slug(self) -> None:
+    def test_a_timeout_with_an_unreadable_listing_keeps_the_marker_and_a_retry_claims_cleanly(
+        self,
+    ) -> None:
+        # Guard: release_unclaimed_marker keeps the marker when the listing fails, because the
+        # claim may stand. The retry settles the marker with a working listing and claims again.
         original = self.host.volume
         listings: list[str] = []
 
@@ -502,9 +508,98 @@ class ClaimTests(EntryTestCase):
         code, _out, err = self.host.request(f"claim {SLUG}")
         self.assertEqual(code, entry.EXIT_FAILED)
         self.assertIn("failed: timeout\n", err)
+        self.assertTrue((self.host.entry / f"{SLUG}.json").exists())
+        self.host.volume = original  # type: ignore[method-assign]
+        self.host.claim()
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+
+    def test_a_timeout_after_the_claim_with_a_failed_listing_keeps_the_claim_and_the_steps_go_on(
+        self,
+    ) -> None:
+        # Guard: a claim that stands keeps its marker, so a retry is refused as in use and does
+        # not take a second uid, and the later steps still reach the claimed slug.
+        original = self.host.volume
+        listings: list[str] = []
+
+        def claim_then_timeout(args: list[str]) -> entry.Outcome:
+            if args == ["--list-claims"]:
+                listings.append("listed")
+                if len(listings) > 1:
+                    raise entry.FailedError("timeout")
+                return original(args)
+            self.host.claims[args[2]] = int(args[1])
+            raise entry.FailedError("timeout")
+
+        self.host.volume = claim_then_timeout  # type: ignore[method-assign]
+        code, _out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertIn("failed: timeout\n", err)
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+        self.host.volume = original  # type: ignore[method-assign]
+        self.assert_refused(self.host.request(f"claim {SLUG}"), "slug-in-use")
+        self.assertIn("volumes=yes", self.host.request(f"status {SLUG}")[1])
         self.assertEqual(
-            sorted(p.name for p in self.host.entry.iterdir()), [".lock", entry.BIND_ADDRESS_FILE]
+            self.host.request(f"secrets {SLUG}", {"template": TEMPLATE, "values": VALUES})[0],
+            entry.EXIT_DONE,
         )
+
+    def test_a_marker_that_cannot_be_written_leaves_no_marker_and_a_retry_claims(self) -> None:
+        # Guard: write_marker writes a temporary file, syncs it and links it. A full disk must not
+        # leave a half marker, which would refuse every later claim for every slug.
+        with mock.patch("os.fsync", side_effect=OSError(errno.ENOSPC, "full")):
+            code, out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
+        self.assertIn("failed: marker\n", err)
+        self.assertEqual([c.argv for c in self.host.calls if "--uid" in c.argv], [])
+        self.assertEqual(
+            list(self.host.entry.iterdir()),
+            [self.host.entry / ".lock", self.host.entry / entry.BIND_ADDRESS_FILE],
+        )
+        self.host.claim()
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+
+    def test_a_termination_during_the_volume_step_frees_the_slug_and_a_retry_succeeds(self) -> None:
+        # Guard: on_termination raises Terminated inside the claim, so the claim's cleanup runs.
+        # The handler is restored afterwards.
+        original = self.host.volume
+        for number in entry.TERMINATION_SIGNALS:
+            with self.subTest(signal=number.name):
+
+                def terminated_on_claim(args: list[str], sent: int = number) -> entry.Outcome:
+                    if args[0] == "--uid":
+                        os.kill(os.getpid(), sent)
+                    return original(args)
+
+                self.host.volume = terminated_on_claim  # type: ignore[method-assign]
+                code, out, err = self.host.request(f"claim {SLUG}")
+                self.assertEqual((code, out, err), (entry.EXIT_FAILED, "", "failed: terminated\n"))
+                self.assertEqual(
+                    list(self.host.entry.iterdir()),
+                    [self.host.entry / ".lock", self.host.entry / entry.BIND_ADDRESS_FILE],
+                )
+                self.assertIsNot(signal.getsignal(number), entry.on_termination)
+        self.host.volume = original  # type: ignore[method-assign]
+        self.host.claim()
+        self.assertEqual(self.host.claims, {SLUG: 30000})
+
+    def test_a_termination_after_the_claim_keeps_the_claim_and_a_retry_is_refused_in_use(
+        self,
+    ) -> None:
+        # Guard: the listing after a termination still sees a claim that stands; its marker stays.
+        original = self.host.volume
+
+        def claim_then_terminated(args: list[str]) -> entry.Outcome:
+            if args[0] == "--uid":
+                self.host.claims[args[2]] = int(args[1])
+                os.kill(os.getpid(), signal.SIGTERM)
+            return original(args)
+
+        self.host.volume = claim_then_terminated  # type: ignore[method-assign]
+        code, _out, err = self.host.request(f"claim {SLUG}")
+        self.assertEqual((code, err), (entry.EXIT_FAILED, "failed: terminated\n"))
+        self.host.volume = original  # type: ignore[method-assign]
+        self.assert_refused(self.host.request(f"claim {SLUG}"), "slug-in-use")
+        self.assertIn("volumes=yes", self.host.request(f"status {SLUG}")[1])
 
     def test_an_unreadable_claim_list_stops_the_request(self) -> None:
         original = self.host.volume
@@ -643,6 +738,26 @@ class SecretsTests(EntryTestCase):
         code, out, err = self.secrets()
         self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
         self.assertNotIn(CANARY, err)
+        self.assertIn("withheld", err)
+
+    def test_a_message_that_repeats_a_value_past_the_cut_or_escaped_is_withheld(self) -> None:
+        # Guard: detail_of checks the whole message, in each escaped form, before it is cut. A
+        # value the 1000-character cut would split, or a JSON-escaped one, is still withheld.
+        self.host.secrets_returncode = 1
+        self.host.secrets_stderr = "x" * 990 + CANARY
+        code, out, err = self.secrets()
+        self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
+        self.assertEqual(err, "failed: secrets\nwithheld: the message held a secret value\n")
+        quoted = 'EXAMPLE"quoted_CANARY'
+        self.host.secrets_stderr = "refused: value " + json.dumps(quoted)[1:-1]
+        code, _out, err = self.secrets(
+            {
+                "template": TEMPLATE,
+                "values": {"GHOST_DB_PASSWORD": quoted, "GHOST_OWNER_EMAIL": OWNER_EMAIL},
+            }
+        )
+        self.assertEqual(code, entry.EXIT_FAILED)
+        self.assertNotIn("quoted_CANARY", err)
         self.assertIn("withheld", err)
 
     def test_a_refusal_that_names_only_keys_is_passed_on(self) -> None:
@@ -1639,6 +1754,78 @@ class RoleContractTests(unittest.TestCase):
         )
         program = (ROLE / "files" / "branchleft_tenant_entry.py").read_text(encoding="utf-8")
         self.assertEqual(program.splitlines()[0], f"#!{own['tenant_entry_python']} -I")
+
+    def test_the_owner_script_and_node_are_where_the_role_installs_them(self) -> None:
+        own = self.variables("tenant_entry")
+        paths = entry.Paths()
+        self.assertEqual(own["tenant_entry_owner_program"], paths.owner_program)
+        self.assertEqual(
+            os.path.dirname(paths.owner_program),
+            self.variables("tenant_onboarding")["tenant_onboarding_program_dir"],
+        )
+        self.assertEqual(own["tenant_entry_node"], "{{ tenant_entry_node_dir }}/bin/node")
+        self.assertEqual(own["tenant_entry_node_dir"], "{{ tenant_entry_judge_dir }}/node")
+        self.assertEqual(
+            os.path.join(str(own["tenant_entry_judge_dir"]), "node", "bin", "node"), paths.node
+        )
+
+    def test_the_owner_script_is_pinned_to_a_commit_and_a_digest(self) -> None:
+        own = self.variables("tenant_entry")
+        self.assertRegex(str(own["tenant_entry_owner_ghost_commit"]), r"\A[0-9a-f]{40}\Z")
+        self.assertRegex(str(own["tenant_entry_owner_program_sha256"]), r"\A[0-9a-f]{64}\Z")
+        url = str(own["tenant_entry_owner_program_url"])
+        self.assertTrue(
+            url.startswith(
+                "https://raw.githubusercontent.com/branchLeft/ghost-platform/"
+                "{{ tenant_entry_owner_ghost_commit }}/"
+            )
+        )
+        self.assertTrue(url.endswith("/adapters/sso/scripts/provision-owner.mjs"))
+        self.assertEqual(
+            os.path.basename(str(own["tenant_entry_owner_program"])),
+            "provision-owner.mjs",
+        )
+
+    def test_node_is_the_pin_broker_deploy_holds(self) -> None:
+        # ANS-12: no role imports another, so the version and both digests are copies, and
+        # held to the original here. Every digest is a published sha256 and the fetch is https.
+        own = self.variables("tenant_entry")
+        broker: dict[str, object] = YAML(typ="safe").load(
+            (ROLES / "broker_deploy" / "defaults" / "main.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(own["tenant_entry_node_version"], broker["broker_deploy_node_version"])
+        self.assertEqual(own["tenant_entry_node_checksums"], broker["broker_deploy_node_checksums"])
+        self.assertEqual(own["tenant_entry_node_base_url"], broker["broker_deploy_node_base_url"])
+        self.assertTrue(str(own["tenant_entry_node_base_url"]).startswith("https://"))
+        checksums = own["tenant_entry_node_checksums"]
+        self.assertIsInstance(checksums, dict)
+        if not isinstance(checksums, dict):
+            self.fail("tenant_entry_node_checksums is not a mapping")
+        for arch, digest in checksums.items():
+            self.assertRegex(str(digest), r"\Asha256:[0-9a-f]{64}\Z", arch)
+        machines = own["tenant_entry_node_arch_by_machine"]
+        self.assertIsInstance(machines, dict)
+        if not isinstance(machines, dict):
+            self.fail("tenant_entry_node_arch_by_machine is not a mapping")
+        self.assertEqual(set(machines.values()), set(checksums))
+
+    def test_the_sudoers_grant_and_the_forced_command_name_the_entry_program_only(self) -> None:
+        # Installing node and the owner script must not give the account anything beyond the one
+        # program: neither path appears in a sudoers line or in the key options.
+        own = self.variables("tenant_entry")
+        lines = [str(line) for line in own["tenant_entry_sudoers_lines"]]  # type: ignore[attr-defined]
+        self.assertEqual(len(lines), 2)
+        grants = [line for line in lines if "NOPASSWD" in line]
+        self.assertEqual(
+            grants,
+            [
+                "{{ tenant_entry_user }} ALL=(root) NOPASSWD: "
+                "{{ tenant_entry_program }} {{ tenant_entry_serve_flag }}"
+            ],
+        )
+        for needle in ("node", "provision-owner", "docker", "platform-provision"):
+            for line in [*lines, str(own["tenant_entry_key_options"])]:
+                self.assertNotIn(needle, line)
 
     def test_the_stack_paths_and_modes_are_the_ones_tenant_compose_writes(self) -> None:
         compose = self.variables("tenant_compose")

@@ -1,0 +1,44 @@
+---
+# The host the default scenario starts from (the first account with its hand-made layout, the
+# test sshd, the keys and the pushed target account), imported so the scaffolding has one home,
+# then the second account: a nologin system account as the runbook makes the first, and two keys
+# of its own. The second account has no earlier layout: the role makes its two files fresh.
+- name: Prepare the host as the default scenario does
+  ansible.builtin.import_playbook: ../default/prepare.yml
+
+- name: Prepare the second account
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the second account as the runbook makes the first
+      ansible.builtin.user:
+        name: '{{ scenario_spool_user }}'
+        comment: Spool jump account
+        system: true
+        shell: /usr/sbin/nologin
+        home: /nonexistent
+        create_home: false
+        password: '*'
+      no_log: true
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used (ANS-9).
+    # spool and spool2 are the two keys the second account takes; the default scenario's keys jump
+    # (the first account's) and intruder (in no file) are used against it.
+    - name: Make one throwaway key pair for each key of the second account
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - spool
+        - spool2
+      no_log: true

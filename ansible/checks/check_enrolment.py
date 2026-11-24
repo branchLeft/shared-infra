@@ -63,6 +63,21 @@ JUMP_VARS = frozenset(
 # keys, nor the keys without the role.
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
+# The second ci_jump account, the spool account whose key opens the spool hosts' ssh port and
+# nothing else (the role's README, "The second account: spool"). Only edge-t carries it: ops1
+# reaches the tenants' spool hosts through edge-t, so edge1 has no second account and its
+# owner_vars file may not hold these keys. A host in SPOOL_JUMP_HOSTS must be a jump host. The
+# keys are optional in the file: with none the role's defaults leave the account switched off, and
+# the account's name is, as the first account's is, a host input and in no file here.
+SPOOL_JUMP_VARS = frozenset(
+    (
+        "ci_jump_spool_keys",
+        "ci_jump_spool_manage_keys",
+        "ci_jump_spool_destinations",
+        "ci_jump_spool_port",
+    )
+)
+SPOOL_JUMP_HOSTS = frozenset(("edget",))
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
 # The control plane's image pin, the value that moves the image ops1 runs. It is the one
 # key an owner file may leave out: without it the control_plane role keeps the image the deploy
@@ -85,6 +100,14 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 STEP_LOGIN_KEY = "ci_step_login_key"
 STEP_LOGIN_FROM = "ci_step_login_from"
 STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
+# The one input of the host_tls_identity role: the peer's public certificate, as PEM text, empty
+# until the owner has read it off the peer's host. It is public data. The role holds every shape
+# check (one certificate, self-signed, the use, the name, the lifetime), so only the type is read
+# here. The hosts that apply the role are exactly HOST_TLS_HOSTS, so a host cannot gain the role
+# without its value, nor the value without the role (_check_host_tls_hosts).
+HOST_TLS_KEY = "host_tls_identity_peer_cert"
+HOST_TLS_ROLE = "host_tls_identity"
+HOST_TLS_HOSTS = frozenset(("demo1",))
 # The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
 # range and the difference between them (its _inputs.yml), so only the type is read here. edge1
 # only: the role refuses any other host, and the playbook lists it there alone.
@@ -112,7 +135,8 @@ MAIL_COLLECTOR_KEYS = (
 )
 # Keys a host's file may omit, by host. Every other allowed key is required.
 OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {
-    "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS
+    "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS,
+    **{host: SPOOL_JUMP_VARS for host in SPOOL_JUMP_HOSTS},
 }
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
@@ -124,7 +148,9 @@ _BASE_OWNER_KEYS = {
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
     | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
-    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
+    | (SPOOL_JUMP_VARS if host in SPOOL_JUMP_HOSTS else frozenset())
+    | (frozenset((HOST_TLS_KEY,)) if host in HOST_TLS_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS, *HOST_TLS_HOSTS)
 }
 STEPS_KEY = "pull_trigger_steps"
 # Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
@@ -205,9 +231,18 @@ EXPECTED_ROLES = [
 # bool, so the string "true" does not match), and a second gateway on one network loops that
 # network's egress. A network does not span hcloud projects, so the switch is on one host per
 # network: edge1 for the estate's network and edget (edge-t) for the tenants network, and no
-# other host. R2 allows no `vars` on a role entry, so these rows are their one home.
+# other host. The edge_firewall role loads a host firewall and edge1's masquerade:
+# edge_firewall_nat_source is the estate subnet it masquerades and edge_firewall_enforce is the
+# default-drop switch, false (monitor mode) until the owner merges the one-line flip here and in
+# the playbook, so no pull and no other host can turn it on. R2 allows no `vars` on a role entry,
+# so these rows are their one home.
 HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
-    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
+    "edge1": {
+        "deploy_tooling_host_class": "gateway",
+        "egress_nat_gateway_enabled": True,
+        "edge_firewall_nat_source": "10.20.1.0/24",
+        "edge_firewall_enforce": False,
+    },
     "edget": {"egress_nat_gateway_enabled": True, "host_baseline_journal_retention_days": 30},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
     "ops1": {"deploy_tooling_host_class": "internal"},
@@ -811,15 +846,42 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
         isinstance(item, str) for item in destinations
     ):
         problems.append("ci_jump_destinations must be a list of text entries")
-    keys = doc.get("ci_jump_keys", [])
+    problems.extend(_jump_list_problems(doc, "ci_jump_keys"))
+    return problems
+
+
+def _jump_list_problems(doc: dict[str, object], name: str) -> list[str]:
+    """The shape of one list of {key} entries, the first account's or the second's."""
+    problems: list[str] = []
+    keys = doc.get(name, [])
     if not isinstance(keys, list):
-        problems.append("ci_jump_keys must be a list of {key} entries")
-        return problems
+        return [f"{name} must be a list of {{key}} entries"]
     for entry in keys:
         if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
-            problems.append(f"a ci_jump_keys entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+            problems.append(f"a {name} entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
         elif not isinstance(entry["key"], str):
-            problems.append("a ci_jump_keys entry needs a text key")
+            problems.append(f"a {name} entry needs a text key")
+    return problems
+
+
+def _spool_key_problems(doc: dict[str, object]) -> list[str]:
+    """The shape of the second jump account's values. Which destinations and keys are acceptable
+    is the role's rule alone (library/ci_jump_authorized_keys.py), so only the types are read."""
+    problems: list[str] = []
+    if "ci_jump_spool_manage_keys" in doc and not isinstance(
+        doc["ci_jump_spool_manage_keys"], bool
+    ):
+        problems.append("ci_jump_spool_manage_keys must be a bool")
+    destinations = doc.get("ci_jump_spool_destinations", [])
+    if not isinstance(destinations, list) or not all(
+        isinstance(item, str) for item in destinations
+    ):
+        problems.append("ci_jump_spool_destinations must be a list of text entries")
+    # A bool is an int in Python, so it is refused by name: true would read as port 1.
+    port = doc.get("ci_jump_spool_port", 22)
+    if isinstance(port, bool) or not isinstance(port, int):
+        problems.append("ci_jump_spool_port must be a whole number")
+    problems.extend(_jump_list_problems(doc, "ci_jump_spool_keys"))
     return problems
 
 
@@ -880,9 +942,12 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
         if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
+    if HOST_TLS_KEY in doc and not isinstance(doc[HOST_TLS_KEY], str):
+        problems.append(f"{HOST_TLS_KEY} must be text")
     problems.extend(_mail_collector_problems(doc))
     problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
+    problems.extend(_spool_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])
@@ -937,6 +1002,26 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
         f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
         for host in sorted(JUMP_HOSTS - applying)
     )
+    findings.extend(
+        f"R10 {host} is in SPOOL_JUMP_HOSTS but is not in JUMP_HOSTS"
+        for host in sorted(SPOOL_JUMP_HOSTS - JUMP_HOSTS)
+    )
+
+
+def _check_host_tls_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the host_tls_identity role are exactly HOST_TLS_HOSTS, the hosts
+    whose owner_vars file holds the peer's certificate it pins."""
+    applying = {host for host, roles in host_roles.items() if HOST_TLS_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {HOST_TLS_ROLE} "
+        "but is not in HOST_TLS_HOSTS"
+        for host in sorted(applying - HOST_TLS_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in HOST_TLS_HOSTS "
+        f"but does not list {HOST_TLS_ROLE}"
+        for host in sorted(HOST_TLS_HOSTS - applying)
+    )
 
 
 def check(root: Path) -> list[str]:
@@ -974,6 +1059,7 @@ def check(root: Path) -> list[str]:
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
     _check_jump_hosts(host_roles, findings)
+    _check_host_tls_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

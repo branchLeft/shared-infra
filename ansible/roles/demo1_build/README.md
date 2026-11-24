@@ -22,7 +22,7 @@ What the role does, in the order of `tasks/main.yml`:
 1. **Checks its inputs** (`_inputs.yml`): the pinned commit is a full sha, every
    program has a 64-digit sha256, the slot table is digits and not repeated, and
    the wrapper path is an absolute path with no dot segment, doubled slash or
-   trailing slash.
+   trailing slash, and the sidecar digest is a bare lower-case sha256 digest.
    **Holds each vendored program to its pin** (`_vendored.yml`), right after,
    and before anything is read from the host or written to it: each of the ten
    programs under `files/ghost-platform` is hashed on the machine that runs the
@@ -35,6 +35,24 @@ What the role does, in the order of `tasks/main.yml`:
    them); the broker's slots directory is `broker:broker` `0755`; and, when
    `broker.env` exists, it holds exactly one drain-flag line,
    `BROKER_DRAIN_FLAG_DIR=/var/lib/branchleft-broker/drain-flags`.
+   2a. **Refuses a secret the holder list does not name** (`_secret_holders.yml`), read-only
+   and before anything is staged or written. demo1 holds only the secrets listed in
+   `demo1_build_secret_holders` (`vars/main.yml`). The step finds secret-bearing files under
+   `/etc`, `/root`, `/home`, `/opt`, `/srv`, `/var/backups` and `/var/lib` by name (an
+   authorised-keys file, a private key's usual name, a binary `*-key.bin` file, which grep
+   cannot read), by content (a PEM or PGP private key block, a bare `KEY=value` line or an
+   `export` in any file; a spaced `KEY = value`, an indented line, a YAML `token: x` or JSON
+   `"token": "x"` line whose key holds a secret word, in a config-named file only; an AWS
+   secret, a GitHub or Pulumi token, a registry auth entry), and by place (every file in the
+   secrets directory and in the broker's admin-key directory). Pruning is by full path only:
+   `/var/lib/docker` and `/var/lib/containerd` (the image stores) are not read, so `/etc/docker`
+   is. Ansible's module payload directory, `/root/.ansible/tmp`, is not read; the rest of
+   `/root/.ansible` and every other `.ansible` is. A symbolic link
+   under the roots is followed for its target; a link whose name or target is a secret path
+   refuses. A found path that no row names refuses the run, naming the path and never a value.
+   The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
+   runbook Part 3) is listed. A host the list covers is
+   accepted and says how many files it found. A plan runs the step too.
 3. **Stages the programs** (`_release.yml`): the ten programs, each copied with
    `copy` from the role's own `files/ghost-platform` (which step 1 has held to the
    pins), into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
@@ -93,6 +111,9 @@ What the role does, in the order of `tasks/main.yml`:
    loads (`_units_loaded.yml`, read-only). An instance that does not load stops the
    run, and the message names the cause: the shared compose template unit is not
    installed, or does not load with the drop-ins (see Phase A-7).
+   8a. **Writes the drain sidecar's pin file** (`_sidecar_pin.yml`): `/etc/branchleft/demo-sidecar.image.env`,
+   `root:root` `0644`, one line, `DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@<digest>`, from
+   `demo1_build_sidecar_digest` (the attested sidecar digest). See "The sidecar's pin file".
 9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
    `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
    directory, for the owner to diff against the live edge before going live.
@@ -118,6 +139,47 @@ What the role does, in the order of `tasks/main.yml`:
 10. **Reads back what root will run** (`_integrity.yml`): each installed program is
     the pinned file, `root:root`, mode `0755`, not a link, and every directory
     above it is root-owned and not writable by anyone else.
+
+Between steps 6 and 7 it also **makes the broker tunnel account**
+(`_broker_tunnel.yml`), once the owner has placed ops1's key; see "The broker tunnel".
+
+### The broker tunnel
+
+ops1's control plane reaches the broker on `127.0.0.1:8090` through an SSH tunnel that
+ops1 dials (the owner's ruling `control=a`, 28 Sep 2026; port 22 is open to edge1's
+address only, and ops1 leaves through edge1's NAT). This role makes demo1's half; ops1's
+`ssh -L` unit is the `broker_tunnel_client` role. The grant is stated once, in
+ghost-platform's `demo-host/provision/render_broker_tunnel.py`, which proves it against a
+real sshd (`demo-host-broker-tunnel-ci.yml` there). The role's two templates render that
+program's output byte for byte: `molecule/broker_tunnel/files/golden` holds it for the
+scenario's test key, and `tests/unit/test_broker_tunnel_templates.py` and the scenario's
+`verify` both compare with it.
+
+- The input is ops1's public key, one `ssh-ed25519 <base64> [comment]` line in
+  `/etc/branchleft/broker-tunnel/ops1_public_key`, `root:root` `0600` or `0400`, in a
+  `root:root` `0700` directory. The owner places it. Absent, nothing is installed and the
+  run says "Broker tunnel NOT installed", a stated skip (ANS-10).
+- The account `brokertunnel`: a system account, shell `/usr/sbin/nologin`, home
+  `/nonexistent`, password locked. An existing account with a login shell is refused,
+  never changed.
+- `/etc/ssh/branchleft-broker-tunnel/authorized_keys` (`root:root` `0644`), one line:
+  `restrict,port-forwarding,permitopen="127.0.0.1:8090" <ops1's key>`.
+- `/etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf` (`root:root` `0644`): a
+  `Match User brokertunnel` block that sets every restriction again
+  (`AllowTcpForwarding local`, `PermitOpen 127.0.0.1:8090`, `PermitListen none`,
+  `ForceCommand /usr/sbin/nologin`, no tty, agent, X11, tunnel or user rc), ended by
+  `Match all`.
+- Then `sshd -t` on the whole configuration, a reload of `ssh` when either file changed,
+  and a read-back of `sshd -T -C user=brokertunnel,...` against each of the thirteen
+  settings in `demo1_build_tunnel_expected_effective`, and of the key file against the
+  grant's one line. A failure puts the previous files back (or removes new ones),
+  reloads, and fails the run naming the cause.
+
+The read-back asks sshd about a documentation address (`192.0.2.1`), because the role does
+not know edge1's: a `Match Address` block for edge1's address alone, ahead of the drop-in,
+would not be seen. The scenario's sshd is a stand-in (`molecule/broker_tunnel/files/sshd-stub`,
+copied from the `tunnel_account` role's); real sshd is proven by the ghost-platform proof
+and by the live run.
 
 ### What each Phase A step becomes
 
@@ -228,8 +290,44 @@ no secret: the one file that holds a secret is named by a path input and never r
   and apply say so. An image that docker finds and that lists anything else (no digests,
   another digest, two images, output that is not JSON) is refused.
 
+- `demo1_build_sidecar_digest`: the manifest digest of the attested drain sidecar image,
+  `sha256:` and 64 lower-case hex digits and nothing else (the role refuses anything
+  else, naming the rule and not the value). The default is the build the owner attested
+  (`drain-sidecar-image.yml`, run 43410699699). It is the
+  only input of the pin file; the path, the variable name and the image name are
+  constants in `vars/main.yml`.
+
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.
+
+### The sidecar's pin file
+
+`/etc/branchleft/demo-sidecar.image.env` is read by three things: the colour units
+name it as an `EnvironmentFile=` (and `AssertPathExists=`, so no colour starts without
+it), the sidecar launcher starts the image it names with `--pull never`, and the slot
+wrapper's `load` tags a pushed image with the sidecar's name only when the image's id is
+the digest this file pins. The role writes it with `copy`: `root:root` `0644`, content
+exactly one line and a newline,
+
+```text
+DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@sha256:<64 lower-case hex digits>
+```
+
+- **The name has no registry host.** `branchleft/drain-sidecar` is the host's own label
+  for the image (the broker's `ghcr.io/branchleft/drain-sidecar` without its host). The
+  wrapper's reader matches its own literal, so a line with `ghcr.io/` is read as "no pin",
+  and the push CLI's printed `envLine`, which carries the registry, is not the line the
+  host holds. The role names no registry (a test holds the role free of `ghcr.io`).
+- **Order on a host.** The file must exist before the signed sidecar push. A push made
+  first tags the sidecar under the slot image's name and has to be repeated.
+- **Who owns the digest.** Nothing else writes this file and nothing bumps the digest by
+  itself: a new sidecar build is a new attested digest in `defaults/main.yml`, in one
+  change. A file placed by hand with another line is replaced by the role's.
+- **Held to the wrapper.** `tests/unit/test_sidecar_pin.py` holds the path to the
+  colour-unit renderer's, the variable to the sidecar launcher's, and (at a pin that
+  carries the reader, ghost-platform#1120) runs the role's line through the vendored
+  wrapper's own reader.
+- **A plan** shows the file as one change with its one line (no secret in it).
 
 ### The wildcard candidate and the DNS token
 
@@ -306,7 +404,10 @@ caddyfile --config -`, the candidate on standard input. Nothing is pulled, start
    run. It accepts only: the admin endpoint off; the `http` and `tls` apps and no
    other (`pki` is where `skip_install_trust` shows); one server, listening on `:443`
    alone (a plain-HTTP site is a server on `:80`), with one route whose host matcher
-   is `*.<base>` and no other key (`auto_https` options show as keys); one TLS
+   is `*.<base>` and no other key (`auto_https` options show as keys), except an `errors`
+   key that is exactly the renderer's one header-only route, the `nosniff` header of the
+   site-level `handle_errors` block, and nothing else, since `errors` is
+   a second route table Caddy serves on an error response (`server-errors`); one TLS
    automation policy, for the subject `*.<base>` alone, with one issuer that is ACME
    with exactly the DNS-01 provider `hetzner` and the token file reference
    `{file.<token path>}`; no `internal` issuer anywhere in the JSON; and no other
@@ -424,7 +525,7 @@ it. The image is not run by the role beyond `caddy adapt`, which fails on such a
 
 ### The pin
 
-The commit is `595bcce0ee2bb1c7f8de565cf008060ea43122cf`, which is at or after
+The commit is `922fc9d997fc5780bec9fc9a4f30c2dc743fe85a`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
@@ -504,6 +605,8 @@ upstream's text, and root runs them.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
+- `/etc/branchleft/demo-sidecar.image.env` (`root:root` `0644`): the drain sidecar's pin
+  file, one line (see "The sidecar's pin file").
 - `/var/lib/branchleft/demo-candidates/` (`root` `0700`) holding
   `edge-upstreams.caddy` (`root` `0600`), and, when the wildcard base is set and the
   DNS token file is placed, one `Caddyfile` (`root` `0600`): the pinned renderer's
@@ -511,6 +614,11 @@ upstream's text, and root runs them.
   it read, one `*.<base>` site. There is no per-slot file. The role never writes or
   reads back those inputs' values, never reads the DNS token, and never writes the
   live edge.
+
+- With ops1's key placed: the `brokertunnel` account, `/etc/ssh/branchleft-broker-tunnel/`
+  (`root:root` `0755`) and its `authorized_keys`, and
+  `/etc/ssh/sshd_config.d/50-branchleft-broker-tunnel.conf`; `ssh` is reloaded when either
+  file changed (see "The broker tunnel").
 
 ### Drain flags
 
@@ -609,6 +717,7 @@ the task. In order:
 | `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.                                                        |
 | Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                                                                           |
 | Edge inputs, DNS token and site candidates               | Inputs and the token file are read as a stat, no checksum, and refused on their shape. Without a renderer, base or token the run says "Production candidate NOT staged"; a slot with no input is "NOT rendered". |
+| Sidecar pin file (`_sidecar_pin.yml`)                    | Modules report what would change (`/etc/branchleft` exists on any host the preconditions pass), with the one line in the diff.                                                                                   |
 | Colour instances load (`_units_loaded.yml`)              | Where the drop-in directories are not on the host, skipped with the line "Colour units NOT verified". Elsewhere systemd is asked, changing nothing, and the check stops a run whose instance does not load.      |
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                                                                       |
 | Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                                                                       |
@@ -804,6 +913,10 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   skipped, as in a first plan): the grant as prepared is accepted and the role
   says it was NOT verified, and the last rule with `, /bin/sh` added is refused,
   because the tie matches each rule to its end;
+- the sidecar digest (`refused_sidecar_digest.yml`, the input check alone): the digest the
+  role ships is **accepted** (the control), and a tag, the image name with its registry
+  host, capitals, a digest one digit short and a digest with a line break after it are
+  each refused, with nothing written at the pin file's path;
 - each path of the directory step as a link, one case each (the socket root, a
   slot's directory, a colour's directory, the broker's state directory and the
   drain-flag directory), refused before anything is created, with the link's
@@ -888,7 +1001,8 @@ instead of agreeing with itself. The one value read from the role is each progra
 pinned checksum, which is the pin. It checks the release (files, owners, modes, no
 bytecode, `current`), the three installed programs, the register and its eight
 claims, the router's account, the socket tree, the state and flag directories and
-the thirteen flags that remain, the fourteen drop-ins and the router unit, systemd
+the thirteen flags that remain, the sidecar's pin file (root:root `0644`, the one
+attested line, written out in full), the fourteen drop-ins and the router unit, systemd
 loading the router unit without enabling it, the candidate directory and its
 fragment, and the absences: no `Caddyfile` anywhere but the staged candidate, no slot
 directory a `reset` would make, no wrapper lock directory.
@@ -950,6 +1064,9 @@ assertion fires in its place or a later one is the only one left:
 | The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                      |
 | The dot-segment condition of `_inputs.yml` removed                                                        | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                     |
 | The checksum comparison of `_vendored.yml` removed                                                        | refusals, `converge`                    | "The role accepted a program whose pinned checksum was wrong", for the case with one digit of a pin changed                   |
+| The sidecar digest check of `_inputs.yml` removed, or its pattern loosened (a capital, a line break)      | refusals, `converge`                    | "The role accepted a sidecar digest that is not a bare sha256 digest.", for the capitals and the trailing-line-break cases    |
+| `_sidecar_pin.yml` removed from `main.yml`, or the file written with another owner, mode or line          | default, `verify`                       | "The sidecar's pin file is missing, is not a root:root mode 0644 regular file, or does not hold exactly the one line"         |
+| The image name given a registry host, the path or the variable renamed                                    | CI, `test_sidecar_pin.py`               | the name, path, variable or wrapper-reader test of the sidecar pin file                                                       |
 | `_vendored.yml` moved after another step of `main.yml`                                                    | CI, `test_demo1_no_github_fetch.py`     | "main.yml includes ... first, not _inputs.yml then _vendored.yml"                                                             |
 | `etc_hosts` removed from `molecule.yml`                                                                   | default and refusals, `verify`          | "resolves to an address outside the container, so the block on it is not in force"                                            |
 | The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                                 |
@@ -1047,10 +1164,10 @@ other unit tests of `ansible/harness`.
 
 ## Gaps the role names and does not close
 
-- **The sidecar's image environment file has no delivery path.**
-  `/etc/branchleft/demo-sidecar.image.env` is not written by this role or by
-  `broker_deploy`. The colour units and drop-ins are installed, but no colour starts
-  until the owner places the file.
+- **The sidecar's image is not on the host until the signed push.** The role writes the
+  pin file (step 8a) but never loads, pulls or checks the image: demo1 reaches no registry.
+  The pin file names a digest that resolves only after the signed sidecar push, and a
+  colour whose sidecar does not resolve is refused by its unit.
 - **No router is enabled or started.** The template unit is installed and systemd is
   reloaded; starting is the owner's step.
 - **The compose template unit is written from `hetzner/provision/` (A-7, the owner's

@@ -14,6 +14,8 @@ import contextlib
 import dataclasses
 import enum
 import fcntl
+import hashlib
+import http.client
 import json
 import os
 import re
@@ -168,6 +170,59 @@ STEP_TAG_PREFIX: Final = "control_plane_db_"
 STEP_VARIABLE: Final = "control_plane_db_step"
 STEP_FIELDS: Final = frozenset({"id", "tag", "word"})
 
+# The look: a fixed, closed set of read-only facts about this host, printed after a check run.
+# A fact is declared in ``LOOK_PATH`` of the commit being checked, which is signed, on main and
+# reviewed like any code; it can ask only for one of the kinds below and only with the fields the
+# kind names. There is no command, no caller input and no free text: every value a line carries is
+# a digest, a three-digit status or a word from a closed list written in this file, so nothing the
+# host holds (a file's content, a service's body, an error) can reach the log. Adding a kind, or a
+# directory a file fact may read, is a change to this root program, reviewed by the owner.
+LOOK_PATH: Final = "ansible/tools/look/facts.json"
+MAX_LOOK_BYTES: Final = 65_536
+MAX_LOOK_FACTS: Final = 64
+LOOK_TOTAL_SECONDS: Final = 120.0
+LOOK_UNIT_SECONDS: Final = 10.0
+LOOK_HTTP_SECONDS: Final = 5.0
+LOOK_MAX_FILE_BYTES: Final = 64 * 1024 * 1024
+LOOK_READ_CHUNK: Final = 1024 * 1024
+# Where a file fact may read: the places the roles put programs and unit files. Never a place that
+# holds a secret, because a digest of a short secret can be guessed.
+LOOK_FILE_ROOTS: Final = (
+    "/etc/systemd/system/",
+    "/usr/local/bin/",
+    "/usr/local/lib/",
+    "/usr/local/sbin/",
+)
+LOOK_LOOPBACK: Final = "127.0.0.1"
+# The declared services an http fact may name: the fact's ``name`` maps to the only loopback ports
+# that fact may GET. A name not here, or a port not in its set, is refused before any request.
+# Adding a service or a port is a change to this program, reviewed by the owner, as a new kind is.
+LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {}
+LOOK_NAME_PATTERN: Final = re.compile(r"[a-z][a-z0-9-]{0,47}")
+# The plan job withholds a host's output that matches the credential words of its scan, and that
+# would fail the plan of every host. A name can never be the cause.
+LOOK_SCAN_WORDS: Final = re.compile(
+    r"passw|passphrase|secret|token|api-?key|private-?key|credential"
+)
+LOOK_FILE_PART: Final = re.compile(r"[A-Za-z0-9_@][A-Za-z0-9_@.+-]*")
+LOOK_UNIT_PATTERN: Final = re.compile(
+    r"[A-Za-z0-9_@][A-Za-z0-9_@.:-]{0,95}\.(?:service|timer|socket|target|path)"
+)
+LOOK_URL_PATH: Final = re.compile(r"/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?")
+LOOK_HOST_NAME: Final = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+LOOK_MAX_PATH: Final = 200
+LOOK_MAX_URL_PATH: Final = 128
+LOOK_MAX_ISSUE: Final = 99_999_999
+LOOK_UNIT_STATES: Final = frozenset(
+    {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance"}
+)
+# The only shape a fact line may have. A line that does not match is never printed.
+LOOK_LINE: Final = re.compile(
+    r"look issue=[0-9]{1,8} name=[a-z][a-z0-9-]{0,47} "
+    r"kind=(?:file_sha256|unit_active|http_status) "
+    r"result=(?:[0-9a-f]{64}|[0-9]{3}|[a-z]+(?:-[a-z]+)*)"
+)
+
 Clock = Callable[[], datetime]
 
 
@@ -299,6 +354,270 @@ class Why(enum.Enum):
     CONFIG_RELEASE_SIGNERS = "release_signers must be a list, and not empty when a tag is required"
     RELEASE_TAG_ABSENT = "no release tag signed by a release key names this commit"
     RELEASE_TAG_FLOOD = "more release tags name this commit than the limit"
+
+
+class LookKind(enum.Enum):
+    """The closed list of facts a host can be asked for. A kind not here is refused."""
+
+    FILE_SHA256 = "file_sha256"
+    UNIT_ACTIVE = "unit_active"
+    HTTP_STATUS = "http_status"
+
+
+class LookWhy(enum.Enum):
+    """Every reason a look entry or the look file is refused, kept in one place.
+
+    The words are fixed and none repeats text from the file, so a refusal line cannot carry what
+    a bad entry held. None holds a word the plan job's secret scan reads.
+    """
+
+    FILE_NOT_JSON = "file-not-json"
+    FILE_SHAPE = "file-shape"
+    FILE_TOO_LARGE = "file-too-large"
+    FILE_TOO_MANY = "file-too-many"
+    FILE_NOT_REGULAR = "file-not-regular"
+    FILE_UNREADABLE = "file-unreadable"
+    ENTRY_SHAPE = "entry-shape"
+    UNKNOWN_KIND = "unknown-kind"
+    UNKNOWN_FIELD = "unknown-field"
+    MISSING_FIELD = "missing-field"
+    BAD_ISSUE = "bad-issue"
+    BAD_NAME = "bad-name"
+    DUPLICATE_NAME = "duplicate-name"
+    BAD_PLAYBOOK = "bad-playbook"
+    PATH_NOT_ALLOWED = "path-not-allowed"
+    BAD_UNIT = "bad-unit"
+    BAD_PORT = "bad-port"
+    SERVICE_NOT_DECLARED = "service-not-declared"
+    PORT_NOT_ALLOWED = "port-not-allowed"
+    BAD_URL_PATH = "bad-url-path"
+    BAD_HOST_NAME = "bad-host-name"
+    LINE_SHAPE = "line-shape"
+    LOOK_FAULT = "look-fault"
+
+
+# The fields every entry has, and the fields each kind adds. ``host`` of an http fact is optional.
+LOOK_COMMON_FIELDS: Final = frozenset({"issue", "name", "playbook", "kind"})
+LOOK_KIND_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.FILE_SHA256: frozenset({"path"}),
+    LookKind.UNIT_ACTIVE: frozenset({"unit"}),
+    LookKind.HTTP_STATUS: frozenset({"port", "url_path"}),
+}
+LOOK_OPTIONAL_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.FILE_SHA256: frozenset(),
+    LookKind.UNIT_ACTIVE: frozenset(),
+    LookKind.HTTP_STATUS: frozenset({"host"}),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class LookFact:
+    """One declared fact. The fields a kind does not use stay at their empty value."""
+
+    issue: int
+    name: str
+    playbook: str
+    kind: LookKind
+    path: str = ""
+    unit: str = ""
+    port: int = 0
+    url_path: str = ""
+    host: str = "localhost"
+
+
+@dataclasses.dataclass(frozen=True)
+class LookRefusal:
+    """An entry that was refused: its place in the list (from 1) and the fixed reason."""
+
+    entry: int
+    why: LookWhy
+
+
+@dataclasses.dataclass(frozen=True)
+class LookDeclaration:
+    """What the look file holds: the facts that passed, the entries refused, and the file's state.
+
+    ``file`` is ``ok`` or the reason the whole file was refused, in which case it holds no fact.
+    """
+
+    facts: tuple[LookFact, ...] = ()
+    refusals: tuple[LookRefusal, ...] = ()
+    file: str = "ok"
+
+    @property
+    def declared(self) -> int:
+        """The entries the file held, those refused included."""
+        return len(self.facts) + len(self.refusals)
+
+
+def refused_look_file(why: LookWhy) -> LookDeclaration:
+    """Return the declaration of a file that is refused whole."""
+    return LookDeclaration(file=why.value)
+
+
+def _single_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Build an object from its pairs and refuse a key given twice.
+
+    Raises:
+        ValueError: a key is given twice.
+    """
+    built: dict[str, object] = {}
+    for key, value in pairs:
+        if key in built:
+            raise ValueError(key)
+        built[key] = value
+    return built
+
+
+def _refuse_constant(_name: str) -> object:
+    """Refuse NaN and the infinities, which JSON does not have.
+
+    Raises:
+        ValueError: always.
+    """
+    raise ValueError
+
+
+def _whole_number(value: object, low: int, high: int) -> bool:
+    """Say whether the value is a whole number in range; a JSON true or false is not."""
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _text_matching(value: object, pattern: re.Pattern[str], longest: int) -> bool:
+    """Say whether the value is text, short enough, and entirely of the pattern's shape."""
+    return isinstance(value, str) and len(value) <= longest and pattern.fullmatch(value) is not None
+
+
+def look_path_allowed(path: object, roots: Sequence[str]) -> bool:
+    """Say whether a file fact may name this path.
+
+    It must be absolute and already normalised (no ``.``, ``..``, doubled or trailing slash),
+    made of plain name parts, and be a file below one of the roots, not the root itself.
+    """
+    if not isinstance(path, str) or len(path) > LOOK_MAX_PATH:
+        return False
+    pure = PurePosixPath(path)
+    if not pure.is_absolute() or str(pure) != path:
+        return False
+    if not all(LOOK_FILE_PART.fullmatch(part) for part in pure.parts[1:]):
+        return False
+    return any(
+        path.startswith(root) and len(pure.parts) > len(PurePosixPath(root).parts) for root in roots
+    )
+
+
+def _field_problem(entry: Mapping[str, object], kind: LookKind) -> LookWhy | None:
+    """Return the reason an entry has the wrong set of fields for its kind, or None."""
+    required = LOOK_COMMON_FIELDS | LOOK_KIND_FIELDS[kind]
+    keys = frozenset(entry)
+    if keys - required - LOOK_OPTIONAL_FIELDS[kind]:
+        return LookWhy.UNKNOWN_FIELD
+    if required - keys:
+        return LookWhy.MISSING_FIELD
+    return None
+
+
+def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
+    entry: Mapping[str, object], kind: LookKind, roots: Sequence[str]
+) -> LookWhy | None:
+    """Return the reason a kind's own fields are refused, or None."""
+    if kind is LookKind.FILE_SHA256 and not look_path_allowed(entry["path"], roots):
+        return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.UNIT_ACTIVE and not _text_matching(entry["unit"], LOOK_UNIT_PATTERN, 128):
+        return LookWhy.BAD_UNIT
+    if kind is LookKind.HTTP_STATUS:
+        if not _whole_number(entry["port"], 1, 65_535):
+            return LookWhy.BAD_PORT
+        declared = LOOK_HTTP_PORTS.get(str(entry["name"]))
+        if declared is None:
+            return LookWhy.SERVICE_NOT_DECLARED
+        if entry["port"] not in declared:
+            return LookWhy.PORT_NOT_ALLOWED
+        if not _text_matching(entry["url_path"], LOOK_URL_PATH, LOOK_MAX_URL_PATH):
+            return LookWhy.BAD_URL_PATH
+        parts = str(entry["url_path"]).split("/")
+        if "." in parts or ".." in parts:
+            return LookWhy.BAD_URL_PATH
+        if "host" in entry and not _text_matching(entry["host"], LOOK_HOST_NAME, 253):
+            return LookWhy.BAD_HOST_NAME
+    return None
+
+
+def _look_fact(  # noqa: PLR0911 - one answer per way an entry can be wrong
+    entry: object, names: set[str], roots: Sequence[str]
+) -> LookFact | LookWhy:
+    """Check one entry against its kind and return the fact, or the reason it is refused."""
+    if not isinstance(entry, dict):
+        return LookWhy.ENTRY_SHAPE
+    kind_text = entry.get("kind")
+    kind = next((item for item in LookKind if item.value == kind_text), None)
+    if kind is None:
+        return LookWhy.UNKNOWN_KIND
+    problem = _field_problem(entry, kind)
+    if problem is not None:
+        return problem
+    issue, name, playbook = entry["issue"], entry["name"], entry["playbook"]
+    if not (isinstance(issue, int) and _whole_number(issue, 1, LOOK_MAX_ISSUE)):
+        return LookWhy.BAD_ISSUE
+    if (
+        not isinstance(name, str)
+        or not _text_matching(name, LOOK_NAME_PATTERN, 48)
+        or LOOK_SCAN_WORDS.search(name) is not None
+    ):
+        return LookWhy.BAD_NAME
+    if name in names:
+        return LookWhy.DUPLICATE_NAME
+    if not isinstance(playbook, str) or canonical_playbook(playbook) is None:
+        return LookWhy.BAD_PLAYBOOK
+    problem = _kind_problem(entry, kind, roots)
+    if problem is not None:
+        return problem
+    names.add(name)
+    port = entry.get("port", 0)
+    return LookFact(
+        issue=issue,
+        name=name,
+        playbook=playbook,
+        kind=kind,
+        path=str(entry.get("path", "")),
+        unit=str(entry.get("unit", "")),
+        port=port if isinstance(port, int) else 0,
+        url_path=str(entry.get("url_path", "")),
+        host=str(entry.get("host", "localhost")),
+    )
+
+
+def parse_look(text: str, roots: Sequence[str] = LOOK_FILE_ROOTS) -> LookDeclaration:
+    """Read the look file: ``{"facts": [entry, ...]}``.
+
+    A file that is too large, is not JSON, repeats a key, or is not exactly that object is
+    refused whole. An entry that is wrong in any way is refused by itself with a fixed reason and
+    the others stand, so one bad entry hides no other issue's look. A declaration with any
+    refusal fails the role's unit tests, so a refusal at a host is not expected to be merged.
+
+    Returns:
+        The facts that passed, the entries refused and the state of the file.
+    """
+    if len(text.encode("utf-8")) > MAX_LOOK_BYTES:
+        return refused_look_file(LookWhy.FILE_TOO_LARGE)
+    try:
+        data = json.loads(text, object_pairs_hook=_single_keys, parse_constant=_refuse_constant)
+    except (ValueError, RecursionError):
+        return refused_look_file(LookWhy.FILE_NOT_JSON)
+    if not isinstance(data, dict) or set(data) != {"facts"} or not isinstance(data["facts"], list):
+        return refused_look_file(LookWhy.FILE_SHAPE)
+    if len(data["facts"]) > MAX_LOOK_FACTS:
+        return refused_look_file(LookWhy.FILE_TOO_MANY)
+    facts: list[LookFact] = []
+    refusals: list[LookRefusal] = []
+    names: set[str] = set()
+    for number, entry in enumerate(data["facts"], start=1):
+        outcome = _look_fact(entry, names, roots)
+        if isinstance(outcome, LookWhy):
+            refusals.append(LookRefusal(number, outcome))
+        else:
+            facts.append(outcome)
+    return LookDeclaration(tuple(facts), tuple(refusals))
 
 
 class TriggerError(Exception):
@@ -475,6 +794,7 @@ class Tools:
     gpg: Path = Path("/usr/bin/gpg")
     gpgconf: Path = Path("/usr/bin/gpgconf")
     ssh_keygen: Path = Path("/usr/bin/ssh-keygen")
+    systemctl: Path = Path("/usr/bin/systemctl")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1215,6 +1535,25 @@ class Repository:
         """Say whether ``path`` is a regular (not symlink, not directory) file in the commit."""
         listing = self._git.output("ls-tree", "-z", commit, "--", path)
         return listing.startswith(("100644 blob ", "100755 blob "))
+
+    def look_text(self, commit: str) -> str | LookWhy | None:
+        """Return the look file of the commit as text, None if it has none, or why it is refused.
+
+        The text is read from the commit object and not from the checkout, so a link cannot
+        point it elsewhere. A fault of git here is a refusal of the file, never of the run.
+        """
+        try:
+            listing = self._git.output("ls-tree", "-z", commit, "--", LOOK_PATH)
+            if not listing:
+                return None
+            if not listing.startswith(("100644 blob ", "100755 blob ")):
+                return LookWhy.FILE_NOT_REGULAR
+            size = int(self._git.output("cat-file", "-s", f"{commit}:{LOOK_PATH}").strip())
+            if size > MAX_LOOK_BYTES:
+                return LookWhy.FILE_TOO_LARGE
+            return self._git.output("cat-file", "blob", f"{commit}:{LOOK_PATH}")
+        except (TriggerError, ValueError):
+            return LookWhy.FILE_UNREADABLE
 
     def release_tags_naming(self, commit: str) -> list[str]:
         """Return the ids of the annotated release tags that name exactly this commit.
@@ -2025,6 +2364,132 @@ def require_playbook_in_checkout(checkout: Path, playbook: str) -> None:
         raise PlaybookNotAllowedError(Why.PLAYBOOK_ESCAPES)
 
 
+class Looker:
+    """Looks at this host for the facts a declaration names, and only reads.
+
+    Every result is a digest, a status number or a word from a closed list; a fact that cannot
+    be read gives a word, never the error. Nothing is written, started, restarted or changed: a
+    file is opened for reading, ``systemctl is-active`` is asked, and one GET goes to the
+    loopback address. The look has a time of its own, and a stop request ends it.
+    """
+
+    def __init__(
+        self,
+        tools: Tools,
+        stop: threading.Event,
+        roots: Sequence[str] = LOOK_FILE_ROOTS,
+        total_seconds: float = LOOK_TOTAL_SECONDS,
+    ) -> None:
+        """Remember the programs, the stop signal, the readable roots and the time allowed."""
+        self._tools = tools
+        self._stop = stop
+        self._roots = tuple(roots)
+        self._deadline = time.monotonic() + total_seconds
+
+    def lines(self, declaration: LookDeclaration, playbook: str) -> list[str]:
+        """Return the lines to print: one for each fact of this playbook, a refusal each, a summary.
+
+        Facts for another playbook are not looked at here; they were still checked, so every host
+        refuses the same entries.
+        """
+        here = [fact for fact in declaration.facts if fact.playbook == playbook]
+        lines = [
+            f"look-refused entry={item.entry} reason={item.why.value}"
+            for item in declaration.refusals
+        ]
+        for fact in here:
+            lines.append(self._line(fact))
+        lines.append(
+            f"look-summary declared={declaration.declared} here={len(here)} "
+            f"refused={len(declaration.refusals)} file={declaration.file}"
+        )
+        return lines
+
+    def _line(self, fact: LookFact) -> str:
+        """Return the line of one fact, or a refusal if the line is not of the one shape."""
+        if self._stop.is_set() or time.monotonic() > self._deadline:
+            result = "skipped-time"
+        else:
+            result = self.result(fact)
+        line = f"look issue={fact.issue} name={fact.name} kind={fact.kind.value} result={result}"
+        if LOOK_LINE.fullmatch(line) is None:
+            return f"look-refused entry=0 reason={LookWhy.LINE_SHAPE.value}"
+        return line
+
+    def result(self, fact: LookFact) -> str:
+        """Look at one fact and return its result word."""
+        if fact.kind is LookKind.FILE_SHA256:
+            return self._file_digest(fact.path)
+        if fact.kind is LookKind.UNIT_ACTIVE:
+            return self._unit_state(fact.unit)
+        return self._http_status(fact)
+
+    def _file_digest(self, path: str) -> str:
+        """Return the SHA-256 of a regular file inside a root, or a word saying why not."""
+        try:
+            real = os.path.realpath(path)
+        except (OSError, ValueError):
+            return "unreadable"
+        if not any(real.startswith(root) for root in self._roots):
+            return "outside-root"
+        try:
+            descriptor = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_FILE_BYTES:
+                return "too-large"
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, LOOK_READ_CHUNK):
+                digest.update(chunk)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        return digest.hexdigest()
+
+    def _unit_state(self, unit: str) -> str:
+        """Return what ``systemctl is-active`` says of a unit, as one of a closed list of words."""
+        argv = [str(self._tools.systemctl), "is-active", "--no-pager", "--", unit]
+        try:
+            done = run_command(argv, {"PATH": SEARCH_PATH, "LC_ALL": "C"}, LOOK_UNIT_SECONDS)
+        except GitError:
+            return "unknown"
+        word = done.stdout.strip()
+        return word if word in LOOK_UNIT_STATES else "unknown"
+
+    @staticmethod
+    def _http_status(fact: LookFact) -> str:
+        """Return the status of one GET to the loopback address, or a word saying why not.
+
+        Only the status is read: no body, no header, no redirect followed, and the connection is
+        to the loopback address whatever name the entry gives for the ``Host`` header. A port the
+        fact's service does not declare is refused here too, before any connection is made.
+        """
+        if fact.port not in LOOK_HTTP_PORTS.get(fact.name, frozenset()):
+            return LookWhy.PORT_NOT_ALLOWED.value
+        connection = http.client.HTTPConnection(LOOK_LOOPBACK, fact.port, timeout=LOOK_HTTP_SECONDS)
+        try:
+            connection.request(
+                "GET",
+                fact.url_path,
+                headers={"Host": fact.host, "Connection": "close", "User-Agent": "pull-trigger"},
+            )
+            status = connection.getresponse().status
+        except TimeoutError:
+            return "timeout"
+        except (OSError, http.client.HTTPException):
+            return "unreachable"
+        finally:
+            connection.close()
+        return f"{status:03d}" if 100 <= status <= 599 else "unreachable"  # noqa: PLR2004 - HTTP's range
+
+
 def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
     """Copy the descriptor to a new private file in ``spool_dir`` and return its path.
 
@@ -2375,12 +2840,42 @@ class Trigger:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_REGULAR)
         checkout = self._workspace.new_checkout(repository.git, commit)
         try:
-            return self._run(mode, commit, checkout, step)
+            declaration = self._declared_look(repository, commit) if mode is Mode.CHECK else None
+            return self._run(mode, commit, checkout, step, declaration)
         finally:
             # Only an apply that got as far as running keeps its checkout (as
             # ``current``); a check, a refusal and a failure before that leave nothing behind.
             if not self._workspace.is_current(checkout):
                 shutil.rmtree(checkout, ignore_errors=True)
+
+    @staticmethod
+    def _declared_look(repository: Repository, commit: str) -> LookDeclaration | None:
+        """Return what the commit's look file declares, or None when it has none.
+
+        Nothing here can fail the run: a file that cannot be read is a refusal that the look
+        prints, and the verdict and the exit status are what they would be without a look.
+        """
+        try:
+            text = repository.look_text(commit)
+            if text is None:
+                return None
+            if isinstance(text, LookWhy):
+                return refused_look_file(text)
+            return parse_look(text)
+        except Exception:  # noqa: BLE001 - nothing the look does may change a verdict
+            return refused_look_file(LookWhy.LOOK_FAULT)
+
+    def _print_look(self, declaration: LookDeclaration) -> None:
+        """Write the look lines to the caller after the playbook's output; a caller gone is fine."""
+        try:
+            looker = Looker(self._tools, self._stop)
+            lines = looker.lines(declaration, self._config.playbook)
+        except Exception:  # noqa: BLE001 - nothing the look does may change a verdict
+            lines = [f"look-refused entry=0 reason={LookWhy.LOOK_FAULT.value}"]
+        text = "".join(f"{line}\n" for line in lines)
+        with contextlib.suppress(OSError, ValueError):
+            self._caller.write(text.encode("ascii"))
+            self._caller.flush()
 
     def _require_tools(self) -> None:
         """Check that every program this run will start is installed.
@@ -2398,8 +2893,18 @@ class Trigger:
             if not (program.is_file() and os.access(program, os.X_OK)):
                 raise ToolMissingError(Why.TOOL_MISSING, program.name)
 
-    def _run(self, mode: Mode, commit: str, checkout: Path, step: Step | None) -> Verdict:
+    def _run(
+        self,
+        mode: Mode,
+        commit: str,
+        checkout: Path,
+        step: Step | None,
+        declaration: LookDeclaration | None = None,
+    ) -> Verdict:
         """Run the playbook in the checkout and turn its end into a verdict.
+
+        A check run that has a look declaration prints the look after the playbook's own output,
+        when the playbook ended by itself; the look never changes the verdict.
 
         Raises:
             PlaybookNotAllowedError: the playbook resolves outside ansible/playbooks.
@@ -2419,6 +2924,8 @@ class Trigger:
             checkout, self._config.playbook, mode, log_path, self._config.timeout_seconds, step
         )
         self._journal.prune()
+        if declaration is not None and not (result.timed_out or result.interrupted):
+            self._print_look(declaration)
         if result.timed_out:
             return Verdict(Exit.TIMED_OUT, "timed-out")
         if result.interrupted:

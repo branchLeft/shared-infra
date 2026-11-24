@@ -36,14 +36,32 @@ here derives that prefix automatically.
 
 ## `AUTHORING_API_PATHS`
 
-Paths exempted from AppSec evaluation on a site flagged `injectionWafPreviewOnly`.
-Ghost's admin API is where author-written HTML, code samples and SQL arrive in a
-request body; the admin UI around it is a static bundle carrying none, so the
-prefix is the API and not `/ghost`.
+Paths exempted from AppSec evaluation on a site flagged `injectionWafPreviewOnly`
+**that has no verified sessions** (`trustedSession`). Ghost's admin API is where
+author-written HTML, code samples and SQL arrive in a request body, so that is
+the whole of the list: `/ghost/api/admin/*`. The Content API
+(`/ghost/api/content/`), which any client can call, and the rest of the
+`/ghost/api/` tree stay inspected, and so does the admin UI around the API (a
+static bundle carrying none). Only the unversioned admin form is listed: Caddy's
+`*` stops at a slash when it is not the last character, so a versioned form
+(`/ghost/api/<version>/admin/...`) could not be listed whole, and it stays
+inspected, which fails towards a false positive and not towards a hole.
+
+A site that sets `trustedSession` has no path exemption at all. A signed-in staff
+session is already exempt, because the edge verifies it ("Verified sessions"), and
+that is the whole of the exemption: every other client, anonymous or not, has its
+request to any path, the Content API and the pre-sign-in admin paths included,
+evaluated by AppSec. An Admin API key (an integration) does not verify, so a
+request authenticated that way is inspected too; no site uses one through the edge
+today, and one that did would need its own verified form.
 
 The exemption removes **all** AppSec evaluation on these paths, not only the
 injection rulesets -- the Caddy handler is per-request, so there is no way to
 exempt three rule families and keep a fourth.
+
+`render.test.ts` fails if an exempted path leaves the admin API or if a verified
+site renders a path exemption; `test_trusted_session_replay.py` proves an anonymous
+Content API request is refused where a verified one is not.
 
 ## `MEMBERS_MAGIC_LINK_ZONE`
 
@@ -266,6 +284,48 @@ toolbar from jsDelivr unless its configuration names other addresses. A tenant r
 - **Not here.** The demo edge (`ghost-platform`'s `demo-host`, vendored under
   `ansible/roles/demo1_build`) refuses a `file_server` outright and is a separate change.
 
+## `siteBlock`: Tenant media
+
+Ghost's S3 adapter links an upload as `<cdnUrl>/<key>` and answers a request for
+`/content/images/...` with a 301 to the same. With `cdnUrl` the storage host, a reader's browser
+contacts that host. A `backend: 'ghost'` site with `media` (`sites.ts`) answers the three upload
+prefixes itself, from the tenant's own bucket, so with `cdnUrl` set to the tenant's own origin
+(a `render-core` change, not this one) the reader contacts nothing else. Until then the route
+is inert for links Ghost still writes, and serves any request that does reach the hostname.
+
+- **Read.** Path-style, `https://<host>/<bucket><path>`; the key is the request path, which is
+  what Ghost wrote (`staticFileURLPrefix` is `content/images`, `content/media`, `content/files`).
+  `GET` and `HEAD` only; anything else falls through to Ghost as before. The bucket must already
+  allow anonymous reads of its objects, which is how the blog's images load today.
+- **What goes to the bucket.** The path only. The query is replaced with an empty one (an S3
+  query selects a version or a sub-resource), `Cookie` and `Authorization` are removed, and `Host`
+  is the storage host's. A `..` segment under the prefixes is a 404 before any of it
+  (`@tenant_media_traversal`). It reads the request three ways, because the bucket path is built
+  from the decoded path and Caddy's path matcher cleans its own copy: the URI as received (a `..`
+  after a slash or an encoded slash), the decoded path (a `..` however the separators were
+  written, so `a%2f..%2fb` is caught), and the decoded path for a leftover `%2e`, `%2f` or `%25`
+  (escaped twice: the edge's own rewrites read the path a second time and would turn it into a
+  dot segment). Ghost writes no `%` into an upload's name. `tenantMediaTraversal.test.ts` sends
+  these forms through the rendered lines under a real Caddy in front of an echoing upstream.
+- **What comes back.** `2xx`, `304` and `416` are passed on with `Cache-Control: public,
+max-age=31536000, immutable` (Ghost never overwrites an upload: it picks a new name, and a
+  resized copy is named by size and source) and with the bucket's request id, version id,
+  expiry date, storage class and `Strict-Transport-Security` removed. `nosniff`, HSTS and the
+  rest of the route's headers are the site's own. `403` and `404` are a 404: the bucket answers
+  a missing key `403`, not `404`. Any other status (a `5xx`) is passed on uncached.
+- **Resized copies.** `/content/images/size/...` is made by Ghost on first request and written
+  to the bucket, so a miss there is asked of Ghost once. Ghost then answers a redirect to the
+  stored copy; the edge follows it itself by reading the bucket again, and a second miss is a 404. Without that second read a missing original would be a redirect loop once `cdnUrl` is
+  the site's own origin. A miss anywhere else is a 404 and never reaches Ghost, for the same
+  reason.
+- **Order.** After the protection chain, the upload refusal (an uploaded `.svg` or `.html` is
+  still a 403) and the widget files, before `reverse_proxy`. A probe is throttled and seen by
+  CrowdSec, and the general throttle counts these requests like any other.
+- **Not here.** Any change to what Ghost writes as `cdnUrl`, and any rewrite of a URL already
+  stored in content: both are `branchLeft/workspace#3868`'s later steps and the second is the
+  owner's. The bucket's `Content-Type` is passed on as stored; a resized copy is stored as
+  `application/octet-stream` by Ghost's own `saveRaw`, which an `<img>` ignores.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
@@ -274,8 +334,8 @@ Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owne
 
 `roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
 a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
-v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
-`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+v2.11.9 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.8 on a background timer). `roll_interval` exists in the
 same module but rolls only on the next write, so it would not bound a quiet edge, and it is
 not used.
 
@@ -367,6 +427,35 @@ Not covered, by decision:
 - Forms the adapter does not read: `BL_BREAK_GLASS`, `bl_break_glass[]` (an array, refused
   as malformed) and a name hidden inside another parameter's value. They are forwarded
   as sent, and the first two are redacted in the log.
+
+## `defaultLogDirective`: the error and no-site lines
+
+The site `log` blocks above cover the access log only. Caddy's default logger is a second
+path, and it writes to stderr, so to the edge container's log. Measured against Caddy
+v2.11.4 with no default logger configured, two lines reach it with the token in clear:
+
+- the `http.log.error` line written when a handler fails (a 502 from a refused upstream).
+  It carries the whole request, `request.uri` and `request.headers.Referer` included;
+- the line for a request whose Host matches no site block, which carries the same request.
+
+The token stays valid for its full 600 s, and for as long as a hung upstream keeps the
+request open, so a reader of the container log could use it.
+
+**Fix.** `globalOptions` carries a `log { output stderr; format filter { wrap json ... } }`
+block, written by `defaultLogDirective`. It uses the same `redactingFormat` as every site
+log, so the encoder, the three fields and the pattern have one source. The block names no
+logger, which in Caddy is the default one. Caddy's own default is JSON on stderr when no
+terminal is attached, so a line with no token is unchanged.
+
+`breakGlassToken.test.ts` starts a real Caddy in front of a dead upstream, sends the token
+in every spelling the access-log rows use to a served site and to a host with no site,
+and reads `docker logs`. With the global block removed from the renderer both paths leak
+and the rows fail; with it, nothing matches `FAKE_`. `render.test.ts` pins the block, its
+filter lines and their equality with the site logs.
+
+Not covered: request headers other than `Referer` are written as sent in the error line
+(for example `Cookie`). They carry no break-glass token, and redacting them is a separate
+decision.
 
 ## `siteBlock`: discard route
 
@@ -507,6 +596,53 @@ CrowdSec's 404 scenarios against the `HEAD` and `GET` of keys that do not exist 
 an S3 client sends as normal traffic. Each is for the first live inspection, and the
 remedy for the first two is a deliberate change in this file and `posture.ts`, not a
 setting.
+
+## `siteBlock`: public path allow-list
+
+`EdgeSite.publicPaths` marks a site whose upstream serves a management surface on the same
+listener as its public one. The sign-in service (Zitadel) is the one entry: its
+administration console and its management, administration, system and v2 APIs share a
+listener with its OIDC endpoints and login pages, and only credentials stood between the
+internet and them (branchLeft/workspace#4155, from the code review under #1815). Set, the
+edge proxies a request only when its path is listed and answers 404 itself to every other
+path. A deny-list was rejected: the service adds endpoints with its releases, and a path
+nobody listed would be public until someone noticed.
+
+Entries are a plain literal path or a literal prefix ending in `/*`; the renderer refuses an
+empty list, a bare `/*`, any other wildcard, a dot segment, and a character that is not a
+URL path character (a brace would read as a Caddy placeholder). `publicReadOnlyPaths` lists
+prefixes on which only `GET` and `HEAD` are proxied, for a prefix that serves a public read
+and takes an authenticated write (the sign-in service's branding files); it needs
+`publicPaths`. A site cannot also be a webhook or a signed object gateway, which already
+admit only their own paths.
+
+The shipped list, for the sign-in service: the discovery document (`/.well-known/*`), the
+OIDC endpoints including the key set (`/oauth/v2/*`, `/oidc/v1/*`), the login pages with
+their static files (`/ui/login/*`), the two health probes (`/debug/healthz`, `/debug/ready`),
+and a read of the branding prefix (`/assets/v1/*`). Everything else is 404 from the edge,
+including `/`. The private listener on `ops1` is unchanged, so the identity reconciler,
+which reaches it on the loopback address, still sees every path.
+
+Placement: after the throttle and the CrowdSec bouncer, before AppSec and the upstream, so
+a probe of a refused path counts against its address (CrowdSec's admin-interface scenario
+reads a 404 on an admin-looking path) and never reaches a WAF or the service. Two answers, in this order: 400 for a
+`.` or `..` segment in the request as it arrived, written literally or percent-encoded,
+with the separator also literal or `%2F`; then 404 for an unlisted path. The dot-segment
+rule exists because Caddy matches `path` with dot segments resolved and proxies the path as
+sent (the gateway section above), so such a request could be judged on one path and read
+as another. No sign-in request carries a dot segment. The matchers were run in a stock Caddy 2 with a stand-in upstream and raw requests (an admin path, a case-changed one, a doubled slash, literal, encoded and `%2F`-joined dot segments, a listed path carrying an admin path in its query): every unlisted path got 404, every dot-segment form 400, every listed path was forwarded. Caddy's `path` matcher is
+case-insensitive; the upstream's router is not, so a differently cased listed path is
+forwarded and answered by the service as an unknown path.
+
+Because the root is refused, a site that sets `publicPaths` names a `probePath` that its own
+list lets through, and the uptime probe and the status page read that path instead of `/`.
+A registry test fails if the probe path is not listed. The status page still names the probe
+by hostname alone.
+
+What this does not do: it does not authenticate anything, and the listed paths are the
+service's own login surface, protected by the service and its policy (second factor and
+lockout: branchLeft/workspace#4154). A path an application newly needs is a deliberate
+addition to the list in `sites.ts`.
 
 ## `siteBlock`: `request_body` ordering
 
@@ -747,6 +883,29 @@ requests, so a test that only asks whether an address was banned stays green wit
 the dot-segment condition removed. Asking for `branchleft/http-admin-interface-probing`
 among the address's alerts does not.
 
+## Host scope of the Ghost files
+
+The three Ghost files (the admin preview exclusion, the admin-interface probing
+scenario and the brute-force scenario) each narrow to "our Ghost hostnames". (The
+post-overflow that silences the hub's probing scenario names no hostname, so it has
+no scope.) The
+estate's edge also serves Nextcloud, the portal and static pages, so there the
+narrowing is real: each file carries the registry's Ghost hostnames.
+
+`EVERY_HOST` is the other scope. It leaves the hostname condition out of the file.
+It is for an edge on which every site is a tenant's Ghost and the names are data the
+repository does not hold: the tenant edge, `hetzner/edge-t/`. A file rendered that way
+names no hostname, so no name of the estate can be written into it. The estate's own
+call sites pass the registry and never `EVERY_HOST`, and the committed estate files
+are unchanged by the existence of the second scope (the snapshot test in
+`render.test.ts` is what shows it).
+
+What `EVERY_HOST` widens: on the tenant edge the preview exclusion applies to a
+matching request on any name that edge answers, not to a list of names. The exclusion
+is out-of-band only, a bodiless `POST` to `/` with the preview's exact content type
+and header, and it removes two rules by id, so the widening gives a request nothing
+that the narrow conditions did not already allow on a Ghost site.
+
 ## Verified sessions
 
 `EdgeSite.trustedSession`, `sessionVerification`, `sessionVerificationMatchers`
@@ -773,8 +932,8 @@ a password change or suspending the user takes effect on the next request.
 **Handler order.** HSTS, the break-glass strip and the body cap, then both
 throttles (still applied to everyone, and they cap how many checks one address
 can cause), then `vars edge_trusted 0`, `log_append` and the check, then
-`crowdsec @edge_untrusted` and AppSec on unverified requests only (on an
-authoring site `@inspected` gains `not vars edge_trusted 1`), then the setup
+`crowdsec @edge_untrusted` and AppSec on unverified requests only (on every
+path, an authoring site included: it has no path exemption), then the setup
 refusal, the upload refusals and the upstream proxy, for everyone.
 
 **Keeping verified traffic out of every bucket.** A request that skips AppSec
@@ -973,9 +1132,38 @@ known exploits on the same hostname, and requires each to ban.
 
 ## Being told about a ban
 
-Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
-reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
-scenario), which the monitoring stack already scrapes from edge1, and its page
-register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
-so the page names the scenario and never an address. A simulated decision is
-not in the gauge, so a watch-only scenario never pages; the replay asserts it.
+A ban pages the owner only when the banned address is owned. An address is
+owned when it made a verified Ghost staff request through the edge in the last
+30 days (the access log's `edge_trusted` is `1`), or when it sits inside a
+banned range that contains such an address. "Owned" covers every tenant's
+Ghost staff addresses (admins and editors who signed in through the edge), not
+only the owner's. `EdgeBanIssued` in `hetzner/monitoring/render.ts` pages for
+owned bans, through ntfy (page register entry `edge-ban`). Any other ban raises
+`EdgeBanUnowned`, a warning that goes to email only and never to ntfy.
+
+A systemd timer on edge1 (role `edge_ban_owner`) classifies every ban every 5
+minutes. It reads only the edge's own access log, through the Caddy container,
+and keeps the addresses only in the root-only state file
+`/var/lib/branchleft/edge-ban-owner/trusted.json` (mode 0600), for at most 30
+days, the edge's log retention. The metric and the alerts carry no address: each
+owned ban is its own alert, labelled with CrowdSec's integer decision id. So an
+owned ban pages up to about 5 minutes after it fires, plus the scrape interval.
+A repeat ban of the same scenario is a new decision id, so it also pages within
+about 5 minutes. Unowned bans are counted per scenario and go to email only.
+
+If the classifier is stale (no run for over 15 minutes), every ban pages at
+once. If it has reported and then goes missing (a lost scrape, or the node
+exporter restarting), every ban pages once its absence has lasted 10 minutes, so
+one lost scrape does not page. If it has never reported, every ban pages at once.
+A stale classifier also raises `EdgeBanOwnerStale`, a page of its own, once the
+staleness has lasted 5 minutes.
+
+The role ships disabled: `edge_ban_owner_enabled: false` in
+`ansible/roles/edge_ban_owner/defaults/main.yml`, with the matching constant
+`EDGE_BAN_OWNER_ENABLED` in `hetzner/monitoring/render.ts`. While it is off the
+role installs nothing on edge1, so no classifier ever reports: every ban pages at
+once through the fallback, as before this change, and `EdgeBanOwnerStale` goes to
+the `discard` receiver rather than the phone.
+Turning it on is one commit that sets both to `true` and re-renders. The simulated
+decisions of a watch-only scenario are not classified, so they never page; the
+replay asserts that the gauge leaves them out.

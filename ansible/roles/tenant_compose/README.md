@@ -53,9 +53,10 @@ The role takes no secret from the repository. The secrets arrive as arguments at
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every variable, and
 [`defaults/main.yml`](defaults/main.yml) holds the defaults. The role reads three:
 
-- `tenant_compose_stacks` is required and has no default. It is a list with one entry for each
-  tenant of this host: `slug`, `uid`, `compose_text`, `secrets_env_text` and `image_env_text`. The
-  list names tenants, so it is never kept in this repository.
+- `tenant_compose_stacks` is optional and defaults to an empty list: when it is absent the role
+  delivers no tenant and fails nothing. Given, it is a list with one entry for each tenant of
+  this host: `slug`, `uid`, `compose_text`, `secrets_env_text` and `image_env_text`. The list
+  names tenants, so it is never kept in this repository.
 - `tenant_compose_mail_spool_text` is the mail spool's compose file. It is empty by default, which
   means this host has no spool to deliver.
 - `tenant_compose_spool_isolation_required` is `true` by default. Leave it so.
@@ -313,9 +314,8 @@ The wiring that change makes has three requirements:
   reads that policy back, but the order is the playbook's to keep. It also runs after the deploy
   verifier role, which installs the verifier the deploy wrapper runs for a tenant's first pin
   (`ansible/checks/test_deploy_verifier_coverage.py` holds this for every playbook that applies the
-  role). It runs last of the host's
-  roles, because it restarts the tenants' live stacks: a failure there must not hold other roles
-  back.
+  role). No playbook applies tenant_compose yet; its place among the host's roles is set by the
+  change that wires it in.
 - The role runs after the tenant onboarding role, which installs the volume program. The role
   fails closed, naming the program, when it is absent.
 - The stacks' text and the secrets reach a host that pulls its own commit with no extra variables

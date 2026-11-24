@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
-import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
+import type { EdgeSite, HostRedirect, SiteMedia, StaticSite } from '../../siteTypes';
 import {
   BAN_LADDER_MINUTES,
   BAN_LADDER_WINDOW,
@@ -23,14 +23,16 @@ import { SHARED_TENANT_FILES, type StaticTextFile } from './sharedTenantFiles';
 // stack/, hand-copied. Registry is the only hostname list. See render.md
 // §"Module: Caddy configuration rendering".
 
-const GENERATED_BANNER = [
+export const GENERATED_BANNER = [
   '# Generated from sites.ts and hetzner/edge/posture.ts.',
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
-// Why: exempts author-written HTML/code/SQL from AppSec on preview-only sites;
-// removes ALL AppSec evaluation (not just injection). See render.md §"AUTHORING_API_PATHS".
-const AUTHORING_API_PATHS = ['/ghost/api/*'];
+// Why: exempts author-written HTML/code/SQL from AppSec on an authoring site that
+// has no verified sessions, on Ghost's authenticated admin API only, never the
+// Content API; removes ALL AppSec evaluation on it. A site with verified
+// sessions has no path exemption at all. See render.md §"AUTHORING_API_PATHS".
+const AUTHORING_API_PATHS = ['/ghost/api/admin/*'];
 
 /**
  * Ghost's members send-magic-link route, both trailing-slash forms, case
@@ -103,7 +105,7 @@ const UPLOAD_REFUSAL_STATUS = 403;
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
 
 /** Where Caddy writes the access log CrowdSec parses. */
-const ACCESS_LOG = '/var/log/caddy/access.log';
+export const ACCESS_LOG = '/var/log/caddy/access.log';
 
 /**
  * The probe listener's log, deliberately a different file: CrowdSec acquires
@@ -115,17 +117,17 @@ const ACCESS_LOG = '/var/log/caddy/access.log';
 const PROBE_LOG = '/var/log/caddy/probe.log';
 
 /** Loopback-published port the runbook's verification commands talk to. */
-const PROBE_PORT = 8080;
+export const PROBE_PORT = 8080;
 
 // Why: host-qualified probe exercises site routing (unlike bare :port); .invalid
 // never resolves; global magic-link zone testable. See render.md §"PROBE_HOSTNAME".
-const PROBE_HOSTNAME = 'edge-probe.invalid';
+export const PROBE_HOSTNAME = 'edge-probe.invalid';
 
 // Why: status code alone cannot distinguish delivered config from skipped rsync;
 // marker header is the only discriminator. See render.md §"PROBE_MARKER_* constants".
 const PROBE_MARKER_HEADER = 'X-Edge-Probe';
-const PROBE_MARKER_HOST = 'host-routed';
-const PROBE_MARKER_BARE = 'bare-port';
+export const PROBE_MARKER_HOST = 'host-routed';
+export const PROBE_MARKER_BARE = 'bare-port';
 
 /**
  * Port carrying Caddy's own Prometheus metrics, on a listener separate from
@@ -334,7 +336,7 @@ export function servableSites(sites: readonly EdgeSite[]): EdgeSite[] {
   return sites.filter((site) => site.privateUpstream !== undefined);
 }
 
-interface Block {
+export interface Block {
   addresses: string[];
   body: string[];
 }
@@ -385,9 +387,23 @@ const LOG_ROLL_AT = '00:00';
 const LOG_ROLL_SIZE = '100MiB';
 const LOG_ROLL_KEEP = 31;
 
-function logDirective(path: string): string[] {
+/**
+ * The encoder every edge log shares: Caddy's JSON, with the break-glass parameter's
+ * value replaced in the fields the token can reach. Unindented, so each caller
+ * nests it at its own depth.
+ */
+function redactingFormat(): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
+  return [
+    'format filter {',
+    '\twrap json',
+    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t${field} regexp "${pattern}" "$1=REDACTED"`),
+    '}',
+  ];
+}
+
+export function logDirective(path: string): string[] {
   return [
     'log {',
     `\toutput file ${path} {`,
@@ -396,12 +412,23 @@ function logDirective(path: string): string[] {
     `\t\troll_keep_for ${LOG_RETENTION}`,
     `\t\troll_at ${LOG_ROLL_AT}`,
     '\t}',
-    '\tformat filter {',
-    '\t\twrap json',
-    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),
-    '\t}',
+    ...redactingFormat().map((line) => `\t${line}`),
     '}',
   ];
+}
+
+/**
+ * Caddy's default logger, set in the global options. Two lines reach it that no
+ * site's `log` block sees: the `http.log.error` line written when a handler fails
+ * (a 502 from a refused upstream), which carries the whole request including its
+ * URI and headers, and the line for a request whose Host matches no site block.
+ * Left alone it writes both to stderr, and so to the container log, with a
+ * break-glass token in clear. Same encoder and fields as `logDirective`, so no log
+ * path the token can reach is left unfiltered. See render.md
+ * §"defaultLogDirective: the error and no-site lines".
+ */
+function defaultLogDirective(): string[] {
+  return ['log {', '\toutput stderr', ...redactingFormat().map((line) => `\t${line}`), '}'];
 }
 
 function tlsDirective(): string[] {
@@ -573,6 +600,111 @@ function widgetAssets(): string[] {
 }
 
 /**
+ * A Ghost tenant's uploads (`/content/images/`, `/content/media/`,
+ * `/content/files/`) answered from the tenant's own hostname by fetching them
+ * from its object-storage bucket, so a reader's browser contacts no storage
+ * host. Ghost's S3 adapter answers these paths with a 301 to the bucket; this
+ * route answers first, and a bucket object is read exactly as Ghost would have
+ * linked it (path-style, key = the request path). Only `GET` and `HEAD`, never
+ * a client query string (an S3 query selects a version or a sub-resource), never
+ * a cookie or credential, and none of the bucket's own response headers. A
+ * missing object is a 404 here; a missing resized copy (`/content/images/size/`)
+ * is first asked of Ghost, which makes it, and then read again from the bucket,
+ * once. Why each line: `render.md`, "Tenant media".
+ */
+const MEDIA_PATHS = ['/content/images/*', '/content/media/*', '/content/files/*'];
+const MEDIA_RESIZE_PATH = '/content/images/size/*';
+const MEDIA_BUCKET = /^branchleft-media-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const MEDIA_STRIPPED_RESPONSE_HEADERS = [
+  'x-amz-request-id',
+  'x-amz-version-id',
+  'x-amz-expiration',
+  'x-amz-storage-class',
+  'x-rgw-object-type',
+  'Strict-Transport-Security',
+];
+/**
+ * Three reads of the one request, because the bucket path is built from the
+ * decoded one (`{http.request.uri.path}`) and Caddy's `path` matcher cleans
+ * its own copy, so no single read sees every form. The URI as received: a
+ * `..` segment, plain or percent-encoded, after a slash plain or encoded.
+ * The decoded path: a `..` segment, however the separators and dots were
+ * written. The decoded path again: an escape left in it (`%2e`, `%2f`, `%25`)
+ * was escaped twice, and the edge's own rewrites (to the bucket after a Ghost
+ * round, to Ghost on a missing resized copy) read it a second time into a
+ * dot segment. Ghost writes no `%` into an upload's name.
+ */
+const MEDIA_TRAVERSAL_EXPRESSION = [
+  "{http.request.orig_uri}.matches('(?i)(?:^|/|%2f)(?:[.]|%2e){2}(?:/|%2f|[?]|$)')",
+  "{http.request.uri.path}.matches('(?:^|/)[.]{2}(?:/|$)')",
+  "{http.request.uri.path}.matches('(?i)%(?:2e|2f|25)')",
+].join(' || ');
+
+function mediaBucketProxy(media: SiteMedia, suffix: string, onMiss: string[]): string[] {
+  return [
+    `rewrite * /${media.bucket}{http.request.uri.path}?`,
+    `reverse_proxy https://${media.host} {`,
+    '\theader_up Host {upstream_hostport}',
+    '\theader_up -Cookie',
+    '\theader_up -Authorization',
+    ...MEDIA_STRIPPED_RESPONSE_HEADERS.map((name) => `\theader_down -${name}`),
+    `\t@media_hit_${suffix} status 2xx 304 416`,
+    `\thandle_response @media_hit_${suffix} {`,
+    `\t\theader Cache-Control "${MEDIA_CACHE_CONTROL}"`,
+    '\t\tcopy_response',
+    '\t}',
+    `\t@media_miss_${suffix} status 403 404`,
+    `\thandle_response @media_miss_${suffix} {`,
+    ...onMiss.map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+}
+
+function tenantMedia(media: SiteMedia, ghostAddress: string): string[] {
+  if (!HOSTNAME.test(media.host)) {
+    throw new Error(`media host "${media.host}" is not a plain hostname`);
+  }
+  if (!MEDIA_BUCKET.test(media.bucket)) {
+    throw new Error(
+      `media bucket "${media.bucket}" must be a tenant media bucket name, "branchleft-media-" ` +
+        'followed by the tenant slug: the edge reads no other bucket'
+    );
+  }
+  const resizeMiss = [
+    'rewrite * {http.request.orig_uri.path}',
+    `reverse_proxy ${ghostAddress} {`,
+    '\t@media_bounce status 301 302 307 308',
+    '\thandle_response @media_bounce {',
+    ...mediaBucketProxy(media, 'retry', ['respond 404']).map((line) => `\t\t${line}`),
+    '\t}',
+    '}',
+  ];
+  return [
+    '@tenant_media_traversal {',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    `\texpression \`${MEDIA_TRAVERSAL_EXPRESSION}\``,
+    '}',
+    'respond @tenant_media_traversal 404',
+    '@tenant_media_resize {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_RESIZE_PATH}`,
+    '}',
+    '@tenant_media {',
+    '\tmethod GET HEAD',
+    `\tpath ${MEDIA_PATHS.join(' ')}`,
+    '}',
+    'route @tenant_media_resize {',
+    ...mediaBucketProxy(media, 'resize', resizeMiss).map((line) => `\t${line}`),
+    '}',
+    'route @tenant_media {',
+    ...mediaBucketProxy(media, 'plain', ['respond 404']).map((line) => `\t${line}`),
+    '}',
+  ];
+}
+
+/**
  * `nosniff` on every response of a Ghost-backed site, deferred (`>`) so it
  * replaces Ghost's own copy instead of doubling it. The extension refusal
  * cannot list every type Ghost accepts (`.txt`, `.md`, `.json`, `.pdf`, `.zip`,
@@ -647,7 +779,7 @@ function webhookRateLimitDirective(zone: string): string[] {
 
 // Why: throttle runs before WAF (unlike Cloud Armor baseline); order protects vCPUs
 // from floods reaching inspection. See render.md §"protectionChain: handler evaluation order".
-function protectionChain(
+export function protectionChain(
   posture: EdgePosture,
   zone: string,
   options: {
@@ -692,7 +824,7 @@ function protectionChain(
   if (options.appsec === 'all') {
     lines.push(`appsec${unlessVerified}`);
   } else if (options.appsec === 'except-authoring') {
-    // `@inspected` itself carries the verified-session condition on such a site.
+    // Only a site with no verified sessions: `@inspected` is its admin API path.
     lines.push('appsec @inspected');
   }
   return lines;
@@ -810,6 +942,75 @@ function discardRouteMatchers(path: string): string[] {
 
 function discardRouteResponses(): string[] {
   return ['header @discard Allow POST', 'respond @discard_post 204', 'respond @discard 405'];
+}
+
+/**
+ * A `.` or `..` segment in the path of the request as it arrived, written
+ * literally or percent-encoded, with the separator before or after it also
+ * literal or encoded (`%2F`). Wider than `GATEWAY_DOT_SEGMENT_REGEXP`, which
+ * reads only a literal separator: a path allow-list is judged on a path with its
+ * dot segments resolved while the upstream is sent the path as written, so a
+ * request that could resolve either way is refused outright. No sign-in request
+ * carries one. Matched on the original URI for the reason the gateway's is.
+ */
+const PUBLIC_PATH_DOT_SEGMENT_REGEXP =
+  '^[^?]*(?:/|%2[Ff])(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|%2[Ff]|[?]|$)';
+
+/**
+ * A path an allow-list entry may name: a literal path, or a literal prefix
+ * ending in `/*`. No other wildcard, no dot segment, nothing that is not a plain
+ * URL path character, so an entry can only ever widen by a whole segment tree.
+ */
+const PUBLIC_PATH_PATTERN = /^\/(?:[A-Za-z0-9_~.-]+\/)*[A-Za-z0-9_~.-]*$/;
+
+function assertPublicPath(site: EdgeSite, path: string): void {
+  const prefix = path.endsWith('/*') ? path.slice(0, -1) : path;
+  if (path === '/*' || !PUBLIC_PATH_PATTERN.test(prefix) || /(?:^|\/)\.\.?(?:\/|$)/.test(prefix)) {
+    throw new Error(
+      `site ${site.name} public path ${path} must be a literal path or a literal prefix ending in /*`
+    );
+  }
+}
+
+/**
+ * The matchers and answers of a site's public path allow-list
+ * (`EdgeSite.publicPaths`), or nothing for a site without one. The answers
+ * are placed before AppSec, after the throttle and the bouncer, so a request for
+ * a path that is not public is counted against its address and refused without
+ * reaching a WAF or the upstream. Why: `render.md`, "`siteBlock`: public path
+ * allow-list".
+ */
+function publicPathRefusal(site: EdgeSite): { matchers: string[]; responses: string[] } {
+  const readOnly = site.publicReadOnlyPaths ?? [];
+  if (site.publicPaths === undefined) {
+    if (readOnly.length > 0) {
+      throw new Error(`site ${site.name} sets publicReadOnlyPaths without publicPaths`);
+    }
+    return { matchers: [], responses: [] };
+  }
+  if (site.publicPaths.length === 0) {
+    throw new Error(`site ${site.name} sets an empty publicPaths, which would refuse every path`);
+  }
+  for (const path of [...site.publicPaths, ...readOnly]) {
+    assertPublicPath(site, path);
+  }
+  return {
+    matchers: [
+      '@not_public {',
+      `\tnot path ${site.publicPaths.join(' ')}`,
+      ...(readOnly.length === 0
+        ? []
+        : ['\tnot {', '\t\tmethod GET HEAD', `\t\tpath ${readOnly.join(' ')}`, '\t}']),
+      '}',
+      '@public_dot_segments {',
+      `\texpression \`{http.request.orig_uri}.matches('${PUBLIC_PATH_DOT_SEGMENT_REGEXP}')\``,
+      '}',
+    ],
+    // Dot segments first: Caddy matches `path` with them resolved but proxies
+    // the path as sent, so a request is refused outright rather than judged on
+    // a path the upstream might read differently.
+    responses: ['respond @public_dot_segments 400', 'respond @not_public 404'],
+  };
 }
 
 const WEBHOOK_METHOD = 'POST';
@@ -995,6 +1196,14 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   }
   // Checked first, so a site that is both refuses to render instead of
   // silently becoming a webhook site.
+  if (
+    (site.signedObjectGateway === true || site.inboundWebhookPath !== undefined) &&
+    (site.publicPaths !== undefined || site.publicReadOnlyPaths !== undefined)
+  ) {
+    throw new Error(
+      `site ${site.name} is a webhook or signed object gateway, which already admits only its own paths, and cannot also declare publicPaths`
+    );
+  }
   if (site.signedObjectGateway === true) {
     return gatewaySiteBlock(site, hostnames, posture);
   }
@@ -1005,20 +1214,19 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   const address = resolvePrivateAddress(upstream.host, upstream.port);
   const verification = sessionVerification(site, address);
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly && verification !== undefined) {
-    body.push(
-      '@inspected {',
-      `\tnot path ${AUTHORING_API_PATHS.join(' ')}`,
-      `\tnot vars ${TRUSTED_SESSION_VAR} 1`,
-      '}'
-    );
-  } else if (site.injectionWafPreviewOnly) {
+  // Only a site whose sessions the edge cannot verify keeps a path exemption: a
+  // verified session is the exemption for the rest (`unlessVerified` in
+  // `protectionChain`), so no anonymous request skips AppSec on any path.
+  const pathExemption = site.injectionWafPreviewOnly && verification === undefined;
+  if (pathExemption) {
     body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
   body.push(...sessionVerificationMatchers(site));
   if (site.discardRoute !== undefined) {
     body.push(...discardRouteMatchers(site.discardRoute));
   }
+  const publicPaths = publicPathRefusal(site);
+  body.push(...publicPaths.matchers);
   // Defined for every site, not only Ghost tenants: the matcher only ever
   // matches Ghost's own path, so a non-Ghost site (e.g. the marketing site)
   // carries an inert matcher rather than needing a flag to opt in. That is
@@ -1048,15 +1256,21 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
-      appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
+      appsec: pathExemption ? 'except-authoring' : 'all',
       ...(site.backend === 'nextcloud' ? { rateLimitEvents: NEXTCLOUD_RATE_LIMIT_EVENTS } : {}),
       membersMagicLink: true,
-      beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
+      beforeAppsec: [
+        ...(site.discardRoute === undefined ? [] : discardRouteResponses()),
+        ...publicPaths.responses,
+      ],
       ...(verification === undefined ? {} : { verification }),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
     ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
     ...(isGhost ? widgetAssets().map((line) => `\t${line}`) : []),
+    ...(isGhost && site.media !== undefined
+      ? tenantMedia(site.media, address).map((line) => `\t${line}`)
+      : []),
     `\treverse_proxy ${address}`,
     '}'
   );
@@ -1179,7 +1393,7 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
 
 // Why: loopback listener makes posture observable before hostnames resolve;
 // rendered twice (bare port and host-qualified). See render.md §"probeBlock".
-function probeBlock(
+export function probeBlock(
   posture: EdgePosture,
   address: string,
   generalZone: string,
@@ -1228,14 +1442,14 @@ function probeBlock(
  * user-facing traffic, and there is nothing here for the throttle or
  * CrowdSec to usefully evaluate.
  */
-function metricsBlock(): Block {
+export function metricsBlock(): Block {
   return {
     addresses: [`:${METRICS_PORT}`],
     body: ['metrics'],
   };
 }
 
-function globalOptions(): string[] {
+export function globalOptions(): string[] {
   return [
     '{',
     // No stable ACME account and no expiry notice without one. Read from the
@@ -1256,6 +1470,7 @@ function globalOptions(): string[] {
     '\t\tprotocols h1 h2',
     '\t\tmetrics',
     '\t}',
+    ...defaultLogDirective().map((line) => `\t${line}`),
     '\tcrowdsec {',
     `\t\tapi_url ${CROWDSEC_LAPI_URL}`,
     '\t\tapi_key {env.CROWDSEC_BOUNCER_KEY}',
@@ -1268,12 +1483,20 @@ function globalOptions(): string[] {
     // so a CrowdSec restart would answer 500 for every request on every site,
     // including in the posture that is supposed to be unable to affect one.
     '\t\tappsec_fail_open',
+    // A bare flag. Without it the bouncer counts nothing: its own counters of
+    // AppSec calls and failed calls (`crowdsec_appsec_lapi_requests_total`,
+    // `crowdsec_appsec_lapi_requests_failures_total`) are only registered in
+    // Caddy's registry, and so served by the `metrics` listener, when it is on.
+    // The failure counter is the one signal of a request that was let through
+    // uninspected, and it is what AppSecFailOpenSustained in
+    // hetzner/monitoring/render.ts reads.
+    '\t\tenable_caddy_metrics',
     '\t}',
     '}',
   ];
 }
 
-function renderBlock(block: Block): string[] {
+export function renderBlock(block: Block): string[] {
   return [`${block.addresses.join(', ')} {`, ...block.body.map((line) => `\t${line}`), '}'];
 }
 
@@ -1443,11 +1666,27 @@ export function renderCaddyLogAcquisition(): string {
 }
 
 /**
- * The hostnames of every Ghost tenant, for the two CrowdSec files below. Each
- * is checked against `HOSTNAME`, which admits no quote, so it can be written
- * into an expression as a quoted literal.
+ * Which hostnames a Ghost-specific CrowdSec file narrows to. The estate's edge
+ * serves more than Ghost, so its files name the registry's Ghost hostnames.
+ * `EVERY_HOST` is for an edge on which every site is a tenant's Ghost and the
+ * names are data this repository does not hold (the tenant edge,
+ * `hetzner/edge-t/`): the file then carries no hostname at all, so no name of
+ * the estate can be written into it. Why: `render.md`, "Host scope of the
+ * Ghost files".
  */
-function ghostHostnames(entries: EdgeSite[]): string[] {
+export const EVERY_HOST = 'every-host' as const;
+export type HostScope = EdgeSite[] | typeof EVERY_HOST;
+
+/**
+ * The hostnames of every Ghost tenant, for the three CrowdSec files below, or
+ * `null` when the scope is `EVERY_HOST`. Each is checked against `HOSTNAME`,
+ * which admits no quote, so it can be written into an expression as a quoted
+ * literal.
+ */
+function ghostHostnames(entries: HostScope): string[] | null {
+  if (entries === EVERY_HOST) {
+    return null;
+  }
   const hostnames = entries
     .filter((site) => site.backend === 'ghost')
     .flatMap((site) => site.hostnames);
@@ -1470,7 +1709,7 @@ const quotedList = (values: readonly string[]): string =>
  * including the same one with a body, is evaluated by every rule. Why:
  * `render.md`, "Ghost admin preview exclusion".
  */
-export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
+export function renderGhostAdminAppsecConfig(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1480,7 +1719,7 @@ export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
     'pre_eval:',
     '  - filter: >-',
     '      IsOutBand == true &&',
-    `      req.Host in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`      req.Host in ${quotedList(hosts)} &&`]),
     "      req.Method == 'POST' &&",
     "      req.URL.Path == '/' &&",
     '      req.ContentLength == 0 &&',
@@ -1522,7 +1761,7 @@ export function renderHubAdminProbingPostoverflow(): string {
  * scenario for that address everywhere for a minute. Why, and what the copy
  * costs: `render.md`, "Ghost admin API and admin-interface probing".
  */
-export function renderAdminProbingScenario(entries: EdgeSite[]): string {
+export function renderAdminProbingScenario(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1535,7 +1774,7 @@ export function renderAdminProbingScenario(entries: EdgeSite[]): string {
     "  evt.Meta.http_status in ['404', '403'] &&",
     '  any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # }) &&',
     '  not (',
-    `    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`]),
     `    evt.Meta.http_path startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
     "    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
     '  )',
@@ -1589,7 +1828,7 @@ export function renderTrustedSessionWhitelist(): string {
  * and from ours, which does not count these paths at all. Why, and the
  * limits it carries: `render.md`, "Ghost admin brute force".
  */
-export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
+export function renderGhostBruteForceScenario(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1599,7 +1838,7 @@ export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
     'filter: >-',
     "  evt.Meta.service == 'http' &&",
     "  evt.Meta.log_type == 'http_access-log' &&",
-    `  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`]),
     '  (',
     "    (evt.Meta.http_verb == 'POST' &&",
     "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/session/?(?:[?]|$)' &&",

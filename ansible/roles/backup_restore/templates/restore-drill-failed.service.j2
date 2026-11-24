@@ -1,0 +1,15 @@
+# Started by OnFailure= of branchleft-restore-drill.service. Written by the backup_restore role.
+# It marks the failure for the monitoring stack and does nothing else: node_exporter reads
+# the file's modification time, and the rule RestoreDrillUnitFailed in
+# hetzner/monitoring/render.ts raises the alert while the mark is newer than the drill's
+# own last-run time. The next run that writes its metrics clears it.
+[Unit]
+Description=branchLeft restore drill failed: mark it for the alert rule
+
+[Service]
+Type=oneshot
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ExecStart=/usr/bin/install -D -m 0644 /dev/null {{ backup_restore_drill_failed_marker }}

@@ -1,0 +1,163 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  vars:
+    binlog_pull_vf: '{{ playbook_dir }}/../../files'
+  tasks:
+    - name: Read the installed program and the two units
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /opt/branchleft/binlog-pull/branchleft_binlog_pull.py
+        - /etc/systemd/system/branchleft-binlog-pull.service
+        - /etc/systemd/system/branchleft-binlog-pull.timer
+      register: binlog_pull_vi
+
+    - name: Assert the three files are the role's own, byte for byte
+      ansible.builtin.assert:
+        that:
+          - >-
+            (binlog_pull_vi.results[0].content | b64decode)
+            == lookup('ansible.builtin.file', binlog_pull_vf + '/branchleft_binlog_pull.py', rstrip=False)
+          - >-
+            (binlog_pull_vi.results[1].content | b64decode)
+            == lookup('ansible.builtin.file', binlog_pull_vf + '/branchleft-binlog-pull.service', rstrip=False)
+          - >-
+            (binlog_pull_vi.results[2].content | b64decode)
+            == lookup('ansible.builtin.file', binlog_pull_vf + '/branchleft-binlog-pull.timer', rstrip=False)
+        quiet: true
+        fail_msg: An installed file differs from the file in the role.
+
+    - name: Read the modes of the installed paths
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /opt/branchleft/binlog-pull
+        - /opt/branchleft/binlog-pull/branchleft_binlog_pull.py
+        - /var/lib/branchleft/binlog-pull
+        - /etc/branchleft/binlog-pull.env
+        - /etc/branchleft/dbt1-ca.pem
+        - /etc/systemd/system/branchleft-binlog-pull.service
+        - /etc/systemd/system/branchleft-binlog-pull.timer
+      register: binlog_pull_verify_stats
+
+    - name: Assert each path is root's with the mode asked for
+      ansible.builtin.assert:
+        that:
+          - binlog_pull_verify_stats.results | map(attribute='stat.pw_name') | unique | list == ['root']
+          - binlog_pull_verify_stats.results | map(attribute='stat.gr_name') | unique | list == ['root']
+          - binlog_pull_verify_stats.results | map(attribute='stat.mode') | list == ['0755', '0755', '0700', '0600', '0644', '0644', '0644']
+        quiet: true
+        fail_msg: A path is not root's or its mode is wrong; the ledger directory must be 0700 and the environment file 0600.
+
+    # The environment file holds the account's login value: widen it by hand, apply again, and
+    # read it back closed. The names are checked and the values compared, never printed.
+    - name: Widen the environment file by hand, as an operator might
+      ansible.builtin.file:
+        path: /etc/branchleft/binlog-pull.env
+        owner: nobody
+        group: nogroup
+        mode: '0644'
+
+    - name: Apply the role again over the widened environment file
+      ansible.builtin.include_role:
+        name: branchleft.binlog_pull
+
+    - name: Look at the environment file
+      ansible.builtin.stat:
+        path: /etc/branchleft/binlog-pull.env
+        get_checksum: false
+      register: binlog_pull_verify_env
+
+    - name: Read the environment file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/binlog-pull.env
+      register: binlog_pull_verify_env_body
+      no_log: true
+
+    - name: Assert the environment file is closed again and holds the six names with the inputs' values
+      ansible.builtin.assert:
+        that:
+          - binlog_pull_verify_env.stat.pw_name == 'root'
+          - binlog_pull_verify_env.stat.gr_name == 'root'
+          - binlog_pull_verify_env.stat.mode == '0600'
+          - (binlog_pull_verify_env_body.content | b64decode).splitlines() | length == 6
+          - "'BINLOG_PULL_DB_HOST=' ~ binlog_pull_db_host in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+          - "'BINLOG_PULL_DB_PORT=3306' in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+          - "'BINLOG_PULL_DB_USER=' ~ binlog_pull_db_user in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+          - "'BINLOG_PULL_DB_PWD=' ~ binlog_pull_db_password in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+          - "'BINLOG_PULL_DB_CA_FILE=/etc/branchleft/dbt1-ca.pem' in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+          - "'BINLOG_PULL_FLUSH=1' in (binlog_pull_verify_env_body.content | b64decode).splitlines()"
+        quiet: true
+        fail_msg: The environment file was not closed again, or holds other names or values than the inputs.
+      no_log: true
+
+    - name: Read the timer's enabled state
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, branchleft-binlog-pull.timer]
+      register: binlog_pull_verify_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the timer's active state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-binlog-pull.timer]
+      register: binlog_pull_verify_active
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the timer is off by default
+      ansible.builtin.assert:
+        that:
+          - binlog_pull_verify_enabled.stdout == 'disabled'
+          - binlog_pull_verify_active.stdout == 'inactive'
+        quiet: true
+        fail_msg: The timer is not disabled and inactive after a run with the defaults.
+
+    - name: Read the schedule systemd has for the timer
+      ansible.builtin.command:
+        argv: [systemctl, show, --property=TimersMonotonic, branchleft-binlog-pull.timer]
+      register: binlog_pull_verify_schedule
+      changed_when: false
+
+    - name: Assert the timer fires every 15 minutes
+      ansible.builtin.assert:
+        that:
+          - "'OnUnitActiveUSec=15min' in binlog_pull_verify_schedule.stdout"
+          - "'OnBootUSec=5min' in binlog_pull_verify_schedule.stdout"
+        quiet: true
+        fail_msg: The timer's period is not the 15 minutes the recovery point depends on.
+
+    - name: Run the installed program's own check
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, -I, /opt/branchleft/binlog-pull/branchleft_binlog_pull.py, --check]
+      changed_when: false
+
+    # With no environment to pull from, the program must stop with the precondition code and
+    # say which file it wanted; it must not print the login value it was given.
+    - name: Run a pull against a missing environment file
+      ansible.builtin.command:
+        argv:
+          [
+            /usr/bin/python3,
+            -I,
+            /opt/branchleft/binlog-pull/branchleft_binlog_pull.py,
+            --env-file,
+            /nonexistent/binlog-pull.env,
+            pull,
+          ]
+      register: binlog_pull_verify_refused
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the program refused with exit 2 and named the file
+      ansible.builtin.assert:
+        that:
+          - binlog_pull_verify_refused.rc == 2
+          - "'/nonexistent/binlog-pull.env is not there' in binlog_pull_verify_refused.stdout"
+        quiet: true
+        fail_msg: The program did not stop with the precondition code on a missing environment file.

@@ -5,6 +5,7 @@ wildcard site.
 Usage: render_demo_site.py --base DOMAIN --site SLOT=EDGE_JSON [--site ...]
                            (--dns-directive DIRECTIVE | --tls DIRECTIVE)
                            [--out FILE] [--gate-env-out FILE]
+       render_demo_site.py --print-upload-guard
 
 `EDGE_JSON` is the JSON of render-core's `EdgeSiteBlock` (the shape of
 `render-core/test/golden/demo.edge.json`). Exactly one TLS source is
@@ -33,6 +34,9 @@ GATE_PORT = 8080
 GATE_UPSTREAM = f"{rde.DEMO_EDGE_ADDR}:{GATE_PORT}"
 GATE_VERIFY_URI = "/__gate/verify"
 GATE_LOGIN_PATH = "/__gate/login"
+# The emailed arrival link's two halves: a page that shows a form, and the form's POST.
+GATE_ENTER_PATH = "/__gate/enter"
+GATE_OWN_PATHS = (GATE_LOGIN_PATH, GATE_ENTER_PATH)
 
 # Why the members-import refusal is not one literal path: render_demo_site.md.
 MEMBERS_UPLOAD_PATH = "/ghost/api/admin/members/upload/"
@@ -46,6 +50,26 @@ MEMBERS_UPLOAD_PATH_GLOBS = (
     "/ghost/api/*/admin/members/upload/",
 )
 MEMBERS_UPLOAD_PATH_REGEXP = r"(?i)^/ghost/api/(?:(?:v[0-9]+|canary)/)?admin/members/upload/?$"
+
+# Why uploads of active content are refused, not served as a download:
+# render_demo_site.md. Ghost serves what a tenant uploads from the tenant's
+# own origin under these three prefixes (render-core's STATIC_FILE_URL_PREFIX),
+# so a `.js` there satisfies `script-src 'self'`.
+UPLOAD_PATH_PREFIXES = ("/content/files/", "/content/images/", "/content/media/")
+ACTIVE_CONTENT_EXTENSIONS = (
+    "js", "mjs", "cjs",
+    "html", "htm", "shtml", "xhtml", "xht",
+    "xml", "xsl", "xslt",
+    "css",
+    "svg", "svgz",
+    "kml", "gpx",
+)
+# Matched against the path as received: any depth below a prefix, any case,
+# any run of slashes. The glob matcher in render_upload_guard covers what
+# Caddy cleans (`.` and `..` segments, escapes) that this one does not.
+UPLOAD_ACTIVE_PATH_REGEXP = (
+    r"(?i)^/+content/+(?:files|images|media)/.*\.(?:" + "|".join(ACTIVE_CONTENT_EXTENSIONS) + r")/*$"
+)
 
 NOINDEX = "noindex, nofollow"
 
@@ -114,10 +138,37 @@ def _slot_host(edge: Mapping[str, Any], base: str) -> str:
     return host
 
 
+def render_upload_guard() -> list[str]:
+    """The refusal of an uploaded file that a browser could run, as lines
+    indented for the slot's `route`. Two overlapping matchers, both followed
+    by a 403: Caddy's cleaning, case-insensitive `path` (a nested `route`
+    makes the prefix and the extension an AND, since two `path` lines in one
+    matcher are an OR), and a `path_regexp` over the path as received. Every
+    method is refused: a script tag is a GET, but nothing legitimate PUTs
+    here either."""
+    prefixes = " ".join(f"{prefix}*" for prefix in UPLOAD_PATH_PREFIXES)
+    extensions = " ".join(f"*.{extension}" for extension in ACTIVE_CONTENT_EXTENSIONS)
+    return [
+        "\t\t\t@uploadsByPath {",
+        f"\t\t\t\tpath {prefixes}",
+        "\t\t\t}",
+        "\t\t\troute @uploadsByPath {",
+        "\t\t\t\t@activeUploadByPath {",
+        f"\t\t\t\t\tpath {extensions}",
+        "\t\t\t\t}",
+        "\t\t\t\trespond @activeUploadByPath 403",
+        "\t\t\t}",
+        "\t\t\t@activeUploadByPattern {",
+        f"\t\t\t\tpath_regexp {UPLOAD_ACTIVE_PATH_REGEXP}",
+        "\t\t\t}",
+        "\t\t\trespond @activeUploadByPattern 403",
+    ]
+
+
 def render_slot_body(slot: str, edge: Mapping[str, Any]) -> list[str]:
     """One slot's gated directives, indented one tab. Every path goes through
-    `forward_auth`; the only route that does not is the gate's own login,
-    which has to carry a body and is the gate's to answer."""
+    `forward_auth`; the only routes that do not are the gate's own login and
+    arrival, which have to carry a body and are the gate's to answer."""
     rde._validate_slot_name(slot)
     gate = edge.get("gate") or {}
     _require(gate.get("kind") == "passphrase",
@@ -135,14 +186,17 @@ def render_slot_body(slot: str, edge: Mapping[str, Any]) -> list[str]:
     return [
         "\theader {",
         f'\t\t>X-Robots-Tag "{NOINDEX}"',
+        '\t\t>X-Content-Type-Options "nosniff"',
         f'\t\t>{csp_header} "{csp}"',
         "\t}",
         f"\trequest_body {{",
         f"\t\tmax_size {max_size}",
         "\t}",
         "",
-        "\t# The login form carries a body, which forward_auth does not forward.",
-        f"\thandle {GATE_LOGIN_PATH} {{",
+        "\t# The login form and the arrival link's form carry a body, which forward_auth does",
+        "\t# not forward, and neither can hold a session yet: both are the gate's to answer.",
+        f"\t@gateOwn path {' '.join(GATE_OWN_PATHS)}",
+        "\thandle @gateOwn {",
         f"\t\treverse_proxy {GATE_UPSTREAM}",
         "\t}",
         "",
@@ -164,6 +218,7 @@ def render_slot_body(slot: str, edge: Mapping[str, Any]) -> list[str]:
         "\t\t\t}",
         "\t\t\trespond @membersImportByPath 403",
         "\t\t\trespond @membersImportByPattern 403",
+        *render_upload_guard(),
         f"\t\t\timport {rde.snippet_name(slot)}",
         "\t\t}",
         "\t}",
@@ -231,6 +286,20 @@ def _render_slot_handles(base: str, sites: Sequence[tuple[str, Mapping[str, Any]
     return lines
 
 
+def render_error_headers() -> list[str]:
+    """The site-level `handle_errors` block. A colour snippet's 503 (no healthy
+    upstream) is an error Caddy writes past the slot's own `header` block, so
+    the nosniff set there never reaches it. This block sits at the site level:
+    Caddy refuses `handle_errors` nested inside an imported snippet."""
+    return [
+        "\thandle_errors {",
+        "\t\theader {",
+        '\t\t\t>X-Content-Type-Options "nosniff"',
+        "\t\t}",
+        "\t}",
+    ]
+
+
 def render_caddyfile(
     base: str,
     sites: Sequence[tuple[str, Mapping[str, Any]]],
@@ -240,7 +309,8 @@ def render_caddyfile(
     """The whole demo Caddyfile: global options and every slot's upstream
     snippet (render_demo_edge) once, then one `*.<base>` site whose
     host-matched handle carries each occupied slot's gated block. A name that
-    matches no slot is aborted, so the wildcard answers nothing else.
+    matches no slot is aborted, so the wildcard answers nothing else. The
+    site's error responses carry nosniff too (`render_error_headers`).
 
     Raises InvalidBaseDomain, InvalidTlsSource, InvalidDnsDirective,
     HostOutsideWildcard, or InvalidEdgeBlock for a bad slot, host or edge."""
@@ -250,6 +320,7 @@ def render_caddyfile(
         f"*.{base} {{",
         *tls_lines,
         *_render_slot_handles(base, sites),
+        *render_error_headers(),
         "\thandle {",
         "\t\tabort",
         "\t}",
@@ -282,14 +353,21 @@ def _parse_site(value: str) -> tuple[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True, help="the wildcard's base domain: sites are one label below it")
-    parser.add_argument("--site", action="append", required=True, type=_parse_site, metavar="SLOT=EDGE_JSON",
+    parser.add_argument("--base", help="the wildcard's base domain: sites are one label below it")
+    parser.add_argument("--site", action="append", type=_parse_site, metavar="SLOT=EDGE_JSON",
                         help="one occupied slot and its edge JSON; repeat for each slot")
+    parser.add_argument("--print-upload-guard", action="store_true",
+                        help="print only the uploaded-file refusal block, so a proof imports the rule itself")
     parser.add_argument("--dns-directive", help="the production TLS source: one `dns <provider> {file.<path>}` line")
     parser.add_argument("--tls", help="the local-CA proof's TLS source, e.g. `tls internal`; never for production")
     parser.add_argument("--out")
     parser.add_argument("--gate-env-out", help="also write the gate's environment file here")
     args = parser.parse_args(argv)
+    if args.print_upload_guard:
+        sys.stdout.write("\n".join(render_upload_guard()) + "\n")
+        return 0
+    if args.base is None or not args.site:
+        parser.error("--base and at least one --site are required")
     sites = []
     for slot, edge_json in args.site:
         with open(edge_json, encoding="utf-8") as handle:

@@ -1,0 +1,80 @@
+---
+argument_specs:
+  main:
+    short_description: Install the weekly media backup and its timer, and hold the timer off until told otherwise
+    description: >-
+      Applied on the control host, after backup_worker (which makes the service
+      account and the recipients file). Stages the program and what it imports
+      from branchLeft/ghost-platform at a pinned commit, each file held to a
+      sha256, points current at the release, installs the service and timer
+      units, and creates the two files the owner fills (the settings file and the
+      tenant-folders file) empty, closed to everyone but root and the service
+      account. The timer stays off unless media_backup_timer_enabled is true, and
+      enabling it is refused until every file the program needs is in place. A
+      timer that is on stays on unless media_backup_timer_may_disable is true. It
+      does not make the service account, the age recipients, the buckets, the
+      keys or the manifest signing key, and it never reads a secret.
+    author: branchLeft
+    options:
+      media_backup_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          Enable and start the weekly timer. False leaves the timer as it is on
+          the host unless media_backup_timer_may_disable is true. True is a
+          production apply and goes through the gated workflow; it is refused
+          until the settings file, the tenant-folders file, the recipients file
+          and the manifest signing key are all in place.
+      media_backup_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          With media_backup_timer_enabled false, stop and disable the weekly
+          timer when it is on. False never changes a timer the host already has
+          on, so a run with the defaults cannot stop production backups.
+      media_backup_calendar:
+        type: str
+        default: 'Sun *-*-* 05:00:00'
+        description: The systemd OnCalendar value of the weekly timer, in UTC.
+      media_backup_max_requests_per_second:
+        type: int
+        default: 50
+        description: >-
+          The most requests a second the run makes, reads and writes together,
+          from 1 to 400. The provider allows 750 a second per address and per
+          bucket; the program refuses more than 400. To be set from a measured
+          run.
+      media_backup_memory_max:
+        type: str
+        default: 1G
+        description: >-
+          The unit's memory limit, a whole number then M or G. An object is read
+          whole into memory, so this bounds the largest object copied.
+      media_backup_source_sha:
+        type: str
+        default: 73b4f54ae4455146a977016f1319e658fa3af645
+        description: >-
+          Full commit of branchLeft/ghost-platform the release is downloaded from.
+          It names the release directory. Change it together with the checksums in
+          media_backup_release_files.
+      media_backup_source_base_url:
+        type: str
+        default: https://raw.githubusercontent.com/branchLeft/ghost-platform/73b4f54ae4455146a977016f1319e658fa3af645
+        description: >-
+          URL each release file is downloaded from, as base/path. The default is the
+          raw URL at the pinned commit. A test points it at a file:// copy.
+      media_backup_release_files:
+        type: list
+        elements: dict
+        description: >-
+          Every file of the release: its path from the release root and its sha256.
+          The list must hold the program and the four files it imports.
+        options:
+          path:
+            type: str
+            required: true
+            description: Path from the release root, lower case, ending in .py.
+          sha256:
+            type: str
+            required: true
+            description: The file's sha256, 64 lower-case hex characters.

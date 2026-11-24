@@ -16,6 +16,11 @@ overrides:
     type: list
     value:
       - 192.0.2.20
+  # The second account's name is a host input on edget only; edge1 applies the role too (the flag is
+  # off there) and the template renders with the condition dropped, so edge1 needs a value to render.
+  ci_jump_spool_user:
+    type: str
+    value: offline-render-dummy
   tunnel_account_in:
     type: dict
     value:
@@ -31,6 +36,17 @@ overrides:
         - stdout: DUMMY_generated_1
         - stdout: DUMMY_generated_2
         - stdout: DUMMY_generated_3
+  # The broker tunnel: demo1's address and host key on ops1 as the role holds them after reading its
+  # two host_inputs keys, and ops1's public key on demo1, read from the owner's file at run time.
+  broker_tunnel_client_address_in:
+    type: str
+    value: 192.0.2.40
+  broker_tunnel_client_host_key_in:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10
+  demo1_build_tunnel_ops1_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
   tunnel_account_db1_source_address:
     type: str
     value: 10.0.0.5
@@ -91,6 +107,13 @@ overrides:
     value:
       from_address: 192.0.2.1
       public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+  # The tunnel role's two keys, which the role reads from its inputs. Throwaway public keys.
+  tenant_scrape_tunnel_scraper_public_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+  tenant_scrape_tunnel_target_host_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
   # The tenant database entry point's two inputs: a throwaway public key (no comment, as the
   # role requires) and a documentation address.
   db_t1_tenant_entry_controller_key:

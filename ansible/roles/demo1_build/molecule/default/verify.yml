@@ -12,7 +12,7 @@
   vars:
     verify_slots: ['0', '1', '2', '3', '4', '5', '6']
     verify_colours: [a, b]
-    verify_release: /opt/branchleft/demo-host/releases/595bcce0ee2bb1c7f8de565cf008060ea43122cf
+    verify_release: /opt/branchleft/demo-host/releases/922fc9d997fc5780bec9fc9a4f30c2dc743fe85a
     verify_wrapper: /usr/local/sbin/branchleft-slot
     verify_sidecar: /usr/local/lib/branchleft/demo_sidecar.py
     verify_router: /usr/local/lib/branchleft/health_router.py
@@ -261,6 +261,36 @@
           - demo1_build_verify_marker.stat.size == 0
         quiet: true
         fail_msg: The preseed marker is missing, or is not an empty root:root mode 0644 file.
+
+    # The drain sidecar's pin file. The wrapper believes it only as a regular file, root's
+    # and writable by no one else, whose whole content is this one line; the line is written
+    # out here, not read from the role, so a wrong name or digest is a failure.
+    - name: Look at the sidecar's pin file
+      ansible.builtin.stat:
+        path: /etc/branchleft/demo-sidecar.image.env
+        follow: false
+        get_checksum: false
+      register: demo1_build_verify_sidecar_pin
+
+    - name: Read the sidecar's pin file
+      ansible.builtin.slurp:
+        src: /etc/branchleft/demo-sidecar.image.env
+      register: demo1_build_verify_sidecar_pin_text
+
+    - name: Assert the pin file is root's regular file, mode 0644, with the one attested line
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_sidecar_pin.stat.isreg
+          - demo1_build_verify_sidecar_pin.stat.pw_name == 'root'
+          - demo1_build_verify_sidecar_pin.stat.gr_name == 'root'
+          - demo1_build_verify_sidecar_pin.stat.mode == '0644'
+          - >-
+            (demo1_build_verify_sidecar_pin_text.content | b64decode)
+            == 'DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954' ~ '\n'
+        quiet: true
+        fail_msg: >-
+          The sidecar's pin file is missing, is not a root:root mode 0644 regular file, or does not hold
+          exactly the one line the wrapper and the colour units read.
 
     # The colour drop-ins and the router unit.
     - name: Read the fourteen colour drop-ins
