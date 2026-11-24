@@ -75,6 +75,20 @@ updates:
     labels:
       - 'dependencies'
 
+  # Watches only the tenant edge's media-cache image. Its CrowdSec pin is held equal to the
+  # estate's by hetzner/edge-t/render.test.ts, so it has no entry here. Merging restarts the
+  # media cache, which is refilled from the buckets, so each PR is reviewed on its own like
+  # the estate edge's.
+  - package-ecosystem: 'docker-compose'
+    directory: '/hetzner/edge-t/stack'
+    schedule:
+      interval: 'monthly'
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-name: 'nginxinc/nginx-unprivileged'
+    labels:
+      - 'dependencies'
+
   # Watches only hetzner/monitoring/stack/compose.yml's pinned node-exporter image.
   # The role that installs the same release by URL (ansible/roles/node_exporter)
   # must move with it: ansible/checks/test_node_exporter_pin_agrees.py fails until it does.

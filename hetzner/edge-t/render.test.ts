@@ -128,7 +128,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
     expect(renderTenantAdminProbingScenario).toHaveLength(0);
     expect(renderTenantHubAdminProbingPostoverflow).toHaveLength(0);
     expect(renderTenantGhostBruteForceScenario).toHaveLength(0);
-    expect(renderTenantCaddyfile.length).toBeLessThanOrEqual(1);
+    expect(renderTenantCaddyfile.length).toBeLessThanOrEqual(2);
   });
 
   it('narrows no Ghost file to a hostname list, because every name here is a tenant’s', () => {
@@ -138,6 +138,7 @@ describe('no hostname of the estate reaches the tenant stack', () => {
       'crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml',
       'crowdsec/scenarios/http-admin-interface-probing.yaml',
       'crowdsec/scenarios/ghost-admin-login-bruteforce.yaml',
+      'crowdsec/scenarios/http-admin-interface-probing.yaml',
     ]) {
       const text = files.get(file) ?? '';
       expect(text, file).not.toMatch(/req\.Host in|target_fqdn'?\)? in|target_fqdn in/);
@@ -162,9 +163,20 @@ describe('the tenant Caddyfile', () => {
     expect(block).not.toContain('appsec');
   });
 
-  it('has the catch-all, the two probes and the metrics listener, and no site of any name', () => {
-    expect(addresses).toEqual([':80', 'http://edge-probe.invalid:8080', ':8080', ':9091']);
-    expect(caddyfile).not.toContain('reverse_proxy');
+  it('has the catch-all, the two probes, the metrics listener, the media snippet and its shard listener, and no site of any name', () => {
+    expect(addresses).toEqual([
+      ':80',
+      'http://edge-probe.invalid:8080',
+      ':8080',
+      ':9091',
+      '(tenant_media)',
+      'http://:18081',
+      'http://:18080',
+    ]);
+    expect(caddyfile.match(/reverse_proxy (\S+)/g)).toEqual([
+      'reverse_proxy 127.0.0.1:18081',
+      'reverse_proxy media-cache:8080',
+    ]);
     expect(caddyfile).not.toMatch(/^\s*tls\b/m);
   });
 

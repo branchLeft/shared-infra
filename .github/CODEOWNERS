@@ -76,6 +76,8 @@ branchleft-verify-image*                                     @branchLeft/branchl
 /ansible/checks/test_plan_diff_scan.py                       @branchLeft/branchleft-admin
 /ansible/checks/test_step_allowlist.py                       @branchLeft/branchleft-admin
 /hetzner-host/LICENSE                                        @branchLeft/branchleft-admin
+/hetzner/edge-t/media.test.ts                                @branchLeft/branchleft-admin
+/hetzner/edge-t/media.ts                                     @branchLeft/branchleft-admin
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin
 
