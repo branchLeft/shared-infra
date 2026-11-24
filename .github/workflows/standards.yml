@@ -51,5 +51,6 @@ jobs:
   standards:
     needs: queue-proof
     # Fail open: a skipped or unreadable proof leaves tested unset, so the gate runs in full.
-    if: ${{ always() && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
+    # !cancelled(), not always(): a cancelled run does not start the gate job.
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
     uses: branchLeft/standards/.github/workflows/standards.yml@v0.8.8
