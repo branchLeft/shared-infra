@@ -93,7 +93,7 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/checks/host_roles/edge1.yml", "gate: a host's role allowlist", True),
     Sample("ansible/checks/test_check_delivery.py", "gate: a kept gate's test", True),
     Sample("ansible/harness/run_harness.py", "gate: the Ansible harness", True),
-    Sample("scripts/assert-no-hetzner-deletes.py", "gate: the delete guard a secret job runs", True),
+    Sample("scripts/assert-no-hetzner-deletes.py", "gate: the delete guard a secret job", True),
     Sample("scripts/choose-apply-environment.py", "gate: the apply approval routing", True),
     Sample("hetzner/scripts/check-crowdsec-hub-pin.py", "gate: a script gating a write step", True),
     Sample("hetzner/scripts/test_check_crowdsec_hub_pin.py", "gate: that script's test", True),
@@ -102,7 +102,10 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/trust/mx1.yml", "gate: a pull signer allowlist", True),
     Sample("ansible/playbooks/includes/require_signers.yml", "gate: the signer requirement", True),
     Sample("ansible/roles/deploy_verifier/files/trusted_root.jsonl", "gate: verifier trust", True),
-    Sample("ansible/roles/deploy_verifier/files/branchleft-verify-image.py", "gate: verifier", True),
+    Sample(
+        "ansible/roles/deploy_verifier/files/branchleft-verify-image.py", "gate: the verifier", True
+    ),
+    Sample("hetzner/scripts/lib/proof_harness.py", "gate: what the owned proofs import", True),
     Sample("hetzner/estate.guard.test.ts", "guard: a Pulumi guard test", True),
     Sample("hetzner/projectGuard.ts", "guard: the project guard", True),
     Sample("hetzner/projectGuard.test.ts", "guard: the project guard test", True),

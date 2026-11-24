@@ -81,6 +81,8 @@ GUARDRAIL_PATHS = [
     "scripts/a_new_ci_script.py",
     "hetzner/scripts/check-crowdsec-hub-pin.py",
     "hetzner/scripts/test_check_crowdsec_hub_pin.py",
+    "hetzner/scripts/lib/docker_pull.py",
+    "hetzner/scripts/lib/proof_harness.py",
     "hetzner/provision/test_suite_size.py",
     "hetzner/provision/test_counts/test_suite_size.txt",
     "hetzner/estate.guard.test.ts",
@@ -325,10 +327,7 @@ class CodeownersTests(unittest.TestCase):
     def test_every_listed_file_exists(self) -> None:
         # A path typed wrongly in a list here owns nothing and nothing says so.
         listed = (
-            GUARDRAIL_PATHS
-            + DOCUMENT_PATHS
-            + RELEASED_PATHS
-            + [sample.path for sample in SAMPLES]
+            GUARDRAIL_PATHS + DOCUMENT_PATHS + RELEASED_PATHS + [sample.path for sample in SAMPLES]
         )
         for path in listed:
             if path in STANDS_FOR_MORE or path in PENDING:

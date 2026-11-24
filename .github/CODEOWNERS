@@ -39,6 +39,8 @@
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
 /hetzner/scripts/check-crowdsec-hub-pin.py                   @branchLeft/branchleft-admin
 /hetzner/scripts/check-hetzner-*                             @branchLeft/branchleft-admin
+/hetzner/scripts/lib/docker_pull.py                          @branchLeft/branchleft-admin
+/hetzner/scripts/lib/proof_harness.py                        @branchLeft/branchleft-admin
 /hetzner/scripts/prove_*                                     @branchLeft/branchleft-admin
 /hetzner/scripts/test_check_crowdsec_hub_pin.py              @branchLeft/branchleft-admin
 /hetzner/scripts/test_check_hetzner_*                        @branchLeft/branchleft-admin
@@ -50,7 +52,9 @@
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 
-# Released, with no owner: documents and the checks that no required gate runs.
+# Released, with no owner: documents, and the checks that guard no gate: the agreement tests and
+# probes in ansible/checks/ run in the required lint's checks and slow legs, but they hold a host
+# role or a stack to its siblings and do not judge a merge or a deploy.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
