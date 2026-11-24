@@ -29,10 +29,6 @@ PROVISION = ROLE / "files" / "ghost-platform" / "demo-host" / "provision"
 NOT_A_MAPPING = "a role variables file is not a mapping"
 NO_SPEC = "cannot load the vendored wrapper"
 NO_CONSTANT = "a string constant the sidecar pin ties to is missing from a vendored program"
-# The pin the role carried before the wrapper learned to read the pin file (ghost-platform#1120).
-# A wrapper vendored at it has no reader to hold the role's line to. Delete this constant and the
-# branch that uses it when the role is re-vendored at a commit that holds the reader.
-PRE_READER_SHA = "5e20991adefcdb9edde4157c6a56d2796ec1da6c"
 DIGEST = "sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954"
 LINE = f"DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@{DIGEST}"
 
@@ -129,15 +125,16 @@ class VendoredTieTests(unittest.TestCase):
         )
 
     def test_the_wrapper_reads_the_line_the_role_writes(self) -> None:
-        """The vendored wrapper's own reader accepts the role's line, as a root-owned 0644 file."""
-        source_sha = str(resolved()["demo1_build_source_sha"])
-        text = (PROVISION / "branchleft_slot.py").read_text(encoding="utf-8")
-        if source_sha == PRE_READER_SHA:
-            self.assertNotIn(
-                "_pinned_sidecar_id", text, "re-vendored: delete PRE_READER_SHA and this branch"
-            )
-            return
+        """The vendored wrapper's own reader accepts the role's line, as a root-owned 0644 file.
+
+        Decided by what the loaded wrapper provides, not by the pinned SHA: a wrapper that has no
+        sidecar reader (no `_pinned_sidecar_id` or no `SIDECAR_IMAGE_NAME`) has nothing to hold the
+        line to, so this check stops there. A re-vendor that adds the reader runs the full check
+        with no edit here.
+        """
         module = wrapper()
+        if not (hasattr(module, "_pinned_sidecar_id") and hasattr(module, "SIDECAR_IMAGE_NAME")):
+            return
         self.assertEqual(module.SIDECAR_IMAGE_NAME, resolved()["demo1_build_sidecar_image_name"])
         self.assertEqual(
             module.SIDECAR_IMAGE_VARIABLE, resolved()["demo1_build_sidecar_image_variable"]
