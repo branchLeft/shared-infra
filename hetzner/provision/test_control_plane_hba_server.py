@@ -10,6 +10,7 @@ See test_control_plane_hba_server.md.
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import os
 import pathlib
 import re
@@ -21,6 +22,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import test_control_plane_stack as stack  # noqa: E402  (needs the path above when run by file)
@@ -86,6 +88,23 @@ STALE_MOUNT_SIZE_SKIP = (
 START_TIMEOUT_SECONDS = 90
 COMMAND_TIMEOUT_SECONDS = 60
 
+# Every container a run makes carries this label with the run's id, and the run removes
+# what carries it, so a start that never returns still leaves nothing behind.
+TEST_RUN_LABEL = "branchleft.test-run"
+# A Docker whose bind mounts hang answers a run with no bind mount at once, and never
+# answers one with a bind mount. One short run with one bind mount, before any server is
+# started, tells the two apart in this long, not in the start timeout once per server.
+BIND_MOUNT_PROBE_TIMEOUT_SECONDS = 30
+# Each step of the cleanup is bounded, because a wedged Docker hangs a removal too.
+CLEANUP_TIMEOUT_SECONDS = 20
+BIND_MOUNT_WEDGE = (
+    "Docker's bind-mount path is wedged: a container with one read-only bind mount did not "
+    f"start in time, though a container without one does. Restart Docker Desktop, then run this again. "
+    f"Every container this run made carries the label {TEST_RUN_LABEL}=<run id> and is removed by it."
+)
+# Set by the first start that proves the wedge, so the next test class fails at once.
+_bind_mount_wedge: str | None = None
+
 RULE_PROVISIONER = re.compile(r"^host\s+portal\s+portal_provisioner_login\s.*\n", re.MULTILINE)
 RULE_MIGRATOR = re.compile(r"^host\s+portal\s+portal_migrator_login\s.*\n", re.MULTILINE)
 RULE_MIGRATOR_DATABASES = re.compile(r"^(host\s+)portal(\s+portal_migrator_login\b)", re.MULTILINE)
@@ -137,6 +156,89 @@ def engine_is_docker_desktop() -> bool:
         check=False,
     )
     return "docker desktop" in result.stdout.lower()
+
+
+def remove_run(run_id: str) -> list[str]:
+    """Remove every container this run made, by its label, and return the ones it could not.
+
+    Nothing here may hang on a wedged Docker: the listing and each removal have their own
+    bound, the removals run side by side, and one that fails does not stop the others. What
+    is left is named on standard error with the command that sweeps it.
+    """
+    selector = f"label={TEST_RUN_LABEL}={run_id}"
+    try:
+        listed = subprocess.run(
+            ["docker", "ps", "--all", "--quiet", "--filter", selector],
+            capture_output=True,
+            text=True,
+            timeout=CLEANUP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        left = ["(the listing of this run's containers did not return)"]
+    else:
+        containers = listed.stdout.split()
+
+        def remove_one(container: str) -> str | None:
+            try:
+                removed = subprocess.run(
+                    ["docker", "rm", "--force", "--volumes", container],
+                    capture_output=True,
+                    text=True,
+                    timeout=CLEANUP_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return container
+            return container if removed.returncode != 0 else None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(containers))) as pool:
+            left = [container for container in pool.map(remove_one, containers) if container is not None]
+    if left:
+        sys.stderr.write(
+            f"{len(left)} container(s) of test run {run_id} could not be removed: {', '.join(left)}\n"
+            f"Remove them once Docker answers: docker ps --all --quiet --filter {selector} | xargs docker rm --force --volumes\n"
+        )
+    return left
+
+
+def require_working_bind_mounts(run_id: str, directory: pathlib.Path) -> None:
+    """Fail at once, naming the wedge, when Docker cannot start a container with a bind mount.
+
+    The probe is one short run of the pinned image with one read-only bind mount of a
+    directory, as the servers mount theirs. A run that does not return in the bound is the
+    wedge. Any other result is left to the servers' own start to report.
+    """
+    global _bind_mount_wedge
+    if _bind_mount_wedge is not None:
+        raise AssertionError(_bind_mount_wedge)
+    probe_directory = directory / "bind-mount-probe"
+    probe_directory.mkdir()
+    probe_directory.chmod(0o755)
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull",
+                "never",
+                "--label",
+                f"{TEST_RUN_LABEL}={run_id}",
+                "--entrypoint",
+                "true",
+                "--volume",
+                f"{probe_directory}:/probe:ro",
+                image_reference(),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=BIND_MOUNT_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _bind_mount_wedge = BIND_MOUNT_WEDGE
+        raise AssertionError(BIND_MOUNT_WEDGE) from None
 
 
 def dropping_the_provisioner_rule(text: str) -> str:
@@ -236,6 +338,27 @@ class Server:
         self.started = True
         # The administrator's password goes by the environment, never on the command
         # line, so it is in no process listing and in no file.
+        global _bind_mount_wedge
+        try:
+            self._run_detached()
+        except subprocess.TimeoutExpired:
+            _bind_mount_wedge = BIND_MOUNT_WEDGE
+            raise AssertionError(f"{self.name}: {BIND_MOUNT_WEDGE}") from None
+        deadline = START_TIMEOUT_SECONDS
+        for _ in range(deadline):
+            ready = subprocess.run(
+                ["docker", "exec", self.name, "pg_isready", "-h", "127.0.0.1", "-p", "5432"],
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                check=False,
+            )
+            if ready.returncode == 0:
+                return
+            time.sleep(1)
+        raise AssertionError(f"{self.name} did not accept connections in {deadline}s:\n{self.logs()}")
+
+    def _run_detached(self) -> None:
         subprocess.run(
             [
                 "docker",
@@ -244,7 +367,7 @@ class Server:
                 "--name",
                 self.name,
                 "--label",
-                f"branchleft.test-run={self.run_id}",
+                f"{TEST_RUN_LABEL}={self.run_id}",
                 "--env",
                 "POSTGRES_PASSWORD",
                 "--volume",
@@ -260,19 +383,6 @@ class Server:
             timeout=COMMAND_TIMEOUT_SECONDS * 4,
             check=True,
         )
-        deadline = START_TIMEOUT_SECONDS
-        for _ in range(deadline):
-            ready = subprocess.run(
-                ["docker", "exec", self.name, "pg_isready", "-h", "127.0.0.1", "-p", "5432"],
-                capture_output=True,
-                text=True,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                check=False,
-            )
-            if ready.returncode == 0:
-                return
-            time.sleep(1)
-        raise AssertionError(f"{self.name} did not accept connections in {deadline}s:\n{self.logs()}")
 
     def logs(self) -> str:
         """The last lines the server printed; it prints no password."""
@@ -436,20 +546,69 @@ class Server:
         assert len(answers) == len(pairs)
         return dict(zip(pairs, answers))
 
-    def remove(self) -> None:
-        """Remove this run's container and its anonymous volume, and nothing else."""
-        subprocess.run(
-            ["docker", "rm", "--force", "--volumes", self.name],
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            check=False,
-        )
-
 
 def differences(actual: dict[tuple[str, str], bool], expected: dict[tuple[str, str], bool]) -> dict[tuple[str, str], bool]:
     """The cells where the server's answer is not the expected one, with the server's answer."""
     return {cell: answer for cell, answer in actual.items() if answer != expected[cell]}
+
+
+class WedgedDockerTests(unittest.TestCase):
+    """A Docker that hangs on bind mounts is named at once, and what the run made is still removed.
+
+    These need no engine: `subprocess.run` is replaced with a Docker that answers a listing,
+    hangs on the removal of one container, or never returns a run that has a bind mount.
+    """
+
+    def setUp(self) -> None:
+        global _bind_mount_wedge
+        self.addCleanup(setattr, sys.modules[__name__], "_bind_mount_wedge", _bind_mount_wedge)
+        _bind_mount_wedge = None
+
+    def test_the_run_removes_each_labelled_container_past_one_that_hangs_and_names_it(self) -> None:
+        removed: list[str] = []
+
+        def docker(arguments: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+            if arguments[1] == "ps":
+                self.assertIn(f"label={TEST_RUN_LABEL}=abc", arguments)
+                return subprocess.CompletedProcess(arguments, 0, "stuck\nfine\nlast\n", "")
+            if arguments[-1] == "stuck":
+                raise subprocess.TimeoutExpired(arguments, CLEANUP_TIMEOUT_SECONDS)
+            removed.append(arguments[-1])
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+
+        with mock.patch.object(subprocess, "run", docker), mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            left = remove_run("abc")
+        self.assertEqual(sorted(removed), ["fine", "last"])
+        self.assertEqual(left, ["stuck"])
+        self.assertIn("stuck", err.getvalue())
+        self.assertIn(f"label={TEST_RUN_LABEL}=abc", err.getvalue())
+
+    def test_the_run_gives_up_on_a_listing_that_hangs_instead_of_hanging(self) -> None:
+        def docker(arguments: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+            raise subprocess.TimeoutExpired(arguments, CLEANUP_TIMEOUT_SECONDS)
+
+        with mock.patch.object(subprocess, "run", docker), mock.patch.object(sys, "stderr", io.StringIO()):
+            self.assertEqual(len(remove_run("abc")), 1)
+
+    def test_a_bind_mount_run_that_never_returns_fails_at_once_and_the_next_class_fails_without_waiting(self) -> None:
+        calls: list[list[str]] = []
+
+        def docker(arguments: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+            calls.append(arguments)
+            if arguments[1] == "run":
+                raise subprocess.TimeoutExpired(arguments, BIND_MOUNT_PROBE_TIMEOUT_SECONDS)
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(subprocess, "run", docker):
+            with mock.patch.object(sys.modules[__name__], "image_reference", return_value="image@sha256:0"):
+                with self.assertRaisesRegex(AssertionError, "bind-mount path is wedged"):
+                    require_working_bind_mounts("abc", pathlib.Path(directory))
+                runs = [call for call in calls if call[1] == "run"]
+                self.assertEqual(len(runs), 1)
+                self.assertIn(f"{TEST_RUN_LABEL}=abc", runs[0])
+                with self.assertRaisesRegex(AssertionError, "bind-mount path is wedged"):
+                    require_working_bind_mounts("def", pathlib.Path(directory))
+                self.assertEqual(len([call for call in calls if call[1] == "run"]), 1)
 
 
 class ControlPlaneHbaServerTests(unittest.TestCase):
@@ -469,7 +628,10 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
         cls._directory = tempfile.TemporaryDirectory(prefix="cp-hba-")
         cls.addClassCleanup(cls._directory.cleanup)
         run_id = uuid.uuid4().hex[:12]
+        # Registered before anything starts, so a failed or hung start still removes what began.
+        cls.addClassCleanup(remove_run, run_id)
         admin_password = secrets.token_urlsafe(32)
+        require_working_bind_mounts(run_id, pathlib.Path(cls._directory.name))
         real = stack.PG_HBA.read_text(encoding="utf-8")
         directory = pathlib.Path(cls._directory.name)
         cls.servers = {"real": Server(run_id, "real", real, admin_password, directory)}
@@ -481,12 +643,8 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
                 cls.vacuous.add(label)
                 continue
             cls.servers[label] = Server(run_id, label, sabotaged, admin_password, directory)
-        # Registered before anything starts, so a failed start still removes what began.
-        for server in cls.servers.values():
-            cls.addClassCleanup(server.remove)
         # The control server: the same real file, but the administrator makes the migrator a superuser.
         cls.superuser_server = Server(run_id, "superuser", real, admin_password, directory)
-        cls.addClassCleanup(cls.superuser_server.remove)
         everything = [*cls.servers.values(), cls.superuser_server]
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(everything)) as pool:
             list(pool.map(lambda server: server.start(), everything))
@@ -592,7 +750,9 @@ class ControlPlaneHbaDeliveryTests(unittest.TestCase):
         cls._directory = tempfile.TemporaryDirectory(prefix="cp-hba-delivery-")
         cls.addClassCleanup(cls._directory.cleanup)
         run_id = uuid.uuid4().hex[:12]
+        cls.addClassCleanup(remove_run, run_id)
         admin_password = secrets.token_urlsafe(32)
+        require_working_bind_mounts(run_id, pathlib.Path(cls._directory.name))
         cls.real = stack.PG_HBA.read_text(encoding="utf-8")
         cls.older = dropping_the_migrator_rule(cls.real)
         if cls.older == cls.real:
@@ -614,8 +774,6 @@ class ControlPlaneHbaDeliveryTests(unittest.TestCase):
             cls.servers["single_file"] = Server(
                 run_id, "delivery-single", cls.older, admin_password, directory, shape=SINGLE_FILE_SHAPE
             )
-        for server in cls.servers.values():
-            cls.addClassCleanup(server.remove)
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(cls.servers)) as pool:
             list(pool.map(lambda server: server.start(), cls.servers.values()))
         cls.before = {label: server.matrix() for label, server in cls.servers.items()}
