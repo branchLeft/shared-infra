@@ -1,0 +1,14 @@
+---
+# One run of the role, in the README's "Order". main.yml includes it once, with the profile's
+# stack directory and lists as task vars when the profile is the tenant's.
+- name: Check the pin, the secrets file and the Caddyfile on the host before anything is written
+  ansible.builtin.include_tasks: _assert.yml
+
+- name: Classify every file of the stack and refuse one that is in no class
+  ansible.builtin.include_tasks: _classify.yml
+
+- name: Work out what is due
+  ansible.builtin.include_tasks: _decide.yml
+
+- name: Validate, deliver, apply and record
+  ansible.builtin.include_tasks: _deliver.yml

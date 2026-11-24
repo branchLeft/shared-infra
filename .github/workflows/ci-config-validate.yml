@@ -87,7 +87,9 @@ jobs:
           IMAGE: ghcr.io/branchleft/edge-caddy@sha256:0000000000000000000000000000000000000000000000000000000000000000
           CROWDSEC_BOUNCER_KEY: validation-only
           ACME_EMAIL: validation@example.invalid
-        run: docker compose -f hetzner/edge/stack/compose.yml config -q
+        run: |
+          docker compose -f hetzner/edge/stack/compose.yml config -q
+          docker compose -f hetzner/edge-t/stack/compose.yml config -q
 
       # `stack/` is what runs today; `validation/` is what the posture flips
       # would produce, loaded here so a directive that only appears under
@@ -100,7 +102,7 @@ jobs:
         if: steps.skip.outputs.run != 'false'
         run: |
           status=0
-          for config in hetzner/edge/stack/caddy/Caddyfile hetzner/edge/validation/Caddyfile.*; do
+          for config in hetzner/edge/stack/caddy/Caddyfile hetzner/edge-t/stack/caddy/Caddyfile hetzner/edge/validation/Caddyfile.*; do
             output=$(docker run --rm \
               --env CROWDSEC_BOUNCER_KEY=validation-only \
               --env ACME_EMAIL=validation@example.invalid \

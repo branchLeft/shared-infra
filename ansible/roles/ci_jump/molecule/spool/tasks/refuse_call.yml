@@ -1,0 +1,30 @@
+---
+# Calls the role's module with action plan for the second account, over the converged host, with
+# the inputs the caller gives, and keeps the result where verify.yml reads it. The call is in an
+# included file because the lint reads a play for the module's name and cannot find the role's
+# library from there. Inputs: refuse_user, refuse_own, refuse_destinations (all required).
+- name: Ask the module to judge the second account's inputs
+  ci_jump_authorized_keys:
+    action: plan
+    profile: spool
+    user: '{{ refuse_user }}'
+    own_address: '{{ refuse_own }}'
+    destinations: '{{ refuse_destinations }}'
+    keys: '{{ refuse_keys }}'
+    owned_accounts:
+      root: root
+      ci_login: ansible-ci
+      tunnel_account: dbtunnel
+      ci_jump: '{{ scenario_jump_user }}'
+  vars:
+    refuse_keys:
+      - '{{ (ci_jump_scenario_refuse_pub.content | b64decode).split(" ")[0:2] | join(" ") }}'
+  register: ci_jump_scenario_refuse
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Keep the code the module answered with, or accepted
+  ansible.builtin.set_fact:
+    ci_jump_scenario_codes: >-
+      {{ ci_jump_scenario_codes + [(ci_jump_scenario_refuse.msg | default('accepted')).split(':')[0]] }}

@@ -49,6 +49,7 @@ host_inputs_required_by_host:
     - ci_jump_user
   edget:
     - ci_jump_user
+    - ci_jump_spool_user
   ops1:
     - backup_worker_db_host
     - backup_worker_db_user
@@ -116,6 +117,7 @@ host_inputs_optional_by_host:
     - ci_jump_user
   edget:
     - ci_jump_user
+    - ci_jump_spool_user
   mx1:
     - mx1_abuse_page_token
 
