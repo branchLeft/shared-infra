@@ -7,7 +7,7 @@
 #       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
 #       codeowners_match.py), CLAUDE.md, .claude/, the workflows, actions and dependabot settings
 #       (/.github/, by the standards lines), the gate scripts those checks run (the checks in
-#       ansible/checks/, ansible/harness/, the six gates in scripts/ and the named hetzner/scripts
+#       ansible/checks/, ansible/harness/, the gates and the skip machinery in scripts/ and the named hetzner/scripts
 #       checks), the apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer
 #       include), the guards that stop a destructive apply, the floors and lint settings, the image
 #       verifier, and the exemption files. The tests of a gate are not listed: they are released.
@@ -51,12 +51,15 @@
 /scripts/choose-apply-environment.py                         @branchLeft/branchleft-admin
 /scripts/ci_skip.py                                          @branchLeft/branchleft-admin
 /scripts/pulumi-stack-inventory.json                         @branchLeft/branchleft-admin
+/scripts/test_ci_skip.py                                     @branchLeft/branchleft-admin
+/scripts/trace_reads.py                                      @branchLeft/branchleft-admin
 /tools/floors.tsv                                            @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 
 # Released, with no owner: documents, every test in ansible/checks/ but the proof of this file (a test
-# of a gate does not judge a merge or a deploy; the gate it reads stays owned), and the helpers and
-# probes there that guard no gate. Every script in scripts/ but the six gates owned above is released.
+# of a gate does not judge a merge or a deploy; the gate it reads stays owned; test_plan_diff_scan.py
+# and test_step_allowlist.py are owned again below because each is itself a check), and the helpers
+# and probes there that guard no gate. Every script in scripts/ but the eight owned above is released.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
@@ -66,11 +69,13 @@ branchleft-verify-image*                                     @branchLeft/branchl
 /ansible/checks/sabotage_offline_render.py
 /ansible/checks/test_*.py
 
-# Owned again after the releases: the instructions, the hook directory, the proof of this file, the licences, the README and the launch page.
+# Owned again after the releases: the instructions, the hook directory, the proof of this file and of two checks, the licences, the README and the launch page.
 /.claude/                                                    @branchLeft/branchleft-admin
 /LICENSE                                                     @branchLeft/branchleft-admin
 /README.md                                                   @branchLeft/branchleft-admin
 /ansible/checks/test_codeowners.py                           @branchLeft/branchleft-admin
+/ansible/checks/test_plan_diff_scan.py                       @branchLeft/branchleft-admin
+/ansible/checks/test_step_allowlist.py                       @branchLeft/branchleft-admin
 /hetzner-host/LICENSE                                        @branchLeft/branchleft-admin
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin

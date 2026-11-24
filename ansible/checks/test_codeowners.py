@@ -59,6 +59,10 @@ GUARDRAIL_PATHS = [
     "CLAUDE.md",
     ".claude/.gitignore",
     "ansible/checks/test_codeowners.py",
+    "ansible/checks/test_plan_diff_scan.py",
+    "ansible/checks/test_step_allowlist.py",
+    "scripts/test_ci_skip.py",
+    "scripts/trace_reads.py",
     "ansible/checks/codeowners_match.py",
     "ansible/checks/check_pins.py",
     "ansible/checks/check_delivery.py",
@@ -151,13 +155,11 @@ RELEASED_PATHS = [
     "hetzner/scripts/check-address-plan-drift.py",
     "ansible/checks/test_edge_single_home.py",
     "ansible/checks/test_check_delivery.py",
-    "ansible/checks/test_step_allowlist.py",
     "ansible/checks/test_ci_gate_order.py",
     "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
     "scripts/test_assert_no_hetzner_deletes.py",
     "scripts/test_choose_apply_environment.py",
-    "scripts/test_ci_skip.py",
     "scripts/cancel-superseded-waiting.py",
     "scripts/tenants_state_rewrap.py",
     "hetzner/estate.guard.test.ts",
@@ -273,8 +275,11 @@ class CodeownersTests(unittest.TestCase):
         self.assert_owned(["ansible/checks/test_codeowners.py"])
 
     def test_the_gates_in_scripts_are_owned_by_name_and_no_other_script_is(self) -> None:
-        # The six gates the merge route's register names, and nothing else under scripts/.
+        # The six gates the merge route's register names, the skip machinery that runs inside the
+        # required jobs (ci_skip's test and trace_reads), and nothing else under scripts/.
         gates = {
+            "scripts/test_ci_skip.py",
+            "scripts/trace_reads.py",
             "scripts/assert-no-committed-pulumi-secrets.py",
             "scripts/assert-no-hetzner-deletes.py",
             "scripts/audit-pulumi-secrets.py",
