@@ -137,6 +137,11 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/roles/r/library/x.py", "loader: a role's library", True),
     Sample("ansible/library/x.py", "loader: the top-level library", True),
     Sample("hetzner/control-plane/stack/postgres/pg_hba.conf", "access: database access", True),
+    Sample(
+        "ansible/playbooks/bootstrap/dbt1.yml",
+        "access: a bootstrap run by hand, outside the gate",
+        True,
+    ),
     # Mail.
     Sample("mail/provision/provision_mailboxes.py", "mail: a program run on mx1", True),
     Sample("ansible/playbooks/mx1.yml", "mail: the mx1 playbook", True),

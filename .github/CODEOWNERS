@@ -86,10 +86,12 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 
 # Trust, keys and access: the signer lists, the owner's values for each host, the roles that write
 # sshd, sudoers, authorized_keys, login accounts or signing keys, the verifier's trusted keys, the
-# owner-run bootstrap guards and their fixtures. Every role directory is owned whole and its
+# owner-run bootstrap guards and their fixtures, and the bootstrap playbooks, which the owner runs by
+# hand outside the gated apply. Every role directory is owned whole and its
 # documents are released below. Pull roles are the owner's alone.
 /ansible/owner_vars/                                         @branchLeft/branchleft-admin
 /ansible/patterns/sudoers_and_keys/                          @branchLeft/branchleft-admin
+/ansible/playbooks/bootstrap/                                 @branchLeft/branchleft-admin
 /ansible/playbooks/includes/                                 @branchLeft/branchleft-admin
 /ansible/roles/ansible_runtime/                              @branchLeft/branchleft-admin
 /ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
