@@ -7,7 +7,7 @@
 # that does not match stops the role before it writes. The commit must be at or after
 # 0a23634b652a37260d77e656ded3c37ff24d62ec, the commit that moved the drain flags to
 # /var/lib/branchleft-broker/drain-flags.
-demo1_build_source_sha: 922fc9d997fc5780bec9fc9a4f30c2dc743fe85a
+demo1_build_source_sha: 8f1b5d649c85da721dc860edebb03ec120b773ad
 
 # Every program the role carries, one path and one sha256 each, relative to the
 # repository root. This is the import closure of the programs the role runs
@@ -16,7 +16,7 @@ demo1_build_source_sha: 922fc9d997fc5780bec9fc9a4f30c2dc743fe85a
 # here: the role declares what they create with modules instead (README).
 demo1_build_release_files:
   - path: demo-host/provision/branchleft_slot.py
-    sha256: 612bcfc2edc1b358fe0d7b89b2d77313f734db3ffdd60ef20767902780bf5dc5
+    sha256: d87811eca0354bbb7bbd1ae1f1a7e144a46ee6cda61e9c5dafda1b464c602e1b
   - path: demo-host/provision/demo_go_live.py
     sha256: ef033f14770bb76c3de3759729bf7bd54e97e2b5db930b96a5f237e95c90ffcb
   - path: demo-host/provision/demo_sidecar.py
