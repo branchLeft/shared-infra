@@ -38,6 +38,7 @@ TOP_KEYS = {
     "registerFile",
     "hosts",
     "sshEntry",
+    "dbEntry",
     "retry",
     "reportTimeoutMs",
 }
@@ -46,6 +47,9 @@ SSH_KEYS = {
     "timeoutMs", "connectTimeoutSeconds", "maxOutputBytes", "maxPayloadBytes",
 }  # fmt: skip
 SSH_INPUT_KEYS = {"secretsFile", "stackFile"}
+# parseDbEntry in sshEntryConfig.ts: exactly a target endpoint and an absolute hand-over directory.
+DB_KEYS = {"target", "handOverDir"}
+ENDPOINT_KEYS = {"user", "host", "port"}
 HOST_KEYS = {"argv", "timeoutMs"}
 
 FORBIDDEN_MODULES = {"shell", "command", "script", "raw", "slurp", "pipe", "fetch", "lineinfile"}
@@ -488,6 +492,47 @@ class ConfigTests(unittest.TestCase):
         self.assertIn(
             f"ReadWritePaths={values['provisioning_controller_host_state_dir']}",
             SERVICE.read_text(encoding="utf-8"),
+        )
+
+
+    def test_a_db_entry_is_rendered_and_meets_the_rules_parse_db_entry_applies(self) -> None:
+        """parseRunConfig refuses the whole run when sshEntry has no dbEntry (sshEntryConfig.ts)."""
+        values = role_vars()
+        config = self.rendered()
+        self.assertIn("dbEntry", config)
+        db = cast(dict[str, object], config["dbEntry"])
+        self.assertEqual(set(db), DB_KEYS)
+        target = cast(dict[str, object], db["target"])
+        self.assertTrue(set(target) <= ENDPOINT_KEYS)
+        self.assertEqual(
+            target,
+            {
+                "user": values[PREFIX + "db_entry_user"],
+                "host": values[PREFIX + "db_t1_address"],
+            },
+        )
+        self.assertEqual(db["handOverDir"], values[PREFIX + "handover_dir"])
+        self.assertTrue(str(db["handOverDir"]).startswith("/"))
+
+    def test_the_hand_over_directory_is_the_accounts_at_0750_as_the_controller_requires(
+        self,
+    ) -> None:
+        """dbHandOver.ts refuses a directory with mode & 0o027 set, or another user's owner."""
+        handover_task = [
+            spec
+            for task in tasks()
+            if isinstance(spec := task.get("ansible.builtin.file"), dict)
+            and spec.get("path") == "{{ " + PREFIX + "handover_dir }}"
+        ]
+        self.assertEqual(len(handover_task), 1)
+        spec = handover_task[0]
+        self.assertEqual(spec["owner"], "{{ " + PREFIX + "account }}")
+        self.assertEqual(spec["group"], "{{ " + PREFIX + "account }}")
+        self.assertEqual(spec["state"], "directory")
+        self.assertEqual(int(str(spec["mode"]), 8) & 0o027, 0)
+        self.assertEqual(
+            str(Path(str(role_vars()[PREFIX + "handover_dir"])).parent),
+            role_vars()[PREFIX + "state_dir"],
         )
 
 

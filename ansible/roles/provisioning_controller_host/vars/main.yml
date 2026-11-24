@@ -39,6 +39,10 @@ provisioning_controller_host_secrets_file: /var/lib/branchleft/provisioning-cont
 provisioning_controller_host_stack_file: /var/lib/branchleft/provisioning-controller/inputs/stack.json
 # Where the stack passphrase of each tenant waits, one file each, for the escrow bucket's step.
 provisioning_controller_host_escrow_dir: /var/lib/branchleft/provisioning-controller/escrow
+# Where the database password minted on db-t1 waits, one file per slot, until render-host-secrets
+# takes it. The controller refuses a directory another user owns or one group-writable or reachable
+# by others (dbHandOver.ts), so the role makes it the account's, mode 0750.
+provisioning_controller_host_handover_dir: /var/lib/branchleft/provisioning-controller/handover
 
 provisioning_controller_host_base_dir: /opt/branchleft/provisioning-controller
 provisioning_controller_host_releases_dir: /opt/branchleft/provisioning-controller/releases

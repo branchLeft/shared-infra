@@ -25,5 +25,9 @@
       "secretsFile": {{ provisioning_controller_host_secrets_file | to_json }},
       "stackFile": {{ provisioning_controller_host_stack_file | to_json }}
     }
+  },
+  "dbEntry": {
+    "target": {"user": {{ provisioning_controller_host_db_entry_user | to_json }}, "host": {{ provisioning_controller_host_db_t1_address | to_json }}},
+    "handOverDir": {{ provisioning_controller_host_handover_dir | to_json }}
   }
 }

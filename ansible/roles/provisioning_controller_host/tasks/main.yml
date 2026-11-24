@@ -225,6 +225,17 @@
     - '{{ provisioning_controller_host_escrow_dir }}'
   when: provisioning_controller_host_account_present
 
+# The hand-over directory the controller reads db-t1's password from: the account's, group-readable
+# by the account's group and closed to others, as dbHandOver.ts requires (no group write, no other access).
+- name: Make the database hand-over directory the account's and closed to others
+  ansible.builtin.file:
+    path: '{{ provisioning_controller_host_handover_dir }}'
+    state: directory
+    owner: '{{ provisioning_controller_host_account }}'
+    group: '{{ provisioning_controller_host_account }}'
+    mode: '0750'
+  when: provisioning_controller_host_account_present
+
 # --- The ssh key. One module makes it inside one process and never returns a private byte, so
 # the task is hidden and its diff is off (ANS-16) although its arguments are only a path. The key
 # is root's with mode 0400 in a root-only directory and is made only when absent. The module's
