@@ -15,8 +15,9 @@ reach the host untested by the push that follows. The base is the nearest first-
 of the previous tip whose delivery run finished its lint and every shard green (``tested_base``),
 or, with the lint and shards skipped, whose discover job's merge-queue confirm step succeeded.
 
-Any failure of any step prints the full selection: every role and pattern. The shell step that
-runs this program does the same when the program itself cannot run. Nothing here may print an
+Any failure of any step prints the full selection: every role and pattern. The step of the
+reusable workflow that runs ``delivery_prepare.py`` (which calls this program) does the same when
+the program itself cannot run. Nothing here may print an
 empty selection except for a diff that names no file a shard reads. The rules are in
 ansible/checks/delivery_select.md.
 """
@@ -47,8 +48,12 @@ FULL_DIRECTORIES = ("roles/*", "patterns/*")
 # the pull request gate, but the delivery's globs never matched it, so it is not tested here.
 ROLE_PARENTS = ("ansible/roles/", "ansible/patterns/")
 # A change to one of these runs every shard, on top of the rules of ci_select.py: the delivery
-# caller and this program decide what the delivery tests, so an edit to either is tested in full.
-EVERY_SHARD = (WORKFLOW_PATH, "ansible/checks/delivery_select.py")
+# caller and these programs decide what the delivery tests, so an edit to either is tested in full.
+EVERY_SHARD = (
+    WORKFLOW_PATH,
+    "ansible/checks/delivery_select.py",
+    "ansible/checks/delivery_prepare.py",
+)
 # How many first-parent commits back from the previous tip are searched for a tested base.
 MAX_WALK = 40
 SHA_LENGTH = 40
