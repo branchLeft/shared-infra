@@ -100,7 +100,11 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
     Sample("hetzner/provision/test_counts/test_suite_size.txt", "gate: a suite-size floor", True),
     Sample("ansible/trust/mx1.yml", "gate: a pull signer allowlist", True),
-    Sample("ansible/playbooks/bootstrap/dbt1.yml", "access: a bootstrap run by hand, outside the gate", True),
+    Sample(
+        "ansible/playbooks/bootstrap/dbt1.yml",
+        "access: a bootstrap run by hand, outside the gate",
+        True,
+    ),
     Sample("ansible/playbooks/includes/require_signers.yml", "gate: the signer requirement", True),
     Sample("ansible/roles/deploy_verifier/files/trusted_root.jsonl", "gate: verifier trust", True),
     Sample(
