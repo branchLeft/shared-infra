@@ -21,6 +21,14 @@ export interface PrivateUpstream {
   port: number;
 }
 
+/** Where a Ghost site's uploads are stored: an S3-compatible host and one bucket on it. */
+export interface SiteMedia {
+  /** The object-storage host, a bare hostname (path-style: the bucket is the first path segment). */
+  host: string;
+  /** The tenant's own bucket, `branchleft-media-<slug>`. */
+  bucket: string;
+}
+
 export interface EdgeSite {
   /** This site's identifier in generated config and log output. */
   name: string;
@@ -41,9 +49,11 @@ export interface EdgeSite {
    */
   region?: string;
   /**
-   * Set for any site with an authenticated authoring surface: the edge then
-   * drops all AppSec rules on the admin API path prefix only. Why, and what
-   * it costs: `sites.md` section "The authoring exemption".
+   * Set for any site with an authenticated authoring surface. With
+   * `trustedSession` only a verified staff session skips AppSec; without it the
+   * edge drops all AppSec rules on the admin API path prefix only, never the
+   * Content API. Why, and what it costs: `sites.md` section "The authoring
+   * exemption".
    */
   injectionWafPreviewOnly?: boolean;
   /**
@@ -58,6 +68,16 @@ export interface EdgeSite {
    * and what it leaves alone: `sites.md` section "What the site runs".
    */
   backend?: 'ghost' | 'nextcloud' | 'other';
+  /**
+   * A `ghost` site's media bucket. The edge then answers Ghost's upload paths
+   * (`/content/images/`, `/content/media/`, `/content/files/`) itself, reading
+   * the object from this bucket, so a reader's browser never contacts the
+   * storage host. Absent: those paths reach Ghost, whose S3 adapter redirects
+   * the browser to the bucket. The bucket name is derived from the tenant slug
+   * in `branchLeft/ghost-platform` and copied here by hand, like the port and
+   * the body ceiling. Why: `hetzner/edge/render.md`, "Tenant media".
+   */
+  media?: SiteMedia;
   /**
    * A signed-in session the edge verifies with the site itself before the
    * CrowdSec bouncer and AppSec. A request whose session the site confirms is
@@ -81,6 +101,32 @@ export interface EdgeSite {
    * empty 204, any other method 405. It runs before AppSec. See `render.md`.
    */
   discardRoute?: string;
+  /**
+   * An allow-list of request paths for a site whose upstream also serves a
+   * management surface that must not be public (the sign-in service). Set, the
+   * edge proxies a request only when its path matches one of these, and answers
+   * 404 itself to every other path, after the throttle and CrowdSec and before
+   * AppSec and the upstream. Each entry is a plain literal path, or a literal
+   * prefix ending in `/*`. The private listener the entry names is untouched, so
+   * a client on the private network still reaches every path. Why a list and not
+   * a deny-list, and what it lets through: `hetzner/edge/render.md`, "`siteBlock`:
+   * public path allow-list".
+   */
+  publicPaths?: string[];
+  /**
+   * Like `publicPaths`, for paths that carry static or public content on a read
+   * and an authenticated write on the same prefix: only `GET` and `HEAD` are
+   * proxied on these, and any other method is answered 404 by the edge. Needs
+   * `publicPaths` to be set.
+   */
+  publicReadOnlyPaths?: string[];
+  /**
+   * The path the uptime probe requests on each of this site's hostnames, for a
+   * site that answers 404 at `/` by design. Absent, the probe requests the root
+   * (or `/healthz` for a signed object gateway). Must be a path the site's
+   * `publicPaths` lets through: a registry test fails for one it does not.
+   */
+  probePath?: string;
   /**
    * One literal path of a site that exists only to receive signed callbacks
    * from an outside sender. Set, the edge proxies `POST` on that path alone,

@@ -11,6 +11,7 @@ import copy
 import json
 import unittest
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 from unittest import mock
 
@@ -158,6 +159,21 @@ class ArgumentSpecTests(unittest.TestCase):
             self.assertEqual(
                 documented[name].get("required", False), option.get("required", False), name
             )
+
+    def test_the_tenant_list_is_optional_and_defaults_to_no_tenants(self) -> None:
+        # Control: a host whose inputs leave the list out (appt1 before its first tenant) must
+        # not fail. Sabotage: restore `required: true` and this test goes red.
+        document = cast(
+            "Mapping[str, Mapping[str, Mapping[str, Mapping[str, Mapping[str, object]]]]]",
+            YAML(typ="safe").load(
+                (Path(__file__).resolve().parents[2] / "meta" / "argument_specs.yml").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+        option = document["argument_specs"]["main"]["options"]["tenant_compose_stacks"]
+        self.assertFalse(option.get("required", False))
+        self.assertEqual(option.get("default"), [])
 
     def test_the_secrets_text_is_the_one_option_marked_no_log(self) -> None:
         marked = [name for name, option in check.ARGUMENT_SPEC.items() if option.get("no_log")]

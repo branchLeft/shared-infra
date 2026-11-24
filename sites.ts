@@ -62,9 +62,14 @@ export const sites: EdgeSite[] = [
     // Ghost serves its uploads from its own origin: see `sites.md`, "What the
     // site runs".
     backend: 'ghost',
+    // The tenant's media bucket (`branchleft-media-<slug>`, endpoint from the
+    // tenant stack's `mediaEndpoint`): the edge reads uploads from it and
+    // answers them on this hostname.
+    media: { host: 'hel1.your-objectstorage.com', bucket: 'branchleft-media-blog' },
     // A signed-in Ghost staff session, verified with this Ghost, is never
     // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
-    // sessions".
+    // sessions". It is the only AppSec exemption this site has: no path skips
+    // AppSec for any other client, the Content API included.
     trustedSession: 'ghost-staff',
   },
 
@@ -141,6 +146,28 @@ export const sites: EdgeSite[] = [
     backend: 'other',
     // Login form posts and token requests only; no upload surface exists.
     requestBodyMaxSize: '1MiB',
+    // The edge forwards only what the portal, the console and a sign-in need:
+    // the discovery document, the OIDC endpoints (which include the key set),
+    // the login pages with their own static files and the health probe. Every
+    // other path -- the service's administration console and its management,
+    // administration, system and v2 APIs -- is answered 404 here and stays
+    // reachable on the private listener above, which is what the identity
+    // reconciler uses. Why: `hetzner/edge/render.md`, "`siteBlock`: public path
+    // allow-list". A new path an application needs is added here deliberately.
+    publicPaths: [
+      '/.well-known/*',
+      '/oauth/v2/*',
+      '/oidc/v1/*',
+      '/ui/login/*',
+      '/debug/healthz',
+      '/debug/ready',
+    ],
+    // Branding files the login pages show. Zitadel takes an upload on the same
+    // prefix, so only a read is forwarded.
+    publicReadOnlyPaths: ['/assets/v1/*'],
+    // The root is answered 404 by the edge, so the uptime probe reads the one
+    // document both applications fetch before every sign-in.
+    probePath: '/.well-known/openid-configuration',
   },
 
   {

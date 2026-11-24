@@ -26,6 +26,7 @@ mail_reconcilers_credential_rows:
   alerting: 64-provision-alerting-submission-credential.sh
   nextcloud: 66-provision-nextcloud-submission-credential.sh
   zitadel: 68-provision-zitadel-submission-credential.sh
+  portal: 69-provision-portal-submission-credential.py
 
 # The programs are read in place from mail/provision/ (their single home); role_path is three
 # levels below the repository root. The role holds no copy and no link.
@@ -55,6 +56,7 @@ mail_reconcilers_installed:
   - { program: 66-provision-nextcloud-submission-credential.sh, mode: '0755' }
   - { program: 67-provision-collector-submission-credential.sh, mode: '0755' }
   - { program: 68-provision-zitadel-submission-credential.sh, mode: '0755' }
+  - { program: 69-provision-portal-submission-credential.py, mode: '0755' }
 
 # The programs above whose diff the plan does not show: each holds a line the plan's secret scan
 # reads as a credential assignment, and they cannot be reworded from here. The rest are placed by
@@ -67,6 +69,7 @@ mail_reconcilers_installed_hidden:
   - 66-provision-nextcloud-submission-credential.sh
   - 67-provision-collector-submission-credential.sh
   - 68-provision-zitadel-submission-credential.sh
+  - 69-provision-portal-submission-credential.py
   - check_collector_sender_scope.py
   - check_zitadel_sender_scope.py
   - configure_stalwart.py

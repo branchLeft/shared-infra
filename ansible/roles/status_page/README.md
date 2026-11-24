@@ -84,6 +84,8 @@ pinned Ansible lock. The role creates no user or group; the files belong to root
   and found healthy, written last.
 - The Compose project `status`: the page, the TEST target and the named volume
   `status-data`, which holds the page's history.
+- The 90-day uptime collector: `/opt/branchleft/status-uptime/`, `/var/lib/branchleft/status-uptime/`
+  (samples and `report.json`), and the two units in `/etc/systemd/system/` (see "The 90-day uptime").
 
 Both services run with a read-only root file system, every capability dropped,
 `no-new-privileges`, a memory limit and `restart: unless-stopped`. Neither mounts the
@@ -152,8 +154,30 @@ hand-worked 99.9306%. To see them red, change `WINDOW_DAYS` to 30, count a faile
 probe as a pass, move the window start from `<` to `<=`, or let a sample be appended twice: each
 turns tests red.
 
-The program is not installed on ops1 and is not scheduled yet, and no page shows its figure:
-Gatus cannot show it, so the route that shows it is a separate change.
+### How it reaches the host
+
+`tasks/_uptime.yml` runs last, after the page answered `200` and the stack was recorded healthy:
+
+- the program, copied byte for byte to `/opt/branchleft/status-uptime/branchleft_status_uptime.py`;
+- the state directory `/var/lib/branchleft/status-uptime` (`0755`) and, in it, the samples
+  directory (`0750`, root only);
+- the oneshot service `branchleft-status-uptime-collect.service`, which runs `collect` against the
+  address the page is published on (`status_page_listen_address`, port `8303`), then `report --out`
+  to rewrite `/var/lib/branchleft/status-uptime/report.json` (`0644`) in one step. A failed
+  collection leaves the previous report in place;
+- the timer `branchleft-status-uptime-collect.timer`, enabled and started, every 30 minutes
+  (`OnCalendar=*:0/30`, `Persistent=true`), well inside the 100 minutes after which the page would
+  have dropped results.
+
+The report file is the route to the figure on the host: it is the document `report` prints, and
+whatever shows the 90-day figure reads it. Publishing it on a public hostname is the edge's work
+and a separate change; this role holds no hostname. Until that exists the figure is read on ops1.
+
+`tests/unit/test_status_page_uptime_timer.py` fails if the program is not copied, the timer is not
+installed, enabled and started, the units do not collect from the page's own address, or the
+service does not write the report. To see it red, delete the include of `_uptime.yml` from
+`tasks/main.yml` or the task that enables the timer. The Molecule scenario runs under systemd, has
+systemd verify both units, runs the service once against a stand-in page and reads the report.
 
 ## How it is delivered
 

@@ -113,13 +113,17 @@ STACKS_ROUTED = mock.patch.dict(
 )
 # Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
 JUMP_KEY = "ci_jump_user"
+SPOOL_KEY = "ci_jump_spool_user"
+# Typed only too: the mail host's publish-only ntfy token, one value that edge1 and mx1 both hold.
+MX1_KEY = "ntfy_pager_mx1_token"
+MX1_HOST_KEY = "mx1_abuse_page_token"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
     {"slug": "alpha", "recipient": RECIPIENT_A},
     {"slug": "beta", "recipient": RECIPIENT_B},
 ]
-EDGE1_KEYS = (*EDGE1_LIVE, JUMP_KEY)
+EDGE1_KEYS = (*EDGE1_LIVE, MX1_KEY, JUMP_KEY)
 OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
 
 
@@ -402,6 +406,7 @@ class Rig:
         self.cfg.chmod(0o755)
         self.answers = list(answers)
         self.jump_answer: str | None = value_for(JUMP_KEY)
+        self.mx1_answer: str | None = value_for(MX1_KEY)
         self.path_answers = list(path_answers)
         self.prompts: list[str] = []
         self.flushes = 0
@@ -441,6 +446,10 @@ class Rig:
         # test queues, so it is answered apart from the queue and the other prompts keep theirs.
         if prompt.startswith(f"{JUMP_KEY}: ") and self.jump_answer is not None:
             return self.jump_answer
+        if prompt.startswith(f"{MX1_KEY}: ") and self.mx1_answer is not None:
+            return self.mx1_answer
+        if prompt.startswith(f"{MX1_HOST_KEY}: ") and self.mx1_answer is not None:
+            return self.mx1_answer
         if not self.answers:
             raise EOFError
         return self.answers.pop(0)
@@ -561,28 +570,84 @@ def app1_document(stacks: bool = True) -> dict[str, object]:
 
 
 class FillTests(unittest.TestCase):
-    def test_edge1_is_filled_from_the_live_files_and_only_the_jump_account_is_typed(self) -> None:
+    def test_edge1_is_filled_from_the_live_files_and_only_two_inputs_are_typed(self) -> None:
         rig = Rig(self)
         rig.seed_edge1()
         self.assertEqual(0, rig.run("--host", "edge1"))
         self.assertEqual(edge1_document(), rig.document())
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertEqual([f"{MX1_KEY}: ", f"{JUMP_KEY}: "], rig.prompts)
         for key in EDGE1_KEYS:
             self.assertIn(key, rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
-        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn(f"typed (2): {MX1_KEY}, {JUMP_KEY}", rig.stdout)
         self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
 
-    def test_edget_has_no_live_file_and_only_the_jump_account_is_typed(self) -> None:
-        # edge-t is a new host: nothing on it to read, so the one input of its row is typed.
+    def test_mx1_has_no_live_file_and_its_one_input_is_typed(self) -> None:
+        # The mail host's file holds the publish-only token and nothing else, typed hidden.
         rig = Rig(self)
+        self.assertEqual(0, rig.run("--host", "mx1"))
+        self.assertEqual({MX1_HOST_KEY: value_for(MX1_KEY)}, rig.document())
+        self.assertEqual([f"{MX1_HOST_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (1): {MX1_HOST_KEY}", rig.stdout)
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
+
+    def test_mx1_with_no_terminal_writes_nothing_and_names_the_key(self) -> None:
+        rig = Rig(self)
+        rig.mx1_answer = None
+        self.assertEqual(1, rig.run("--host", "mx1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertIn(f"still missing (1): {MX1_HOST_KEY}", rig.stdout)
+
+    def test_the_same_token_on_both_hosts_is_one_value_typed_twice_never_printed(self) -> None:
+        edge = Rig(self)
+        mail = Rig(self)
+        edge.seed_edge1()
+        self.assertEqual(0, edge.run("--host", "edge1"))
+        self.assertEqual(0, mail.run("--host", "mx1"))
+        self.assertEqual(edge.document()[MX1_KEY], mail.document()[MX1_HOST_KEY])
+
+    def test_the_mail_host_token_is_set_alone_on_an_edge1_file_placed_without_it(self) -> None:
+        rig = Rig(self)
+        rig.seed_edge1()
+        document = {k: v for k, v in edge1_document().items() if k != MX1_KEY}
+        rig.put(tool.DEST_NAME, json.dumps(document))
+        self.assertEqual(0, rig.run("--host", "edge1", "--set", MX1_KEY))
+        self.assertEqual(edge1_document(), rig.document())
+        self.assertEqual([f"{MX1_KEY}: "], rig.prompts)
+        self.assertNotIn(value_for(MX1_KEY), rig.everything)
+
+    def test_edget_has_no_live_file_and_only_the_two_jump_accounts_are_typed(self) -> None:
+        # edge-t is a new host: nothing on it to read, so the two inputs of its row are typed,
+        # the account the gated run jumps through and the second account for the spool tunnels.
+        rig = Rig(self, answers=[value_for(SPOOL_KEY)])
         self.assertEqual(0, rig.run("--host", "edget"))
-        self.assertEqual({JUMP_KEY: value_for(JUMP_KEY)}, rig.document())
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
-        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertEqual(
+            {JUMP_KEY: value_for(JUMP_KEY), SPOOL_KEY: value_for(SPOOL_KEY)}, rig.document()
+        )
+        self.assertEqual([f"{JUMP_KEY}: ", f"{SPOOL_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (2): {JUMP_KEY}, {SPOOL_KEY}", rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+        self.assertNotIn(value_for(SPOOL_KEY), rig.everything)
+
+    def test_the_second_account_is_added_to_the_file_edget_already_has(self) -> None:
+        # The path the owner takes once the spool tunnels are wanted: edget's file holds the
+        # first account's name, and one --set adds the second without touching it.
+        rig = Rig(self, answers=["typed-spool-account"])
+        rig.jump_answer = None
+        rig.put(tool.DEST_NAME, json.dumps({JUMP_KEY: "typed-jump-account"}))
+        self.assertEqual(0, rig.run("--host", "edget", "--set", SPOOL_KEY))
+        self.assertEqual(
+            {JUMP_KEY: "typed-jump-account", SPOOL_KEY: "typed-spool-account"}, rig.document()
+        )
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+        self.assertEqual([f"{SPOOL_KEY}: "], rig.prompts)
+        self.assertIn(f"set {SPOOL_KEY} ({len('typed-spool-account')} bytes)", rig.stdout)
+        self.assertNotIn("typed-spool-account", rig.everything)
+        self.assertNotIn("typed-jump-account", rig.everything)
 
     def test_the_pager_keys_are_found_in_monitoring_env_when_the_pager_file_is_absent(self) -> None:
         rig = Rig(self)
@@ -642,17 +707,19 @@ class FillTests(unittest.TestCase):
         rig = Rig(self, answers=["typed-snds-value"])
         rig.seed_edge1(skip=["monitoring_stack_snds_data_url"])
         self.assertEqual(0, rig.run("--host", "edge1"))
-        self.assertEqual(2, len(rig.prompts))
         self.assertIn("monitoring_stack_snds_data_url", rig.prompts[0])
         self.assertEqual("typed-snds-value", rig.document()["monitoring_stack_snds_data_url"])
-        self.assertIn(f"typed (2): monitoring_stack_snds_data_url, {JUMP_KEY}", rig.stdout)
+        self.assertEqual(3, len(rig.prompts))
+        self.assertIn(
+            f"typed (3): monitoring_stack_snds_data_url, {MX1_KEY}, {JUMP_KEY}", rig.stdout
+        )
         self.assertNotIn("typed-snds-value", rig.everything)
 
     def test_a_live_value_is_never_prompted_over(self) -> None:
         rig = Rig(self, answers=["typed"])
         rig.seed_edge1()
         rig.run("--host", "edge1")
-        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertEqual([f"{MX1_KEY}: ", f"{JUMP_KEY}: "], rig.prompts)
         self.assertEqual(["typed"], rig.answers)
 
     def test_an_empty_answer_writes_nothing_and_names_the_key(self) -> None:
@@ -672,6 +739,7 @@ class FillTests(unittest.TestCase):
     def test_no_terminal_writes_nothing_and_lists_every_missing_key(self) -> None:
         rig = Rig(self)
         rig.jump_answer = None
+        rig.mx1_answer = None
         self.assertEqual(1, rig.run("--host", "edge1"))
         self.assertFalse(rig.dest.exists())
         self.assertIn(f"still missing ({len(EDGE1_KEYS)}):", rig.stdout)
@@ -1732,6 +1800,121 @@ class ProductionContextTests(unittest.TestCase):
         self.assertEqual(tool.ROOT_GID, ctx.root_gid)
         self.assertEqual(Path(tool.STACK_ROOT), ctx.stack_root)
         self.assertIs(tool.run_volume_program, ctx.list_claims)
+
+
+VALID_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "B" * 43
+APPT1_KEY = VALID_KEY
+DBT1_KEY = VALID_KEY
+
+
+class TenantEntryInputTests(unittest.TestCase):
+    """appt1 and dbt1 are seeded the way app1 is: one command per host, each input typed hidden."""
+
+    def test_appt1_is_filled_from_three_typed_answers_and_the_addresses_are_a_list(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 10.20.0.0/24", "10.0.0.5"])
+        self.assertEqual(0, rig.run("--host", "appt1"))
+        self.assertEqual(
+            {
+                "tenant_entry_key": APPT1_KEY,
+                "tenant_entry_from": ["203.0.113.7", "10.20.0.0/24"],
+                "tenant_entry_bind_address": "10.0.0.5",
+            },
+            rig.document(),
+        )
+        self.assertEqual(3, len(rig.prompts))
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(APPT1_KEY, rig.stdout)
+        self.assertNotIn("203.0.113.7", rig.stdout)
+
+    def test_dbt1_is_filled_from_its_key_and_its_one_address(self) -> None:
+        rig = Rig(self, answers=[DBT1_KEY, "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(
+            {
+                "db_t1_tenant_entry_controller_key": DBT1_KEY,
+                "db_t1_tenant_entry_controller_address": "203.0.113.8",
+            },
+            rig.document(),
+        )
+        self.assertNotIn(DBT1_KEY, rig.stdout)
+
+    def test_a_token_that_is_not_an_address_or_range_writes_nothing_and_is_not_echoed(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "203.0.113.7 not-an-address"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertNotIn("not-an-address", rig.everything)
+
+    def test_an_empty_address_line_writes_nothing(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, ""])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_range_wider_than_slash_24_is_refused(self) -> None:
+        rig = Rig(self, answers=[APPT1_KEY, "10.0.0.0/16"])
+        self.assertEqual(1, rig.run("--host", "appt1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_set_changes_the_address_list_and_keeps_the_key(self) -> None:
+        rig = Rig(self, answers=["198.51.100.4"])
+        rig.put(
+            tool.DEST_NAME,
+            json.dumps({"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["203.0.113.7"]}),
+        )
+        self.assertEqual(0, rig.run("--host", "appt1", "--set", "tenant_entry_from"))
+        self.assertEqual(
+            {"tenant_entry_key": APPT1_KEY, "tenant_entry_from": ["198.51.100.4"]},
+            rig.document(),
+        )
+
+
+class TypedValueCheckTests(unittest.TestCase):
+    """The key lines and the controller address are checked when typed, before any write."""
+
+    BAD_KEYS = (
+        ("an option in front", "no-pty " + VALID_KEY),
+        ("a comment", VALID_KEY + " owner@laptop"),
+        ("another key type", "ssh-rsa " + VALID_KEY.split(" ", 1)[1]),
+        ("two keys on one line", VALID_KEY + " " + VALID_KEY),
+        ("a body of the wrong shape", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "B" * 10),
+        ("a private key", "-----BEGIN OPENSSH PRIVATE KEY----- " + VALID_KEY),
+        ("nothing", ""),
+    )
+    BAD_ADDRESSES = ("256.1.1.1", "203.0.113", "203.0.113.8/24", "", "not-an-address")
+
+    def test_a_key_is_trimmed_and_stored_exactly(self) -> None:
+        rig = Rig(self, answers=["   " + VALID_KEY + "  ", "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(VALID_KEY, rig.document()["db_t1_tenant_entry_controller_key"])
+
+    def test_an_address_is_trimmed_and_stored_exactly(self) -> None:
+        rig = Rig(self, answers=[VALID_KEY, "  203.0.113.8  "])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual("203.0.113.8", rig.document()["db_t1_tenant_entry_controller_address"])
+
+    def test_a_key_that_is_not_exactly_one_ed25519_line_writes_nothing(self) -> None:
+        for label, bad in self.BAD_KEYS:
+            with self.subTest(label):
+                rig = Rig(self, answers=[bad, "203.0.113.8"])
+                self.assertEqual(1, rig.run("--host", "dbt1"))
+                self.assertFalse(rig.dest.exists())
+                if bad:
+                    self.assertNotIn(bad, rig.everything)
+
+    def test_the_appt1_key_is_checked_the_same_way(self) -> None:
+        for label, bad in self.BAD_KEYS:
+            with self.subTest(label):
+                rig = Rig(self, answers=[bad, "203.0.113.7"])
+                self.assertEqual(1, rig.run("--host", "appt1"))
+                self.assertFalse(rig.dest.exists())
+
+    def test_an_address_that_is_not_one_ipv4_address_writes_nothing(self) -> None:
+        for bad in self.BAD_ADDRESSES:
+            with self.subTest(bad):
+                rig = Rig(self, answers=[VALID_KEY, bad])
+                self.assertEqual(1, rig.run("--host", "dbt1"))
+                self.assertFalse(rig.dest.exists())
+                if bad:
+                    self.assertNotIn(bad, rig.everything)
 
 
 if __name__ == "__main__":

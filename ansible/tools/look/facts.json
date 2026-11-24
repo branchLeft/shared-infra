@@ -1,0 +1,60 @@
+{
+  "facts": [
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-app1",
+      "playbook": "ansible/playbooks/app1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-appt1",
+      "playbook": "ansible/playbooks/appt1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-db1",
+      "playbook": "ansible/playbooks/db1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-dbt1",
+      "playbook": "ansible/playbooks/dbt1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-demo1",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-edge1",
+      "playbook": "ansible/playbooks/edge1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-edget",
+      "playbook": "ansible/playbooks/edget.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4082,
+      "name": "pull-trigger-program-ops1",
+      "playbook": "ansible/playbooks/ops1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/pull-trigger"
+    }
+  ]
+}

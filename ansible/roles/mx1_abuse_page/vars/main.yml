@@ -1,0 +1,20 @@
+---
+# Constants of the role, not inputs, so a caller cannot move them (a value in vars/ outranks an
+# inventory or play variable). The program holds the same paths as constants of its own; the unit
+# tests pin the two together.
+mx1_abuse_page_program_dir: /opt/branchleft/abuse-page
+mx1_abuse_page_program_name: branchleft_abuse_page.py
+mx1_abuse_page_program_path: /opt/branchleft/abuse-page/branchleft_abuse_page.py
+mx1_abuse_page_config_dir: /etc/branchleft
+mx1_abuse_page_env_file: /etc/branchleft/mx1-abuse-page.env
+mx1_abuse_page_env_key: NTFY_MX1_TOKEN
+mx1_abuse_page_lib_dir: /var/lib/branchleft
+mx1_abuse_page_state_dir: /var/lib/branchleft/abuse-page
+mx1_abuse_page_unit_dir: /etc/systemd/system
+mx1_abuse_page_service_unit: branchleft-abuse-page.service
+mx1_abuse_page_timer_unit: branchleft-abuse-page.timer
+
+# The optional input, read once. It has no default (a row input of the loader may not: the loader
+# leaves an absent one unset), so the role reads it through this name and an absent or empty
+# token is the same thing: the page is off.
+mx1_abuse_page_token_value: "{{ mx1_abuse_page_token | default('') }}"

@@ -1,0 +1,11 @@
+---
+# Removes the tunnel account, for both halves, after _account_lookup.yml refused one that has a
+# login shell. Nothing is removed that was not the account: no home directory (it has none) and
+# no file. force lets the removal finish while a connection of the account is still open; the
+# target host's teardown ends such a connection first.
+- name: Remove the tunnel account
+  ansible.builtin.user:
+    name: '{{ tenant_scrape_tunnel_user }}'
+    state: absent
+    force: true
+    remove: false

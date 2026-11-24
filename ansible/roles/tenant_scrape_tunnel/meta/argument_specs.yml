@@ -1,0 +1,48 @@
+---
+# Only the main entry: both halves are underscore files, reached by main on the host's name in the
+# play (a pulled playbook may not name a half with tasks_from). The three options are public data
+# the operator's data commit fills in; each is empty until then, and empty means off. None is a
+# secret. The constants (account, paths, ports, destinations) are role vars, not options.
+argument_specs:
+  main:
+    short_description: Install the scraper host's or the target host's half of the tenant scrape tunnel
+    description: >-
+      Runs on edge1 (the scraper host, where Prometheus runs) or on edget (the tenants base host), by
+      the host's name in the play, and stops on any other name. The scraper host creates the tunnel
+      account and an ed25519 key (once, never regenerated) and prints the public half; the target
+      host prints its own SSH host public key. With the target's host key and endpoint set, the
+      scraper host also pins the host key, writes the target file and installs and starts the
+      tunnel unit. With the scraper's public key set, the target host also creates the account with
+      no login shell, writes an authorized key restricted to forwards to the three tenant node
+      exporters and an sshd drop-in that allows the same, checks sshd as a whole, reloads it and
+      reads the effective settings back, restoring the previous files on a failure. Emptying a half's
+      values after it was installed removes it again: the scraper host removes its unit, files, key and
+      account when its host key and endpoint are both empty and the unit is installed; the target host
+      removes its account, authorized key and drop-in, checking and reloading sshd, when the scraper's
+      key is empty and any of them exists. Runs under --check without changing anything, on a host
+      where none of it exists yet too.
+    author: branchLeft
+    options:
+      tenant_scrape_tunnel_scraper_public_key:
+        type: str
+        required: false
+        default: ''
+        description: >-
+          The scraper host's public key, one ssh-ed25519 line as that host printed it. Read by the
+          target host. Empty means the target host installs nothing, and removes what it installed.
+      tenant_scrape_tunnel_target_host_key:
+        type: str
+        required: false
+        default: ''
+        description: >-
+          The target host's SSH host public key, one ssh-ed25519 line as that host printed it. Read by
+          the scraper host, which pins it. Empty, or an empty endpoint, means the scraper host
+          installs no unit; both empty, with the unit installed, removes it.
+      tenant_scrape_tunnel_target_endpoint:
+        type: str
+        required: false
+        default: ''
+        description: >-
+          The target host's DNS name or IPv4 address, with no port or user, that the scraper host
+          connects to. Read by the scraper host. Empty, or an empty host key, means the scraper host
+          installs no unit.

@@ -1,0 +1,119 @@
+---
+# What the `owner` verb runs: the platform's owner script, fetched as it is at one pinned
+# ghost-platform commit and checked against its digest (a file whose bytes differ fails the
+# apply), and the node that runs it. Root's and closed to everyone else: the entry account may
+# run neither, and sudo grants it only the entry program. Until both are in place the verb fails
+# closed with `failed: program-missing`; this role installs them before the key line is written.
+#
+# ANS-10: the fetch, the node download and the unpack are skipped in check mode. get_url writes
+# into a directory that tenant_onboarding makes, which a plan on a fresh host has only seen as
+# to-be-created; unarchive needs its destination to exist even under --check. The second run's
+# zero-change report is the evidence both are in place. The version probe is a read, so it runs
+# in check mode too, or a configured host would be planned for a download on every check.
+- name: Fetch the owner script from ghost-platform
+  ansible.builtin.get_url:
+    url: '{{ tenant_entry_owner_program_url }}'
+    dest: '{{ tenant_entry_owner_program }}'
+    checksum: 'sha256:{{ tenant_entry_owner_program_sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not ansible_check_mode
+
+- name: Read which machine this host is
+  ansible.builtin.command:
+    argv: [/usr/bin/uname, -m]
+  register: tenant_entry_machine
+  changed_when: false
+  check_mode: false
+
+- name: Refuse a machine that has no pinned node build
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_machine.stdout in tenant_entry_node_arch_by_machine
+      - tenant_entry_node_checksums[tenant_entry_node_arch_by_machine[tenant_entry_machine.stdout]] is match('^sha256:[0-9a-f]{64}\Z')
+    quiet: true
+    fail_msg: >-
+      node is pinned for {{ tenant_entry_node_arch_by_machine.keys() | list | join(' and ') }} only,
+      with a published sha256 each.
+
+- name: Read the node this host already has
+  ansible.builtin.stat:
+    path: '{{ tenant_entry_node }}'
+    get_checksum: false
+  register: tenant_entry_node_stat
+
+- name: Ask that node its version when it is there
+  ansible.builtin.command:
+    argv: ['{{ tenant_entry_node }}', --version]
+  register: tenant_entry_node_version_out
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: tenant_entry_node_stat.stat.exists
+
+# Another version, or a node that will not run, is put back whole: the directory is removed first
+# so no file of an older build stays beside the new one.
+- name: Decide whether node has to be installed
+  ansible.builtin.set_fact:
+    tenant_entry_node_needed: >-
+      {{ not tenant_entry_node_stat.stat.exists
+      or (tenant_entry_node_version_out.stdout | default('')) != tenant_entry_node_version }}
+
+- name: Remove a node that is not the pinned version
+  ansible.builtin.file:
+    path: '{{ tenant_entry_node_dir }}'
+    state: absent
+  when: tenant_entry_node_needed and tenant_entry_node_stat.stat.exists
+
+- name: Make the directory of the node runtime
+  ansible.builtin.file:
+    path: '{{ tenant_entry_node_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: tenant_entry_node_needed
+
+- name: Look for xz, which unpacks the node tarball
+  ansible.builtin.stat:
+    path: /usr/bin/xz
+    get_checksum: false
+  register: tenant_entry_xz
+  when: tenant_entry_node_needed and not ansible_check_mode
+
+- name: Refuse a host that has no xz
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_xz.stat.exists
+    quiet: true
+    fail_msg: The node tarball is .tar.xz and this host has no /usr/bin/xz to unpack it with.
+  when: tenant_entry_node_needed and not ansible_check_mode
+
+- name: Download the node tarball and check its published digest
+  ansible.builtin.get_url:
+    url: >-
+      {{ tenant_entry_node_base_url }}/{{ tenant_entry_node_version }}/node-{{ tenant_entry_node_version }}-linux-{{
+      tenant_entry_node_arch_by_machine[tenant_entry_machine.stdout] }}.tar.xz
+    dest: '{{ tenant_entry_node_tarball }}'
+    checksum: '{{ tenant_entry_node_checksums[tenant_entry_node_arch_by_machine[tenant_entry_machine.stdout]] }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: tenant_entry_node_needed and not ansible_check_mode
+
+- name: Unpack the checked node tarball into the runtime directory
+  ansible.builtin.unarchive:
+    src: '{{ tenant_entry_node_tarball }}'
+    dest: '{{ tenant_entry_node_dir }}'
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+      - --no-same-owner
+  when: tenant_entry_node_needed and not ansible_check_mode
+
+- name: Remove the node tarball once it is unpacked
+  ansible.builtin.file:
+    path: '{{ tenant_entry_node_tarball }}'
+    state: absent
+  when: tenant_entry_node_needed and not ansible_check_mode
