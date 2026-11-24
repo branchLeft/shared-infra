@@ -105,7 +105,8 @@ class CapabilityRoles(unittest.TestCase):
         self._capability()
         self._write(
             "roles/a/tasks/main.yml",
-            "- ansible.builtin.include_role:\n    name: cap\n    vars:\n      target_path: /etc/x\n",
+            "- ansible.builtin.include_role:\n    name: cap\n    vars:\n"
+            "      target_path: /etc/x\n",
         )
         findings = check(self.root)
         self.assertEqual(1, len(findings), findings)
@@ -164,7 +165,8 @@ class CapabilityRoles(unittest.TestCase):
         self._capability()
         self._write(
             "roles/a/tasks/main.yml",
-            "- ansible.builtin.include_role:\n    name: '{{ which }}'\n    vars: {target_path: x}\n",
+            "- ansible.builtin.include_role:\n    name: '{{ which }}'\n"
+            "    vars: {target_path: x}\n",
         )
         self.assertEqual(1, len(check(self.root)))
 
