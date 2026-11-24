@@ -9,10 +9,10 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TEMPLATE = REPO / "hetzner/monitoring/stack/ntfy/alertmanager.yml"
+TEMPLATE = REPO / "hetzner/monitoring/stack/ntfy/templates/alertmanager.yml"
 COMPOSE = REPO / "hetzner/monitoring/stack/compose.yml"
 FIRING_PRIORITY = "priority: '{{ if eq .status \"firing\" }}5{{ else }}3{{ end }}'"
-MOUNT = "- ./ntfy/alertmanager.yml:/etc/ntfy/templates/alertmanager.yml:ro"
+MOUNT = "- ./ntfy/templates:/etc/ntfy/templates:ro"
 
 
 class NtfyPagePriorityTest(unittest.TestCase):

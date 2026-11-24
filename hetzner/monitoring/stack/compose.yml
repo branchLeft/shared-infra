@@ -129,7 +129,7 @@ services:
       - '10.20.1.10:2586:80'
     volumes:
       - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
-      - ./ntfy/alertmanager.yml:/etc/ntfy/templates/alertmanager.yml:ro
+      - ./ntfy/templates:/etc/ntfy/templates:ro
       - ntfy-data:/var/lib/ntfy
     read_only: true
     tmpfs:

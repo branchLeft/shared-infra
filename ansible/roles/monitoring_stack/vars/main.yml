@@ -29,6 +29,7 @@ monitoring_stack_dirs:
   - grafana/provisioning/dashboards
   - grafana/provisioning/datasources
   - ntfy
+  - ntfy/templates
   - prometheus
 
 monitoring_stack_files:
@@ -43,7 +44,7 @@ monitoring_stack_files:
   - grafana/provisioning/dashboard-json/tenant-health.json
   - grafana/provisioning/dashboards/dashboards.yaml
   - grafana/provisioning/datasources/prometheus.yaml
-  - ntfy/alertmanager.yml
+  - ntfy/templates/alertmanager.yml
   - ntfy/server.yml.tmpl
   - prometheus/alerts.yml
   - prometheus/demo_tls_probe.yml.tmpl
