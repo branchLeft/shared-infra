@@ -41,6 +41,9 @@ the host's private inputs, then `roles/host_baseline`, then `roles/deploy_toolin
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, then `roles/node_exporter_public` last, and not
 `roles/host_baseline`, `roles/egress_nat` or `roles/broker_deploy`.
+`playbooks/bootstrap/HOST.yml` (`dbt1`, `appt1`) is the owner's hand bootstrap of a host: the two pull
+roles and no other, pinned by `checks/check_enrolment.py` (R12), so the first apply of every service role
+is the gated one.
 The other trees hold only what those hosts need. Delivery is `.github/workflows/ansible-delivery.yml`,
 which calls the reusable workflow in `branchLeft/github-workflows`; the trigger on the host is
 `roles/pull_trigger`, and ANS-17 describes the only approved path.

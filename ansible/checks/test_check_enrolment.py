@@ -25,6 +25,7 @@ from check_enrolment import (
     MAIL_COLLECTOR_KEYS,
     OPTIONAL_OWNER_KEYS,
     OWNER_VARS_KEYS,
+    PULL_ROLES,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
     SPOOL_JUMP_HOSTS,
@@ -48,6 +49,44 @@ STACK_LINE = "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
 class RealTree(unittest.TestCase):
     def test_the_real_tree_passes(self) -> None:
         self.assertEqual(check(ROOT), [])
+
+
+class RealBootstraps(unittest.TestCase):
+    """Reads the real bootstrap playbooks without the check, so the check is not alone."""
+
+    def _bootstraps(self) -> list[Path]:
+        return sorted((ROOT / "ansible" / "playbooks" / "bootstrap").glob("*.yml"))
+
+    def test_the_hosts_that_have_a_bootstrap(self) -> None:
+        self.assertEqual([path.stem for path in self._bootstraps()], ["appt1", "dbt1"])
+
+    def test_a_bootstrap_applies_the_two_pull_roles_and_no_service_role(self) -> None:
+        for path in self._bootstraps():
+            plays = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(plays), 1, path.name)
+            names = [Path(entry["role"]).name for entry in plays[0]["roles"]]
+            self.assertEqual(names, ["ansible_runtime", "pull_trigger"], path.name)
+            self.assertEqual(set(names), PULL_ROLES, path.name)
+
+    def test_a_bootstrap_never_applies_the_loader_nor_needs_its_file(self) -> None:
+        for path in self._bootstraps():
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("host_inputs", text, path.name)
+            self.assertNotIn("host-inputs", text, path.name)
+            for role in PULL_ROLES:
+                for tree in ("tasks", "defaults", "vars"):
+                    for file in (ROOT / "ansible" / "roles" / role / tree).glob("*.yml"):
+                        self.assertNotIn("host_inputs", file.read_text(encoding="utf-8"), file)
+
+    def test_no_bootstrap_carries_a_tag_a_when_or_a_task_section(self) -> None:
+        for path in self._bootstraps():
+            plays = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertLessEqual(
+                set(plays[0]),
+                {"name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"},
+            )
+            for entry in plays[0]["roles"]:
+                self.assertLessEqual(set(entry), {"role", "vars"}, path.name)
 
 
 class Sabotage(unittest.TestCase):
@@ -408,6 +447,106 @@ class Sabotage(unittest.TestCase):
             "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n",
         )
         self._assert_rule("R2 evil.YAML")
+
+    # R12: a service role in a bootstrap playbook is refused, the one control that keeps the hand
+    # bootstrap from deploying anything outside the gated apply.
+    def test_r12_bootstrap_applies_a_service_role(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../../roles/db_t1 # noqa: role-name[path]\n",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: roles must be exactly")
+
+    # R12: host_inputs is refused by name too: a fresh host has no seed, and the seed tool arrives
+    # only after the first gated apply.
+    def test_r12_bootstrap_applies_the_loader(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/appt1.yml",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._assert_rule("R12 bootstrap/appt1.yml: host_inputs must not be applied")
+
+    # R12: the two pull roles are pinned, so the toolchain role may not be dropped either.
+    def test_r12_bootstrap_drops_a_pull_role(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n",
+            "",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: roles must be exactly")
+
+    # R12: no task, tag or handler section may carry a service action around the role list.
+    def test_r12_bootstrap_carries_tasks(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "  roles:\n",
+            "  tasks:\n    - ansible.builtin.command: /bin/true\n  roles:\n",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: play key tasks")
+
+    # R12: a role entry may not carry a tag, so a tag cannot widen the run.
+    def test_r12_bootstrap_role_entry_carries_a_tag(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../../roles/pull_trigger # noqa: role-name[path]\n      tags: [x]\n",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: roles must be exactly")
+
+    # R12: a bootstrap names its own host's trust file, never another's.
+    def test_r12_bootstrap_loads_another_hosts_trust(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml", "/../../trust/dbt1.yml", "/../../trust/appt1.yml"
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: vars_files must be exactly")
+
+    # R12: the same two refusals run first, as in the host playbook.
+    def test_r12_bootstrap_drops_the_signer_refusal(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    - name: Refuse an empty signer list\n"
+            "      ansible.builtin.include_tasks: ../includes/require_signers.yml\n",
+            "",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: pre_tasks must be exactly")
+
+    # R12: the host's own extra vars (a gateway switch, say) are not carried: enrolled_host alone.
+    def test_r12_bootstrap_carries_another_var(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    enrolled_host: dbt1\n",
+            "    enrolled_host: dbt1\n    egress_nat_gateway_enabled: true\n",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: vars must be exactly")
+
+    # R12: a bootstrap exists only for an enrolled host.
+    def test_r12_bootstrap_for_a_host_with_no_playbook(self) -> None:
+        shutil.copy(
+            self.ansible / "playbooks" / "bootstrap" / "dbt1.yml",
+            self.ansible / "playbooks" / "bootstrap" / "db9.yml",
+        )
+        self._assert_rule("R12 bootstrap/db9.yml: no enrolled playbook")
+
+    # R12: the bootstrap folder holds exact .yml files at its top, nothing else.
+    def test_r12_bootstrap_folder_refuses_a_nested_or_oddly_named_file(self) -> None:
+        self._write("playbooks/bootstrap/sub/evil.yml", EVIL_PLAY)
+        self._write("playbooks/bootstrap/evil.YAML", EVIL_PLAY)
+        findings = check(self.root)
+        for name in ("bootstrap/sub/evil.yml", "bootstrap/evil.YAML"):
+            self.assertTrue(any(f.startswith(f"R2 {name}") for f in findings), findings)
+
+    # R6: a bootstrap playbook may not set a protected key beyond its own enrolled_host.
+    def test_r6_bootstrap_sets_a_signer(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "    enrolled_host: dbt1\n",
+            "    enrolled_host: dbt1\n    pull_trigger_signers: [attacker]\n",
+        )
+        self._assert_rule("R6 ansible/playbooks/bootstrap/dbt1.yml")
 
     # Playbooks: a nested playbook whose name is not an exact .yml is refused.
     def test_nested_uppercase_yaml_playbook_is_refused(self) -> None:

@@ -198,5 +198,19 @@ is not loaded there.
   literal keys of its input task, `host_roles/`, the playbook and the role argument specs
   in agreement, and the structure of the loader's tasks.
 
+- **R12** `playbooks/bootstrap/HOST.yml` is the owner's one hand step for a host that has none of
+  its inputs yet: it installs the pull and nothing else, so the first apply of every other role
+  goes through the gated `ansible-hosts` approval. It exists only for an enrolled host (`HOST.yml`
+  beside it), has one play with no key but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`,
+  `pre_tasks` and `roles`, on `hosts: all`, `vars` exactly `enrolled_host: HOST` (the
+  host's other play variables belong to roles it does not apply), `vars_files` exactly the shared
+  include, `../../trust/HOST.yml` and `../../owner_vars/HOST.yml` if and only if that file exists,
+  `pre_tasks` the two refusals, and `roles` exactly the runtime entry and the bare trigger, at
+  one level deeper than a host playbook. Any other role is a finding, `host_inputs` by name: a
+  fresh host has no inputs file and its seed tool arrives with the first gated apply, which then
+  stops at the loader. No tag, `when` or `vars` can sit on a role entry, so no tag widens the
+  run. The file is never pulled (R3 derives `playbooks/HOST.yml`), and R6 reads it as an
+  enrolled playbook. Run it with `-i "HOST," -e ansible_host=ADDRESS`, as for a host playbook.
+
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
