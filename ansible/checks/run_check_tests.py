@@ -123,7 +123,7 @@ def jobs_from(environment: dict[str, str]) -> int:
             return max(1, int(raw))
         except ValueError:
             return 1
-    return max(1, os.cpu_count() or 1)
+    return max(1, min(2, os.cpu_count() or 1))  # EXPERIMENT: 2 workers
 
 
 @dataclass
