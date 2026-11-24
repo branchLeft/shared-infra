@@ -10,6 +10,9 @@
 - name: Fetch the secrets program the entry program calls
   ansible.builtin.import_tasks: _secrets_program.yml
 
+- name: Install the owner script and the node it runs under
+  ansible.builtin.import_tasks: _owner_program.yml
+
 - name: Make sure the entry account exists, locked, with a real shell
   ansible.builtin.import_tasks: _account.yml
 

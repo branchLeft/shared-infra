@@ -108,6 +108,7 @@
         caddy_reload: '{{ edge_stack_caddy_due | bool }}'
         compose_restart: '{{ edge_stack_compose_due | bool }}'
         crowdsec_restart: '{{ edge_stack_crowdsec_due | bool }}'
+        crowdsec_files: "{{ edge_stack_crowdsec_files | map('regex_replace', '^crowdsec/', '') | list }}"
         wait_tries: '{{ edge_stack_crowdsec_wait_tries }}'
         wait_interval: '{{ edge_stack_crowdsec_wait_interval }}'
         pending_text: '{{ edge_stack_stamp_pending }}'

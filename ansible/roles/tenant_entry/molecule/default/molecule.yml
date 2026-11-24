@@ -56,6 +56,15 @@ provisioner:
         scenario_secrets_program: /root/platform-provision/render_tenant_secrets.py
         # Written out here, not read from the role, so a changed pin fails the comparison.
         scenario_secrets_sha256: 1d67b290515ba642aa507b7bbe1ef6e489b845c9feb09419c6fd489233d8580f
+        # The owner script and the node it runs under. Written out here, not read from the role,
+        # so a changed pin fails the comparison. The version is the one nodejs.org's digest for
+        # the platform's own build names.
+        scenario_owner_program: /root/platform-provision/provision-owner.mjs
+        scenario_owner_sha256: 4aa7094cd22bcddf90ffe195fa44775812be4968f557ab7dba0d87d3eb77dc97
+        scenario_node_dir: /usr/local/lib/branchleft-tenant-entry/node
+        scenario_node: /usr/local/lib/branchleft-tenant-entry/node/bin/node
+        scenario_node_version: v26.5.0
+        scenario_docker_log: /var/tmp/stand-in-docker.log
         scenario_opt_dir: /opt/branchleft
         scenario_bind_address: 10.20.2.30
         scenario_etc_dir: /etc/branchleft
