@@ -46,7 +46,7 @@ RELEASE_KINDS: frozenset[str] = frozenset(
     {
         "*.md",  # every document; README, CLAUDE.md, .claude/ and /.github/ are owned again
         "/ansible/checks/offline/",  # the offline render fixtures
-        "/scripts/nvmrc-node-exec.*",
+        "/ansible/checks/test_*.py",  # the tests of the checks; test_codeowners.py is owned again
     }
 )
 
@@ -62,12 +62,11 @@ GUARDRAIL_PATHS = [
     "ansible/checks/codeowners_match.py",
     "ansible/checks/check_pins.py",
     "ansible/checks/check_delivery.py",
+    "ansible/checks/check_secret_no_log.py",
+    "ansible/checks/ci_select.py",
+    "ansible/checks/blocking_shards.json",
     "ansible/checks/check_enrolment.py",
     "ansible/checks/host_roles/edge1.yml",
-    "ansible/checks/test_check_delivery.py",
-    "ansible/checks/test_step_allowlist.py",
-    "ansible/checks/test_ci_gate_order.py",
-    "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/checks/a_new_gate_script.py",
     "ansible/harness/run_harness.py",
     "ansible/pyproject.toml",
@@ -75,25 +74,21 @@ GUARDRAIL_PATHS = [
     "ansible/playbooks/includes/require_signers.yml",
     "ansible/roles/deploy_verifier/files/trusted_root.jsonl",
     "ansible/roles/deploy_verifier/files/branchleft-verify-image.py",
-    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
     "scripts/assert-no-hetzner-deletes.py",
     "scripts/choose-apply-environment.py",
-    "scripts/a_new_ci_script.py",
+    "scripts/assert-no-committed-pulumi-secrets.py",
+    "scripts/audit-pulumi-secrets.py",
+    "scripts/ci_skip.py",
+    "scripts/pulumi-stack-inventory.json",
     "hetzner/scripts/check-crowdsec-hub-pin.py",
     "hetzner/scripts/test_check_crowdsec_hub_pin.py",
     "hetzner/scripts/lib/docker_pull.py",
     "hetzner/scripts/lib/proof_harness.py",
     "hetzner/provision/test_suite_size.py",
     "hetzner/provision/test_counts/test_suite_size.txt",
-    "hetzner/estate.guard.test.ts",
-    "hetzner/dns.guard.test.ts",
-    "hetzner/tenants.guard.test.ts",
     "hetzner/projectGuard.ts",
-    "hetzner/projectGuard.test.ts",
     "ovh/copy2/projectGuard.ts",
-    "ovh/copy2/projectGuard.test.ts",
     "ovh/copy2/configGuard.ts",
-    "ovh/copy2/configGuard.test.ts",
     "ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py",
     ".pre-commit-config.yaml",
     ".prettierignore",
@@ -155,6 +150,22 @@ RELEASED_PATHS = [
     "hetzner/scripts/probe-object-storage.py",
     "hetzner/scripts/check-address-plan-drift.py",
     "ansible/checks/test_edge_single_home.py",
+    "ansible/checks/test_check_delivery.py",
+    "ansible/checks/test_step_allowlist.py",
+    "ansible/checks/test_ci_gate_order.py",
+    "ansible/checks/test_deploy_verifier_coverage.py",
+    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
+    "scripts/test_assert_no_hetzner_deletes.py",
+    "scripts/test_choose_apply_environment.py",
+    "scripts/test_ci_skip.py",
+    "scripts/cancel-superseded-waiting.py",
+    "scripts/tenants_state_rewrap.py",
+    "hetzner/estate.guard.test.ts",
+    "hetzner/dns.guard.test.ts",
+    "hetzner/tenants.guard.test.ts",
+    "hetzner/projectGuard.test.ts",
+    "ovh/copy2/projectGuard.test.ts",
+    "ovh/copy2/configGuard.test.ts",
     "ansible/requirements.txt",
     "pnpm-lock.yaml",
     "hetzner/pnpm-lock.yaml",
@@ -165,7 +176,6 @@ RELEASED_PATHS = [
 # Paths named above that the repository does not hold yet.
 STANDS_FOR_MORE = {
     "ansible/checks/a_new_gate_script.py",
-    "scripts/a_new_ci_script.py",
     # Named by the standards template; a repository that has no floors or ignore file yet has none.
     "tools/floors.tsv",
     ".standardsignore",
@@ -238,18 +248,44 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(RELEASED_PATHS)
 
     def test_a_new_file_in_a_gate_directory_is_the_owners_before_it_is_listed(self) -> None:
-        # A new check or gate test, or a new CI script, fails closed; and so does a workflow.
+        # A new check script, host allowlist or trust file fails closed; and so does a workflow.
         self.assert_owned(
             [
                 "ansible/checks/check_a_new_gate.py",
-                "ansible/checks/test_a_new_gate_agree.py",
                 "ansible/checks/host_roles/a_new_host.yml",
                 "ansible/trust/newhost.yml",
-                "scripts/a_new_ci_script.py",
-                "hetzner/aNewGuard.guard.test.ts",
                 ".github/workflows/a_new_workflow.yml",
             ]
         )
+
+    def test_a_test_of_a_gate_is_not_the_owners_but_the_proof_of_this_file_is(self) -> None:
+        # The owner's second pass: the tests of a gate are the agents', the gate
+        # they read is not. Only the proof of this file stays owned among the tests.
+        self.assert_unowned(
+            [
+                "ansible/checks/test_a_new_gate_agree.py",
+                "scripts/test_a_new_gate.py",
+                "scripts/a_new_ci_script.py",
+                "hetzner/aNewGuard.guard.test.ts",
+                "ovh/copy2/aNewGuard.test.ts",
+            ]
+        )
+        self.assert_owned(["ansible/checks/test_codeowners.py"])
+
+    def test_the_gates_in_scripts_are_owned_by_name_and_no_other_script_is(self) -> None:
+        # The six gates the merge route's register names, and nothing else under scripts/.
+        gates = {
+            "scripts/assert-no-committed-pulumi-secrets.py",
+            "scripts/assert-no-hetzner-deletes.py",
+            "scripts/audit-pulumi-secrets.py",
+            "scripts/choose-apply-environment.py",
+            "scripts/ci_skip.py",
+            "scripts/pulumi-stack-inventory.json",
+        }
+        scripts = [f for f in repository_files() if f.startswith("scripts/") and "/" not in f[8:]]
+        self.assertTrue(gates <= set(scripts))
+        self.assert_owned(sorted(gates))
+        self.assert_unowned(sorted(set(scripts) - gates))
 
     def test_a_new_file_outside_the_guardrails_is_not_the_owners(self) -> None:
         self.assert_unowned(
