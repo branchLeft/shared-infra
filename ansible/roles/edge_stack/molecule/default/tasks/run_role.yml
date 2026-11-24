@@ -4,6 +4,9 @@
 # calls and their kinds in order. The inputs are edge_stack_verify_run_name (required) and, with
 # the defaults below, edge_stack_verify_run_source (a stack directory), edge_stack_verify_run_check,
 # edge_stack_verify_run_timeout, edge_stack_verify_run_tries and edge_stack_verify_run_interval.
+# A run of the tenant profile is edge_stack_verify_run_profile: tenant, with
+# edge_stack_verify_run_tenant_source as the stack directory it takes (the real tenant stack when
+# that is not given).
 - name: Snapshot before
   ansible.builtin.include_tasks: snapshot.yml
 
@@ -14,16 +17,33 @@
 
 - name: Apply the role and note whether it failed
   block:
-    - name: Apply the role
+    # A variable the caller passes to the role beats the role's own set_fact, so the tenant
+    # profile, which swaps edge_stack_source_dir itself, must not be handed one.
+    - name: Apply the role, estate profile
       ansible.builtin.include_role:
         name: branchleft.edge_stack
         apply:
           check_mode: '{{ edge_stack_verify_run_check | default(false) }}'
       vars:
         edge_stack_source_dir: '{{ edge_stack_verify_run_source | default(edge_stack_verify_real_stack) }}'
+        edge_stack_profile: estate
         edge_stack_lock_timeout: '{{ edge_stack_verify_run_timeout | default(600) }}'
         edge_stack_crowdsec_wait_tries: '{{ edge_stack_verify_run_tries | default(24) }}'
         edge_stack_crowdsec_wait_interval: '{{ edge_stack_verify_run_interval | default(5) }}'
+      when: edge_stack_verify_run_profile | default('estate') == 'estate'
+
+    - name: Apply the role, tenant profile
+      ansible.builtin.include_role:
+        name: branchleft.edge_stack
+        apply:
+          check_mode: '{{ edge_stack_verify_run_check | default(false) }}'
+      vars:
+        edge_stack_profile: tenant
+        edge_stack_tenant_source_dir: '{{ edge_stack_verify_run_tenant_source | default(edge_stack_verify_real_tenant_stack) }}'
+        edge_stack_lock_timeout: '{{ edge_stack_verify_run_timeout | default(600) }}'
+        edge_stack_crowdsec_wait_tries: '{{ edge_stack_verify_run_tries | default(24) }}'
+        edge_stack_crowdsec_wait_interval: '{{ edge_stack_verify_run_interval | default(5) }}'
+      when: edge_stack_verify_run_profile | default('estate') == 'tenant'
 
     - name: Note that the role did not fail
       ansible.builtin.set_fact:

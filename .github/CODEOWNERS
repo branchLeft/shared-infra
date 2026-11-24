@@ -1,64 +1,24 @@
-# What the owner reviews, and nothing else. A path is the owner's when a change to it could do harm
-# that no later check of the owner's would catch: it moves a secret or a key, changes who may log in
-# or what runs as root, reaches the mail host, creates or changes a billed resource, changes what
-# the public can reach, shortens a database backup, or weakens a rule, a gate or an exemption that
-# judges a merge or a deploy. Every other path merges on the reviewer App's approval, and a host
-# configuration change that is merged still reaches a host only through the gated apply.
-# The last matching line wins and there is no catch-all line. A line with no owner un-owns what it
-# matches, so the released paths below come after the directories they are cut out of, and the
-# files that must stay the owner's are listed again after them. The shared standards lines are
-# last (SYNC-1). A directory that is owned below and not released stays owned for every new file in
-# it, so a new file of a kept kind fails closed. ansible/checks/test_codeowners.py proves this file
-# against sample paths and against the paths each kept class names.
-# Rows are in order inside each block (no block mixes owned and released rows, so the order changes
-# no answer), so two changes that add a row at different places do not edit the same lines. A
-# release is a kind of path from that test's RELEASE_KINDS or one file named in full, never a name
-# pattern. `codeowners_match.py --against OLD` lists every tracked file that lost or gained an owner.
+# The owner reviews only two kinds of path (workspace#4323); every other path merges on the reviewer
+# App's approval and green CI, and a host change that merges still reaches a host only through the
+# gated apply. The owner has extended trust to agents on the edge, Caddy, firewall, mail host,
+# Ansible roles and playbooks, inventories, Pulumi programs, hetzner/ and ovh/ code, ssh and sudoers
+# roles, and secrets handling code, so none of those is listed.
+#   (a) Guardrails: a path whose silent weakening would stop an agent guardrail or a required check
+#       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
+#       codeowners_match.py), CLAUDE.md, .claude/, the workflows, actions and dependabot settings
+#       (/.github/, by the standards lines), the gate scripts and tests those checks run
+#       (ansible/checks/, ansible/harness/, scripts/ and the named hetzner/scripts checks), the
+#       apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer include), the
+#       guard tests and guards that stop a destructive apply, the floors and lint settings, the
+#       image verifier, and the exemption files.
+#   (b) Human-facing documents: README, the licences, and the launch page copy.
+# When in doubt: if this file were silently weakened, would a guardrail or a required check stop
+# protecting us? Yes, owner. No, released.
+# The last matching line wins and there is no catch-all. Blocks are in order, and no block mixes
+# owned and released rows. A release is a kind of path from RELEASE_KINDS in
+# ansible/checks/test_codeowners.py or one file named in full. The shared standards lines are last
+# (SYNC-1). `codeowners_match.py --against OLD` lists every tracked file that lost or gained an owner.
 
-# The mail host and what runs on it: mx1 is live production mail, and the mail programs run under
-# plan credentials. Only the mail documents are released, by the markdown line below.
-/ansible/inventories/production/group_vars/mx*               @branchLeft/branchleft-admin
-/ansible/inventories/production/host_vars/mx1*               @branchLeft/branchleft-admin
-/ansible/inventories/production/hosts.yml                    @branchLeft/branchleft-admin
-/ansible/playbooks/group_vars/mx*                            @branchLeft/branchleft-admin
-/ansible/playbooks/host_vars/mx1*                            @branchLeft/branchleft-admin
-/ansible/playbooks/mx1.yml                                   @branchLeft/branchleft-admin
-/ansible/roles/mail_reconcilers/                             @branchLeft/branchleft-admin
-/mail/                                                       @branchLeft/branchleft-admin
-
-# Billed resources and what plans them: the Pulumi programs, their stack files and the install-time
-# controls the credentialed plan jobs run (package.json scripts, pnpm-workspace.yaml allowBuilds,
-# .npmrc), and the DNS zone data. A dependency bump that touches package.json therefore still
-# reaches the owner. Lockfiles are released below. ovh/ creates Object Storage with object lock,
-# and a Compliance lock cannot be undone once an object is written.
-.npmrc                                                       @branchLeft/branchleft-admin
-/hetzner-host/                                               @branchLeft/branchleft-admin
-/hetzner-host/package.json                                   @branchLeft/branchleft-admin
-/hetzner-host/vitest.config.ts                               @branchLeft/branchleft-admin
-/hetzner/*.ts                                                @branchLeft/branchleft-admin
-/hetzner/dns/*.json                                          @branchLeft/branchleft-admin
-/hetzner/package.json                                        @branchLeft/branchleft-admin
-/hetzner/tsconfig.json                                       @branchLeft/branchleft-admin
-/hetzner/vitest.config.ts                                    @branchLeft/branchleft-admin
-/ovh/                                                        @branchLeft/branchleft-admin
-/package.json                                                @branchLeft/branchleft-admin
-/tsconfig.json                                               @branchLeft/branchleft-admin
-Pulumi*.yaml                                                 @branchLeft/branchleft-admin
-pnpm-workspace.yaml                                          @branchLeft/branchleft-admin
-
-# The launch page and the owner's words on it, and the routing that goes public: the hostname
-# registry, the renderer, the committed Caddyfiles it makes and the test that holds them equal.
-/hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
-/hetzner/edge/render.test.ts                                 @branchLeft/branchleft-admin
-/hetzner/edge/render.ts                                      @branchLeft/branchleft-admin
-/hetzner/edge/stack/caddy/Caddyfile                          @branchLeft/branchleft-admin
-/hetzner/edge/validation/Caddyfile.enforcing                 @branchLeft/branchleft-admin
-/sites.ts                                                    @branchLeft/branchleft-admin
-
-# Rules, gates and exemption files: the hook set and format skips, the lint floors, the Ansible
-# harness, every CI gate and its tests under ansible/checks/, the CI scripts, the deploy account's
-# command and slot provisioner and their tests, the suite-size floor, the image verifier and the
-# image-scan exemptions. Each directory is owned whole and its released files are listed below.
 /.ansible-lint                                               @branchLeft/branchleft-admin
 /.image-scan-exemptions.json                                 @branchLeft/branchleft-admin
 /.pre-commit-config.yaml                                     @branchLeft/branchleft-admin
@@ -66,175 +26,36 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /.yamllint                                                   @branchLeft/branchleft-admin
 /ansible/checks/                                             @branchLeft/branchleft-admin
 /ansible/harness/                                            @branchLeft/branchleft-admin
+/ansible/playbooks/includes/require_signers.yml              @branchLeft/branchleft-admin
 /ansible/pyproject.toml                                      @branchLeft/branchleft-admin
-/hetzner/control-plane/stack/postgres/pg_hba.conf            @branchLeft/branchleft-admin
-/hetzner/edge/breakGlassToken.test.ts                        @branchLeft/branchleft-admin
-/hetzner/provision/*branchleft_deploy*                       @branchLeft/branchleft-admin
-/hetzner/provision/*branchleft_promote*                      @branchLeft/branchleft-admin
-/hetzner/provision/*provision_deploy_slot*                   @branchLeft/branchleft-admin
-/hetzner/provision/fixtures/offline-attestation/             @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
+/ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py @branchLeft/branchleft-admin
+/ansible/trust/                                              @branchLeft/branchleft-admin
+/hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
+/hetzner/projectGuard.test.ts                                @branchLeft/branchleft-admin
+/hetzner/projectGuard.ts                                     @branchLeft/branchleft-admin
+/hetzner/provision/stack_keys_check.py                       @branchLeft/branchleft-admin
 /hetzner/provision/test_counts/                              @branchLeft/branchleft-admin
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
-/hetzner/scripts/                                            @branchLeft/branchleft-admin
+/hetzner/scripts/check-crowdsec-hub-pin.py                   @branchLeft/branchleft-admin
+/hetzner/scripts/check-hetzner-*                             @branchLeft/branchleft-admin
+/hetzner/scripts/lib/docker_pull.py                          @branchLeft/branchleft-admin
+/hetzner/scripts/lib/proof_harness.py                        @branchLeft/branchleft-admin
+/hetzner/scripts/prove_*                                     @branchLeft/branchleft-admin
+/hetzner/scripts/test_check_crowdsec_hub_pin.py              @branchLeft/branchleft-admin
+/hetzner/scripts/test_check_hetzner_*                        @branchLeft/branchleft-admin
+/hetzner/scripts/test_proof_harness.py                       @branchLeft/branchleft-admin
+/ovh/copy2/configGuard*                                      @branchLeft/branchleft-admin
+/ovh/copy2/projectGuard*                                     @branchLeft/branchleft-admin
 /scripts/                                                    @branchLeft/branchleft-admin
 /tools/floors.tsv                                            @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 
-# Trust, keys and access: the signer lists, the owner's values for each host, the roles that write
-# sshd, sudoers, authorized_keys, login accounts or signing keys, the verifier's trusted keys, the
-# owner-run bootstrap guards and their fixtures. Every role directory is owned whole and its
-# documents are released below. Pull roles are the owner's alone.
-/ansible/owner_vars/                                         @branchLeft/branchleft-admin
-/ansible/patterns/sudoers_and_keys/                          @branchLeft/branchleft-admin
-/ansible/playbooks/includes/                                 @branchLeft/branchleft-admin
-/ansible/roles/ansible_runtime/                              @branchLeft/branchleft-admin
-/ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
-/ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin
-/ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml       @branchLeft/branchleft-admin
-/ansible/roles/broker_deploy/tasks/_sudoers.yml              @branchLeft/branchleft-admin
-/ansible/roles/broker_deploy/tasks/main.yml                  @branchLeft/branchleft-admin
-/ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
-/ansible/roles/ci_jump/                                      @branchLeft/branchleft-admin
-/ansible/roles/ci_login/                                     @branchLeft/branchleft-admin
-/ansible/roles/ci_step_login/                                @branchLeft/branchleft-admin
-/ansible/roles/control_plane_db/                             @branchLeft/branchleft-admin
-/ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
-/ansible/roles/db_t1_tenant_entry/                          @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/render_slot_sudoers.py @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/files/judge_caddy_config.py       @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/tasks/_accounts.yml               @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/tasks/_broker_tunnel_install.yml  @branchLeft/branchleft-admin
-/ansible/roles/demo1_build/tests/unit/test_caddy_judge.py    @branchLeft/branchleft-admin
-/ansible/roles/deploy_slot_keys/                             @branchLeft/branchleft-admin
-/ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
-/ansible/roles/deploy_verifier/tasks/_offline.yml            @branchLeft/branchleft-admin
-/ansible/roles/deploy_verifier/vars/main.yml                 @branchLeft/branchleft-admin
-/ansible/roles/host_baseline/files/01-branchleft-hardening.conf @branchLeft/branchleft-admin
-/ansible/roles/host_baseline/tasks/_ssh.yml                  @branchLeft/branchleft-admin
-/ansible/roles/host_inputs/                                  @branchLeft/branchleft-admin
-/ansible/roles/mail_collector/                               @branchLeft/branchleft-admin
-/ansible/roles/node_exporter/tasks/_node_exporter.yml        @branchLeft/branchleft-admin
-/ansible/roles/promote_host/                                 @branchLeft/branchleft-admin
-/ansible/roles/provisioning_controller_host/                 @branchLeft/branchleft-admin
-/ansible/roles/pull_trigger/                                 @branchLeft/branchleft-admin
-/ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
-/ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
-/ansible/roles/safety_service/                               @branchLeft/branchleft-admin
-/ansible/roles/spool_path_account/                           @branchLeft/branchleft-admin
-/ansible/roles/spool_paths/                                  @branchLeft/branchleft-admin
-/ansible/roles/tenant_entry/                                @branchLeft/branchleft-admin
-/ansible/roles/tenant_scrape_tunnel/                         @branchLeft/branchleft-admin
-/ansible/roles/tunnel_account/                               @branchLeft/branchleft-admin
-/ansible/tools/*ci_key_line*                                 @branchLeft/branchleft-admin
-/ansible/tools/*pubkey_only*                                 @branchLeft/branchleft-admin
-/ansible/tools/*seed_host_inputs*                            @branchLeft/branchleft-admin
-/ansible/tools/*spool_image_gate*                            @branchLeft/branchleft-admin
-/ansible/tools/fixtures/                                     @branchLeft/branchleft-admin
-/ansible/trust/                                              @branchLeft/branchleft-admin
-broker-verify-key*                                           @branchLeft/branchleft-admin
-
-# Stopping or shortening a backup: the role that writes the dump and prune timers, the binary log
-# expiry that sets the seven-day point-in-time-recovery window, and the two roles that hold the
-# nightly backup and state-copy timers (the account those roles create is in the same files).
-/ansible/roles/backup_restore/                               @branchLeft/branchleft-admin
-/ansible/roles/backup_worker/                                @branchLeft/branchleft-admin
-/ansible/roles/db1_backup_timers/                            @branchLeft/branchleft-admin
-/ansible/roles/db1_stack/templates/branchleft.cnf.j2         @branchLeft/branchleft-admin
-/ansible/roles/db_t1/templates/branchleft.cnf.j2             @branchLeft/branchleft-admin
-
-# Ansible runs code from the directories beside each playbook it loads, in an imported
-# playbook's directory and in each role. The pull sets no variable that names a plugin or
-# module path, so these are read with no config. Each name below is a loader directory of
-# ansible-core; collections is listed at the top and playbook levels only, where Ansible's
-# collection finder looks. Each loader line has no trailing slash, so it owns a directory of
-# that name and also a file or a symlink of that name, which Ansible follows to a directory.
-/ansible/action_plugins                  @branchLeft/branchleft-admin
-/ansible/ansible.cfg                     @branchLeft/branchleft-admin
-/ansible/become_plugins                  @branchLeft/branchleft-admin
-/ansible/cache_plugins                   @branchLeft/branchleft-admin
-/ansible/callback_plugins                @branchLeft/branchleft-admin
-/ansible/cliconf_plugins                 @branchLeft/branchleft-admin
-/ansible/collections                     @branchLeft/branchleft-admin
-/ansible/connection_plugins              @branchLeft/branchleft-admin
-/ansible/doc_fragments                   @branchLeft/branchleft-admin
-/ansible/filter_plugins                  @branchLeft/branchleft-admin
-/ansible/httpapi_plugins                 @branchLeft/branchleft-admin
-/ansible/inventory_plugins               @branchLeft/branchleft-admin
-/ansible/library                         @branchLeft/branchleft-admin
-/ansible/lookup_plugins                  @branchLeft/branchleft-admin
-/ansible/module_utils                    @branchLeft/branchleft-admin
-/ansible/netconf_plugins                 @branchLeft/branchleft-admin
-/ansible/playbooks/**/action_plugins     @branchLeft/branchleft-admin
-/ansible/playbooks/**/become_plugins     @branchLeft/branchleft-admin
-/ansible/playbooks/**/cache_plugins      @branchLeft/branchleft-admin
-/ansible/playbooks/**/callback_plugins   @branchLeft/branchleft-admin
-/ansible/playbooks/**/cliconf_plugins    @branchLeft/branchleft-admin
-/ansible/playbooks/**/connection_plugins @branchLeft/branchleft-admin
-/ansible/playbooks/**/doc_fragments      @branchLeft/branchleft-admin
-/ansible/playbooks/**/filter_plugins     @branchLeft/branchleft-admin
-/ansible/playbooks/**/httpapi_plugins    @branchLeft/branchleft-admin
-/ansible/playbooks/**/inventory_plugins  @branchLeft/branchleft-admin
-/ansible/playbooks/**/library            @branchLeft/branchleft-admin
-/ansible/playbooks/**/lookup_plugins     @branchLeft/branchleft-admin
-/ansible/playbooks/**/module_utils       @branchLeft/branchleft-admin
-/ansible/playbooks/**/netconf_plugins    @branchLeft/branchleft-admin
-/ansible/playbooks/**/shell_plugins      @branchLeft/branchleft-admin
-/ansible/playbooks/**/strategy_plugins   @branchLeft/branchleft-admin
-/ansible/playbooks/**/terminal_plugins   @branchLeft/branchleft-admin
-/ansible/playbooks/**/test_plugins       @branchLeft/branchleft-admin
-/ansible/playbooks/**/vars_plugins       @branchLeft/branchleft-admin
-/ansible/playbooks/action_plugins        @branchLeft/branchleft-admin
-/ansible/playbooks/become_plugins        @branchLeft/branchleft-admin
-/ansible/playbooks/cache_plugins         @branchLeft/branchleft-admin
-/ansible/playbooks/callback_plugins      @branchLeft/branchleft-admin
-/ansible/playbooks/cliconf_plugins       @branchLeft/branchleft-admin
-/ansible/playbooks/collections           @branchLeft/branchleft-admin
-/ansible/playbooks/connection_plugins    @branchLeft/branchleft-admin
-/ansible/playbooks/doc_fragments         @branchLeft/branchleft-admin
-/ansible/playbooks/filter_plugins        @branchLeft/branchleft-admin
-/ansible/playbooks/httpapi_plugins       @branchLeft/branchleft-admin
-/ansible/playbooks/inventory_plugins     @branchLeft/branchleft-admin
-/ansible/playbooks/library               @branchLeft/branchleft-admin
-/ansible/playbooks/lookup_plugins        @branchLeft/branchleft-admin
-/ansible/playbooks/module_utils          @branchLeft/branchleft-admin
-/ansible/playbooks/netconf_plugins       @branchLeft/branchleft-admin
-/ansible/playbooks/shell_plugins         @branchLeft/branchleft-admin
-/ansible/playbooks/strategy_plugins      @branchLeft/branchleft-admin
-/ansible/playbooks/terminal_plugins      @branchLeft/branchleft-admin
-/ansible/playbooks/test_plugins          @branchLeft/branchleft-admin
-/ansible/playbooks/vars_plugins          @branchLeft/branchleft-admin
-/ansible/roles/*/action_plugins          @branchLeft/branchleft-admin
-/ansible/roles/*/become_plugins          @branchLeft/branchleft-admin
-/ansible/roles/*/cache_plugins           @branchLeft/branchleft-admin
-/ansible/roles/*/callback_plugins        @branchLeft/branchleft-admin
-/ansible/roles/*/cliconf_plugins         @branchLeft/branchleft-admin
-/ansible/roles/*/connection_plugins      @branchLeft/branchleft-admin
-/ansible/roles/*/doc_fragments           @branchLeft/branchleft-admin
-/ansible/roles/*/filter_plugins          @branchLeft/branchleft-admin
-/ansible/roles/*/httpapi_plugins         @branchLeft/branchleft-admin
-/ansible/roles/*/inventory_plugins       @branchLeft/branchleft-admin
-/ansible/roles/*/library                 @branchLeft/branchleft-admin
-/ansible/roles/*/lookup_plugins          @branchLeft/branchleft-admin
-/ansible/roles/*/module_utils            @branchLeft/branchleft-admin
-/ansible/roles/*/netconf_plugins         @branchLeft/branchleft-admin
-/ansible/roles/*/shell_plugins           @branchLeft/branchleft-admin
-/ansible/roles/*/strategy_plugins        @branchLeft/branchleft-admin
-/ansible/roles/*/terminal_plugins        @branchLeft/branchleft-admin
-/ansible/roles/*/test_plugins            @branchLeft/branchleft-admin
-/ansible/roles/*/vars_plugins            @branchLeft/branchleft-admin
-/ansible/shell_plugins                   @branchLeft/branchleft-admin
-/ansible/strategy_plugins                @branchLeft/branchleft-admin
-/ansible/terminal_plugins                @branchLeft/branchleft-admin
-/ansible/test_plugins                    @branchLeft/branchleft-admin
-/ansible/vars_plugins                    @branchLeft/branchleft-admin
-
-# Released, with no owner: documents, lockfiles and version pins, tests and fixtures that are not
-# the tests of a kept gate, checkers and probes that run in no job holding a secret, and host
-# configuration that reaches a host only through the gated apply.
+# Released, with no owner: documents, and the checks that guard no gate: the agreement tests and
+# probes in ansible/checks/ run in the required lint's checks and slow legs, but they hold a host
+# role or a stack to its siblings and do not judge a merge or a deploy.
 *.md
-.nvmrc
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
 /ansible/checks/offline/
@@ -258,41 +79,20 @@ broker-verify-key*                                           @branchLeft/branchl
 /ansible/checks/test_mx1_stack_agree.py
 /ansible/checks/test_offline_render.py
 /ansible/checks/test_patterns_typecheck.py
-/ansible/requirements.in
-/ansible/requirements.txt
-/ansible/requirements.yml
-/hetzner-host/*.test.ts
-/hetzner-host/testdata/
-/hetzner/*.test.ts
-/hetzner/dns/test_zonecheck.py
-/hetzner/dns/zonecheck.py
-/hetzner/scripts/check-address-plan-drift.py
-/hetzner/scripts/lib/docker-pull.sh
-/hetzner/scripts/probe-*
-/hetzner/scripts/test-control-plane-port-policy.sh
-/hetzner/scripts/test-spool-bridge-egress.sh
-/hetzner/scripts/test_check_address_plan_drift.py
-/hetzner/scripts/test_probe_*
-/ovh/copy2/probe/requirements.txt
 /scripts/assert-min-python-version.py
 /scripts/nvmrc-node-exec.*
 /scripts/test_assert_min_python_version.py
 /scripts/test_nvmrc_node_exec.py
-pnpm-lock.yaml
 
-# Owned again after the releases: guard tests, the repo's own instructions, the licence, and this
-# file. The standards lines below own /.github/, so this line is also the review rule's own line.
-/.github/CODEOWNERS                                          @branchLeft/branchleft-admin
-/ansible/checks/test_deploy_slot_keys_single_home.py         @branchLeft/branchleft-admin
-/hetzner-host/cloudInit.test.ts                              @branchLeft/branchleft-admin
-/hetzner-host/enrolment.test.ts                              @branchLeft/branchleft-admin
-/hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
-/hetzner/projectGuard.test.ts                                @branchLeft/branchleft-admin
-/hetzner/tenants.structure.test.ts                           @branchLeft/branchleft-admin
+# Owned again after the releases: the instructions, the hook directory, the licences, the README and the launch page.
+/.claude/                                                    @branchLeft/branchleft-admin
+/LICENSE                                                     @branchLeft/branchleft-admin
+/README.md                                                   @branchLeft/branchleft-admin
+/hetzner-host/LICENSE                                        @branchLeft/branchleft-admin
+/hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin
-LICENSE                                                      @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners at the v0.8.8 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
+# The shared set from branchLeft/standards templates/codeowners at the v0.8.8 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin

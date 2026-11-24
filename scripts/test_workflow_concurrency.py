@@ -1126,6 +1126,58 @@ class DeliveryWorkflowTests(unittest.TestCase):
         self.assertTrue(found, "the run-keyed rule no longer refuses a literal group on a push-only workflow")
 
 
+class WaitingDeliveryIsNeverCancelledTests(unittest.TestCase):
+    """No workflow cancels an Ansible delivery that waits for approval (owner ruling, 24 Nov).
+
+    A delivery with a green plan stays waiting until an agent approves it, or rejects it
+    once a newer run's plan is green (ci_deploy_approve.py --reject-superseded). A push
+    to main must cancel nothing: a canceller took 27 of 33 green plans away unapproved.
+    The cancelling workflow is a job holding `actions: write`, so only ci.yml's own plan
+    jobs (which cancel older ci.yml runs, never a delivery) may hold it.
+    """
+
+    ACTIONS_WRITE_ALLOWED = {"ci.yml"}
+
+    @staticmethod
+    def write_holders(name: str, text: str) -> list[str]:
+        data = load(text)
+        found = []
+        if (data.get("permissions") or {}) == "write-all" or (
+            isinstance(data.get("permissions"), dict) and data["permissions"].get("actions") == "write"
+        ):
+            found.append(f"{name}: workflow-level actions: write")
+        for job_name, job in (data.get("jobs") or {}).items():
+            perms = job.get("permissions")
+            if perms == "write-all" or (isinstance(perms, dict) and perms.get("actions") == "write"):
+                found.append(f"{name}: job {job_name} holds actions: write")
+        return found
+
+    def test_no_workflow_but_ci_holds_actions_write(self):
+        problems = []
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            if path.name in self.ACTIONS_WRITE_ALLOWED:
+                continue
+            problems += self.write_holders(path.name, path.read_text(encoding="utf-8"))
+        self.assertEqual([], problems)
+
+    def test_the_delivery_supersede_workflow_and_script_are_gone(self):
+        for relative in (
+            ".github/workflows/ansible-supersede.yml",
+            "scripts/cancel-superseded-ansible-delivery.py",
+            "scripts/test_cancel_superseded_ansible_delivery.py",
+        ):
+            with self.subTest(path=relative):
+                self.assertFalse((ROOT / relative).exists())
+
+    def test_the_check_refuses_a_workflow_that_cancels_with_actions_write(self):
+        text = (
+            "name: Cancel\non:\n  push:\n    branches: [main]\n"
+            "jobs:\n  cancel:\n    runs-on: ubuntu-24.04\n    permissions:\n      actions: write\n"
+            "    steps:\n      - run: gh run cancel 1\n"
+        )
+        self.assertTrue(self.write_holders("cancel.yml", text))
+
+
 class ScriptsSuiteDependencyTests(unittest.TestCase):
     """Every place the scripts suite runs has PyYAML, so this module imports.
 

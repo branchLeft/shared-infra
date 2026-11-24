@@ -1755,6 +1755,78 @@ class RoleContractTests(unittest.TestCase):
         program = (ROLE / "files" / "branchleft_tenant_entry.py").read_text(encoding="utf-8")
         self.assertEqual(program.splitlines()[0], f"#!{own['tenant_entry_python']} -I")
 
+    def test_the_owner_script_and_node_are_where_the_role_installs_them(self) -> None:
+        own = self.variables("tenant_entry")
+        paths = entry.Paths()
+        self.assertEqual(own["tenant_entry_owner_program"], paths.owner_program)
+        self.assertEqual(
+            os.path.dirname(paths.owner_program),
+            self.variables("tenant_onboarding")["tenant_onboarding_program_dir"],
+        )
+        self.assertEqual(own["tenant_entry_node"], "{{ tenant_entry_node_dir }}/bin/node")
+        self.assertEqual(own["tenant_entry_node_dir"], "{{ tenant_entry_judge_dir }}/node")
+        self.assertEqual(
+            os.path.join(str(own["tenant_entry_judge_dir"]), "node", "bin", "node"), paths.node
+        )
+
+    def test_the_owner_script_is_pinned_to_a_commit_and_a_digest(self) -> None:
+        own = self.variables("tenant_entry")
+        self.assertRegex(str(own["tenant_entry_owner_ghost_commit"]), r"\A[0-9a-f]{40}\Z")
+        self.assertRegex(str(own["tenant_entry_owner_program_sha256"]), r"\A[0-9a-f]{64}\Z")
+        url = str(own["tenant_entry_owner_program_url"])
+        self.assertTrue(
+            url.startswith(
+                "https://raw.githubusercontent.com/branchLeft/ghost-platform/"
+                "{{ tenant_entry_owner_ghost_commit }}/"
+            )
+        )
+        self.assertTrue(url.endswith("/adapters/sso/scripts/provision-owner.mjs"))
+        self.assertEqual(
+            os.path.basename(str(own["tenant_entry_owner_program"])),
+            "provision-owner.mjs",
+        )
+
+    def test_node_is_the_pin_broker_deploy_holds(self) -> None:
+        # ANS-12: no role imports another, so the version and both digests are copies, and
+        # held to the original here. Every digest is a published sha256 and the fetch is https.
+        own = self.variables("tenant_entry")
+        broker: dict[str, object] = YAML(typ="safe").load(
+            (ROLES / "broker_deploy" / "defaults" / "main.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(own["tenant_entry_node_version"], broker["broker_deploy_node_version"])
+        self.assertEqual(own["tenant_entry_node_checksums"], broker["broker_deploy_node_checksums"])
+        self.assertEqual(own["tenant_entry_node_base_url"], broker["broker_deploy_node_base_url"])
+        self.assertTrue(str(own["tenant_entry_node_base_url"]).startswith("https://"))
+        checksums = own["tenant_entry_node_checksums"]
+        self.assertIsInstance(checksums, dict)
+        if not isinstance(checksums, dict):
+            self.fail("tenant_entry_node_checksums is not a mapping")
+        for arch, digest in checksums.items():
+            self.assertRegex(str(digest), r"\Asha256:[0-9a-f]{64}\Z", arch)
+        machines = own["tenant_entry_node_arch_by_machine"]
+        self.assertIsInstance(machines, dict)
+        if not isinstance(machines, dict):
+            self.fail("tenant_entry_node_arch_by_machine is not a mapping")
+        self.assertEqual(set(machines.values()), set(checksums))
+
+    def test_the_sudoers_grant_and_the_forced_command_name_the_entry_program_only(self) -> None:
+        # Installing node and the owner script must not give the account anything beyond the one
+        # program: neither path appears in a sudoers line or in the key options.
+        own = self.variables("tenant_entry")
+        lines = [str(line) for line in own["tenant_entry_sudoers_lines"]]  # type: ignore[attr-defined]
+        self.assertEqual(len(lines), 2)
+        grants = [line for line in lines if "NOPASSWD" in line]
+        self.assertEqual(
+            grants,
+            [
+                "{{ tenant_entry_user }} ALL=(root) NOPASSWD: "
+                "{{ tenant_entry_program }} {{ tenant_entry_serve_flag }}"
+            ],
+        )
+        for needle in ("node", "provision-owner", "docker", "platform-provision"):
+            for line in [*lines, str(own["tenant_entry_key_options"])]:
+                self.assertNotIn(needle, line)
+
     def test_the_stack_paths_and_modes_are_the_ones_tenant_compose_writes(self) -> None:
         compose = self.variables("tenant_compose")
         paths = entry.Paths()
