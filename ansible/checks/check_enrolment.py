@@ -1,6 +1,6 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R11, and what each one does not see, are in ansible/checks/check_enrolment.md. A
+Rules R0 to R12, and what each one does not see, are in ansible/checks/check_enrolment.md. A
 failure names the rule and the file. This check catches a protected key set outside
 its one file. It does not judge a role edit: nothing here gates one (see checks/check_enrolment.md).
 """
@@ -257,6 +257,39 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
+# R12: a bootstrap playbook, playbooks/bootstrap/HOST.yml, is the one entry for the owner's hand
+# bootstrap that installs the pull and nothing else. It is never pulled (the pull runs only
+# playbooks/HOST.yml, R3), so it is pinned here to the two pull roles, one level deeper than a host
+# playbook, and a service role in it is a finding.
+BOOTSTRAP_DIR = "bootstrap"
+BOOTSTRAP_COMMON = "{{ playbook_dir }}/../includes/pull_trigger_common.yml"
+BOOTSTRAP_REFUSE = "../includes/refuse_other_hosts.yml"
+BOOTSTRAP_SIGNER = "../includes/require_signers.yml"
+BOOTSTRAP_ROLES = [
+    {
+        "role": "../../roles/ansible_runtime",
+        "vars": {"ansible_runtime_requirements_src": "{{ playbook_dir }}/../../requirements.txt"},
+    },
+    {"role": "../../roles/pull_trigger"},
+]
+# The one task a bootstrap play carries beside its roles: the seeding tool of the host's private
+# inputs, copied from the checkout to a fixed root-only path. A plan runs in check mode, which
+# never replaces the pull's current link, so the tool cannot come from a first apply.
+SEED_TOOL_SRC = "{{ playbook_dir }}/../../tools/seed_host_inputs.py"
+SEED_TOOL_DEST = "/usr/local/sbin/seed_host_inputs.py"
+BOOTSTRAP_TASKS = [
+    {
+        "name": "Install the host-inputs seeding tool, root-only, at its one fixed path",
+        "ansible.builtin.copy": {
+            "src": SEED_TOOL_SRC,
+            "dest": SEED_TOOL_DEST,
+            "owner": "root",
+            "group": "root",
+            "mode": "0700",
+        },
+    }
+]
+BOOTSTRAP_KEYS = PLAY_KEYS | {"tasks"}
 # One file per host, HOST.yml, each a list of role names: a pull request that gives one host a
 # role touches that host's file and no other, so two such pull requests do not meet on a line.
 HOST_ROLES_DIR = "checks/host_roles"
@@ -451,6 +484,56 @@ def _check_enrolled(
         )
     ):
         findings.append(f"{label}: pre_tasks must be exactly {REFUSE_TASKS}, then {SIGNER_TASKS}")
+
+
+def _check_bootstrap(
+    stem: str, plays: list[dict[str, object]], has_owner_vars: bool, findings: list[str]
+) -> None:
+    """R12: one bootstrap play for an enrolled host: its own vars and trust, the two pull roles and
+    no other role, and the same two refusals first."""
+    label = f"R12 bootstrap/{stem}.yml"
+    if len(plays) != 1:
+        findings.append(f"{label}: expected one play, found {len(plays)}")
+        return
+    play = plays[0]
+    for key in sorted(set(play) - BOOTSTRAP_KEYS):
+        findings.append(f"{label}: play key {key} is not allowed, only {sorted(BOOTSTRAP_KEYS)}")
+    if play.get("hosts") != "all":
+        findings.append(f"{label}: hosts must be all")
+    if play.get("tasks") != BOOTSTRAP_TASKS:
+        findings.append(
+            f"{label}: tasks must be exactly the one copy of the seeding tool to {SEED_TOOL_DEST}"
+        )
+    if play.get("vars") != {HOST_KEY: stem}:
+        findings.append(f"{label}: vars must be exactly {{{HOST_KEY!r}: {stem!r}}}")
+    expected_files = [BOOTSTRAP_COMMON, f"{{{{ playbook_dir }}}}/../../trust/{stem}.yml"]
+    if has_owner_vars:
+        expected_files.append(f"{{{{ playbook_dir }}}}/../../{OWNER_VARS_DIR}/{stem}.yml")
+    if play.get("vars_files") != expected_files:
+        findings.append(f"{label}: vars_files must be exactly {expected_files}")
+    if any(Path(name).name == LOADER_ROLE for name in _role_names(play)):
+        findings.append(
+            f"{label}: {LOADER_ROLE} must not be applied: a fresh host has no inputs file yet, "
+            f"and the first gated apply is what stops at it"
+        )
+    if play.get("roles") != BOOTSTRAP_ROLES:
+        findings.append(
+            f"{label}: roles must be exactly the runtime entry then the bare trigger, "
+            f"{sorted(PULL_ROLES)}, and no service role: {_role_names(play)}"
+        )
+    pre_tasks = play.get("pre_tasks")
+    expected_pre = [BOOTSTRAP_REFUSE, BOOTSTRAP_SIGNER]
+    if not (
+        isinstance(pre_tasks, list)
+        and len(pre_tasks) == len(expected_pre)
+        and all(
+            _exact_include(task, target)
+            for task, target in zip(pre_tasks, expected_pre, strict=True)
+        )
+    ):
+        findings.append(
+            f"{label}: pre_tasks must be exactly {BOOTSTRAP_REFUSE}, then {BOOTSTRAP_SIGNER}"
+        )
 
 
 def read_host_roles_raw(ansible: Path) -> dict[str, object]:
@@ -759,7 +842,9 @@ def _check_no_other_definition(ansible: Path, findings: list[str]) -> None:
             continue
         parse_findings = [] if _is_tool_artefact(relative) else findings
         doc = _load(path, parse_findings, f"R6 {where}")
-        if relative.parent == Path("playbooks") and path.suffix in TASK_SUFFIXES:
+        if relative.parent in {Path("playbooks"), Path("playbooks") / BOOTSTRAP_DIR} and (
+            path.suffix in TASK_SUFFIXES
+        ):
             _scan_playbook(doc, path, resolved, where, findings)
         else:
             allowed = _allowed_in(relative.as_posix())
@@ -775,10 +860,11 @@ def _is_play_list(path: Path) -> bool:
 
 
 def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
-    """A .yml sits where Ansible reads it: at the top of its tree, or in playbooks/includes/."""
+    """A .yml sits where Ansible reads it: at the top of its tree, or in playbooks/includes/ or
+    playbooks/bootstrap/ (R12)."""
     if len(inside) == 1:
         return True
-    return tree == "playbooks" and inside[:-1] == ("includes",)
+    return tree == "playbooks" and inside[:-1] in {("includes",), (BOOTSTRAP_DIR,)}
 
 
 def _check_names(ansible: Path, findings: list[str]) -> None:
@@ -807,7 +893,11 @@ def _check_names(ansible: Path, findings: list[str]) -> None:
             elif path.suffix != ".yml":
                 findings.append(f"{label}: must be an exact .yml, as Ansible reads it")
             elif not _in_place(tree, inside.parts):
-                where = "or in playbooks/includes/" if tree == "playbooks" else ""
+                where = (
+                    "or in playbooks/includes/ or playbooks/bootstrap/"
+                    if tree == "playbooks"
+                    else ""
+                )
                 findings.append(f"{label}: a .yml must sit at the top of {tree}/ {where}".rstrip())
 
 
@@ -1056,6 +1146,12 @@ def check(root: Path) -> list[str]:
     owner_stems = {path.stem for path in _yml_files(owner_vars)}
     for stem, plays in sorted(enrolled.items()):
         _check_enrolled(stem, plays, host_roles.get(stem, []), stem in owner_stems, findings)
+    for path in _yml_files(playbooks / BOOTSTRAP_DIR):
+        if path.stem not in enrolled:
+            findings.append(f"R12 bootstrap/{path.name}: no enrolled playbook {path.stem}.yml")
+            continue
+        plays = _plays(_load(path, findings, f"R12 bootstrap/{path.name}"))
+        _check_bootstrap(path.stem, plays, path.stem in owner_stems, findings)
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
     _check_jump_hosts(host_roles, findings)
