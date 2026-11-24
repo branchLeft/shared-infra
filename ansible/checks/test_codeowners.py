@@ -47,6 +47,7 @@ RELEASE_KINDS: frozenset[str] = frozenset(
         "*.md",  # every document; README, CLAUDE.md, .claude/ and /.github/ are owned again
         "/ansible/checks/offline/",  # the offline render fixtures
         "/ansible/checks/test_*.py",  # the tests of the checks; test_codeowners.py is owned again
+        "/scripts/nvmrc-node-exec.*",
     }
 )
 
@@ -63,6 +64,8 @@ GUARDRAIL_PATHS = [
     "ansible/checks/test_step_allowlist.py",
     "scripts/test_ci_skip.py",
     "scripts/trace_reads.py",
+    "scripts/a_new_ci_script.py",
+    "scripts/json.py",
     "ansible/checks/codeowners_match.py",
     "ansible/checks/check_pins.py",
     "ansible/checks/check_delivery.py",
@@ -158,10 +161,6 @@ RELEASED_PATHS = [
     "ansible/checks/test_ci_gate_order.py",
     "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
-    "scripts/test_assert_no_hetzner_deletes.py",
-    "scripts/test_choose_apply_environment.py",
-    "scripts/cancel-superseded-waiting.py",
-    "scripts/tenants_state_rewrap.py",
     "hetzner/estate.guard.test.ts",
     "hetzner/dns.guard.test.ts",
     "hetzner/tenants.guard.test.ts",
@@ -178,6 +177,8 @@ RELEASED_PATHS = [
 # Paths named above that the repository does not hold yet.
 STANDS_FOR_MORE = {
     "ansible/checks/a_new_gate_script.py",
+    "scripts/a_new_ci_script.py",
+    "scripts/json.py",
     # Named by the standards template; a repository that has no floors or ignore file yet has none.
     "tools/floors.tsv",
     ".standardsignore",
@@ -250,12 +251,14 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(RELEASED_PATHS)
 
     def test_a_new_file_in_a_gate_directory_is_the_owners_before_it_is_listed(self) -> None:
-        # A new check script, host allowlist or trust file fails closed; and so does a workflow.
+        # A new check script, host allowlist, trust file or script fails closed; and so does a workflow.
         self.assert_owned(
             [
                 "ansible/checks/check_a_new_gate.py",
                 "ansible/checks/host_roles/a_new_host.yml",
                 "ansible/trust/newhost.yml",
+                "scripts/a_new_ci_script.py",
+                "scripts/json.py",
                 ".github/workflows/a_new_workflow.yml",
             ]
         )
@@ -266,42 +269,30 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(
             [
                 "ansible/checks/test_a_new_gate_agree.py",
-                "scripts/test_a_new_gate.py",
-                "scripts/a_new_ci_script.py",
                 "hetzner/aNewGuard.guard.test.ts",
                 "ovh/copy2/aNewGuard.test.ts",
             ]
         )
         self.assert_owned(["ansible/checks/test_codeowners.py"])
 
-    def test_the_gates_in_scripts_are_owned_by_name_and_no_other_script_is(self) -> None:
-        # The six gates the merge route's register names, the skip machinery that runs inside the
-        # required jobs (ci_skip's test and trace_reads), and nothing else under scripts/.
-        gates = {
-            "scripts/test_ci_skip.py",
-            "scripts/trace_reads.py",
-            "scripts/assert-no-committed-pulumi-secrets.py",
-            "scripts/assert-no-hetzner-deletes.py",
-            "scripts/audit-pulumi-secrets.py",
-            "scripts/choose-apply-environment.py",
-            "scripts/ci_skip.py",
-            "scripts/pulumi-stack-inventory.json",
+    def test_every_script_is_the_owners_but_the_four_released_before(self) -> None:
+        # The scripts that run with credentials import from scripts/ first, so a new file there
+        # (scripts/json.py shadows the standard library's) runs with those credentials. The whole
+        # directory is owned; only four files released before the second pass are not.
+        released = {
+            "scripts/assert-min-python-version.py",
+            "scripts/nvmrc-node-exec.py",
+            "scripts/test_assert_min_python_version.py",
+            "scripts/test_nvmrc_node_exec.py",
         }
-        scripts = [f for f in repository_files() if f.startswith("scripts/") and "/" not in f[8:]]
-        self.assertTrue(gates <= set(scripts))
-        self.assert_owned(sorted(gates))
-        self.assert_unowned(sorted(set(scripts) - gates))
-
-    def test_a_new_file_outside_the_guardrails_is_not_the_owners(self) -> None:
-        self.assert_unowned(
-            [
-                "hetzner/aNewProgram.ts",
-                "hetzner-host/aNewFirewall.ts",
-                "ansible/roles/a_new_role/tasks/main.yml",
-                "ansible/roles/a_new_role/library/a_new_module.py",
-                "mail/a_new_program.py",
-            ]
-        )
+        scripts = [
+            f
+            for f in repository_files()
+            if f.startswith("scripts/") and "/" not in f[8:] and not f.endswith(".md")
+        ]
+        self.assertTrue(released <= set(scripts))
+        self.assert_owned(sorted(set(scripts) - released))
+        self.assert_unowned(sorted(released))
 
     def test_documents_are_not_the_owners_but_the_instructions_and_readme_are(self) -> None:
         # Every tracked markdown file, derived from the checkout so a new document needs no line

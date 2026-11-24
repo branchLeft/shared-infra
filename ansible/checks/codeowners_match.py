@@ -118,6 +118,12 @@ SAMPLES: tuple[Sample, ...] = (
         True,
     ),
     Sample("scripts/audit-pulumi-secrets.py", "gate: the Pulumi secrets audit", True),
+    Sample(
+        "scripts/json.py",
+        "gate: a new script; credentialed scripts import scripts/ first",
+        True,
+    ),
+    Sample("scripts/tenants_state_rewrap.py", "gate: a script run with state keys", True),
     Sample("hetzner/scripts/check-crowdsec-hub-pin.py", "gate: a script gating a write step", True),
     Sample("hetzner/scripts/test_check_crowdsec_hub_pin.py", "gate: that script's test", True),
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
@@ -172,8 +178,6 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
     Sample("ansible/checks/test_check_delivery.py", "released: a gate's test", False),
-    Sample("scripts/test_assert_no_hetzner_deletes.py", "released: a gate's test", False),
-    Sample("scripts/tenants_state_rewrap.py", "released: a housekeeping script", False),
     Sample("hetzner/estate.guard.test.ts", "released: a guard's test", False),
     Sample("hetzner/projectGuard.test.ts", "released: a guard's test", False),
     Sample("ovh/copy2/configGuard.test.ts", "released: a guard's test", False),
@@ -188,7 +192,9 @@ SAMPLES: tuple[Sample, ...] = (
 )
 
 # Samples that stand for a file the repository does not hold, so they are not looked up on disk.
-PENDING: frozenset[str] = frozenset({"ansible/library/x.py", "hetzner/edge/publicpress/index.html"})
+PENDING: frozenset[str] = frozenset(
+    {"ansible/library/x.py", "hetzner/edge/publicpress/index.html", "scripts/json.py"}
+)
 
 
 def mismatches(rules: list[Rule], samples: Sequence[Sample] = SAMPLES) -> list[Sample]:

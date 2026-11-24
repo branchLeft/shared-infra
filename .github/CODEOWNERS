@@ -7,10 +7,11 @@
 #       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
 #       codeowners_match.py), CLAUDE.md, .claude/, the workflows, actions and dependabot settings
 #       (/.github/, by the standards lines), the gate scripts those checks run (the checks in
-#       ansible/checks/, ansible/harness/, the gates and the skip machinery in scripts/ and the named hetzner/scripts
+#       ansible/checks/, ansible/harness/, all of scripts/ and the named hetzner/scripts
 #       checks), the apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer
 #       include), the guards that stop a destructive apply, the floors and lint settings, the image
-#       verifier, and the exemption files. The tests of a gate are not listed: they are released.
+#       verifier, and the exemption files. The tests of a gate in ansible/checks/ and hetzner/ are
+#       not listed: they are released.
 #   (b) Human-facing documents: README, the licences, and the launch page copy.
 # When in doubt: if this file were silently weakened, would a guardrail or a required check stop
 # protecting us? Yes, owner. No, released.
@@ -45,21 +46,15 @@
 /hetzner/scripts/test_proof_harness.py                       @branchLeft/branchleft-admin
 /ovh/copy2/configGuard.ts                                    @branchLeft/branchleft-admin
 /ovh/copy2/projectGuard.ts                                   @branchLeft/branchleft-admin
-/scripts/assert-no-committed-pulumi-secrets.py               @branchLeft/branchleft-admin
-/scripts/assert-no-hetzner-deletes.py                        @branchLeft/branchleft-admin
-/scripts/audit-pulumi-secrets.py                             @branchLeft/branchleft-admin
-/scripts/choose-apply-environment.py                         @branchLeft/branchleft-admin
-/scripts/ci_skip.py                                          @branchLeft/branchleft-admin
-/scripts/pulumi-stack-inventory.json                         @branchLeft/branchleft-admin
-/scripts/test_ci_skip.py                                     @branchLeft/branchleft-admin
-/scripts/trace_reads.py                                      @branchLeft/branchleft-admin
+/scripts/                                                    @branchLeft/branchleft-admin
 /tools/floors.tsv                                            @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 
 # Released, with no owner: documents, every test in ansible/checks/ but the proof of this file (a test
 # of a gate does not judge a merge or a deploy; the gate it reads stays owned; test_plan_diff_scan.py
 # and test_step_allowlist.py are owned again below because each is itself a check), and the helpers
-# and probes there that guard no gate. Every script in scripts/ but the eight owned above is released.
+# and probes there that guard no gate. Under scripts/ only four files, released before this change, are released: a script
+# there is imported first by the scripts that run with credentials, so a new file is owned too.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
@@ -68,6 +63,10 @@ branchleft-verify-image*                                     @branchLeft/branchl
 /ansible/checks/pip-requirements.txt
 /ansible/checks/sabotage_offline_render.py
 /ansible/checks/test_*.py
+/scripts/assert-min-python-version.py
+/scripts/nvmrc-node-exec.*
+/scripts/test_assert_min_python_version.py
+/scripts/test_nvmrc_node_exec.py
 
 # Owned again after the releases: the instructions, the hook directory, the proof of this file and of two checks, the licences, the README and the launch page.
 /.claude/                                                    @branchLeft/branchleft-admin
