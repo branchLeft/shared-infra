@@ -205,8 +205,10 @@ is not loaded there.
   `pre_tasks` and `roles`, on `hosts: all`, `vars` exactly `enrolled_host: HOST` (the
   host's other play variables belong to roles it does not apply), `vars_files` exactly the shared
   include, `../../trust/HOST.yml` and `../../owner_vars/HOST.yml` if and only if that file exists,
-  `pre_tasks` the two refusals, and `roles` exactly the runtime entry and the bare trigger, at
-  one level deeper than a host playbook. Any other role is a finding, `host_inputs` by name: a
+  `pre_tasks` the two refusals, `roles` exactly the runtime entry and the bare trigger, at
+  one level deeper than a host playbook, and `tasks` exactly one `copy` of `tools/seed_host_inputs.py`
+  to `/usr/local/sbin/seed_host_inputs.py` (root, `0700`): a plan runs in check mode, which never
+  replaces the pull's `current` link, so the tool cannot wait for a first apply. Any other role is a finding, `host_inputs` by name: a
   fresh host has no inputs file and its seed tool arrives with the first gated apply, which then
   stops at the loader. No tag, `when` or `vars` can sit on a role entry, so no tag widens the
   run. The file is never pulled (R3 derives `playbooks/HOST.yml`), and R6 reads it as an

@@ -272,6 +272,24 @@ BOOTSTRAP_ROLES = [
     },
     {"role": "../../roles/pull_trigger"},
 ]
+# The one task a bootstrap play carries beside its roles: the seeding tool of the host's private
+# inputs, copied from the checkout to a fixed root-only path. A plan runs in check mode, which
+# never replaces the pull's current link, so the tool cannot come from a first apply.
+SEED_TOOL_SRC = "{{ playbook_dir }}/../../tools/seed_host_inputs.py"
+SEED_TOOL_DEST = "/usr/local/sbin/seed_host_inputs.py"
+BOOTSTRAP_TASKS = [
+    {
+        "name": "Install the host-inputs seeding tool, root-only, at its one fixed path",
+        "ansible.builtin.copy": {
+            "src": SEED_TOOL_SRC,
+            "dest": SEED_TOOL_DEST,
+            "owner": "root",
+            "group": "root",
+            "mode": "0700",
+        },
+    }
+]
+BOOTSTRAP_KEYS = PLAY_KEYS | {"tasks"}
 # One file per host, HOST.yml, each a list of role names: a pull request that gives one host a
 # role touches that host's file and no other, so two such pull requests do not meet on a line.
 HOST_ROLES_DIR = "checks/host_roles"
@@ -478,10 +496,14 @@ def _check_bootstrap(
         findings.append(f"{label}: expected one play, found {len(plays)}")
         return
     play = plays[0]
-    for key in sorted(set(play) - PLAY_KEYS):
-        findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
+    for key in sorted(set(play) - BOOTSTRAP_KEYS):
+        findings.append(f"{label}: play key {key} is not allowed, only {sorted(BOOTSTRAP_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
+    if play.get("tasks") != BOOTSTRAP_TASKS:
+        findings.append(
+            f"{label}: tasks must be exactly the one copy of the seeding tool to {SEED_TOOL_DEST}"
+        )
     if play.get("vars") != {HOST_KEY: stem}:
         findings.append(f"{label}: vars must be exactly {{{HOST_KEY!r}: {stem!r}}}")
     expected_files = [BOOTSTRAP_COMMON, f"{{{{ playbook_dir }}}}/../../trust/{stem}.yml"]

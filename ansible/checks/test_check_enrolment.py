@@ -28,6 +28,7 @@ from check_enrolment import (
     PULL_ROLES,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
+    SEED_TOOL_DEST,
     SPOOL_JUMP_HOSTS,
     SPOOL_JUMP_VARS,
     _AnyTagLoader,
@@ -70,20 +71,46 @@ class RealBootstraps(unittest.TestCase):
 
     def test_a_bootstrap_never_applies_the_loader_nor_needs_its_file(self) -> None:
         for path in self._bootstraps():
-            text = path.read_text(encoding="utf-8")
+            # The seeding tool's own name holds the loader's; the loader role and its file do not.
+            text = path.read_text(encoding="utf-8").replace("seed_host_inputs", "")
             self.assertNotIn("host_inputs", text, path.name)
-            self.assertNotIn("host-inputs", text, path.name)
+            self.assertNotIn("host-inputs.json", text, path.name)
             for role in PULL_ROLES:
                 for tree in ("tasks", "defaults", "vars"):
                     for file in (ROOT / "ansible" / "roles" / role / tree).glob("*.yml"):
                         self.assertNotIn("host_inputs", file.read_text(encoding="utf-8"), file)
 
-    def test_no_bootstrap_carries_a_tag_a_when_or_a_task_section(self) -> None:
+    def test_the_seeding_tool_lands_at_its_one_fixed_path(self) -> None:
+        for path in self._bootstraps():
+            play = yaml.safe_load(path.read_text(encoding="utf-8"))[0]
+            self.assertEqual(len(play["tasks"]), 1, path.name)
+            copy = play["tasks"][0]["ansible.builtin.copy"]
+            self.assertEqual(copy["dest"], "/usr/local/sbin/seed_host_inputs.py", path.name)
+            self.assertEqual(copy["dest"], SEED_TOOL_DEST, path.name)
+            self.assertEqual((copy["owner"], copy["group"], copy["mode"]), ("root", "root", "0700"))
+            source = copy["src"].replace("{{ playbook_dir }}", str(path.parent))
+            self.assertEqual(
+                Path(source).resolve(),
+                (ROOT / "ansible" / "tools" / "seed_host_inputs.py").resolve(),
+                path.name,
+            )
+            self.assertTrue(Path(source).is_file(), path.name)
+
+    def test_no_bootstrap_carries_a_tag_a_when_or_a_service_task(self) -> None:
         for path in self._bootstraps():
             plays = yaml.safe_load(path.read_text(encoding="utf-8"))
             self.assertLessEqual(
                 set(plays[0]),
-                {"name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"},
+                {
+                    "name",
+                    "hosts",
+                    "gather_facts",
+                    "vars",
+                    "vars_files",
+                    "pre_tasks",
+                    "roles",
+                    "tasks",
+                },
             )
             for entry in plays[0]["roles"]:
                 self.assertLessEqual(set(entry), {"role", "vars"}, path.name)
@@ -479,14 +506,46 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R12 bootstrap/dbt1.yml: roles must be exactly")
 
-    # R12: no task, tag or handler section may carry a service action around the role list.
-    def test_r12_bootstrap_carries_tasks(self) -> None:
+    # R12: the one task is the seeding tool's copy; a second task, a service action, is refused.
+    def test_r12_bootstrap_carries_another_task(self) -> None:
         self._edit(
             "playbooks/bootstrap/dbt1.yml",
-            "  roles:\n",
-            "  tasks:\n    - ansible.builtin.command: /bin/true\n  roles:\n",
+            "  tasks:\n",
+            "  tasks:\n    - ansible.builtin.command: /bin/true\n",
         )
-        self._assert_rule("R12 bootstrap/dbt1.yml: play key tasks")
+        self._assert_rule("R12 bootstrap/dbt1.yml: tasks must be exactly")
+
+    # R12: the tool lands at its one fixed path and nowhere else.
+    def test_r12_bootstrap_moves_the_seeding_tool(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/appt1.yml",
+            "dest: /usr/local/sbin/seed_host_inputs.py",
+            "dest: /root/seed_host_inputs.py",
+        )
+        self._assert_rule("R12 bootstrap/appt1.yml: tasks must be exactly")
+
+    # R12: nor may the copy's source be anything but the tool in the checkout.
+    def test_r12_bootstrap_copies_another_file(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "../../tools/seed_host_inputs.py",
+            "../../tools/carry_broker_release.py",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: tasks must be exactly")
+
+    # R12: the tool is not world-readable or writable.
+    def test_r12_bootstrap_loosens_the_tool_mode(self) -> None:
+        self._edit("playbooks/bootstrap/dbt1.yml", "mode: '0700'", "mode: '0755'")
+        self._assert_rule("R12 bootstrap/dbt1.yml: tasks must be exactly")
+
+    # R12: no handler section either.
+    def test_r12_bootstrap_carries_handlers(self) -> None:
+        self._edit(
+            "playbooks/bootstrap/dbt1.yml",
+            "  tasks:\n",
+            "  handlers:\n    - ansible.builtin.command: /bin/true\n      name: x\n  tasks:\n",
+        )
+        self._assert_rule("R12 bootstrap/dbt1.yml: play key handlers")
 
     # R12: a role entry may not carry a tag, so a tag cannot widen the run.
     def test_r12_bootstrap_role_entry_carries_a_tag(self) -> None:
