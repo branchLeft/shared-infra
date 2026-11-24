@@ -52,9 +52,24 @@ options:
     required: true
     choices: [report, plan, verify]
   user:
-    description: The jump account. Needed by plan and verify; never printed.
+    description: The account the profile is about. Needed by plan and verify; never printed.
     type: str
     default: ""
+  profile:
+    description: >-
+      Which of the role's two accounts the call is about. C(ci) is the account the gated run
+      jumps through, C(spool) the second account whose key opens the spool hosts' ssh port only.
+      The profile decides the two managed paths, the port, and whether the jump host's own
+      address must be (C(ci)) or must not be (C(spool)) among the destinations.
+    type: str
+    default: ci
+    choices: [ci, spool]
+  port:
+    description: >-
+      The one port every destination is opened on. C(ci) pins 22 and refuses any other value;
+      C(spool) takes the port the far host's sshd listens on.
+    type: int
+    default: 22
   own_address:
     description: >-
       The jump host's own private IPv4 address. It is the address sshd -T -C is asked about,
@@ -138,6 +153,11 @@ PINNED_COMMAND = "/usr/sbin/nologin"
 KEY_DIR = "/etc/ssh/authorized_keys.d"
 KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump"
 DROPIN_FILE = "/etc/ssh/sshd_config.d/40-branchleft-jump.conf"
+# The second account's own two files. A separate account has separate files, so neither account's
+# write can remove the other's keys, and its drop-in sorts after the first account's: the two
+# Match blocks name different users, so the order carries no meaning but is fixed.
+SPOOL_KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump-spool"
+SPOOL_DROPIN_FILE = "/etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf"
 # The files are root's and nobody else's to change: the account must never edit its own keys.
 ROOT_FILE_MODE = 0o644
 ROOT_DIR_MODE = 0o755
@@ -253,6 +273,47 @@ class RefusalError(Exception):
 
 class HostError(Exception):
     """The host could not answer (sshd -T failed). Carries no output."""
+
+
+@dataclasses.dataclass(frozen=True)
+class Profile:
+    """Which of the role's two accounts a call is about: the account the gated run jumps through
+    (ci) or the second account whose key opens the spool hosts' ssh port and nothing else (spool).
+
+    The two differ in their two managed files, in their port, and in one rule about the jump
+    host's own address: the first must list it, the second must not.
+    """
+
+    kind: str
+    key_file: str
+    dropin_file: str
+    port: int
+    subject: str
+
+
+CI_PROFILE = Profile("ci", KEY_FILE, DROPIN_FILE, PINNED_PORT, "the jump account")
+MANAGED_KEY_FILES = (KEY_FILE, SPOOL_KEY_FILE)
+MAX_PORT = 65535
+
+
+def make_profile(kind: object, port: object) -> Profile:
+    """Return the profile a call asks for, or refuse a kind the module does not know or a port
+    that is not one port number. The ci profile's port is pinned.
+
+    Raises:
+        RefusalError: for each of those.
+    """
+    if kind == "ci":
+        if port != PINNED_PORT:
+            raise RefusalError(
+                "E-PORT-PINNED", "the jump account's port is pinned and not an input"
+            )
+        return CI_PROFILE
+    if kind != "spool":
+        raise RefusalError("E-PROFILE-UNKNOWN", "the profile is not one the module knows")
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= MAX_PORT:
+        raise RefusalError("E-PORT-SHAPE", "the spool port is not one port number")
+    return Profile("spool", SPOOL_KEY_FILE, SPOOL_DROPIN_FILE, port, "the spool account")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -639,13 +700,16 @@ def check_keys(keys: object) -> list[tuple[str, str]]:
     return found
 
 
-def check_own_address(own: object, destinations: Sequence[str]) -> str:
+def check_own_address(
+    own: object, destinations: Sequence[str], profile: Profile = CI_PROFILE
+) -> str:
     """Return the jump host's own address, or refuse one that is unset, not an IPv4 address, not in
-    a private range, or not among the destinations.
+    a private range, or, for the ci profile, not among the destinations.
 
     The runner reaches every host through the jump, the jump host itself included, so a list
     that lacks the jump host's own address fails the plan of every host and cannot be corrected
-    by the pull it would block.
+    by the pull it would block. The spool profile is the opposite: its key must never reach the
+    jump host's own sshd, so its list must not hold the address (E-SPOOL-OWN).
 
     Raises:
         RefusalError: for each of those.
@@ -661,20 +725,75 @@ def check_own_address(own: object, destinations: Sequence[str]) -> str:
     address = ipaddress.ip_address(".".join(str(int(label)) for label in labels))
     if not any(address in network for network in PRIVATE_NETWORKS):
         raise RefusalError("E-OWN-PRIVATE", "the jump host's own address is not a private address")
-    if own.lower() not in (item.lower() for item in destinations):
+    listed = own.lower() in (item.lower() for item in destinations)
+    if profile.kind == "spool":
+        if listed:
+            raise RefusalError("E-SPOOL-OWN", "the spool list holds the jump host's own address")
+    elif not listed:
         raise RefusalError(
             "E-DEST-OWN", "the destination list lacks the jump host's own address on port 22"
         )
     return own
 
 
-def wanted_options(destinations: Sequence[str]) -> str:
+def check_spool_destinations(destinations: Sequence[str], own_is_loopback: bool) -> None:
+    """Refuse a spool destination that is not one private IPv4 address written plainly.
+
+    The second account's key is meant to open the spool hosts' private addresses and nothing
+    else, so a host name (which says nothing about where it points), a public address and an
+    address with leading zeros (a different text to sshd from the one the client sends) are
+    refused. A loopback address is accepted only on a test host, whose own address is loopback
+    too: on a real jump host it is the jump host's own sshd.
+
+    Raises:
+        RefusalError: with a code for each way a spool destination can be wrong.
+    """
+    for number, entry in enumerate(destinations, start=1):
+        try:
+            address = ipaddress.IPv4Address(entry)
+        except ValueError:
+            raise RefusalError(
+                "E-SPOOL-ADDRESS", f"destination {number} is not a plain IPv4 address"
+            ) from None
+        if str(address) != entry or not any(address in network for network in PRIVATE_NETWORKS):
+            raise RefusalError(
+                "E-SPOOL-ADDRESS", f"destination {number} is not a plain private IPv4 address"
+            )
+        if address.is_loopback and not own_is_loopback:
+            raise RefusalError("E-SPOOL-LOOPBACK", f"destination {number} is a loopback address")
+
+
+def check_spool_key_lists(
+    key_lists: Sequence[Sequence[str] | None], destinations: Sequence[str]
+) -> None:
+    """Refuse a spool key whose own list names a host the spool destinations do not hold. A key
+    with no list of its own takes the spool list and is not looked at here.
+
+    The comparison is on the text of each destination, as sshd receives it, so a list can only
+    narrow the spool list, never widen it.
+
+    Raises:
+        RefusalError: E-SPOOL-KEY-WIDER, naming the key's number. No destination is printed.
+    """
+    held = {item.lower() for item in destinations}
+    for number, own in enumerate(key_lists, start=1):
+        if own is None:
+            continue
+        for item in own:
+            if item.lower() not in held:
+                raise RefusalError(
+                    "E-SPOOL-KEY-WIDER",
+                    f"spool key {number} names a destination the spool list does not hold",
+                )
+
+
+def wanted_options(destinations: Sequence[str], profile: Profile = CI_PROFILE) -> str:
     """The options of every line the role writes: the fixed pair, one permitopen each, then the
     forced command, in the order the runbook's hand-made line has."""
     return ",".join(
         [
             *PINNED_FIXED_OPTIONS,
-            *(f'permitopen="{item}:{PINNED_PORT}"' for item in destinations),
+            *(f'permitopen="{item}:{profile.port}"' for item in destinations),
             f'command="{PINNED_COMMAND}"',
         ]
     )
@@ -684,28 +803,29 @@ def wanted_lines(
     destinations: Sequence[str],
     keys: Sequence[tuple[str, str]],
     key_destinations: Sequence[Sequence[str] | None] | None = None,
+    profile: Profile = CI_PROFILE,
 ) -> list[str]:
     """The exact lines the key file must hold: options, key type, key body, nothing else. A key
     with a list of its own carries that list; every other key carries the shared one."""
     each = effective_destinations(destinations, key_destinations, len(keys))
     return [
-        f"{wanted_options(listed)} {key_type} {body}"
+        f"{wanted_options(listed, profile)} {key_type} {body}"
         for listed, (key_type, body) in zip(each, keys, strict=True)
     ]
 
 
-def wanted_dropin(user: str, destinations: Sequence[str]) -> str:
+def wanted_dropin(user: str, destinations: Sequence[str], profile: Profile = CI_PROFILE) -> str:
     """The exact text of the sshd drop-in: a Match block for the account, closed by Match all.
 
     The PermitOpen here is the union of the key lines' permitopen lists (permitted_destinations),
     which is the one shared list while no key has a list of its own.
     """
-    permit = " ".join(f"{item}:{PINNED_PORT}" for item in destinations)
+    permit = " ".join(f"{item}:{profile.port}" for item in destinations)
     return "\n".join(
         [
             "# Written by the ci_jump role. Change the owner's variables, not this file.",
             f"Match User {user}",
-            f"    AuthorizedKeysFile {KEY_FILE}",
+            f"    AuthorizedKeysFile {profile.key_file}",
             "    AuthenticationMethods publickey",
             "    AllowTcpForwarding local",
             f"    PermitOpen {permit}",
@@ -829,7 +949,11 @@ def check_unfixable(settings: Mapping[str, list[str]]) -> None:
         )
 
 
-def check_effective(settings: Mapping[str, list[str]], destinations: Sequence[str]) -> None:
+def check_effective(
+    settings: Mapping[str, list[str]],
+    destinations: Sequence[str],
+    profile: Profile = CI_PROFILE,
+) -> None:
     """Refuse unless sshd's own answer for the jump account is exactly what the role means.
     The destinations are what the Match block permits (permitted_destinations).
 
@@ -839,14 +963,15 @@ def check_effective(settings: Mapping[str, list[str]], destinations: Sequence[st
     Raises:
         RefusalError: with the code of the first setting that differs.
     """
-    for keyword, expected in EXPECTED_EFFECTIVE.items():
+    expected_settings = {**EXPECTED_EFFECTIVE, "authorizedkeysfile": profile.key_file}
+    for keyword, expected in expected_settings.items():
         if _values(settings, keyword, "") != [expected.lower()]:
             code = EFFECTIVE_CODES.get(keyword, "E-SSHD-EFFECTIVE")
             raise RefusalError(
                 code, f"sshd does not apply the wanted {keyword} to the jump account"
             )
     live = sorted(_values(settings, "permitopen", "any"))
-    wanted = sorted(f"{item}:{PINNED_PORT}".lower() for item in destinations)
+    wanted = sorted(f"{item}:{profile.port}".lower() for item in destinations)
     if live != wanted:
         raise RefusalError(
             "E-SSHD-PERMITOPEN", "sshd's PermitOpen for the jump account is not the owner's list"
@@ -881,45 +1006,56 @@ def plan_lines(
     keys: Sequence[tuple[str, str]],
     legacy_files: Sequence[str] = (),
     key_destinations: Sequence[Sequence[str] | None] | None = None,
+    profile: Profile = CI_PROFILE,
 ) -> list[str]:
     """Show the live key file and sshd settings against the wanted ones, destination by
     destination and key by key. The account is never named, and neither is a path made from it:
     the files of the earlier hand-made layout are only counted."""
-    text = host.read(KEY_FILE)
+    text = host.read(profile.key_file)
     live, not_understood = parse_file(text) if text is not None else ([], 0)
     each = effective_destinations(destinations, key_destinations, len(keys))
     permitted = permitted_destinations(destinations, key_destinations, len(keys))
-    out = [
-        "ci_jump plan for the jump account: every key line is wanted with the options"
+    # With no key holding a list of its own the wording is what it was before per-key lists.
+    per_key = any(item is not None for item in key_destinations or [])
+    summary = (
+        f"ci_jump plan for {profile.subject}: every key line is wanted with the options"
         f" {', '.join(PINNED_FIXED_OPTIONS)}, one permitopen per destination of that key (the"
         " shared list unless the key has a list of its own) and a forced command, and sshd gets"
-        " the union of those lists as its PermitOpen",
+        " the union of those lists as its PermitOpen"
+        if per_key
+        else f"ci_jump plan for {profile.subject}: every key line is wanted with the options"
+        f" {', '.join(PINNED_FIXED_OPTIONS)}, one permitopen per destination and a forced"
+        " command, and sshd gets the same list as its PermitOpen"
+    )
+    out = [
+        summary,
         (
             f"key file has {len(live)} key line(s) and {not_understood} line(s) not understood,"
-            f" root-owned {'yes' if _root_owned(host.info(KEY_FILE), False) else 'no'}"
+            f" root-owned {'yes' if _root_owned(host.info(profile.key_file), False) else 'no'}"
             if text is not None
             else "key file is absent and would be created"
         ),
     ]
-    dropin = host.read(DROPIN_FILE)
+    dropin = host.read(profile.dropin_file)
     if dropin is None:
         out.append("sshd drop-in is absent and would be created")
-    elif dropin == wanted_dropin(user, permitted):
+    elif dropin == wanted_dropin(user, permitted, profile):
         out.append("sshd drop-in is identical to the wanted text")
     else:
         out.append("sshd drop-in differs from the wanted text and would be replaced")
-    old = legacy_present(host, legacy_files)
-    out.append(
-        f"{old} file(s) of the earlier hand-made layout present"
-        + (", removed once the new files read back" if old else "")
-    )
+    if profile.kind == "ci":
+        old = legacy_present(host, legacy_files)
+        out.append(
+            f"{old} file(s) of the earlier hand-made layout present"
+            + (", removed once the new files read back" if old else "")
+        )
     live_key_destinations = _destinations_of(live)
     live_sshd = [value.rpartition(":")[0] for value in _values(settings, "permitopen", "any")]
     for item in permitted:
         in_keys = "yes" if item in live_key_destinations else "no"
         in_sshd = "yes" if item in live_sshd else "no"
         out.append(
-            f"destination {item} port {PINNED_PORT} key file live {in_keys} wanted yes,"
+            f"destination {item} port {profile.port} key file live {in_keys} wanted yes,"
             f" sshd PermitOpen live {in_sshd} wanted yes"
         )
     for item in dict.fromkeys([*live_key_destinations, *live_sshd]):
@@ -935,20 +1071,21 @@ def plan_lines(
         if found is None:
             out.append(f"key {key_type} fingerprint {fp} live no wanted yes")
         else:
-            same = found.options_text == wanted_options(listed)
+            same = found.options_text == wanted_options(listed, profile)
             out.append(
                 f"key {key_type} fingerprint {fp} live yes wanted yes, live options"
                 f" {'match' if same else 'differ from'} the wanted options"
             )
-        live_set = (
-            sorted(value.rpartition(":")[0] for value in permitopen_set(found))
-            if found is not None
-            else []
-        )
-        out.append(
-            f"key {key_type} fingerprint {fp} permitopen wanted {', '.join(listed)},"
-            f" live {', '.join(live_set) if live_set else 'none'}"
-        )
+        if per_key:
+            live_set = (
+                sorted(value.rpartition(":")[0] for value in permitopen_set(found))
+                if found is not None
+                else []
+            )
+            out.append(
+                f"key {key_type} fingerprint {fp} permitopen wanted {', '.join(listed)},"
+                f" live {', '.join(live_set) if live_set else 'none'}"
+            )
     for fp, line in live_by_fp.items():
         if fp not in wanted_fps:
             out.append(
@@ -963,19 +1100,30 @@ def _checked_inputs(
     destinations: object,
     keys: object,
     owned: Mapping[str, str],
+    profile: Profile = CI_PROFILE,
 ) -> tuple[str, str, list[str], list[tuple[str, str]], list[list[str] | None]]:
     """Judge every input, in the order that tells the owner the most: the account, the
     destinations, the jump host's own address, the keys, the keys' own lists.
+
+    A spool key with a list of its own is held to the same shape as a first-account key, and its
+    list must be a subset of the spool destinations: a wider list is refused (E-SPOOL-KEY-WIDER).
 
     Raises:
         RefusalError: for the first rule that is broken.
     """
     name = check_user(user, owned)
     dests = check_destinations(destinations)
-    own_address = check_own_address(own, dests)
+    own_address = check_own_address(own, dests, profile)
+    if profile.kind == "spool":
+        own_labels = own_address.split(".")
+        loopback = ipaddress.ip_address(".".join(str(int(label)) for label in own_labels))
+        check_spool_destinations(dests, loopback.is_loopback)
     texts, own_lists = split_key_entries(keys)
     parsed = check_keys(texts)
-    return name, own_address, dests, parsed, check_key_destinations(own_lists, len(parsed))
+    checked_lists = check_key_destinations(own_lists, len(parsed))
+    if profile.kind == "spool":
+        check_spool_key_lists(checked_lists, dests)
+    return name, own_address, dests, parsed, checked_lists
 
 
 def plan_result(
@@ -986,6 +1134,7 @@ def plan_result(
     keys: object,
     owned: Mapping[str, str],
     legacy_files: Sequence[str] = (),
+    profile: Profile = CI_PROFILE,
 ) -> tuple[list[str], bool]:
     """Judge the inputs, then the host, and show live against wanted. Also say whether a write
     is owed (is_pending).
@@ -994,13 +1143,18 @@ def plan_result(
         RefusalError: for the first rule that is broken, inputs before host.
     """
     name, own_address, dests, parsed_keys, own_lists = _checked_inputs(
-        user, own, destinations, keys, owned
+        user, own, destinations, keys, owned, profile
     )
     account = check_account(find_account(host, name))
     settings = _sshd(host, account.name, own_address)
     check_unfixable(settings)
-    lines = plan_lines(host, name, settings, dests, parsed_keys, legacy_files, own_lists)
-    return lines, is_pending(host, name, dests, parsed_keys, legacy_files, own_lists)
+    lines = plan_lines(
+        host, name, settings, dests, parsed_keys, legacy_files, own_lists, profile=profile
+    )
+    pending = is_pending(
+        host, name, dests, parsed_keys, legacy_files, own_lists, profile=profile
+    )
+    return lines, pending
 
 
 def do_plan(
@@ -1011,13 +1165,14 @@ def do_plan(
     keys: object,
     owned: Mapping[str, str],
     legacy_files: Sequence[str] = (),
+    profile: Profile = CI_PROFILE,
 ) -> list[str]:
     """Judge the inputs, then the host, and show live against wanted.
 
     Raises:
         RefusalError: for the first rule that is broken, inputs before host.
     """
-    return plan_result(host, user, own, destinations, keys, owned, legacy_files)[0]
+    return plan_result(host, user, own, destinations, keys, owned, legacy_files, profile)[0]
 
 
 def check_files(
@@ -1026,6 +1181,7 @@ def check_files(
     destinations: Sequence[str],
     keys: Sequence[tuple[str, str]],
     key_destinations: Sequence[Sequence[str] | None] | None = None,
+    profile: Profile = CI_PROFILE,
 ) -> list[str]:
     """Compare both managed files with the wanted text exactly, and return the key lines.
 
@@ -1034,21 +1190,21 @@ def check_files(
     """
     if not _root_owned(host.info(KEY_DIR), True):
         raise RefusalError("E-READBACK-MISMATCH", "the key directory is not root's at mode 0755")
-    for path in (KEY_FILE, DROPIN_FILE):
+    for path in (profile.key_file, profile.dropin_file):
         if not _root_owned(host.info(path), False):
             raise RefusalError(
                 "E-READBACK-MISMATCH", "a managed file is not root's regular file at mode 0644"
             )
-    text = host.read(KEY_FILE)
+    text = host.read(profile.key_file)
     if text is None:
         raise RefusalError("E-READBACK-MISMATCH", "the managed key file cannot be read back")
     live = sorted(line.strip() for line in text.splitlines() if line.strip())
-    if live != sorted(wanted_lines(destinations, keys, key_destinations)):
+    if live != sorted(wanted_lines(destinations, keys, key_destinations, profile)):
         raise RefusalError(
             "E-READBACK-MISMATCH", "the managed key file is not exactly the wanted lines"
         )
     permitted = permitted_destinations(destinations, key_destinations, len(keys))
-    if host.read(DROPIN_FILE) != wanted_dropin(name, permitted):
+    if host.read(profile.dropin_file) != wanted_dropin(name, permitted, profile):
         raise RefusalError(
             "E-READBACK-MISMATCH", "the managed sshd drop-in is not exactly the wanted text"
         )
@@ -1070,6 +1226,7 @@ def do_verify(
     owned: Mapping[str, str],
     legacy_files: Sequence[str] = (),
     legacy_gone: bool = False,
+    profile: Profile = CI_PROFILE,
 ) -> list[str]:
     """Read both files back and compare them with the wanted text exactly, then require sshd's
     own answer for the account to be what the role means. With legacy_gone the files of the
@@ -1080,20 +1237,26 @@ def do_verify(
             a legacy file the caller says must be gone is still there.
     """
     name, own_address, dests, parsed_keys, own_lists = _checked_inputs(
-        user, own, destinations, keys, owned
+        user, own, destinations, keys, owned, profile
     )
     account = check_account(find_account(host, name))
     permitted = permitted_destinations(dests, own_lists, len(parsed_keys))
-    check_effective(_sshd(host, account.name, own_address), permitted)
-    live = check_files(host, name, dests, parsed_keys, own_lists)
+    check_effective(_sshd(host, account.name, own_address), permitted, profile)
+    live = check_files(host, name, dests, parsed_keys, own_lists, profile)
     if legacy_gone and legacy_present(host, legacy_files):
         raise RefusalError(
             "E-LEGACY-PRESENT", "a file of the earlier hand-made layout is still there"
         )
+    # With no key holding a list of its own the wording is what it was before per-key lists.
+    listing = (
+        "with the union of the keys' lists as its PermitOpen"
+        if any(item is not None for item in own_lists)
+        else "with the same list as its PermitOpen"
+    )
     return [
         f"ci_jump read back {len(live)} key line(s) and the sshd drop-in, each exactly the wanted"
-        f" text for {len(permitted)} destination(s) on port {PINNED_PORT}; sshd applies local"
-        " forwarding only, with the union of the keys' lists as its PermitOpen"
+        f" text for {len(permitted)} destination(s) on port {profile.port}; sshd applies local"
+        f" forwarding only, {listing}"
     ]
 
 
@@ -1104,12 +1267,13 @@ def is_pending(
     keys: Sequence[tuple[str, str]],
     legacy_files: Sequence[str],
     key_destinations: Sequence[Sequence[str] | None] | None = None,
+    profile: Profile = CI_PROFILE,
 ) -> bool:
     """True when a write is owed: a managed file is not exactly as wanted, or a file of the
     earlier hand-made layout is still there. It is the complement of what verify reads, so a
     host the role has finished with is never pending and the role's second run changes nothing."""
     try:
-        check_files(host, user, destinations, keys, key_destinations)
+        check_files(host, user, destinations, keys, key_destinations, profile)
     except RefusalError:
         return True
     return legacy_present(host, legacy_files) > 0
@@ -1126,8 +1290,9 @@ def _setting(settings: Mapping[str, list[str]], keyword: str, default: str, limi
 
 
 def _file_label(paths: Sequence[str]) -> str:
-    """Say whether a key file is the managed one, without printing a path that could hold a name."""
-    return "managed" if list(paths) == [KEY_FILE] else "other"
+    """Say whether a key file is a managed one (either account's), without printing a path that
+    could hold a name."""
+    return "managed" if list(paths) in ([path] for path in MANAGED_KEY_FILES) else "other"
 
 
 def _carrying_lines(host: Host, files: Sequence[str]) -> list[KeyLine]:
@@ -1160,10 +1325,21 @@ def _report_destinations(
         for value in _values(settings, "permitopen", "any")
         if value != "any"
     ]
+    # The port each live destination is opened on, as the key lines and sshd carry it. A list
+    # that holds one port (the ci account's is always 22) reads as it did before there was a
+    # second account, whose own port may differ.
+    ports: dict[str, set[str]] = {}
+    for value in (
+        *(value for line in lines for value in permitopen_set(line)),
+        *(value for value in _values(settings, "permitopen", "any") if value != "any"),
+    ):
+        host_part, _, port_part = value.rpartition(":")
+        ports.setdefault(host_part, set()).add(port_part)
     out: list[str] = []
     for item in dict.fromkeys([*in_keys, *in_sshd]):
+        port_text = "/".join(sorted(ports.get(item, {str(PINNED_PORT)}))) or str(PINNED_PORT)
         out.append(
-            f"account {index} destination {clean(item)} port {PINNED_PORT}"
+            f"account {index} destination {clean(item)} port {clean(port_text, 40)}"
             f" in key lines {'yes' if item in in_keys else 'no'},"
             f" in sshd PermitOpen {'yes' if item in in_sshd else 'no'},"
             f" in the owner's list {'yes' if item in listed else 'no'}"
@@ -1176,15 +1352,36 @@ def _report_destinations(
     return out
 
 
+def _own_lists(entries: Sequence[object] | None) -> dict[str, list[str]]:
+    """Per key body (fingerprint), the list the owner wrote for that key. A key entry with no
+    destinations of its own is left out, so its account's default applies to it."""
+    found: dict[str, list[str]] = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("key"), str):
+            continue
+        parts = _key_parts(entry["key"])
+        if parts is None or not isinstance(entry.get("destinations"), list):
+            continue
+        listed = [item for item in entry["destinations"] if isinstance(item, str)]
+        found[fingerprint(parts[1])] = listed
+    return found
+
+
 def do_report(
     host: Host,
     owned: Mapping[str, str],
     listed: Sequence[str],
     address: str,
+    defaults: Mapping[str, Sequence[str]] | None = None,
+    key_entries: Mapping[str, Sequence[object]] | None = None,
 ) -> tuple[list[str], list[dict[str, object]]]:
     """Describe the accounts whose key files carry forwarding options, found per account with
     sshd -T -C so a Match block's AuthorizedKeysFile is followed. Reads, never writes, and
-    prints no account name: an account is its index in this report."""
+    prints no account name: an account is its index in this report.
+
+    Each key is compared with the list the owner wrote for that key when it has one, and
+    otherwise with its account's default (defaults, by account name; listed when none is given).
+    """
     out = ["ci_jump report, read only, nothing was changed"]
     owner_of = {name: role for role, name in owned.items()}
     structured: list[dict[str, object]] = []
@@ -1207,21 +1404,32 @@ def do_report(
         owned_by_root = all(
             _root_owned(host.info(path), False) for path in files if host.read(path)
         )
+        default = list((defaults or {}).get(account.name, listed))
+        own_map = _own_lists((key_entries or {}).get(account.name))
+        expected = [own_map.get(fingerprint(line.body), default) for line in carrying]
+        listed_here = list(dict.fromkeys(item for each in expected for item in each))
         out.append(
             f"account {index} shell class {shell_class(account.shell)} owned by role"
             f" {clean(owner, 32)}, {len(carrying)} key line(s) with forwarding options,"
             f" key file {_file_label(files)}, root-owned {'yes' if owned_by_root else 'no'}"
         )
         for number, line in enumerate(carrying, start=1):
+            want = expected[number - 1]
+            live_hosts = {value.rpartition(":")[0] for value in permitopen_set(line)}
             out.append(
                 f"account {index} line {number} key {line.key_type}"
                 f" fingerprint {fingerprint(line.body)} options {describe_options(line)}"
+            )
+            out.append(
+                f"account {index} line {number} owner's list"
+                f" {'own' if fingerprint(line.body) in own_map else 'account default'},"
+                f" live hosts match it {'yes' if live_hosts == set(want) else 'no'}"
             )
         out.append(
             f"account {index} all key lines carry the same permitopen set"
             f" {'yes' if len(sets) == 1 else 'no'}"
         )
-        out.extend(_report_destinations(index, carrying, settings, listed))
+        out.extend(_report_destinations(index, carrying, settings, listed_here))
         out.append(
             f"account {index} sshd AuthorizedKeysCommand"
             f" {_setting(settings, 'authorizedkeyscommand', 'none')},"
@@ -1330,6 +1538,10 @@ ARGUMENT_SPEC: dict[str, dict[str, object]] = {
     "owned_accounts": {"type": "dict", "default": {}},
     "legacy_files": {"type": "list", "elements": "str", "default": [], "no_log": True},
     "legacy_gone": {"type": "bool", "default": False},
+    "profile": {"type": "str", "default": "ci", "choices": ["ci", "spool"]},
+    "port": {"type": "int", "default": PINNED_PORT},
+    "account_destinations": {"type": "dict", "default": {}, "no_log": True},
+    "account_keys": {"type": "dict", "default": {}, "no_log": True},
 }
 
 
@@ -1363,6 +1575,7 @@ def main() -> None:
     params = module.params
     try:
         owned = owned_from(params["owned_accounts"])
+        profile = make_profile(params["profile"], params["port"])
         action = params["action"]
         if action == "report":
             lines, accounts = do_report(
@@ -1370,6 +1583,8 @@ def main() -> None:
                 owned,
                 [item for item in params["destinations"] if isinstance(item, str)],
                 params["own_address"] or STAND_IN_ADDRESS,
+                params["account_destinations"],
+                params["account_keys"],
             )
             module.exit_json(changed=False, lines=lines, accounts=accounts)
         elif action == "plan":
@@ -1381,6 +1596,7 @@ def main() -> None:
                 params["keys"],
                 owned,
                 params["legacy_files"],
+                profile,
             )
             module.exit_json(changed=False, lines=lines, pending=pending)
         else:
@@ -1393,6 +1609,7 @@ def main() -> None:
                 owned,
                 params["legacy_files"],
                 params["legacy_gone"],
+                profile,
             )
             module.exit_json(changed=False, lines=lines)
     except RefusalError as error:

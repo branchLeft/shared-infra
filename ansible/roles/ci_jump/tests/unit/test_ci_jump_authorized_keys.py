@@ -1245,15 +1245,19 @@ class KeyOwnDestinationTests(unittest.TestCase):
         self.assertIn("live options differ from the wanted options", text)
 
     def test_a_plan_of_a_host_with_no_list_of_its_own_still_shows_the_shared_set(self) -> None:
+        # Main's output form: a host with no per-key lists plans exactly as before, with the
+        # shared set in the summary and no per-key permitopen line.
         host = FakeHost()
         host.deliver(self.SHARED, [KEY_A, KEY_B])
-        text = "\n".join(jump.do_plan(host, "jumper", OWN, self.SHARED, [KEY_A, KEY_B], OWNED))
-        shared = ", ".join(self.SHARED)
-        for key in (KEY_A, KEY_B):
-            self.assertIn(
-                f"fingerprint {jump.fingerprint(body(key))} permitopen wanted {shared}, live",
-                text,
-            )
+        lines = jump.do_plan(host, "jumper", OWN, self.SHARED, [KEY_A, KEY_B], OWNED)
+        self.assertEqual(
+            lines[0],
+            "ci_jump plan for the jump account: every key line is wanted with the options "
+            "restrict, port-forwarding, one permitopen per destination and a forced command, "
+            "and sshd gets the same list as its PermitOpen",
+        )
+        self.assertFalse(any("permitopen wanted" in line for line in lines))
+        self.assertIn("sshd drop-in is identical to the wanted text", lines)
 
     def test_a_pending_host_is_one_whose_key_line_is_on_the_wrong_list(self) -> None:
         host = FakeHost()

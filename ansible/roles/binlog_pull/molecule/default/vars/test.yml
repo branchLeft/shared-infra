@@ -1,0 +1,11 @@
+---
+# Documentation values only: an address from 192.0.2.0/24, an account that exists nowhere, and a
+# made-up login value. Nothing here is a real value, and none is real-looking enough to pass as
+# one. These are the role's own inputs, set as play variables by converge.yml and verify.yml.
+binlog_pull_db_host: 192.0.2.20
+binlog_pull_db_user: binlog_example
+binlog_pull_db_password: EXAMPLEONLYloginvalue00000000000000000
+binlog_pull_db_ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  TEST_PLACEHOLDER_NOT_A_CERTIFICATE
+  -----END CERTIFICATE-----

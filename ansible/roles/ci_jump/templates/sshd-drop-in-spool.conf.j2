@@ -1,0 +1,25 @@
+# Written by the ci_jump role. Change the owner's variables, not this file.
+{% set seen = namespace(names=[], lowered=[]) %}
+{% for entry in ci_jump_spool_keys %}
+{% for destination in (entry.destinations if entry.destinations is defined else ci_jump_spool_destinations) %}
+{% if destination | lower not in seen.lowered %}
+{% set seen.names = seen.names + [destination] %}
+{% set seen.lowered = seen.lowered + [destination | lower] %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+Match User {{ ci_jump_spool_user }}
+    AuthorizedKeysFile {{ ci_jump_spool_key_file }}
+    AuthenticationMethods publickey
+    AllowTcpForwarding local
+    PermitOpen {% for destination in seen.names %}{{ destination }}:{{ ci_jump_spool_port }}{{ ' ' if not loop.last }}{% endfor %}
+
+    GatewayPorts no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ ci_jump_forced_command }}
+Match all

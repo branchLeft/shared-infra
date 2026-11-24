@@ -2,17 +2,22 @@
 # Read only, so it also runs in check mode and always reports no change. The module prints option
 # names, host names and ports, key types and short fingerprints, an index per account and the
 # class of its shell, and nothing else: no account name, so the result is safe in a public plan.
+# The owner's lists the report compares each key with: the key's own list when it has one, and
+# otherwise its account's default. The second account's lists are empty unless its flag is on, so
+# a host with one account reads as it always did.
 - name: Read the forwarding options every account holds
   ci_jump_authorized_keys:
     action: report
     owned_accounts: '{{ ci_jump_owned_accounts }}'
-    # The owner's list the report compares the host with is every list the owner wrote: the shared
-    # one and each key's own.
-    destinations: "{{ (ci_jump_destinations + (ci_jump_keys | map(attribute='destinations', default=[]) | flatten)) | unique | list }}"
+    destinations: '{{ ci_jump_destinations + ci_jump_spool_destinations }}'
+    account_destinations: '{{ {ci_jump_user: ci_jump_destinations} | combine({ci_jump_spool_user: ci_jump_spool_destinations} if ci_jump_spool_user is defined else {}) }}'
+    account_keys: '{{ {ci_jump_user: ci_jump_keys} | combine({ci_jump_spool_user: ci_jump_spool_keys} if ci_jump_spool_user is defined else {}) }}'
     own_address: '{{ ci_jump_own_address }}'
   register: ci_jump_report
   changed_when: false
+  no_log: true
 
 - name: Show what the host holds today
   ansible.builtin.debug:
     msg: '{{ ci_jump_report.lines }}'
+  no_log: true

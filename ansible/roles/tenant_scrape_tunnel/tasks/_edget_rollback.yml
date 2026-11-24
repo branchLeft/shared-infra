@@ -1,0 +1,46 @@
+---
+# Puts the sshd drop-in and the authorized key back as _edget.yml found them (its observation
+# tasks kept them in memory), for the install and for the removal, then reloads sshd. The caller
+# fails the run after it, with the cause.
+- name: Put back the sshd drop-in that was there before
+  ansible.builtin.copy:
+    content: '{{ tenant_scrape_tunnel_prev.results[0].content | b64decode }}'
+    dest: '{{ tenant_scrape_tunnel_sshd_dropin }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: tenant_scrape_tunnel_before.results[0].stat.exists
+  no_log: true
+  diff: false
+
+- name: Remove the sshd drop-in when there was none before
+  ansible.builtin.file:
+    path: '{{ tenant_scrape_tunnel_sshd_dropin }}'
+    state: absent
+  when: not tenant_scrape_tunnel_before.results[0].stat.exists
+
+- name: Put back the authorized key that was there before
+  ansible.builtin.copy:
+    content: '{{ tenant_scrape_tunnel_prev.results[1].content | b64decode }}'
+    dest: '{{ tenant_scrape_tunnel_authorized_keys_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: tenant_scrape_tunnel_before.results[1].stat.exists
+  no_log: true
+  diff: false
+
+- name: Remove the authorized key when there was none before
+  ansible.builtin.file:
+    path: '{{ tenant_scrape_tunnel_authorized_keys_file }}'
+    state: absent
+  when: not tenant_scrape_tunnel_before.results[1].stat.exists
+
+# A reload that fails here (another file makes the whole configuration bad) must not hide
+# the cause the caller reports: the running sshd keeps its old settings.
+- name: Reload sshd with the previous files back
+  ansible.builtin.systemd_service:
+    name: '{{ tenant_scrape_tunnel_sshd_service }}'
+    state: reloaded
+  when: not ansible_check_mode
+  failed_when: false

@@ -1,0 +1,32 @@
+---
+# Constants of the service, not inputs: role variables outrank every value a caller passes.
+# The program holds the same paths and names (a unit test pins each pair).
+binlog_pull_program_dir: /opt/branchleft/binlog-pull
+binlog_pull_program_name: branchleft_binlog_pull.py
+binlog_pull_program_path: '{{ binlog_pull_program_dir }}/{{ binlog_pull_program_name }}'
+
+# The ledger of what was shipped lives here, root only: the put key cannot read copy 1, so this
+# directory is the one record of what it holds.
+binlog_pull_state_dir: /var/lib/branchleft/binlog-pull
+
+binlog_pull_config_dir: /etc/branchleft
+binlog_pull_env_file: /etc/branchleft/binlog-pull.env
+binlog_pull_ca_file: /etc/branchleft/dbt1-ca.pem
+
+# The file the program reads the estate recipient and copy 1's put key from. The
+# backup_restore role writes it; this role never reads or writes its content.
+binlog_pull_copy_env_file: /etc/branchleft/state-copy.env
+
+# The signing client the backup_worker role stages. The program loads it from there.
+binlog_pull_release_client: /opt/branchleft/backup-worker/current/infra/provisioning/scripts/shared_objectstorage.py
+
+binlog_pull_unit_dir: /etc/systemd/system
+binlog_pull_service_unit: branchleft-binlog-pull.service
+binlog_pull_timer_unit: branchleft-binlog-pull.timer
+
+# The patterns end in \Z, not $, so a trailing line break does not pass.
+binlog_pull_host_pattern: '^[A-Za-z0-9][A-Za-z0-9.:-]*\Z'
+binlog_pull_user_pattern: '^[A-Za-z0-9_][A-Za-z0-9_-]*\Z'
+# A login value goes on one line of the environment file, which systemd parses for quotes and
+# backslashes: letters, digits and a few safe symbols only.
+binlog_pull_login_pattern: '^[A-Za-z0-9/+=_.-]+\Z'

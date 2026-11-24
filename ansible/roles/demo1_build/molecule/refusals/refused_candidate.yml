@@ -20,7 +20,7 @@
     converge_global: "{{ converge_case.global_option | default('') }}"
     converge_text: '{{ converge_good_text }}{{ converge_case.append | default("") }}'
     converge_fixtures: '{{ playbook_dir }}/../../tests/unit/fixtures'
-    converge_answer: /etc/stand-in-caddy-adapt.json
+    converge_answer: /usr/share/standin-docker/adapt.json
     converge_good_text: |
       {
           admin off

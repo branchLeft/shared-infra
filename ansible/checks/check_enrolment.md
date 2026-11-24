@@ -176,6 +176,11 @@ is not loaded there.
   (text), `mail_collector_hosts` (a list), `mail_collector_smtp_port` and `mail_collector_shim_port`
   (whole numbers) and `mail_collector_smtp_secure` (a bool). What a value may look like is the
   role's rule alone. The sending credential is never a key here: it is the file the owner places.
+  The `host_tls_identity` role adds one, `host_tls_identity_peer_cert`, text, allowed on the hosts that
+  apply the role (`HOST_TLS_HOSTS`: demo1) and required there; it is empty until the owner has read the peer's
+  public certificate off its host. The role holds every shape rule for it (one certificate, self-signed, the use,
+  the name, the lifetime), so only the type is read here. `HOST_TLS_HOSTS` must equal the hosts whose
+  `checks/host_roles/HOST.yml` lists the role, as for `ci_jump`.
   The `ci_step_login` role adds two, allowed on ops1 only: `ci_step_login_key`, text, and
   `ci_step_login_from`, a list of text. `test_ci_step_login_pins.py` holds the real key and
   addresses to the owner's values.

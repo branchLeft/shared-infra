@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig(
   defineStandardTest({
     environment: 'node',
-    coverageInclude: ['*.ts', 'edge/*.ts', 'monitoring/*.ts'],
+    coverageInclude: ['*.ts', 'edge/*.ts', 'edge-t/*.ts', 'monitoring/*.ts'],
     coverageExclude: [
       '**/*.test.ts',
       '**/*.d.ts',
@@ -13,6 +13,7 @@ export default defineConfig(
       'index.ts',
       'network.ts',
       'estate.ts',
+      'media.ts',
       'dns.ts',
     ],
   })

@@ -190,6 +190,16 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "registered because the scan reads the path as a stack name. No Compose "
         "file exists for it anywhere."
     ),
+    "binlog-pull": (
+        "Not an instance of the template: `/opt/branchleft/binlog-pull` is the "
+        "directory the ansible/roles/binlog_pull role of branchLeft/shared-infra "
+        "installs its binary-log pull program into, and `/etc/branchleft/binlog-pull.env` "
+        "is its settings file, which a systemd oneshot service and timer of that "
+        "role run. It never starts through branchleft-compose@ or branchleft-deploy; "
+        "it dials the tenant database host's MySQL port over TLS. It is registered "
+        "because the scan reads the path as a stack name. No Compose file exists "
+        "for it anywhere."
+    ),
     "ntfy-pager": (
         "Not an instance of the template: `/etc/branchleft/ntfy-pager.env` is the "
         "secrets file of the ntfy pager, written by the ansible/roles/ntfy_pager "
@@ -231,6 +241,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "because the scratch image cannot carry a healthcheck. It is registered "
         "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
         "exists for it."
+    ),
+    "status-uptime": (
+        "Not an instance of the template: `/opt/branchleft/status-uptime` is the directory "
+        "the ansible/roles/status_page role of branchLeft/shared-infra installs the 90-day "
+        "uptime collector into, which a systemd oneshot service and timer of that role run "
+        "against the status page. It never starts through branchleft-compose@ or "
+        "branchleft-deploy. It is registered because the scan reads the path as a stack "
+        "name. No Compose file exists for it anywhere."
     ),
     "dbt1": (
         "An instance of the template on the tenant database host, started through "
@@ -406,6 +424,14 @@ def documented_instance_rows(readme: pathlib.Path) -> list[str]:
     return REACH_ROW_INSTANCE.findall(readme.read_text(encoding="utf-8"))
 
 
+# A directory under hetzner/ holding the stack of another profile of an instance, keyed by the
+# directory and giving the instance it runs as. edge-t's stack is the tenant profile of the
+# instance `edge` (one unit, `branchleft-compose@edge`, on its own host), so no file names an
+# instance called `edge-t`; the directory is registered here so the scan reads it as named
+# wherever its instance is. Full reasoning: `test_compose_unit_contract.md`.
+PROFILE_DIRECTORIES = {"edge-t": "edge"}
+
+
 def stacks_named_in_this_repository() -> dict[str, set[str]]:
     """Stack instance names this repository writes down, each with where.
 
@@ -420,6 +446,9 @@ def stacks_named_in_this_repository() -> dict[str, set[str]]:
     for drop_in in sorted(HETZNER.glob("*/systemd/*.override.conf")):
         stack = drop_in.name.removesuffix(".override.conf")
         found.setdefault(stack, set()).add(str(drop_in.relative_to(REPOSITORY)))
+    for directory, instance in PROFILE_DIRECTORIES.items():
+        if instance in found:
+            found.setdefault(directory, set()).update(found[instance])
     return found
 
 
@@ -1561,6 +1590,13 @@ class ContractReachTests(unittest.TestCase):
             "the scan finds no stack from outside this repository, so it can no "
             "longer tell the two sides of the boundary apart.",
         )
+
+    def test_a_profile_directory_is_a_covered_stack_of_a_covered_instance(self):
+        for directory, instance in PROFILE_DIRECTORIES.items():
+            with self.subTest(directory=directory):
+                self.assertIn(directory, CONTRACT_COVERS)
+                self.assertIn(instance, CONTRACT_COVERS)
+                self.assertNotEqual(directory, instance)
 
     def test_the_unit_template_states_its_own_reach(self):
         """A reader of the unit file sees `%i` and cannot tell what checked it."""

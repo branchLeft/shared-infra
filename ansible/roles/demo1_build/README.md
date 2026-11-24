@@ -35,6 +35,24 @@ What the role does, in the order of `tasks/main.yml`:
    them); the broker's slots directory is `broker:broker` `0755`; and, when
    `broker.env` exists, it holds exactly one drain-flag line,
    `BROKER_DRAIN_FLAG_DIR=/var/lib/branchleft-broker/drain-flags`.
+   2a. **Refuses a secret the holder list does not name** (`_secret_holders.yml`), read-only
+   and before anything is staged or written. demo1 holds only the secrets listed in
+   `demo1_build_secret_holders` (`vars/main.yml`). The step finds secret-bearing files under
+   `/etc`, `/root`, `/home`, `/opt`, `/srv`, `/var/backups` and `/var/lib` by name (an
+   authorised-keys file, a private key's usual name, a binary `*-key.bin` file, which grep
+   cannot read), by content (a PEM or PGP private key block, a bare `KEY=value` line or an
+   `export` in any file; a spaced `KEY = value`, an indented line, a YAML `token: x` or JSON
+   `"token": "x"` line whose key holds a secret word, in a config-named file only; an AWS
+   secret, a GitHub or Pulumi token, a registry auth entry), and by place (every file in the
+   secrets directory and in the broker's admin-key directory). Pruning is by full path only:
+   `/var/lib/docker` and `/var/lib/containerd` (the image stores) are not read, so `/etc/docker`
+   is. Ansible's module payload directory, `/root/.ansible/tmp`, is not read; the rest of
+   `/root/.ansible` and every other `.ansible` is. A symbolic link
+   under the roots is followed for its target; a link whose name or target is a secret path
+   refuses. A found path that no row names refuses the run, naming the path and never a value.
+   The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
+   runbook Part 3) is listed. A host the list covers is
+   accepted and says how many files it found. A plan runs the step too.
 3. **Stages the programs** (`_release.yml`): the ten programs, each copied with
    `copy` from the role's own `files/ghost-platform` (which step 1 has held to the
    pins), into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
@@ -468,7 +486,7 @@ it. The image is not run by the role beyond `caddy adapt`, which fails on such a
 
 ### The pin
 
-The commit is `5e20991adefcdb9edde4157c6a56d2796ec1da6c`, which is at or after
+The commit is `922fc9d997fc5780bec9fc9a4f30c2dc743fe85a`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
