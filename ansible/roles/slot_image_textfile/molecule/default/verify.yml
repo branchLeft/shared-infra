@@ -1,0 +1,67 @@
+---
+# Read what the role installed and what the writer made, on the instance itself. The writer
+# exits 1 for the refused tag, so it is run with that status allowed and then judged here.
+- name: Verify the slot image digest gauge
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_output: /var/lib/branchleft/backup-worker-exporter/branchleft_slot_image.prom
+  tasks:
+    - name: Read the installed program, unit and timer
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/sbin/branchleft-slot-image-textfile
+        - /etc/systemd/system/branchleft-slot-image-textfile.service
+        - /etc/systemd/system/branchleft-slot-image-textfile.timer
+      register: slot_image_textfile_verify_installed
+
+    - name: Assert the program is root-owned 0755 and the units exist
+      ansible.builtin.assert:
+        that:
+          - slot_image_textfile_verify_installed.results[0].stat.exists
+          - slot_image_textfile_verify_installed.results[0].stat.pw_name == 'root'
+          - slot_image_textfile_verify_installed.results[0].stat.mode == '0755'
+          - slot_image_textfile_verify_installed.results[1].stat.exists
+          - slot_image_textfile_verify_installed.results[2].stat.exists
+        quiet: true
+        fail_msg: The program or a unit is missing or not owned as the role owns it.
+
+    - name: Ask systemd whether the timer is enabled
+      ansible.builtin.systemd_service:
+        name: branchleft-slot-image-textfile.timer
+      register: slot_image_textfile_verify_timer
+
+    - name: Assert the timer is enabled and active
+      ansible.builtin.assert:
+        that:
+          - slot_image_textfile_verify_timer.status.UnitFileState == 'enabled'
+          - slot_image_textfile_verify_timer.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The slot image timer is not enabled and active.
+
+    - name: Run the writer as the timer does
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/branchleft-slot-image-textfile
+          - --config-dir
+          - /etc/branchleft
+          - --output
+          - '{{ verify_output }}'
+      register: slot_image_textfile_verify_run
+      failed_when: slot_image_textfile_verify_run.rc not in [0, 1]
+      changed_when: false
+
+    - name: Read the gauge the writer made
+      ansible.builtin.slurp:
+        src: '{{ verify_output }}'
+      register: slot_image_textfile_verify_gauge
+
+    - name: Assert the digest pin is exported and the tag is not
+      ansible.builtin.assert:
+        that:
+          - slot_image_textfile_verify_run.rc == 1
+          - '''branchleft_slot_image_info{stack="slot-a",digest="sha256:'' ~ (''a'' * 64) ~ ''"} 1'' in (slot_image_textfile_verify_gauge.content | b64decode)'
+          - "'slot-b' not in (slot_image_textfile_verify_gauge.content | b64decode)"
+        quiet: true
+        fail_msg: The gauge does not hold the valid digest pin alone, or the refused pin was exported.
