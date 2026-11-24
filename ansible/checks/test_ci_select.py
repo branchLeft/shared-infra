@@ -228,6 +228,19 @@ class SelectionTest(unittest.TestCase):
         )
         self.assertEqual(own, chosen)
 
+    def test_an_owner_values_file_runs_only_the_shards_of_its_hosts_roles(self) -> None:
+        # ansible/owner_vars/HOST.yml is loaded by the HOST playbook's vars_files, so only the
+        # roles that host runs can read it. An owner-values change runs those roles and no others.
+        chosen = {shard["path"] for shard in self.pull_request("ansible/owner_vars/edge1.yml")}
+        self.assertIn("ansible/roles/ci_jump", chosen)
+        self.assertIn("ansible/roles/sweego_receiver", chosen)
+        self.assertNotIn("ansible/roles/db1_stack", chosen)
+        self.assertLess(len(chosen), len(self.shards))
+
+    def test_an_owner_values_file_for_a_host_with_no_role_list_runs_every_shard(self) -> None:
+        # Control: a host that has no role list cannot say which shards read its file.
+        self.assertEqual(self.shards, self.pull_request("ansible/owner_vars/mx9.yml"))
+
     def test_the_three_checks_files_the_shards_read_run_every_shard(self) -> None:
         # A shard that is wrongly left out is a gate that passes without running. Each file is
         # shown alone and beside a role file, on both events.
