@@ -1,0 +1,36 @@
+---
+# Applies the role the way a playbook would on edge-t: both accounts, with the owner's values. The
+# first account is as in the default scenario. The second account's list is the spool host alone.
+# Inputs, all optional: apply_spool_destinations (default: the spool host), apply_spool_user
+# (default: the second account), apply_spool_manage (default true), apply_spool_port (default 22).
+# It is idempotent and runs in check mode, so the harness's check steps can use it.
+- name: Read the public keys of the keys the role is told about
+  ansible.builtin.slurp:
+    src: '{{ scenario_key_dir }}/{{ item }}.pub'
+  loop:
+    - jump
+    - second
+    - spool
+    - spool2
+  register: ci_jump_scenario_pubs
+  check_mode: false
+  no_log: true
+
+- name: Apply the role with the scenario's values
+  ansible.builtin.include_role:
+    name: branchleft.ci_jump
+  vars:
+    ci_jump_manage_keys: true
+    ci_jump_user: '{{ scenario_jump_user }}'
+    ci_jump_own_address: '{{ scenario_own }}'
+    ci_jump_destinations: ['{{ scenario_listed }}', '{{ scenario_own }}']
+    ci_jump_keys:
+      - key: '{{ ci_jump_scenario_pubs.results[0].content | b64decode | trim }}'
+      - key: '{{ ci_jump_scenario_pubs.results[1].content | b64decode | trim }}'
+    ci_jump_spool_manage_keys: '{{ apply_spool_manage | default(true) }}'
+    ci_jump_spool_user: '{{ apply_spool_user | default(scenario_spool_user) }}'
+    ci_jump_spool_destinations: '{{ apply_spool_destinations | default([scenario_unlisted]) }}'
+    ci_jump_spool_port: '{{ apply_spool_port | default(22) }}'
+    ci_jump_spool_keys:
+      - key: '{{ ci_jump_scenario_pubs.results[2].content | b64decode | trim }}'
+      - key: '{{ ci_jump_scenario_pubs.results[3].content | b64decode | trim }}'

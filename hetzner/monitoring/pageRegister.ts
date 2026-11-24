@@ -4,7 +4,8 @@
  * and why alerts group on the cause, is in `pageRegister.md`.
  */
 
-export type PageRegisterDeliveryPath = 'alertmanager' | 'healthchecks' | 'ntfy_direct';
+export type PageRegisterDeliveryPath =
+  'alertmanager' | 'healthchecks' | 'ntfy_direct' | 'github-workflow';
 
 export interface PageRegisterEntry {
   /** Stable slug -- the identity a future change argues about, never renamed. */
@@ -23,11 +24,12 @@ export interface PageRegisterEntry {
    * How this entry's page actually reaches a phone. Every entry but one routes
    * through this stack's own Alertmanager; the drain worker's dead-man's
    * switch pages through its own Healthchecks.io check directly, so this
-   * entry renders no Alertmanager route at all -- it is listed here only so
-   * the register still names every path that can reach the phone. The mail
-   * host's abuse-report page (`ntfy_direct`) is posted by mx1 itself to the
-   * pager with a publish-only grant on a topic of its own, so it renders no
-   * route either.
+   * entry renders no Alertmanager route at all. The mail host's abuse-report
+   * page (`ntfy_direct`) is posted by mx1 itself to the pager with a
+   * publish-only grant on a topic of its own, and the secret-scanning page
+   * (`github-workflow`) is posted to ntfy by a scheduled workflow. Neither
+   * renders an Alertmanager route -- they are listed here only so the register
+   * still names every path that can reach the phone.
    */
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
@@ -172,6 +174,19 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     alertName: 'StoppedDemoReaper',
     deliveryPath: 'alertmanager',
     dormant: true,
+    tenantScoped: false,
+  },
+  {
+    id: 'secret-scanning-alert',
+    name: 'A secret-scanning alert',
+    reason:
+      'A credential pushed to a public repository is exposed the moment it lands, so it ' +
+      "cannot wait for a digest. A scheduled workflow polls the organisation's open " +
+      'secret-scanning alerts on public repositories and sends one ntfy page per new alert; ' +
+      'the page never carries the secret.',
+    alertName: null,
+    deliveryPath: 'github-workflow',
+    dormant: false,
     tenantScoped: false,
   },
 ] as const;

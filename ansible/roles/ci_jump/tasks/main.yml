@@ -4,7 +4,8 @@
 # nothing, and every task reports no change. With the flag true the inputs and the host are
 # judged first (_guards.yml), then the root-owned key file and the sshd drop-in are written,
 # checked, reloaded and read back (_write.yml, which includes _readback.yml). Both files are
-# made from the one destination list, ci_jump_destinations.
+# made from the one destination list, ci_jump_destinations. The second account, when its own flag
+# is true, has its own guards, files and list and the same steps (the *_spool.yml files).
 #
 # The module (library/ci_jump_authorized_keys.py) is the one home of every rule about the key
 # lines and the Match block. Its results carry fingerprints and option names only, never a key
@@ -28,6 +29,19 @@
   ansible.builtin.import_tasks: _guards.yml
   when: ci_jump_manage_keys | bool
 
+# The second account (README, "The second account: spool"). Its inputs are judged here, ahead of
+# both writes, so a second account that cannot be written (its name is the first account's, an
+# address on its list is the jump host's own) stops the run before the first account is touched.
+# Inert while ci_jump_spool_manage_keys is false: none of its tasks runs and the first account is
+# exactly as it was before the second existed.
+- name: Judge the spool account's inputs and the host before anything is written
+  ansible.builtin.import_tasks: _guards_spool.yml
+  when: ci_jump_spool_manage_keys | bool
+
 - name: Write the key file and the sshd drop-in, check them, reload sshd and read them back
   ansible.builtin.import_tasks: _write.yml
   when: ci_jump_manage_keys | bool
+
+- name: Write the spool account's key file and sshd drop-in, check them, reload sshd and read them back
+  ansible.builtin.import_tasks: _write_spool.yml
+  when: ci_jump_spool_manage_keys | bool

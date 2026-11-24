@@ -66,3 +66,11 @@ demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcar
 # is the identity; it is the digest of the published image the owner carries.
 # Empty, the production candidate is not staged, and the plan and apply say so.
 demo1_build_caddy_image: 'demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'
+
+# The drain sidecar's image, as the manifest digest the signed push delivers, pinned
+# to the build the owner attested: drain-sidecar-image.yml, run 43410699699.
+# The role writes it to /etc/branchleft/demo-sidecar.image.env
+# under the name the host gives the sidecar (vars/main.yml), which the colour units start the
+# sidecar from and the wrapper reads to name the pushed image. Nothing bumps it by itself: a
+# new sidecar is a new attested digest here, in one change.
+demo1_build_sidecar_digest: sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954

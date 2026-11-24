@@ -1,0 +1,505 @@
+---
+# The second account over the real sshd the role reloaded. The phases, in this order; each starts
+# from the state the last one left, so the order is part of the test.
+#
+#   1  the second account's connections: its key reaches the spool host on port 22 and nothing else
+#      (the first account's listed address, the jump host's own address, its loopback, the spool
+#      host on another port: each refused by the key line and logged by sshd as denied); it may not
+#      open a port of its own (ssh -R); the first account's key, a key in no file and the replaced
+#      line's key are turned away from it; the first account is unchanged (its two listed
+#      addresses go through, the spool host is refused it)
+#   1b the same cases through the client ops1 uses (ssh -F, ProxyJump) to a target account
+#   2  the converged files of both accounts: owner, modes, the exact lines, the exact drop-ins; no
+#      path under /etc/ssh holds either account's name; no reload marker is left
+#   3  what sshd evaluates for each account, observed with sshd -T -C
+#   4  the control: with another address on the second account's list the same connection goes
+#      through, so the refusal in phase 1 is the configuration's doing; then the list is put back
+#      and it is refused again
+#   5  the refusals: the second account named as the first stops the role before either account's
+#      file is touched; the module refuses the jump host's own address on the list, a host name,
+#      and a loopback address, each with its own code, and accepts the control beside them
+#   6  the report, which names no account and describes both
+#   7  the role applied once more in check mode, then the log of every run read for a key body and
+#      for either account's name, which must be nowhere in it
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    spool_options: 'restrict,port-forwarding,permitopen="{{ scenario_unlisted }}:22",command="/usr/sbin/nologin"'
+    ci_options: 'restrict,port-forwarding,permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_own }}:22",command="/usr/sbin/nologin"'
+  tasks:
+    - name: Read the public keys the scenario made
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+        - spool
+        - spool2
+        - intruder
+        - old
+      register: ci_jump_scenario_verify_pubs
+      no_log: true
+
+    # Phase 1. A stdio forward (-W) is what the client's ProxyJump asks of the jump host.
+    - name: Forward to the spool host with each of the second account's keys
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: through
+      loop:
+        - spool
+        - spool2
+
+    - name: Forward to a live address the second account's list does not hold
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: spool
+        attempt_target: '{{ item }}'
+        attempt_expect: refused
+      loop:
+        # The first account's two listed addresses: the jump host's own sshd among them.
+        - '{{ scenario_listed }}:22'
+        - '{{ scenario_own }}:22'
+        # The jump host's own loopback.
+        - '127.0.0.1:22'
+        # The spool host on another port that has a live listener.
+        - '{{ scenario_unlisted }}:{{ scenario_ssh_port }}'
+
+    - name: Ask the jump host to open a port of its own and send it to a host
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ item.target }}:22'
+        attempt_expect: no_remote_forward
+      loop:
+        - { key: spool, target: '{{ scenario_unlisted }}' }
+        - { key: spool2, target: '{{ scenario_listed }}' }
+
+    - name: Present keys the second account does not hold, and the second account's key to the first
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ item.user }}'
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: denied
+      loop:
+        - { user: '{{ scenario_spool_user }}', key: jump }
+        - { user: '{{ scenario_spool_user }}', key: second }
+        - { user: '{{ scenario_spool_user }}', key: intruder }
+        - { user: '{{ scenario_spool_user }}', key: old }
+        - { user: '{{ scenario_jump_user }}', key: spool }
+        - { user: '{{ scenario_jump_user }}', key: spool2 }
+
+    - name: Ask for remote commands, which a restricted key on a nologin account never runs
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: spool
+        attempt_command: '{{ item }}'
+        attempt_expect: no_command
+      loop:
+        - touch /tmp/EXAMPLE_MARKER
+        - id
+        - ''
+
+    # The first account is as it was: its two listed addresses go through and the spool host,
+    # which only the second account may reach, is refused it.
+    - name: Forward with the first account's keys to its listed addresses
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ item.target }}:22'
+        attempt_expect: through
+      loop:
+        - { key: jump, target: '{{ scenario_listed }}' }
+        - { key: second, target: '{{ scenario_listed }}' }
+        - { key: jump, target: '{{ scenario_own }}' }
+
+    - name: Forward with the first account's keys to the spool host
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+      loop:
+        - jump
+        - second
+
+    # Phase 1b. ops1's client is the pipeline's shape: ssh -F with a jump_hop stanza and -o
+    # ProxyJump to the target as its own account with its own key.
+    - name: Reach the spool host as the tunnel client does, with each of the second account's keys
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_route: proxyjump
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: through
+      loop:
+        - spool
+        - spool2
+
+    - name: Reach addresses the second account's list does not hold through the hop
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_route: proxyjump
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: spool
+        attempt_target: '{{ item }}'
+        attempt_expect: refused
+      loop:
+        - '{{ scenario_listed }}:22'
+        - '{{ scenario_own }}:22'
+        - '127.0.0.1:22'
+        - '{{ scenario_unlisted }}:{{ scenario_ssh_port }}'
+
+    - name: Present the first account's key and a key in no file at the second account's hop
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_route: proxyjump
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: denied
+      loop:
+        - jump
+        - intruder
+
+    # Phase 2.
+    - name: Look at the key directory and the four managed files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /etc/ssh/authorized_keys.d
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump-spool
+        - /etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf
+      register: ci_jump_scenario_verify_stat
+
+    - name: Read the four managed files
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump-spool
+        - /etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf
+      register: ci_jump_scenario_verify_files
+      no_log: true
+
+    - name: Look at the two reload markers
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /run/branchleft-jump-reload-owed
+        - /run/branchleft-jump-spool-reload-owed
+      register: ci_jump_scenario_verify_markers
+
+    - name: Find every path under /etc/ssh that holds either account's name
+      ansible.builtin.find:
+        paths: /etc/ssh
+        patterns:
+          - '*{{ scenario_jump_user }}*'
+          - '*{{ scenario_spool_user }}*'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: ci_jump_scenario_verify_named
+      no_log: true
+
+    - name: Assert no marker is left and no path under /etc/ssh holds either account's name
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_markers.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+          - ci_jump_scenario_verify_named.matched == 0
+        quiet: true
+        fail_msg: >-
+          A reload marker is left, or a path under /etc/ssh holds an account's name (the name is
+          not shown). Matched {{ ci_jump_scenario_verify_named.matched }}.
+
+    # The expected lines are written out here, not read from the role.
+    - name: Assert both key files are exactly the declared lines, root's and closed to the accounts
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_stat.results[0].stat.mode == '0755'
+          - ci_jump_scenario_verify_stat.results[0].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[1].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[1].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[3].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[3].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[3].stat.gr_name == 'root'
+          - (ci_jump_scenario_verify_files.results[0].content | b64decode).splitlines() | map('trim') | sort == expected_ci | sort
+          - (ci_jump_scenario_verify_files.results[2].content | b64decode).splitlines() | map('trim') | sort == expected_spool | sort
+          - (ci_jump_scenario_verify_files.results[2].content | b64decode).splitlines() | length == 2
+          - "'PLACEHOLDER' not in (ci_jump_scenario_verify_files.results[2].content | b64decode)"
+          - 'scenario_listed not in (ci_jump_scenario_verify_files.results[2].content | b64decode)'
+          - 'scenario_own not in (ci_jump_scenario_verify_files.results[2].content | b64decode)'
+        quiet: true
+        fail_msg: A key file is not exactly the declared lines.
+      vars:
+        expected_ci:
+          - "{{ ci_options }} {{ (ci_jump_scenario_verify_pubs.results[0].content | b64decode).split(' ')[0:2] | join(' ') }}"
+          - "{{ ci_options }} {{ (ci_jump_scenario_verify_pubs.results[1].content | b64decode).split(' ')[0:2] | join(' ') }}"
+        expected_spool:
+          - "{{ spool_options }} {{ (ci_jump_scenario_verify_pubs.results[2].content | b64decode).split(' ')[0:2] | join(' ') }}"
+          - "{{ spool_options }} {{ (ci_jump_scenario_verify_pubs.results[3].content | b64decode).split(' ')[0:2] | join(' ') }}"
+
+    - name: Assert both sshd drop-ins are exactly the wanted blocks, each with its own list
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_stat.results[2].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[2].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[4].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[4].stat.pw_name == 'root'
+          - (ci_jump_scenario_verify_files.results[1].content | b64decode) == expected_ci_dropin
+          - (ci_jump_scenario_verify_files.results[3].content | b64decode) == expected_spool_dropin
+        quiet: true
+        fail_msg: An sshd drop-in is not exactly the wanted text.
+      vars:
+        expected_ci_dropin: |
+          # Written by the ci_jump role. Change the owner's variables, not this file.
+          Match User {{ scenario_jump_user }}
+              AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_listed }}:22 {{ scenario_own }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+        expected_spool_dropin: |
+          # Written by the ci_jump role. Change the owner's variables, not this file.
+          Match User {{ scenario_spool_user }}
+              AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump-spool
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_unlisted }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+
+    # Phase 3. sshd -T -C for each account.
+    - name: Ask sshd what it evaluates for each account
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -T
+          - -C
+          - 'user={{ item }},host=x,addr={{ scenario_own }}'
+      loop:
+        - '{{ scenario_jump_user }}'
+        - '{{ scenario_spool_user }}'
+      register: ci_jump_scenario_verify_sshd
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Assert sshd gives each account its own file, its own list and local forwarding only
+      ansible.builtin.assert:
+        that:
+          - "'allowtcpforwarding local' in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "'allowtcpforwarding local' in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+          - "'authorizedkeysfile /etc/ssh/authorized_keys.d/branchleft-jump' in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "'authorizedkeysfile /etc/ssh/authorized_keys.d/branchleft-jump-spool' in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+          - "('permitopen ' ~ scenario_listed ~ ':22 ' ~ scenario_own ~ ':22') in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "('permitopen ' ~ scenario_unlisted ~ ':22') in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+          - "'authorizedkeyscommand none' in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+        quiet: true
+        fail_msg: sshd -T -C did not evaluate the two Match blocks as the role relies on.
+
+    # Phase 4. The control, then the list put back.
+    - name: Put the first account's listed address on the second account's list
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_spool_destinations:
+          - '{{ scenario_unlisted }}'
+          - '{{ scenario_listed }}'
+
+    - name: Forward to the added address with the second account's key, now listed
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: spool
+        attempt_target: '{{ scenario_listed }}:22'
+        attempt_expect: through
+
+    - name: Put the second account's list back
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+
+    - name: Forward to the added address, listed no longer
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/ssh_attempt.yml'
+      vars:
+        attempt_user: '{{ scenario_spool_user }}'
+        attempt_key: spool
+        attempt_target: '{{ scenario_listed }}:22'
+        attempt_expect: refused
+
+    # Phase 5. A second account that is the first stops the role before either file is written:
+    # the first account's key file is the very bytes it was.
+    - name: Take the checksum of the first account's files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump-spool
+        - /etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf
+      register: ci_jump_scenario_verify_before
+      no_log: true
+
+    - name: Apply the role with the second account named as the first, with a different list for each
+      block:
+        - name: Apply the role
+          ansible.builtin.include_tasks: tasks/apply_role.yml
+          vars:
+            apply_spool_user: '{{ scenario_jump_user }}'
+            apply_spool_destinations: ['{{ scenario_listed }}']
+        - name: Note that the role was not stopped
+          ansible.builtin.set_fact:
+            ci_jump_scenario_verify_forbidden: ''
+      rescue:
+        - name: Keep the refusal's own message
+          ansible.builtin.set_fact:
+            ci_jump_scenario_verify_forbidden: "{{ ansible_failed_task.name | default('') }}"
+
+    - name: Take the checksum of the files again
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump-spool
+        - /etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf
+      register: ci_jump_scenario_verify_after
+      no_log: true
+
+    - name: Assert the role stopped at the module's refusal and touched none of the four files
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_forbidden == 'Stop if the module refused the spool account'
+          - >-
+            ci_jump_scenario_verify_before.results | map(attribute='stat') | map(attribute='checksum') | list
+            == ci_jump_scenario_verify_after.results | map(attribute='stat') | map(attribute='checksum') | list
+        quiet: true
+        fail_msg: The role did not refuse the second account named as the first, or it changed a file.
+
+    - name: Read the public key the refusals use
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/spool.pub'
+      register: ci_jump_scenario_refuse_pub
+      no_log: true
+
+    # The control first: the inputs the converge used are accepted, so a module that refused
+    # everything would not pass the cases after it. refuse_call.yml appends each result's code,
+    # or accepted, to ci_jump_scenario_codes.
+    - name: Start the list of codes
+      ansible.builtin.set_fact:
+        ci_jump_scenario_codes: []
+
+    - name: Ask the module to judge each input, the control first
+      ansible.builtin.include_tasks: tasks/refuse_call.yml
+      vars:
+        refuse_user: '{{ scenario_spool_user }}'
+        refuse_own: '{{ item.own }}'
+        refuse_destinations: '{{ item.destinations }}'
+      loop:
+        - { own: '{{ scenario_own }}', destinations: ['{{ scenario_unlisted }}'] }
+        - own: '{{ scenario_own }}'
+          destinations:
+            - '{{ scenario_unlisted }}'
+            - '{{ scenario_own }}'
+        - { own: '{{ scenario_own }}', destinations: ['db-t1'] }
+        - { own: '{{ scenario_own }}', destinations: ['203.0.113.7'] }
+        # A test host's own address is loopback, so loopback is let through above; a jump host's
+        # own address is a private one, and then a loopback destination is its own sshd.
+        - { own: '10.20.1.210', destinations: ['127.0.0.1'] }
+      loop_control:
+        label: 'list {{ ansible_loop.index }}'
+        extended: true
+
+    - name: Assert the control is accepted and each wrong list is refused with its own code
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_codes == ['accepted', 'E-SPOOL-OWN', 'E-SPOOL-ADDRESS', 'E-SPOOL-ADDRESS', 'E-SPOOL-LOOPBACK']
+        quiet: true
+        fail_msg: A spool input was accepted that must be refused, or the control was refused.
+
+    # Phase 6. The report, run by the module over the converged host.
+    - name: Run the report over the converged host
+      ansible.builtin.include_tasks: tasks/report_call.yml
+
+    - name: Assert the report describes both accounts by index and names neither
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_report.changed is false
+          - ci_jump_scenario_verify_report.accounts | length == 2
+          - ci_jump_scenario_verify_report.accounts | map(attribute='shell_class') | unique | list == ['nologin']
+          - ci_jump_scenario_verify_report.accounts | map(attribute='allowtcpforwarding') | map('first') | unique | list == ['local']
+          - >-
+            (ci_jump_scenario_verify_report.lines | join('\n'))
+            is search('destination ' ~ scenario_unlisted ~ ' port 22 in key lines yes, in sshd PermitOpen yes, in the owner.s list yes')
+          - (ci_jump_scenario_verify_report.lines | join('\n')) is search('key file managed, root-owned yes')
+          - scenario_jump_user not in (ci_jump_scenario_verify_report | to_json)
+          - scenario_spool_user not in (ci_jump_scenario_verify_report | to_json)
+        quiet: true
+        fail_msg: The report is not what the role relies on.
+
+    # Phase 7. Verbosity 1 prints every task's arguments into this log, so a task that handles a
+    # key and lacks no_log would show the key. Neither account's name may be in the log of any run
+    # of the role, nor in anything the log holds before this play.
+    - name: Apply the role in check mode over the converged host
+      ansible.builtin.include_tasks:
+        file: tasks/apply_role.yml
+        apply:
+          check_mode: true
+
+    - name: Read the log of every run
+      ansible.builtin.slurp:
+        src: '{{ scenario_log_path }}'
+      delegate_to: localhost
+      register: ci_jump_scenario_verify_log
+      no_log: true
+
+    - name: Assert the log shows the canary, no key body, and no account name anywhere
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in (ci_jump_scenario_verify_log.content | b64decode)"
+          - "'PLAY RECAP' in before_verify"
+          - "'branchleft.ci_jump : ' in before_verify"
+          - scenario_jump_user not in before_verify
+          - scenario_spool_user not in before_verify
+          - >-
+            ci_jump_scenario_verify_pubs.results | map(attribute='content') | map('b64decode')
+            | map('split', ' ') | map(attribute='1')
+            | select('in', ci_jump_scenario_verify_log.content | b64decode) | list | length == 0
+          - (role_segments | length) > 0
+          - scenario_jump_user not in (role_segments | join('\n'))
+          - scenario_spool_user not in (role_segments | join('\n'))
+        quiet: true
+        fail_msg: The log is missing the canary, shows a key body, or shows an account (the name is not shown).
+      vars:
+        before_verify: "{{ (ci_jump_scenario_verify_log.content | b64decode).split('PLAY [Verify]')[0] }}"
+        role_segments: >-
+          {{ ci_jump_scenario_verify_log.content | b64decode
+          | regex_findall('(?s)\| TASK \[branchleft\.ci_jump : .*?(?=\| TASK \[|\| PLAY \[|\Z)') }}
