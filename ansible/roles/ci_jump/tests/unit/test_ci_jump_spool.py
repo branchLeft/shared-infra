@@ -297,9 +297,7 @@ class SpoolProfile(unittest.TestCase):
     def test_the_whole_input_check_applies_the_spool_rules_in_order(self) -> None:
         profile = spool_profile()
 
-        def check(
-            own: str, destinations: list[str]
-        ) -> Callable[[], object]:
+        def check(own: str, destinations: list[str]) -> Callable[[], tuple[object, ...]]:
             return partial(
                 jump._checked_inputs,  # noqa: SLF001
                 SPOOL_USER,
