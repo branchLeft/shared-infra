@@ -124,7 +124,9 @@ TENANTS = [
     {"slug": "beta", "recipient": RECIPIENT_B},
 ]
 EDGE1_KEYS = (*EDGE1_LIVE, MX1_KEY, JUMP_KEY)
-OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
+# The one typed ops1 key: no live file holds it, so the tool asks for it hidden, once.
+PORTAL_SMTP_KEY = "control_plane_portal_support_smtp_password"
+OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY, PORTAL_SMTP_KEY)
 
 
 def value_for(key: str) -> str:
@@ -446,6 +448,10 @@ class Rig:
         # test queues, so it is answered apart from the queue and the other prompts keep theirs.
         if prompt.startswith(f"{JUMP_KEY}: ") and self.jump_answer is not None:
             return self.jump_answer
+        # The portal's support password is typed on every ops1 fill with no live file, so it is
+        # answered apart from the queue as well; the other ops1 prompts keep their order.
+        if prompt.startswith(f"{PORTAL_SMTP_KEY}: "):
+            return value_for(PORTAL_SMTP_KEY)
         if prompt.startswith(f"{MX1_KEY}: ") and self.mx1_answer is not None:
             return self.mx1_answer
         if prompt.startswith(f"{MX1_HOST_KEY}: ") and self.mx1_answer is not None:
@@ -546,6 +552,7 @@ def ops1_document() -> dict[str, object]:
     document: dict[str, object] = {key: value_for(key) for key in OPS1_LIVE}
     document[CA_KEY] = PEM
     document[TENANTS_KEY] = TENANTS
+    document[PORTAL_SMTP_KEY] = value_for(PORTAL_SMTP_KEY)
     return {key: document[key] for key in OPS1_KEYS}
 
 
@@ -686,17 +693,18 @@ class FillTests(unittest.TestCase):
         self.assertEqual(edge1_document(), rig.document())
 
     def test_ops1_is_filled_from_the_five_live_sources(self) -> None:
-        rig = Rig(self)
+        rig = Rig(self, answers=[value_for(PORTAL_SMTP_KEY)])
         rig.seed_ops1()
         self.assertEqual(0, rig.run("--host", "ops1"))
         document = rig.document()
         self.assertEqual(ops1_document(), document)
         self.assertEqual(TENANTS, document[TENANTS_KEY])
         self.assertEqual(PEM, document[CA_KEY])
-        self.assertEqual([], rig.prompts)
+        self.assertEqual(1, len(rig.prompts))
+        self.assertIn(PORTAL_SMTP_KEY, rig.prompts[0])
 
     def test_every_value_but_the_tenants_is_a_string(self) -> None:
-        rig = Rig(self)
+        rig = Rig(self, answers=[value_for(PORTAL_SMTP_KEY)])
         rig.seed_ops1()
         rig.run("--host", "ops1")
         for key, value in rig.document().items():
