@@ -940,6 +940,28 @@ def step_stack(host: Host, slug: str) -> list[str]:
         if compose_matches(host, compose, text):
             return ["compose.yml already in place"]
         refuse("stack-exists")
+    judge_stack(host, slug, marker, text, secrets_text)
+    directory = os.path.dirname(compose)
+    try:
+        if not os.path.lexists(directory):
+            os.mkdir(directory, STACK_DIR_MODE)
+            os.chmod(directory, STACK_DIR_MODE)
+        staged = stage_file(compose, text, COMPOSE_MODE, host.paths.root_uid)
+    except FileExistsError:
+        refuse("stack-exists")
+    except OSError:
+        fail("write")
+    place_file(staged, compose)
+    return ["compose.yml written"]
+
+
+def judge_stack(
+    host: Host, slug: str, marker: Mapping[str, int], text: str, secrets_text: str
+) -> None:
+    """Run the judge tenant_compose runs on the built text, against the claims and the secrets file.
+
+    Refuses by the judge's own rules; a message that repeats a secret is withheld whole.
+    """
     claims = list_claims(host)
     judge = load_judge(host)
     try:
@@ -967,18 +989,52 @@ def step_stack(host: Host, slug: str) -> list[str]:
         refuse("judge-refused", sentences)
     if verdict.claim_state != "same":
         refuse("claim-mismatch")
-    directory = os.path.dirname(compose)
-    try:
-        if not os.path.lexists(directory):
-            os.mkdir(directory, STACK_DIR_MODE)
-            os.chmod(directory, STACK_DIR_MODE)
-        staged = stage_file(compose, text, COMPOSE_MODE, host.paths.root_uid)
-    except FileExistsError:
-        refuse("stack-exists")
-    except OSError:
-        fail("write")
-    place_file(staged, compose)
-    return ["compose.yml written"]
+
+
+def step_restack(host: Host, slug: str) -> list[str]:
+    """Replace an enabled tenant's compose file in place, under the same checks, then restart it.
+
+    The request carries the same parameters as `stack` and never a uid, a port, a compose text or a
+    pin. The new text is built from the claim, judged, and only then put over the old file in one
+    rename, so a judge refusal leaves the file on disk unchanged. The running colour is restarted
+    so it reads the new environment; a unit that is not running is not started by this verb.
+    A retry after a failed restart finds the file in place and restarts again.
+    """
+    marker = require_enabled(host, slug)
+    parameters = read_stack_parameters(host)
+    compose = check_slot_targets(host, slug)
+    if not stack_is_in_place(host, slug):
+        refuse("stack-first")
+    secrets_text = read_secrets_text(host, slug)
+    text = build_stack(slug, marker, read_bind_address(host), parameters)
+    if compose_matches(host, compose, text):
+        lines = ["compose.yml already in place"]
+    else:
+        judge_stack(host, slug, marker, text, secrets_text)
+        try:
+            staged = stage_file(compose, text, COMPOSE_MODE, host.paths.root_uid)
+        except OSError:
+            fail("write")
+        try:
+            os.replace(staged, compose)
+        except OSError:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(staged)
+            fail("write")
+        lines = ["compose.yml replaced"]
+    lines.append(restart_colour(host, slug))
+    return lines
+
+
+def restart_colour(host: Host, slug: str) -> str:
+    """Restart the tenant's unit if it is running, so the new file is read. Never starts one."""
+    active = host.runner([host.paths.systemctl, "is-active", unit_name(slug)], None)
+    if active.stdout.strip() != "active":
+        return "not restarted: not running, the file is read at its next start"
+    outcome = host.runner([host.paths.systemctl, "restart", unit_name(slug)], None)
+    if outcome.returncode != 0:
+        fail("restart", detail_of(outcome))
+    return "restarted"
 
 
 def step_key(host: Host, slug: str) -> list[str]:
@@ -1100,6 +1156,7 @@ STEPS: Final[dict[str, Step]] = {
     "enable": step_enable,
     "key": step_key,
     "owner": step_owner,
+    "restack": step_restack,
 }
 VERBS: Final = frozenset(STEPS)
 
