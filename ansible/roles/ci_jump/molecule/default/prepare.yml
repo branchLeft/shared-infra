@@ -168,6 +168,10 @@
     # Close to the Debian defaults: key authentication only, StrictModes on. Only the listeners
     # are the test's, and PAM is off because a container has no login session for it to open. The
     # Match block ends with Match all so that it covers nothing the drop-ins after it hold.
+    # PerSourcePenalties no: the scenarios make many refused key logins from the one loopback
+    # source, and OpenSSH 9.8 and later then drop that source's next connection at key exchange
+    # (kex_exchange_identification: Connection reset) before any authentication is judged. This is
+    # the test server only; the production sshd keeps its defaults.
     - name: Put the test SSH server's configuration in place
       ansible.builtin.copy:
         content: |
@@ -180,6 +184,7 @@
           KbdInteractiveAuthentication no
           PubkeyAuthentication yes
           StrictModes yes
+          PerSourcePenalties no
           Match User {{ scenario_other_user }}
             AllowTcpForwarding no
           Match all
