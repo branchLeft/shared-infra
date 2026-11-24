@@ -1024,7 +1024,7 @@ def redact_diagnostic_line(line: str) -> str:
 
 
 def bound_diagnosis(
-    text: str, *, max_lines: int, secret_values: frozenset[str] = frozenset()
+    text: str, *, max_lines: int, env_values: frozenset[str] = frozenset()
 ) -> list[str]:
     """The last `max_lines` redacted lines of `text`; the end is where a failure is.
 
@@ -1033,7 +1033,7 @@ def bound_diagnosis(
     """
     lines = []
     for raw in text.splitlines():
-        if any(value in raw for value in secret_values):
+        if any(value in raw for value in env_values):
             lines.append(f"{REDACTED} (line carries a value from the stack's env file)")
         else:
             lines.append(redact_diagnostic_line(raw))
@@ -1081,16 +1081,16 @@ def restart_diagnosis(
     unit = f"branchleft-compose@{stack}"
     compose_file = compose_file_path(stack, stack_dir)
     try:
-        secrets = read_env_file(os.path.join(config_dir, f"{stack}.env"))
+        stack_env = read_env_file(os.path.join(config_dir, f"{stack}.env"))
         pins = read_env_file(image_env_path(stack, config_dir))
     except OSError:
         return ""
-    secret_values = frozenset(
-        value for value in secrets.values() if len(value) >= DIAGNOSIS_MIN_SECRET_VALUE
+    env_values = frozenset(
+        value for value in stack_env.values() if len(value) >= DIAGNOSIS_MIN_SECRET_VALUE
     )
     # The unit's own environment, as systemd would give it: the pin, then the stack's secrets.
     # Compose interpolates from it, so validation needs it. Its output is never printed bare.
-    unit_env = {**os.environ, **pins, **secrets}
+    unit_env = {**os.environ, **pins, **stack_env}
     sections = []
     for title, argv, limit, extra, report_status in (
         (
@@ -1133,7 +1133,7 @@ def restart_diagnosis(
         body = bound_diagnosis(
             f"{result.stdout or ''}\n{result.stderr or ''}",
             max_lines=limit,
-            secret_values=secret_values,
+            env_values=env_values,
         )
         if report_status:
             body = [f"exit status {result.returncode}", *body]
