@@ -578,10 +578,10 @@ jobs:
       # and library/ on theirs.
       - name: Run the typed_module pattern's unit tests
         if: matrix.part == 'units'
-        working-directory: ansible/patterns/typed_module
+        working-directory: ansible/patterns/typed_module/tests/unit
         env:
-          PYTHONPATH: library
-        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"'
+          PYTHONPATH: ../../library
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -p "test_*.py"'
 
   # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every
   # shard on a scheduled or manual run. The gate job waits for this job and fails with it.
