@@ -1,0 +1,12 @@
+---
+# The role takes no input. Its paths are internal (vars/), so the entry point declares none.
+argument_specs:
+  main:
+    short_description: Write each tenant stack's pinned image digest as a node_exporter textfile gauge
+    description: >-
+      Installs a typed writer, a service and a five-minute timer. The writer reads each
+      /etc/branchleft/<stack>.image.env and replaces one branchleft_slot_image.prom in the
+      node_exporter textfile directory. A pin that is not one digest-pinned IMAGE= line is
+      refused: its stack gets no series and the service exits 1. No value is a secret.
+    author: branchLeft
+    options: {}
