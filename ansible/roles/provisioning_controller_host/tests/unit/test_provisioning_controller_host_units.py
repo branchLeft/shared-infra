@@ -494,7 +494,6 @@ class ConfigTests(unittest.TestCase):
             SERVICE.read_text(encoding="utf-8"),
         )
 
-
     def test_a_db_entry_is_rendered_and_meets_the_rules_parse_db_entry_applies(self) -> None:
         """parseRunConfig refuses the whole run when sshEntry has no dbEntry (sshEntryConfig.ts)."""
         values = role_vars()
