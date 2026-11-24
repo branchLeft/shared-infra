@@ -53,45 +53,6 @@ def job_of(document: dict[str, object]) -> dict[str, object]:
     return mutable(mutable(document["jobs"])["delivery"])
 
 
-def proof_of(document: dict[str, object]) -> dict[str, object]:
-    """Return the queue-proof job of ``document``."""
-    return mutable(mutable(document["jobs"])[check_delivery.PROOF_JOB])
-
-
-def select_of(document: dict[str, object]) -> dict[str, object]:
-    """Return the select job of ``document``."""
-    return mutable(mutable(document["jobs"])[check_delivery.SELECT_JOB])
-
-
-def select_steps(document: dict[str, object]) -> list[object]:
-    """Return the step list of the select job, itself and not a copy.
-
-    Raises:
-        TypeError: the steps are not a list.
-    """
-    listed = select_of(document)["steps"]
-    if not isinstance(listed, list):
-        raise TypeError(type(listed).__name__)
-    return listed
-
-
-def steps(document: dict[str, object]) -> list[object]:
-    """Return the step list of the queue-proof job, itself and not a copy.
-
-    Raises:
-        TypeError: the steps are not a list.
-    """
-    listed = proof_of(document)["steps"]
-    if not isinstance(listed, list):
-        raise TypeError(type(listed).__name__)
-    return listed
-
-
-def step_of(document: dict[str, object], index: int) -> dict[str, object]:
-    """Return step ``index`` of the queue-proof job."""
-    return mutable(steps(document)[index])
-
-
 def section(job: dict[str, object], key: str) -> dict[str, object]:
     """Return the ``with`` or ``secrets`` mapping of ``job``."""
     return mutable(job[key])
@@ -260,18 +221,18 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.23", "@v2.3.4"):
+        for ref in ("@v1.3.0", "@v1.3.1", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
 
             self.assertEqual([], self.weakened(set_good))
 
-    def test_a_pin_below_the_push_release_is_named(self) -> None:
-        # The call passes the push list and playbook, and a release that does not declare them
-        # fails it.
+    def test_a_pin_below_the_prepare_release_is_named(self) -> None:
+        # The call passes prepare-command and has no job before the call, and a release that does
+        # not declare the input fails it, or leaves the plan behind the shards.
         workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
-        for ref in ("@v1.0.15", "@v1.0.18", "@v1.0.19", "@v1.0.22", "@v1.0.0", "@v0.9.99"):
+        for ref in ("@v1.2.7", "@v1.0.23", "@v1.0.22", "@v1.0.0", "@v0.9.99"):
 
             def set_old(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
@@ -583,27 +544,23 @@ class CallerTests(unittest.TestCase):
         shard = mutable(mutable(mutable(ansible)["jobs"])["shard"])
         self.assertIn("github.event_name != 'merge_group'", str(shard["if"]))
         given = section(job_of(committed()), "with")
-        # It skips only when the select job says no shard is called for AND the queue passed.
-        self.assertEqual(check_delivery.SKIP_EXPRESSION, given[check_delivery.SKIP_INPUT])
+        # The skip is on, and the reusable workflow skips only when the preparation says no shard
+        # is called for AND the queue passed (it reads both from prepare-command).
+        self.assertIs(True, given[check_delivery.SKIP_INPUT])
+        self.assertEqual(check_delivery.PREPARE_SCRIPT, given[check_delivery.PREPARE_INPUT])
 
-    def test_a_skip_that_is_not_the_two_conditions_is_named(self) -> None:
-        # Each of these skips the re-test on one condition alone, or always: not allowed. The
-        # queue's answer alone would skip a role change whose shards the queue never ran, and
-        # the selection alone would skip a merge that never went through the queue.
+    def test_a_skip_that_is_not_the_boolean_true_is_named(self) -> None:
+        # An expression would let a job's answer stand in for the reusable workflow's own rule, and
+        # a false or missing skip would retest every push, which the owner's ruling removed.
         for value in (
-            True,
             "true",
             "false",
             False,
             0,
+            1,
             "${{ true }}",
-            "${{ needs.queue-proof.outputs.tested }}",
             "${{ needs.queue-proof.outputs.tested == 'true' }}",
             "${{ needs.select.outputs.shards == 'false' }}",
-            "${{ needs.select.outputs.shards != 'true' "
-            "&& needs.queue-proof.outputs.tested == 'true' }}",
-            "${{ needs.select.outputs.shards == 'false' "
-            "|| needs.queue-proof.outputs.tested == 'true' }}",
             None,
         ):
 
@@ -612,13 +569,36 @@ class CallerTests(unittest.TestCase):
 
             self.assert_names(self.weakened(set_skip), f"with.{check_delivery.SKIP_INPUT} must be")
 
-    def test_a_missing_skip_or_check_name_input_is_named(self) -> None:
-        for key in (check_delivery.SKIP_INPUT, check_delivery.CHECK_NAME_INPUT):
+    def test_a_missing_skip_prepare_or_check_name_input_is_named(self) -> None:
+        for key in (
+            check_delivery.SKIP_INPUT,
+            check_delivery.PREPARE_INPUT,
+            check_delivery.CHECK_NAME_INPUT,
+        ):
 
             def drop(document: dict[str, object], key: str = key) -> None:
                 del section(job_of(document), "with")[key]
 
             self.assert_names(self.weakened(drop), f"with.{key} must be")
+
+    def test_a_prepare_command_that_is_not_the_one_program_is_named(self) -> None:
+        for value in (
+            "ansible/checks/delivery_select.py",
+            "ansible/checks/merge_group_proof.py",
+            "ansible/checks/other.py",
+            "ansible/checks/delivery_prepare.py ",
+            "ansible/checks/delivery_prepare.py; echo shards=false",
+            "${{ needs.x.outputs.y }}",
+            "",
+            None,
+        ):
+
+            def set_prepare(document: dict[str, object], value: object = value) -> None:
+                section(job_of(document), "with")[check_delivery.PREPARE_INPUT] = value
+
+            self.assert_names(
+                self.weakened(set_prepare), f"with.{check_delivery.PREPARE_INPUT} must be"
+            )
 
     def test_a_wrong_check_name_is_named(self) -> None:
         for value in ("Ansible checks passed", "Lint and test the Ansible roles ", "", None):
@@ -637,10 +617,11 @@ class CallerTests(unittest.TestCase):
         jobs = mutable(mutable(document)["jobs"])
         self.assertEqual(check_delivery.GATE_CHECK_NAME, mutable(jobs["roles"])["name"])
 
-    def test_a_delivery_that_waits_for_anything_but_the_proof_is_named(self) -> None:
+    def test_a_delivery_that_waits_for_anything_is_named(self) -> None:
+        # The delivery is the one job and waits for nothing: every needs is one more wait for a
+        # runner before the checks, and a dependency can skip the call without a red run.
         for needs in (
             ["other"],
-            ["queue-proof", "other"],
             ["queue-proof"],
             ["select"],
             ["select", "queue-proof"],
@@ -654,204 +635,20 @@ class CallerTests(unittest.TestCase):
 
             self.assert_names(self.weakened(set_needs), "job delivery has needs")
 
-    def test_a_delivery_with_no_needs_is_named(self) -> None:
-        def drop(document: dict[str, object]) -> None:
-            del job_of(document)["needs"]
-
-        self.assert_names(self.weakened(drop), "job delivery must have needs")
-
     def test_a_missing_or_extra_job_is_named(self) -> None:
-        def drop_proof(document: dict[str, object]) -> None:
-            del mutable(document["jobs"])[check_delivery.PROOF_JOB]
-
+        # A job before the call is a runner wait the delivery used to have three of (the queue
+        # proof, the selection and discover): they are one job now, inside the call.
         def add_job(document: dict[str, object]) -> None:
-            mutable(document["jobs"])["third"] = {"runs-on": "ubuntu-24.04"}
+            mutable(document["jobs"])["queue-proof"] = {"runs-on": "ubuntu-24.04"}
 
-        self.assert_names(self.weakened(drop_proof), "jobs must hold exactly the three jobs")
-        self.assert_names(self.weakened(add_job), "jobs must hold exactly the three jobs")
+        def add_select(document: dict[str, object]) -> None:
+            mutable(document["jobs"])["select"] = {"runs-on": "ubuntu-24.04"}
 
-    def test_a_proof_job_key_that_can_skip_or_hide_the_proof_is_named(self) -> None:
-        extras: dict[str, object] = {
-            "if": "github.actor != 'x'",
-            "continue-on-error": True,
-            "needs": ["delivery"],
-            "environment": "production",
-            "permissions": {"contents": "write"},
-            "strategy": {"matrix": {"a": [1]}},
-        }
-        for key, value in extras.items():
+        def drop_delivery(document: dict[str, object]) -> None:
+            del mutable(document["jobs"])["delivery"]
 
-            def add_key(document: dict[str, object], key: str = key, value: object = value) -> None:
-                proof_of(document)[key] = value
-
-            self.assert_names(self.weakened(add_key), f"job queue-proof has {key}")
-
-    def test_a_proof_output_that_is_not_the_proof_steps_is_named(self) -> None:
-        for value in ("true", "${{ steps.proof.outputs.other }}", "${{ steps.x.outputs.tested }}"):
-
-            def set_output(document: dict[str, object], value: str = value) -> None:
-                mutable(proof_of(document)["outputs"])["tested"] = value
-
-            self.assert_names(self.weakened(set_output), "job queue-proof outputs must be")
-
-    def test_a_proof_job_that_is_not_checkout_and_the_proof_step_is_named(self) -> None:
-        def extra_step(document: dict[str, object]) -> None:
-            steps(document).append({"run": "echo hello"})
-
-        def one_step(document: dict[str, object]) -> None:
-            del steps(document)[0]
-
-        self.assert_names(self.weakened(extra_step), "exactly two steps")
-        self.assert_names(self.weakened(one_step), "exactly two steps")
-
-    def test_a_checkout_of_another_ref_or_with_credentials_is_named(self) -> None:
-        extras: list[dict[str, object]] = [
-            {"ref": "refs/heads/other"},
-            {"persist-credentials": True},
-        ]
-        for extra in extras:
-
-            def set_with(document: dict[str, object], extra: dict[str, object] = extra) -> None:
-                step_of(document, 0)["with"] = {"persist-credentials": False, **extra}
-
-            self.assert_names(self.weakened(set_with), "the checkout step with must be")
-
-    def test_a_proof_step_that_does_not_run_the_script_on_the_runs_is_named(self) -> None:
-        runs = {
-            "writes the answer itself": 'echo "tested=true" >> "$GITHUB_OUTPUT"',
-            "runs another script": 'python3 other.py --runs r --sha "$SHA" >> "$GITHUB_OUTPUT"',
-            "judges another commit": (
-                'python3 ansible/checks/merge_group_proof.py --runs r --sha "abc" '
-                '| tee -a "$GITHUB_OUTPUT"'
-            ),
-            "writes no output": 'python3 ansible/checks/merge_group_proof.py --runs r --sha "$SHA"',
-            "adds a literal answer": (
-                'python3 ansible/checks/merge_group_proof.py --runs r --sha "$SHA" '
-                '| tee -a "$GITHUB_OUTPUT"; echo tested=true >> "$GITHUB_OUTPUT"'
-            ),
-        }
-        for name, text in runs.items():
-
-            def set_run(document: dict[str, object], text: str = text) -> None:
-                step_of(document, 1)["run"] = text
-
-            with self.subTest(name=name):
-                self.assert_names(self.weakened(set_run), "step proof run")
-
-    def test_a_proof_step_with_another_commit_token_or_a_condition_is_named(self) -> None:
-        def other_id(document: dict[str, object]) -> None:
-            step_of(document, 1)["id"] = "other"
-
-        def conditional(document: dict[str, object]) -> None:
-            step_of(document, 1)["if"] = "always()"
-
-        def tolerant(document: dict[str, object]) -> None:
-            step_of(document, 1)["continue-on-error"] = True
-
-        for name in check_delivery.PROOF_ENV:
-            # Each variable in turn is pointed at something else: another commit, another token.
-
-            def point_elsewhere(document: dict[str, object], name: str = name) -> None:
-                mutable(step_of(document, 1)["env"])[name] = "${{ github.event.before }}"
-
-            self.assert_names(self.weakened(point_elsewhere), "step proof env must be")
-        self.assert_names(self.weakened(other_id), "step proof id must be")
-        self.assert_names(self.weakened(conditional), "step proof has if")
-        self.assert_names(self.weakened(tolerant), "step proof has continue-on-error")
-
-    def test_a_select_job_key_that_can_skip_or_hide_the_selection_is_named(self) -> None:
-        extras: dict[str, object] = {
-            "if": "github.actor != 'x'",
-            "continue-on-error": True,
-            "needs": ["delivery"],
-            "environment": "production",
-            "permissions": {"contents": "write"},
-            "strategy": {"matrix": {"a": [1]}},
-        }
-        for key, value in extras.items():
-
-            def add_key(document: dict[str, object], key: str = key, value: object = value) -> None:
-                select_of(document)[key] = value
-
-            self.assert_names(self.weakened(add_key), f"job select has {key}")
-
-    def test_a_select_output_that_is_not_the_select_steps_is_named(self) -> None:
-        for value in (
-            "false",
-            "${{ steps.select.outputs.other }}",
-            "${{ steps.x.outputs.shards }}",
-        ):
-
-            def set_output(document: dict[str, object], value: str = value) -> None:
-                mutable(select_of(document)["outputs"])["shards"] = value
-
-            self.assert_names(self.weakened(set_output), "job select outputs must be")
-
-    def test_a_select_job_that_is_not_checkout_and_the_select_step_is_named(self) -> None:
-        def extra_step(document: dict[str, object]) -> None:
-            select_steps(document).append({"run": "echo hello"})
-
-        def one_step(document: dict[str, object]) -> None:
-            del select_steps(document)[0]
-
-        self.assert_names(self.weakened(extra_step), "job select must hold exactly two steps")
-        self.assert_names(self.weakened(one_step), "job select must hold exactly two steps")
-
-    def test_a_select_checkout_with_a_shallow_history_or_credentials_is_named(self) -> None:
-        # A shallow clone has no previous tip to diff against: the program then falls back, but
-        # the checkout is pinned too, so the savings are not lost to a silent change.
-        shapes: list[dict[str, object]] = [
-            {"persist-credentials": False},
-            {"persist-credentials": True, "fetch-depth": 0},
-            {"persist-credentials": False, "fetch-depth": 1},
-            {"persist-credentials": False, "fetch-depth": 0, "ref": "refs/heads/other"},
-        ]
-        for with_ in shapes:
-
-            def set_with(document: dict[str, object], with_: dict[str, object] = with_) -> None:
-                mutable(select_steps(document)[0])["with"] = with_
-
-            self.assert_names(self.weakened(set_with), "the select checkout step with must be")
-
-    def test_a_select_step_that_does_not_run_the_program_or_has_no_fallback_is_named(self) -> None:
-        good = str(mutable(select_steps(committed())[1])["run"])
-        runs = {
-            "writes the answer itself": 'echo "shards=false" >> "$GITHUB_OUTPUT"',
-            "adds a literal none": good + '\necho "shards=false" >> "$GITHUB_OUTPUT"\n',
-            "runs another script": good.replace("delivery_select.py", "other.py"),
-            "judges another commit": good.replace('--sha "$SHA"', '--sha "abc"'),
-            "judges another base": good.replace('--before "$BEFORE"', '--before "abc"'),
-            "writes no output": good.replace("$GITHUB_OUTPUT", "$RUNNER_TEMP/x"),
-            "has no fallback to every shard": good.replace("'patterns/*'", "''"),
-            "falls back to none": good.replace("'shards=true'", "'shards=maybe'"),
-        }
-        for name, text in runs.items():
-
-            def set_run(document: dict[str, object], text: str = text) -> None:
-                mutable(select_steps(document)[1])["run"] = text
-
-            with self.subTest(name=name):
-                self.assert_names(self.weakened(set_run), "step select run")
-
-    def test_a_select_step_with_another_commit_token_or_a_condition_is_named(self) -> None:
-        def other_id(document: dict[str, object]) -> None:
-            mutable(select_steps(document)[1])["id"] = "other"
-
-        def conditional(document: dict[str, object]) -> None:
-            mutable(select_steps(document)[1])["if"] = "always()"
-
-        def tolerant(document: dict[str, object]) -> None:
-            mutable(select_steps(document)[1])["continue-on-error"] = True
-
-        for name in check_delivery.SELECT_ENV:
-
-            def point_elsewhere(document: dict[str, object], name: str = name) -> None:
-                mutable(mutable(select_steps(document)[1])["env"])[name] = "${{ github.ref }}"
-
-            self.assert_names(self.weakened(point_elsewhere), "step select env must be")
-        self.assert_names(self.weakened(other_id), "step select id must be")
-        self.assert_names(self.weakened(conditional), "step select has if")
-        self.assert_names(self.weakened(tolerant), "step select has continue-on-error")
+        for change in (add_job, add_select, drop_delivery):
+            self.assert_names(self.weakened(change), "jobs must hold exactly the one job")
 
     def test_a_narrowed_or_changed_input_is_named(self) -> None:
         def narrow(document: dict[str, object]) -> None:
@@ -862,7 +659,7 @@ class CallerTests(unittest.TestCase):
 
         def other_output(document: dict[str, object]) -> None:
             section(job_of(document), "with")["role-directories"] = (
-                "${{ needs.select.outputs.shards }}"
+                "${{ needs.select.outputs.directories }}"
             )
 
         def repoint(document: dict[str, object]) -> None:
@@ -877,9 +674,9 @@ class CallerTests(unittest.TestCase):
         def retarget_role_test(document: dict[str, object]) -> None:
             section(job_of(document), "with")["role-test-command"] = "harness/other.py"
 
-        self.assert_names(self.weakened(narrow), "with.role-directories must be")
-        self.assert_names(self.weakened(hardwire), "with.role-directories must be")
-        self.assert_names(self.weakened(other_output), "with.role-directories must be")
+        self.assert_names(self.weakened(narrow), "with.role-directories must name every role")
+        self.assert_names(self.weakened(hardwire), "with.role-directories must name every role")
+        self.assert_names(self.weakened(other_output), "with.role-directories must name every role")
         self.assert_names(self.weakened(repoint), "with.python-paths must be")
         self.assert_names(self.weakened(drop_role_test), "with.role-test-command must be")
         self.assert_names(self.weakened(retarget_role_test), "with.role-test-command must be")
@@ -892,7 +689,7 @@ class CallerTests(unittest.TestCase):
         def add_env(document: dict[str, object]) -> None:
             document["env"] = {"A": "b"}
 
-        self.assert_names(self.weakened(second_job), "jobs must hold exactly the three jobs")
+        self.assert_names(self.weakened(second_job), "jobs must hold exactly the one job")
         self.assert_names(self.weakened(add_env), "the workflow has env")
 
     def test_a_workflow_that_is_not_a_mapping_is_refused(self) -> None:

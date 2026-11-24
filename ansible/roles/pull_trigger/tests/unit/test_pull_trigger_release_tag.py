@@ -177,15 +177,17 @@ class ReleaseTagFixture:
         run([GIT, "push", "-q", "--force", bare, *refs], cwd=self.remote.work)
 
     def bundle(self, directory: Path, commit: str, tags: Sequence[tuple[str, str]]) -> Path:
-        """Make a bundle whose HEAD is ``commit`` and that carries the tags, as the sender would."""
+        """Make a bundle of HEAD ``commit``, its tip of main and the tags, as the sender would."""
         bare = directory / "sender.git"
         shutil.rmtree(bare, ignore_errors=True)
         run([GIT, "init", "-q", "--bare", "-b", "main", bare])
         self.export_bare(bare, commit, tags)
+        run([GIT, f"--git-dir={bare}", "update-ref", trigger.BUNDLE_MAIN_REF, commit])
         path = directory / "sent.bundle"
         path.unlink(missing_ok=True)
         refs = [f"refs/tags/release/{suffix}" for suffix, _ in tags]
-        run([GIT, f"--git-dir={bare}", "bundle", "create", path, "HEAD", *refs])
+        names = ["HEAD", trigger.BUNDLE_MAIN_REF, *refs]
+        run([GIT, f"--git-dir={bare}", "bundle", "create", path, *names])
         return path
 
 
