@@ -58,10 +58,10 @@ starts with a code, so that a test can tell one from another:
 
 `host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
 file may leave out. Today that is `ci_jump_user` (edge1 and edget), `ntfy_pager_mx1_token` (edge1),
-`mx1_abuse_page_token` (mx1) and the two `broker_tunnel_client_demo1_*` inputs (ops1), and nothing else. An
+`mx1_abuse_page_token` (mx1), `ci_jump_spool_user` (edget) and the two `broker_tunnel_client_demo1_*` inputs (ops1), and nothing else. An
 absent optional input is not set, which leaves its role's argument unset, and the play goes
-on. A host whose every input in its row is optional (demo1 today, and edget, whose one input is
-`ci_jump_user`) runs without the file at all: no file loads as an empty set of inputs and the
+on. A host whose every input in its row is optional (demo1 today, and edget, whose two inputs are
+`ci_jump_user` and `ci_jump_spool_user`) runs without the file at all: no file loads as an empty set of inputs and the
 run goes on. A host with one required input still stops with `host_inputs[file-missing]`. A file
 that is present is checked exactly as before. One that is in the file must still hold a usable value (an empty string, null or white
 space is `host_inputs[missing-key]`), and a key outside the row is refused as ever.
@@ -228,9 +228,10 @@ content hides its result, every check precedes the first input).
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
 nothing else. The playbooks of edge1, edget, ops1, db1, app1 and mx1 apply it. On edget (edge-t)
-its one input is `ci_jump_user`, for the `ci_jump` role. That input is optional, so edget's run
-goes on whether or not the owner has placed `/etc/branchleft/host-inputs.json` (root:root, `0600`,
-the keys above), and the `ci_jump` role stays inert until the owner seeds it. db1 also needs its signer in
+its two inputs are `ci_jump_user` and `ci_jump_spool_user`, the names of the two jump accounts of
+the `ci_jump` role, both optional. That makes edget's run go on whether or not the owner has placed
+`/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above), and the `ci_jump` role stays
+inert until the owner seeds it. db1 also needs its signer in
 `ansible/trust/db1.yml` before any pull runs. On app1 the file holds the four SMTP keys above
 and `deploy_slot_keys_slots` with at least one slot; until a slot is there the run stops with
 `host_inputs[missing-key]`. The tool places it: `seed_host_inputs.py --host app1`

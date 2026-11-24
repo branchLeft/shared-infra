@@ -1,6 +1,7 @@
 ---
-# tenant_compose_stacks has no default: it names the tenants of a host, which are
-# supplied at run time and never listed in this repository. Its secret content is
-# never given a default either.
+# tenant_compose_stacks defaults to no tenants: an absent list delivers nothing and fails
+# nothing (see meta/argument_specs.yml). Its tenants are supplied at run time and never
+# listed in this repository, and its secret content is never given a default.
+tenant_compose_stacks: []
 tenant_compose_mail_spool_text: ''
 tenant_compose_spool_isolation_required: true

@@ -90,7 +90,8 @@ export function renderStatusConfig(
   postmortems: readonly Postmortem[] = []
 ): string {
   const hostnameProbes: Probe[] = blackboxTargets(sites).map((target) => ({
-    name: target.replace('https://', ''),
+    // The hostname alone: a probe path is not part of what the page names.
+    name: new URL(target).hostname,
     group: SITES_GROUP,
     url: target,
     conditions: PASS_CONDITIONS,

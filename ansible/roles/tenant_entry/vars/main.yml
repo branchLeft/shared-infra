@@ -59,3 +59,36 @@ tenant_entry_secrets_program: /root/platform-provision/render_tenant_secrets.py
 tenant_entry_ghost_commit: b664d265708e91fb6c3be8f512c7f34e81fccc54
 tenant_entry_ghost_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ tenant_entry_ghost_commit }}'
 tenant_entry_secrets_program_sha256: 1d67b290515ba642aa507b7bbe1ef6e489b845c9feb09419c6fd489233d8580f
+
+# The owner script: the platform's own program that makes a tenant Ghost's owner, run by the
+# `owner` verb under node. Like the secrets program it is fetched, never copied into this role:
+# its one home is ghost-platform. It is fetched at one full 40-character commit and checked
+# against the digest below. It is a different commit from the secrets program's on purpose, since
+# the secrets program's pin must move with the volume program (see above) and the owner script
+# does not import it. The commit is one on ghost-platform's main that holds the script; the
+# script's bytes are what ghost-platform PR 1122 (the controller's create-owner-account step)
+# calls and that PR does not change them. A bump moves the commit and the digest together.
+tenant_entry_owner_program: /root/platform-provision/provision-owner.mjs
+tenant_entry_owner_ghost_commit: 733da627ab88e57da94eef4baa7d128359d39232
+tenant_entry_owner_program_url: >-
+  https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ tenant_entry_owner_ghost_commit }}/adapters/sso/scripts/provision-owner.mjs
+tenant_entry_owner_program_sha256: 4aa7094cd22bcddf90ffe195fa44775812be4968f557ab7dba0d87d3eb77dc97
+
+# The node the owner script runs under: the tarball nodejs.org publishes, held to the SHA-256 in
+# its SHASUMS256.txt, unpacked into a root-owned directory of its own beside the judge (so the
+# entry account can write none of it). It is not the Debian package: that follows the archive and
+# is not pinned. The version and both digests are copies of broker_deploy's pins (ANS-12: no role
+# imports another), held equal to them by tests/unit/test_branchleft_tenant_entry.py. The
+# program's own default node path is held equal to tenant_entry_node.
+tenant_entry_node_dir: '{{ tenant_entry_judge_dir }}/node'
+tenant_entry_node: '{{ tenant_entry_node_dir }}/bin/node'
+tenant_entry_node_version: v26.5.0
+tenant_entry_node_base_url: https://nodejs.org/dist
+tenant_entry_node_tarball: /var/tmp/branchleft-tenant-entry-node.tar.xz
+# What `uname -m` says, to the name nodejs.org gives the build. Any other machine stops the role.
+tenant_entry_node_arch_by_machine:
+  x86_64: x64
+  aarch64: arm64
+tenant_entry_node_checksums:
+  x64: 'sha256:9f619528f1db5ddc41dccf54211066fb42228d69a156733c69cb9d6cc92e358c'
+  arm64: 'sha256:036df0b49662ebb350eb56f1cac603699b1e9ed1e2603ee129fefda473479030'

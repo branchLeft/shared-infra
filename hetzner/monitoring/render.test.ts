@@ -72,6 +72,17 @@ describe('blackboxTargets', () => {
     ]);
   });
 
+  it("probes a site's own probePath on each hostname, because its root is refused by design", () => {
+    const listed = site({
+      hostnames: ['a.test', 'b.test'],
+      probePath: '/.well-known/openid-configuration',
+    });
+    expect(blackboxTargets([listed])).toEqual([
+      'https://a.test/.well-known/openid-configuration',
+      'https://b.test/.well-known/openid-configuration',
+    ]);
+  });
+
   it('includes a redirect source, not only a servable site', () => {
     // Unlike the edge renderer, a probe target has nothing to do with which
     // backend currently serves a hostname -- www.example.test redirecting to
@@ -85,7 +96,7 @@ describe('blackboxTargets', () => {
     expect(() => renderPrometheusConfig(sites)).not.toThrow();
     const targets = blackboxTargets(sites);
     for (const hostname of sites.flatMap((entry) => entry.hostnames)) {
-      expect(targets).toContain(`https://${hostname}`);
+      expect(targets.some((target) => new URL(target).hostname === hostname)).toBe(true);
     }
   });
 });

@@ -872,6 +872,30 @@ def docker_binary() -> str:
     return found
 
 
+BUILD_ERROR_TAIL_LINES = 40
+
+
+def docker_build(docker: str, tag: str, context: str) -> None:
+    """Build the image in context. A failed build raises with the last lines of its stderr.
+
+    CalledProcessError names only the exit status; the reason the build failed is on stderr,
+    which capture_output keeps, so the message carries its tail.
+
+    Raises:
+        RuntimeError: the build exited non-zero; the message holds the build's stderr tail.
+    """
+    try:
+        subprocess.run(
+            [docker, "build", "--quiet", "-t", tag, context],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        tail = (exc.stderr or b"").decode(errors="replace").splitlines()[-BUILD_ERROR_TAIL_LINES:]
+        message = f"docker build of {tag} exited {exc.returncode}; the build said:\n"
+        raise RuntimeError(message + "\n".join(tail)) from exc
+
+
 def role_template(name: str, **context: object) -> str:
     """Render one of the role's own templates from vars/main.yml with the given variables."""
     role_vars = yaml.safe_load(VARS.read_text())
@@ -919,6 +943,19 @@ def servers(adapted: str) -> int:
     return len(json.loads(adapted)["apps"]["http"]["servers"])
 
 
+class DockerBuildTests(unittest.TestCase):
+    def test_a_failed_build_says_why_not_only_its_exit_status(self) -> None:
+        # A build that fails says why on its stderr. CI showed only "exited with status 1", so
+        # the failure message must carry that stderr, where the reason is.
+        marker = "missing-" + uuid.uuid4().hex + ".txt"
+        tag = "demo1-build-test-bad:" + uuid.uuid4().hex[:12]
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "Dockerfile").write_text("FROM scratch\nCOPY " + marker + " /x\n")
+            with self.assertRaises(RuntimeError) as caught:
+                docker_build(docker_binary(), tag, tmp)
+        self.assertIn(marker, str(caught.exception))
+
+
 class RealCaddyTests(unittest.TestCase):
     image = ""
     docker = ""
@@ -935,11 +972,7 @@ class RealCaddyTests(unittest.TestCase):
             tag = "demo1-build-test-caddy:" + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]
             with tempfile.TemporaryDirectory() as tmp:
                 (Path(tmp) / "Dockerfile").write_text(DOCKERFILE)
-                subprocess.run(
-                    [cls.docker, "build", "--quiet", "-t", tag, tmp],
-                    check=True,
-                    capture_output=True,
-                )
+                docker_build(cls.docker, tag, tmp)
             cls.image = subprocess.run(
                 [cls.docker, "image", "inspect", "--format", "{{.Id}}", tag],
                 capture_output=True,

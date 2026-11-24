@@ -528,3 +528,16 @@ demo1_build_tunnel_expected_effective:
   permittunnel: 'no'
   permituserrc: 'no'
   forcecommand: '{{ demo1_build_tunnel_nologin }}'
+
+# The drain sidecar's pin file. The wrapper (branchleft_slot.py) believes it only when it is
+# a regular file owned by root, writable by no one else, whose one line is exactly
+# <variable>=<name>@sha256:<64 lower-case hex>; the colour units read it as an EnvironmentFile
+# and the sidecar launcher starts the image it names. The name is the host's own label for the
+# image (the broker's repository path without its registry host: demo1 reaches no registry),
+# duplicated from the wrapper and held to it by tests/unit/test_sidecar_pin.py. These are
+# constants: a caller cannot move the file the wrapper reads or the name it matches.
+demo1_build_sidecar_image_env_path: /etc/branchleft/demo-sidecar.image.env
+demo1_build_sidecar_image_variable: DEMO_SIDECAR_IMAGE
+demo1_build_sidecar_image_name: branchleft/drain-sidecar
+demo1_build_sidecar_digest_pattern: '^sha256:[0-9a-f]{64}\Z'
+demo1_build_sidecar_image_line: '{{ demo1_build_sidecar_image_variable }}={{ demo1_build_sidecar_image_name }}@{{ demo1_build_sidecar_digest }}'
