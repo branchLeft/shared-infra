@@ -831,7 +831,7 @@ describe('the rendered Caddyfile', () => {
 
   it('narrows the authoring exemption to the admin API rather than the whole hostname', () => {
     const rendered = render(ENFORCING, [site({ injectionWafPreviewOnly: true })]);
-    expect(rendered).toContain('@inspected not path /ghost/api/*');
+    expect(rendered).toContain('@inspected not path /ghost/api/admin/*\n');
     expect(rendered).toContain('appsec @inspected');
     // The IP-decision handler is not exempted with it: this is a matcher on one
     // handler, not a hole in the route. Anchored, because an unanchored
@@ -847,6 +847,36 @@ describe('the rendered Caddyfile', () => {
     // `/ghost` itself, the admin UI bundle, stays inspected.
     expect(rendered).not.toContain('/ghost/*');
     expect(rendered).not.toContain('not path /ghost ');
+  });
+
+  // Why: the exemption once covered the whole `/ghost/api/` tree for every
+  // client, which includes the public Content API.
+  it.each([
+    ['with no verified sessions', {}],
+    [
+      'with verified sessions',
+      { backend: 'ghost' as const, trustedSession: 'ghost-staff' as const },
+    ],
+  ])('never exempts the Content API or an unauthenticated client, %s', (_name, extra) => {
+    const rendered = render(ENFORCING, [site({ injectionWafPreviewOnly: true, ...extra })]);
+    const exempted = [...rendered.matchAll(/not path ([^\n]+)/g)].flatMap(([, paths]) =>
+      (paths ?? '').split(' ')
+    );
+    for (const pattern of exempted) {
+      expect(pattern, 'an exempted path must stay inside the admin API').toMatch(
+        /^\/ghost\/api\/admin\//
+      );
+    }
+    expect(rendered).not.toMatch(/not path[^\n]*\/ghost\/api\/(\*|content)/);
+  });
+
+  it('exempts no path at all where the edge verifies staff sessions, and only a verified one skips', () => {
+    const rendered = render(ENFORCING, [
+      site({ injectionWafPreviewOnly: true, backend: 'ghost', trustedSession: 'ghost-staff' }),
+    ]);
+    expect(rendered).not.toContain('@inspected');
+    expect(rendered).not.toMatch(/not path/);
+    expect(rendered).toContain('appsec @edge_untrusted');
   });
 
   it('inspects every path of a site with no authoring surface', () => {
@@ -1690,10 +1720,6 @@ const BLOG_BLOCK = `
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -1751,7 +1777,7 @@ const BLOG_BLOCK = `
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}${TENANT_MEDIA_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
@@ -1991,10 +2017,11 @@ describe('the owner console and tenant portal routes', () => {
       }
     });
 
-    it('keeps the blog admin API outside AppSec so author-written HTML is not blocked', () => {
+    it('skips AppSec on the blog only for a verified staff session, never by path', () => {
       const blog = blockOf(rendered, 'blog.branchleft.co.uk');
-      expect(blog).toContain('@inspected {\n\t\tnot path /ghost/api/*\n');
-      expect(blog).toContain('appsec @inspected');
+      expect(blog).not.toContain('@inspected');
+      expect(blog).not.toMatch(/not path/);
+      expect(blog).toContain('appsec @edge_untrusted');
     });
 
     it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
@@ -2024,6 +2051,196 @@ describe('the owner console and tenant portal routes', () => {
         expect(entry?.privateUpstream).not.toEqual(blog?.privateUpstream);
         expect(entry?.hostnames.some((host) => host.endsWith('blog.branchleft.co.uk'))).toBe(false);
       }
+    });
+  });
+});
+
+// Why: render.md, "`siteBlock`: public path allow-list". The sign-in service serves its
+// administration console and its management APIs on the same listener as its OIDC
+// endpoints, so the public hostname forwards an allow-list and the edge answers 404 to
+// the rest. What a path matcher does is Caddy's; these tests read the matcher the
+// renderer emitted and judge requests by it, so a path that reopens fails here.
+describe('the sign-in service public path allow-list', () => {
+  const identityBlock = (list: EdgeSite[]): string =>
+    blockOf(renderCaddyfile(list, hostRedirects, ENFORCING, staticSites), IDENTITY_HOSTNAME);
+  const withoutRule = sites.map((entry) =>
+    entry.name === 'identity'
+      ? { ...entry, publicPaths: undefined, publicReadOnlyPaths: undefined }
+      : entry
+  );
+
+  /**
+   * What the edge does with one request, read from the rendered block: refused (400 or
+   * 404) or proxied to the upstream. Caddy's `path` matcher is case-insensitive, ignores
+   * the query, and treats a trailing `/*` as a prefix.
+   */
+  const verdict = (block: string, method: string, rawUri: string): string => {
+    const dotSegments = new RegExp(
+      block.match(
+        /@public_dot_segments \{\n\t\texpression `\{http\.request\.orig_uri\}\.matches\('(.*)'\)`/
+      )?.[1] ?? '(?!)'
+    );
+    const matcher = block.match(/@not_public \{\n([\s\S]*?)\n\t\}/)?.[1];
+    if (matcher === undefined) {
+      return 'proxied';
+    }
+    if (dotSegments.test(rawUri)) {
+      return '400';
+    }
+    const path = rawUri.split('?')[0]!.toLowerCase();
+    const listed = (patterns: string): boolean =>
+      patterns
+        .trim()
+        .split(/\s+/)
+        .some((pattern) =>
+          pattern.endsWith('/*')
+            ? path.startsWith(pattern.slice(0, -1).toLowerCase())
+            : path === pattern.toLowerCase()
+        );
+    const lines = matcher.split('\n').map((line) => line.trim());
+    const publicList = lines
+      .find((line) => line.startsWith('not path '))!
+      .slice('not path '.length);
+    const readOnly = lines.find(
+      (line, index) => line.startsWith('path ') && lines[index - 1]?.startsWith('method GET HEAD')
+    );
+    const isPublic =
+      listed(publicList) ||
+      (readOnly !== undefined && ['GET', 'HEAD'].includes(method) && listed(readOnly.slice(5)));
+    return isPublic ? 'proxied' : '404';
+  };
+
+  const ADMIN_REQUESTS: Array<[string, string]> = [
+    ['GET', '/ui/console/'],
+    ['GET', '/ui/console/projects'],
+    ['POST', '/management/v1/orgs/_search'],
+    ['GET', '/management/v1/orgs/me'],
+    ['POST', '/admin/v1/smtp/_search'],
+    ['POST', '/system/v1/instances/_search'],
+    ['GET', '/auth/v1/users/me'],
+    ['GET', '/v2/users/1234'],
+    ['POST', '/v2/users/1234/password'],
+    ['POST', '/zitadel.management.v1.ManagementService/ListOrgs'],
+    ['POST', '/zitadel.admin.v1.AdminService/ListOrgs'],
+    ['GET', '/debug/metrics'],
+    ['GET', '/openapi/v2/swagger'],
+    ['POST', '/assets/v1/org/policy/label/logo'],
+    ['PUT', '/assets/v1/org/policy/label/icon'],
+    ['GET', '/'],
+    ['GET', '/OAUTH/V2/../../management/v1/orgs'],
+    ['GET', '/oauth/v2/%2e%2e/%2e%2e/management/v1/orgs'],
+    ['GET', '/oauth/v2/..%2fmanagement/v1/orgs'],
+  ];
+
+  const SIGN_IN_REQUESTS: Array<[string, string]> = [
+    ['GET', '/.well-known/openid-configuration'],
+    ['GET', '/oauth/v2/authorize?client_id=x&response_type=code'],
+    ['POST', '/oauth/v2/token'],
+    ['GET', '/oauth/v2/keys'],
+    ['GET', '/oidc/v1/userinfo'],
+    ['GET', '/oidc/v1/end_session?id_token_hint=x'],
+    ['GET', '/ui/login/login'],
+    ['POST', '/ui/login/loginname'],
+    ['GET', '/ui/login/resources/themes/zitadel/css/main.css'],
+    ['GET', '/assets/v1/1234/policy/label/logo/dark'],
+    ['GET', '/debug/healthz'],
+    ['GET', '/debug/ready'],
+  ];
+
+  it('answers 404 at the edge to the administration console and the management, administration, system and v2 APIs', () => {
+    const block = identityBlock(sites);
+    for (const [method, uri] of ADMIN_REQUESTS) {
+      expect(verdict(block, method, uri), `${method} ${uri}`).toMatch(/^(?:400|404)$/);
+    }
+  });
+
+  it('still forwards the discovery document, the OIDC endpoints, the key set, the login pages and the health probe', () => {
+    const block = identityBlock(sites);
+    for (const [method, uri] of SIGN_IN_REQUESTS) {
+      expect(verdict(block, method, uri), `${method} ${uri}`).toBe('proxied');
+    }
+  });
+
+  it('is red with the rule removed: every administration path is then forwarded', () => {
+    const block = identityBlock(withoutRule);
+    expect(block).not.toContain('@not_public');
+    expect(block).not.toContain('respond @not_public 404');
+    for (const [method, uri] of ADMIN_REQUESTS.slice(0, 16)) {
+      expect(verdict(block, method, uri), `${method} ${uri}`).toBe('proxied');
+    }
+  });
+
+  it('refuses before AppSec and the upstream, after the throttle and the bouncer', () => {
+    const block = identityBlock(sites);
+    const order = [
+      block.indexOf('rate_limit {'),
+      block.indexOf('\t\tcrowdsec\n'),
+      block.indexOf('respond @public_dot_segments 400'),
+      block.indexOf('respond @not_public 404'),
+      block.indexOf('\t\tappsec\n'),
+      block.indexOf('reverse_proxy 10.20.1.50:8300'),
+    ];
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('forwards only a read on the branding prefix, and lists nothing wider than the sign-in paths', () => {
+    const block = identityBlock(sites);
+    expect(block).toContain(
+      '\t\tnot path /.well-known/* /oauth/v2/* /oidc/v1/* /ui/login/* /debug/healthz /debug/ready\n'
+    );
+    expect(block).toContain('\t\tnot {\n\t\t\tmethod GET HEAD\n\t\t\tpath /assets/v1/*\n\t\t}\n');
+    expect(verdict(block, 'POST', '/assets/v1/org/policy/label/logo')).toBe('404');
+    expect(verdict(block, 'GET', '/assets/v1/org/policy/label/logo')).toBe('proxied');
+  });
+
+  it('leaves the private listener alone: one upstream, the same port', () => {
+    const block = identityBlock(sites);
+    expect(block.match(/reverse_proxy/g)).toHaveLength(1);
+    expect(block).toContain('reverse_proxy 10.20.1.50:8300');
+    expect(sites.find((entry) => entry.name === 'identity')?.privateUpstream).toEqual({
+      host: 'ops1',
+      port: 8300,
+    });
+  });
+
+  it('is the only block that carries it', () => {
+    const rendered = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
+    expect(rendered.match(/respond @not_public 404/g)).toHaveLength(1);
+  });
+
+  it('names an uptime probe path that its own allow-list lets through', () => {
+    const identity = sites.find((entry) => entry.name === 'identity')!;
+    expect(identity.probePath).toBeDefined();
+    expect(verdict(identityBlock(sites), 'GET', identity.probePath!)).toBe('proxied');
+  });
+
+  describe('refuses to render a list that could reopen the surface', () => {
+    const renderWith = (overrides: Partial<EdgeSite>): string =>
+      renderCaddyfile([site(overrides)], [], ENFORCING);
+
+    it.each([
+      ['an empty list', { publicPaths: [] }],
+      ['a bare wildcard', { publicPaths: ['/*'] }],
+      ['a wildcard inside a segment', { publicPaths: ['/oauth*'] }],
+      ['a path with no leading slash', { publicPaths: ['oauth/v2/*'] }],
+      ['a dot segment', { publicPaths: ['/oauth/../management/*'] }],
+      ['a space', { publicPaths: ['/oauth v2'] }],
+      ['a brace', { publicPaths: ['/{http.request.host}'] }],
+      ['a read-only list without a list', { publicReadOnlyPaths: ['/assets/*'] }],
+      [
+        'a read-only entry that is not a path',
+        { publicPaths: ['/a'], publicReadOnlyPaths: ['assets'] },
+      ],
+      ['a webhook site', { publicPaths: ['/a'], inboundWebhookPath: '/webhook' }],
+      ['a gateway site', { publicPaths: ['/a'], signedObjectGateway: true }],
+    ] as Array<[string, Partial<EdgeSite>]>)('%s', (_label, overrides) => {
+      expect(() => renderWith(overrides)).toThrow();
+    });
+
+    it('accepts a literal path and a literal prefix', () => {
+      const block = renderWith({ publicPaths: ['/a', '/b/c/*'] });
+      expect(block).toContain('not path /a /b/c/*');
     });
   });
 });
@@ -2586,7 +2803,7 @@ describe('verified sessions', () => {
       'log_append edge_trusted {http.vars.edge_trusted}',
       'reverse_proxy @edge_session_candidate 10.20.1.100:2368 {',
       'crowdsec @edge_untrusted',
-      'appsec @inspected',
+      'appsec @edge_untrusted',
       'respond @ghost_setup 403',
       'reverse_proxy 10.20.1.100:2368',
     ].map(at);
@@ -2606,11 +2823,11 @@ describe('verified sessions', () => {
     expect(route).toContain('reverse_proxy @edge_session_candidate 10.20.1.100:2369 {');
   });
 
-  it('keeps the authoring exemption and adds the verified condition to it', () => {
+  it('drops the authoring path exemption: only a verified session skips AppSec', () => {
     const block = blockOf(rendered, 'tenant-one.test');
-    expect(block).toContain(
-      '@inspected {\n\t\tnot path /ghost/api/*\n\t\tnot vars edge_trusted 1\n\t}'
-    );
+    expect(block).not.toContain('@inspected');
+    expect(block).not.toMatch(/not path/);
+    expect(block).toContain('appsec @edge_untrusted');
   });
 
   it('asks only on /ghost/ with the staff cookie, never on a members cookie', () => {
@@ -2648,7 +2865,7 @@ describe('verified sessions', () => {
       'tenant-one.test'
     );
     expect(plain).not.toContain('edge_');
-    expect(plain).toContain('@inspected not path /ghost/api/*');
+    expect(plain).toContain('@inspected not path /ghost/api/admin/*');
     expect(plain.split('\n').map((line) => line.trim())).toContain('crowdsec');
   });
 

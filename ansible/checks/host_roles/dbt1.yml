@@ -1,14 +1,16 @@
 ---
-# dbt1, the database host db-t1. Six roles after the pull roles, no host_inputs: the host
-# has no private inputs, so the loader has nothing to read (R11 applies only when it is
-# listed). egress_nat is applied bare with its gateway switch unset: this host is no gateway.
-# deploy_tooling (class internal, no policy program) installs the deploy wrapper and the
-# compose unit, and db_t1 is the first role to run the wrapper on this host, so it follows
-# deploy_verifier and deploy_tooling. node_exporter comes before db_t1 so that a refusal in the
-# database role holds monitoring back from nothing.
+# dbt1, the database host db-t1. host_inputs first (R11): the host has the controller's key and
+# address as private inputs, which db_t1_tenant_entry reads. egress_nat is applied bare with its
+# gateway switch unset: this host is no gateway. deploy_tooling (class internal, no policy program)
+# installs the deploy wrapper and the compose unit, and db_t1 is the first role to run the wrapper
+# on this host, so it follows deploy_verifier and deploy_tooling. node_exporter comes before db_t1 so
+# that a refusal in the database role holds monitoring back from nothing. db_t1_tenant_entry needs
+# the database stack db_t1 runs, so it follows db_t1.
+- host_inputs
 - host_baseline
 - egress_nat
 - deploy_verifier
 - deploy_tooling
 - node_exporter
 - db_t1
+- db_t1_tenant_entry

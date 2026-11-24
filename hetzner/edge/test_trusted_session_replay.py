@@ -48,8 +48,8 @@ PYTHON_IMAGE = (
     "python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217"
 )
 
-TENANT_ONE = "tenant-one.test"  # AppSec skips /ghost/api/*, as on the blog
-TENANT_TWO = "tenant-two.test"  # AppSec on every path, as on the portal
+TENANT_ONE = "tenant-one.test"  # an authoring site, as the blog is
+TENANT_TWO = "tenant-two.test"  # not an authoring site, as the portal is
 # The rendered upstreams name `app1`, 10.20.1.100. The test network uses a
 # subnet of its own, so a workstation network already on edge1's plan does not
 # stop it, and the upstream address is the second and last change to the file.
@@ -67,6 +67,7 @@ TRUSTED_PROBER = "198.51.100.60"
 CONTROL_PROBER = "198.51.100.61"
 FORGED_FLAG = "198.51.100.62"
 APPSEC_CONTROL = "198.51.100.63"
+APPSEC_ANONYMOUS_API = "198.51.100.64"
 
 UPLOAD_BYTES = 64 * 1024 * 1024  # the blog's requestBodyMaxSize
 PROBE_PATHS = tuple(f"/ghost/api/admin/missing-{index}/" for index in range(15))
@@ -217,6 +218,9 @@ def probes(host: str, session: str | None, **extra: str) -> list[Request]:
 
 # The in-band AppSec rule set refuses a request for a `.env` file.
 APPSEC_PROBE = "/ghost/.env"
+# The same on the public Content API of the authoring site: an anonymous client
+# gets no AppSec exemption there.
+APPSEC_API_PROBE = "/ghost/api/content/.env"
 
 
 class Edge:
@@ -458,6 +462,8 @@ class VerifiedSessionsAreNeverRefused(unittest.TestCase):
     refused: list[dict[str, object]]
     appsec_trusted: dict[str, object]
     appsec_control: dict[str, object]
+    appsec_anonymous_api: dict[str, object]
+    appsec_verified_api: dict[str, object]
     bans: dict[str, list[str]]
 
     @classmethod
@@ -508,6 +514,28 @@ class VerifiedSessionsAreNeverRefused(unittest.TestCase):
             [
                 Request(
                     "AppSec probe, no session", TENANT_TWO, APPSEC_PROBE, browser(TENANT_TWO, None)
+                )
+            ],
+        )[0]
+        cls.appsec_anonymous_api = edge.send(
+            APPSEC_ANONYMOUS_API,
+            [
+                Request(
+                    "AppSec probe, Content API, no session",
+                    TENANT_ONE,
+                    APPSEC_API_PROBE,
+                    browser(TENANT_ONE, None),
+                )
+            ],
+        )[0]
+        cls.appsec_verified_api = edge.send(
+            TRUSTED_PROBER,
+            [
+                Request(
+                    "AppSec probe, Content API, verified",
+                    TENANT_ONE,
+                    APPSEC_API_PROBE,
+                    browser(TENANT_ONE, VALID_ONE),
                 )
             ],
         )[0]
@@ -581,6 +609,10 @@ class VerifiedSessionsAreNeverRefused(unittest.TestCase):
     def test_appsec_does_not_refuse_a_verified_session(self) -> None:
         self.assertEqual(self.appsec_control["status"], 403, self.appsec_control)
         self.assertEqual(self.appsec_trusted["status"], 200, self.appsec_trusted)
+
+    def test_appsec_inspects_the_content_api_of_an_authoring_site_unless_verified(self) -> None:
+        self.assertEqual(self.appsec_anonymous_api["status"], 403, self.appsec_anonymous_api)
+        self.assertEqual(self.appsec_verified_api["status"], 200, self.appsec_verified_api)
 
     def test_verified_traffic_adds_nothing_to_a_ban_bucket(self) -> None:
         # The same traffic with a forged cookie bans, so it is traffic that would.

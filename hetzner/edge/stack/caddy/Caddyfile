@@ -189,10 +189,6 @@ blog.branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -250,7 +246,7 @@ blog.branchleft.co.uk {
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403
 		@uploads_by_path {
 			path /content/files/* /content/images/* /content/media/*
@@ -726,6 +722,16 @@ id.publicpress.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
+	@not_public {
+		not path /.well-known/* /oauth/v2/* /oidc/v1/* /ui/login/* /debug/healthz /debug/ready
+		not {
+			method GET HEAD
+			path /assets/v1/*
+		}
+	}
+	@public_dot_segments {
+		expression `{http.request.orig_uri}.matches('^[^?]*(?:/|%2[Ff])(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|%2[Ff]|[?]|$)')`
+	}
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -756,6 +762,8 @@ id.publicpress.co.uk {
 			}
 		}
 		crowdsec
+		respond @public_dot_segments 400
+		respond @not_public 404
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8300

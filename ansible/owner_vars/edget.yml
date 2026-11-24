@@ -19,5 +19,6 @@ ci_jump_own_address: '10.20.1.210'
 ci_jump_destinations:
   - '10.20.1.210'
   - '10.20.1.200'
+  - '10.20.1.201'
 ci_jump_keys:
   - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOXEOya/JF6dWqkYRMusenbM7/5Qzah8JNUs/qtdCCVl'

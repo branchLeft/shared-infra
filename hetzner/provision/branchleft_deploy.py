@@ -937,6 +937,138 @@ def pinned_image_is_up(stack: str, image: str, *, run=subprocess.run) -> bool | 
     return not any(_CONTAINER_NOT_UP.search(status) for status in statuses)
 
 
+# See branchleft_deploy.md, "Restart diagnosis".
+DIAGNOSIS_JOURNAL_LINES = 50
+DIAGNOSIS_STATUS_LINES = 30
+DIAGNOSIS_LINE_CHARS = 400
+DIAGNOSIS_TOTAL_BYTES = 8192
+DIAGNOSIS_TIMEOUT = 20
+REDACTED = "<redacted>"
+
+_NAME_WORDS = r"(?:pass(?:word|wd|phrase)?|secret|token|api[-_]?key|key|credential|auth\w*|cookie|session)"
+_KEY_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*" + "PRIV" + r"ATE KEY-----.*?(?:-----END [A-Z ]*" + "PRIV" + r"ATE KEY-----|\Z)",
+    re.S,
+)
+_KNOWN_SHAPES = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}"
+    r"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*)"
+)
+_AUTH_HEADER = re.compile(r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie)\b\s*[:=].*")
+_SCHEME_CRED = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{8,}")
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
+_NAMED_FIELD = re.compile(
+    r"(?i)(?P<key>[\"']?[\w.-]*" + _NAME_WORDS + r"[\w.-]*[\"']?\s*[:=]\s*)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;}]+)"
+)
+_NAMED_FLAG = re.compile(r"(?i)(--?[\w-]*" + _NAME_WORDS + r"[\w-]*[ =])\S+")
+_ASSIGNMENT = re.compile(
+    r"(?<![\w.-])(?P<key>[A-Za-z_][\w.-]*)=(?P<value>\"[^\"]*\"|'[^']*'|\S*)"
+)
+# Keys whose values are exit facts, not configuration: `(code=exited, status=1/FAILURE)`.
+_SAFE_ASSIGNMENT_KEYS = frozenset({"code", "status", "signal", "result"})
+_SAFE_ASSIGNMENT_VALUE = re.compile(r"\A[A-Za-z0-9/_.-]{1,24}\Z")
+_LONG_RUN = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_=-]{32,}")
+_CONTROL = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]")
+
+
+# logfmt fields of docker's own errors: the message is the diagnosis, so its inner assignments
+# are redacted rather than the whole value.
+_MESSAGE_KEYS = frozenset({"level", "msg", "time", "error", "err"})
+
+
+def _redact_assignment(match: re.Match) -> str:
+    key, value = match.group("key"), match.group("value")
+    if key.lower() in _MESSAGE_KEYS:
+        quote = value[0] if len(value) > 1 and value[0] in "\"'" and value[-1] == value[0] else ""
+        inner = value[len(quote) : len(value) - len(quote)]
+        return f"{key}={quote}{_ASSIGNMENT.sub(_redact_assignment, inner)}{quote}"
+    if key.lower() in _SAFE_ASSIGNMENT_KEYS and _SAFE_ASSIGNMENT_VALUE.match(value.rstrip(",);]")):
+        return match.group(0)
+    return f"{key}={REDACTED}"
+
+
+def _redact_long_token(match: re.Match) -> str:
+    run = match.group(0)
+    if match.string[max(0, match.start() - 7) : match.start()] == "sha256:":
+        return run  # an image digest is public and is the thing being diagnosed
+    mixed = (
+        re.search(r"[0-9]", run)
+        and re.search(r"[A-Za-z]", run)
+        and ("/" not in run or re.search(r"[A-Z]", run) and re.search(r"[a-z]", run))
+    )
+    return REDACTED if mixed else run
+
+
+def redact_diagnostic_line(line: str) -> str:
+    """One host line made safe for a public CI log. See branchleft_deploy.md, "Restart diagnosis"."""
+    line = _CONTROL.sub("", line).rstrip()
+    line = _KEY_BLOCK.sub(REDACTED, line)
+    line = _AUTH_HEADER.sub(lambda m: f"{m.group(1)}: {REDACTED}", line)
+    line = _SCHEME_CRED.sub(lambda m: f"{m.group(1)} {REDACTED}", line)
+    line = _URL_USERINFO.sub(lambda m: f"{m.group(1)}{REDACTED}@", line)
+    line = _KNOWN_SHAPES.sub(REDACTED, line)
+    line = _NAMED_FIELD.sub(lambda m: m.group("key") + REDACTED, line)
+    line = _NAMED_FLAG.sub(lambda m: m.group(1) + REDACTED, line)
+    line = _ASSIGNMENT.sub(_redact_assignment, line)
+    line = _LONG_RUN.sub(_redact_long_token, line)
+    # `::name::` at the start of a runner log line is a workflow command.
+    line = line.replace("::", ": :")
+    if len(line) > DIAGNOSIS_LINE_CHARS:
+        line = line[:DIAGNOSIS_LINE_CHARS] + " ...[truncated]"
+    return line
+
+
+def bound_diagnosis(text: str, *, max_lines: int) -> list[str]:
+    """The last `max_lines` redacted lines of `text`; the end is where a failure is."""
+    lines = [redact_diagnostic_line(raw) for raw in text.splitlines()]
+    return [line for line in lines if line.strip()][-max_lines:]
+
+
+def restart_diagnosis(stack: str, *, run=subprocess.run) -> str:
+    """The unit's status and recent journal, redacted and bounded; "" if neither could be read.
+
+    Reading must never change what the deploy does next, so every failure here is swallowed.
+    """
+    unit = f"branchleft-compose@{stack}"
+    sections = []
+    for title, argv, limit in (
+        (
+            "systemctl status",
+            ["systemctl", "status", "--no-pager", "--full", "--lines=0", unit],
+            DIAGNOSIS_STATUS_LINES,
+        ),
+        (
+            f"journalctl, last {DIAGNOSIS_JOURNAL_LINES} lines",
+            ["journalctl", "-u", unit, "-n", str(DIAGNOSIS_JOURNAL_LINES), "--no-pager", "-o", "short-iso"],
+            DIAGNOSIS_JOURNAL_LINES,
+        ),
+    ):
+        try:
+            result = run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+                timeout=DIAGNOSIS_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        body = bound_diagnosis(f"{result.stdout or ''}\n{result.stderr or ''}", max_lines=limit)
+        if body:
+            sections.append(f"--- {title} ---\n" + "\n".join(body))
+    if not sections:
+        return ""
+    header = f"branchleft-deploy: {unit} failed to restart; unit diagnosis (redacted, bounded)\n"
+    text = header + "\n".join(sections) + "\n--- end of diagnosis ---\n"
+    encoded = text.encode("utf-8")
+    if len(encoded) > DIAGNOSIS_TOTAL_BYTES:
+        text = "...[earlier lines dropped]\n" + encoded[-DIAGNOSIS_TOTAL_BYTES:].decode("utf-8", "ignore")
+    return text
+
+
 def deploy(
     stack: str,
     image: str,
@@ -1035,6 +1167,16 @@ def deploy(
         result = run(["systemctl", "restart", f"branchleft-compose@{stack}"], check=False)
         if result.returncode == 0:
             return
+
+        # Before the rollback restarts the unit and the status moves on.
+        # Any failure here, a closed stderr (BrokenPipeError) included, must not stop the rollback.
+        try:
+            diagnosis = restart_diagnosis(stack, run=run)
+            if diagnosis:
+                print(diagnosis, end="", file=sys.stderr)
+                sys.stderr.flush()
+        except Exception:
+            pass
 
         if previous is None:
             # Nothing to roll back to. The unit's EnvironmentFile for the pin
