@@ -1,0 +1,31 @@
+---
+# The container has no tenant stacks, so the test writes two pin files that the writer must
+# read: one digest pin that is exported, and one tag that is refused. Values are test values
+# and carry no secret; the digest is the one the role's unit tests use.
+- name: Prepare the config directory and the pin files
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the config directory the deploy program writes to
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Write a digest pin for a valid stack
+      ansible.builtin.copy:
+        dest: /etc/branchleft/tenant-a.image.env
+        content: "IMAGE=registry.example/ghost@sha256:{{ 'a' * 64 }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Write a tag pin that must be refused
+      ansible.builtin.copy:
+        dest: /etc/branchleft/tenant-b.image.env
+        content: "IMAGE=registry.example/ghost:latest\n"
+        owner: root
+        group: root
+        mode: '0600'

@@ -1,0 +1,12 @@
+[Unit]
+Description=Write each tenant stack's pinned image digest to the node_exporter textfile directory
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/branchleft-slot-image-textfile --config-dir /etc/branchleft --output /var/lib/branchleft/backup-worker-exporter/branchleft_slot_image.prom
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/branchleft/backup-worker-exporter
+PrivateTmp=true
