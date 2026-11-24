@@ -160,9 +160,12 @@ The one seed command per host that this change adds, run as root on that host:
     python3 -I seed_host_inputs.py --host appt1
     python3 -I seed_host_inputs.py --host dbt1
 
-It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
-holds it has been applied on the host; before that the file is copied there by hand from the
-branch.
+It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` after the first gated
+apply of a commit that holds it. A gated apply that stops at host_inputs still leaves the tool in
+place: the apply promotes its checkout to `current` (`pull_trigger.py`, `_run`) before the play
+reaches the loader (`playbooks/dbt1.yml` and `playbooks/appt1.yml` list pull_trigger before
+host_inputs). So the order is: the gated apply, the seed from `current`, then the next apply. No
+hand copy is needed.
 
 ## The three guards of the demo1 root bootstrap
 

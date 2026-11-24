@@ -1917,5 +1917,26 @@ class TypedValueCheckTests(unittest.TestCase):
                     self.assertNotIn(bad, rig.everything)
 
 
+class DeliveryRouteTests(unittest.TestCase):
+    """The tool reaches dbt1 and appt1 by the gated apply, not by a hand copy (issue 4306)."""
+
+    README = ROOT / "ansible" / "tools" / "README.md"
+
+    def test_the_readme_names_no_hand_copy_and_the_gated_apply_route(self) -> None:
+        text = self.README.read_text(encoding="utf-8")
+        self.assertNotIn("copied there by hand", text)
+        self.assertIn("gated apply that stops at host_inputs", text)
+
+    def test_each_pulled_host_applies_pull_trigger_before_the_loader(self) -> None:
+        # The gated apply promotes the checkout to `current` before the play reaches the loader,
+        # so the tool is on the host when the apply stops at host_inputs.
+        for host in ("dbt1", "appt1", "db1"):
+            with self.subTest(host):
+                play = (ROOT / "ansible" / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+                self.assertLess(
+                    play.index("roles/pull_trigger"), play.index("roles/host_inputs")
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
