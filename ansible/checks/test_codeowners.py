@@ -65,6 +65,11 @@ GUARDRAIL_PATHS = [
     ".github/workflows/publish-hetzner-host.yml",
     ".github/workflows/tenants-state-rewrap.yml",
     ".github/workflows/verify-package-attestations.yml",
+    ".github/workflows/ansible-drift-check.yml",
+    ".github/workflows/crowdsec-hub-pin-check.yml",
+    ".github/workflows/secret-alert-pager.yml",
+    ".github/scripts/secret_alert_pager.py",
+    ".github/scripts/test_secret_alert_pager.py",
     ".github/workflows/docs-lint.yml",
     ".github/actions/ci-skip/action.yml",
     ".github/actions/ansible-venv/action.yml",
@@ -134,13 +139,8 @@ DOCUMENT_PATHS = [
 RELEASED_PATHS = [
     ".github/dependabot.yml",
     ".github/workflows/ci.md",
-    ".github/workflows/ansible-drift-check.yml",
     ".github/workflows/ansible-offline.yml",
-    ".github/workflows/crowdsec-hub-pin-check.yml",
     ".github/workflows/ghost-pin-lag.yml",
-    ".github/workflows/secret-alert-pager.yml",
-    ".github/scripts/secret_alert_pager.py",
-    ".github/scripts/test_secret_alert_pager.py",
     "sites.ts",
     "hetzner/edge/render.ts",
     "hetzner/edge/render.test.ts",
@@ -213,6 +213,38 @@ def blocks_of(text: str) -> list[list[str]]:
     return [b for b in blocks if b]
 
 
+def hold_reasons(text: str, is_action: bool) -> list[str]:
+    """Why a workflow or action file stays owned, read from its own text.
+
+    A file stays owned when it names a secret other than GITHUB_TOKEN, carries an environment,
+    grants any write permission, has no explicit permissions block, or declares secrets on
+    workflow_call.
+    """
+    out: list[str] = []
+    if (
+        re.search(r"(?<![\w-])secrets\.(?!GITHUB_TOKEN\b)[A-Za-z_]", text)
+        or re.search(r"(?<![\w-])secrets\[", text)
+        or re.search(r"secrets:\s*inherit", text)
+    ):
+        out.append("secrets")
+    if re.search(r"^\s+environment:", text, re.M):
+        out.append("environment")
+    if re.search(r"^\s+[a-z-]+:\s*write\s*(#.*)?$", text, re.M) or re.search(
+        r"permissions:\s*write-all", text
+    ):
+        out.append("write permission")
+    if re.search(r"workflow_call:", text) and re.search(r"^\s{4}secrets:\s*$", text, re.M):
+        out.append("workflow_call secrets")
+    if not is_action and not re.search(r"^permissions:", text, re.M):
+        start = re.search(r"^jobs:\s*$", text, re.M)
+        body = text[start.end() :] if start else ""
+        pattern = r"^  (?=[A-Za-z0-9_.-]+:\s*(?:#.*)?$)"
+        jobs = re.split(pattern, body, flags=re.M)[1:]
+        if not jobs or any(not re.search(r"^    permissions:", job, re.M) for job in jobs):
+            out.append("no permissions block")
+    return out
+
+
 class CodeownersTests(unittest.TestCase):
     """The owner's files are the owner's, and the matcher can tell an owned file from not."""
 
@@ -281,6 +313,37 @@ class CodeownersTests(unittest.TestCase):
                 ".github/workflows/a_new_workflow.yml",
             ]
         )
+
+    def test_the_hold_rule_reads_what_it_names(self) -> None:
+        cases = {
+            "a secret": ("env:\n  T: ${{ secrets.TOKEN }}\n", "secrets"),
+            "an environment": ("jobs:\n  a:\n    environment: prod\n", "environment"),
+            "a write": ("permissions:\n  contents: write\n", "write permission"),
+            "no block": ("on: push\njobs:\n  a:\n    runs-on: x\n", "no permissions block"),
+        }
+        for name, (text, reason) in cases.items():
+            with self.subTest(case=name):
+                self.assertIn(reason, hold_reasons(text, False))
+        plain = "env:\n  T: ${{ secrets.GITHUB_TOKEN }}\npermissions: {}\n"
+        self.assertEqual([], hold_reasons(plain, False))
+
+    def test_a_workflow_or_action_that_matches_the_hold_rule_is_owned(self) -> None:
+        # The rule is read from each file's own text, so a new workflow that holds a secret or
+        # grants a write cannot be released by a name no line matches. The scripts a workflow
+        # runs from .github/scripts/ stay owned with it.
+        files = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        files += sorted((ROOT / ".github" / "actions").glob("*/action.y*ml"))
+        self.assertGreaterEqual(len(files), 10)
+        for file in files:
+            path = file.relative_to(ROOT).as_posix()
+            reasons = hold_reasons(file.read_text(encoding="utf-8"), "/actions/" in path)
+            if reasons:
+                with self.subTest(path=path, reasons=reasons):
+                    self.assertEqual([OWNER], owners_of(path, self.rules))
+        pager_dir = ROOT / ".github" / "scripts"
+        scripts = sorted(p.relative_to(ROOT).as_posix() for p in pager_dir.iterdir())
+        self.assertTrue(scripts)
+        self.assert_owned(scripts)
 
     def test_a_workflow_that_gates_a_deploy_or_emits_a_required_check_is_owned(self) -> None:
         # A workflow nothing names is released, so one that adds an approval environment, or a

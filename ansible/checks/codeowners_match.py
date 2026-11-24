@@ -84,6 +84,9 @@ SAMPLES: tuple[Sample, ...] = (
     Sample(".github/workflows/standards.yml", "rule: the required Standards gates", True),
     Sample(".github/workflows/docs-lint.yml", "rule: the required docs-lint", True),
     Sample(".github/actions/ci-skip/action.yml", "rule: an action", True),
+    Sample(".github/workflows/ansible-drift-check.yml", "rule: holds secrets and a write", True),
+    Sample(".github/workflows/secret-alert-pager.yml", "rule: holds a secret", True),
+    Sample(".github/scripts/secret_alert_pager.py", "rule: run by the secret pager", True),
     Sample("CLAUDE.md", "rule: the repository's instructions", True),
     Sample(".claude/.gitignore", "rule: the agent hook directory", True),
     Sample(".pre-commit-config.yaml", "rule: the hook set", True),
@@ -153,10 +156,6 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/requirements.txt", "released: a hash-locked pin", False),
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
-    Sample(
-        ".github/workflows/ansible-drift-check.yml", "released: reports drift, gates nothing", False
-    ),
-    Sample(".github/workflows/secret-alert-pager.yml", "released: a scheduled pager", False),
     Sample(".github/dependabot.yml", "released: update settings", False),
     Sample("hetzner/dns/zonecheck.py", "released: a checker", False),
     Sample("hetzner/scripts/probe-object-storage.py", "released: a probe", False),

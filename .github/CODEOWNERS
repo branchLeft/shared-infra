@@ -6,9 +6,10 @@
 #   (a) Guardrails: a path whose silent weakening would stop an agent guardrail or a required check
 #       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
 #       codeowners_match.py), CLAUDE.md, .claude/, the workflows that enforce a required check or
-#       gate a deploy and the actions they call (named below, and docs-lint and standards by the
-#       standards lines), the gate scripts and tests those checks run
-#       (ansible/checks/, ansible/harness/, scripts/ and the named hetzner/scripts checks), the
+#       gate a deploy, hold a secret or grant a write permission, and the actions they call (named
+#       below, and docs-lint and standards by the standards lines), the gate scripts and tests
+#       those checks run (ansible/checks/, ansible/harness/, scripts/ and the named
+#       hetzner/scripts checks), the
 #       apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer include), the
 #       guard tests and guards that stop a destructive apply, the floors and lint settings, the
 #       image verifier, and the exemption files.
@@ -22,14 +23,18 @@
 
 /.ansible-lint                                               @branchLeft/branchleft-admin
 /.github/actions/                                            @branchLeft/branchleft-admin
+/.github/scripts/                                            @branchLeft/branchleft-admin
 /.github/workflows/ansible-delivery.yml                      @branchLeft/branchleft-admin
+/.github/workflows/ansible-drift-check.yml                   @branchLeft/branchleft-admin
 /.github/workflows/ansible-environment-probe.yml             @branchLeft/branchleft-admin
 /.github/workflows/ansible.yml                               @branchLeft/branchleft-admin
 /.github/workflows/ci-config-validate.yml                    @branchLeft/branchleft-admin
 /.github/workflows/ci.yml                                    @branchLeft/branchleft-admin
+/.github/workflows/crowdsec-hub-pin-check.yml                @branchLeft/branchleft-admin
 /.github/workflows/ovh-copy2-probe.yml                       @branchLeft/branchleft-admin
 /.github/workflows/publish-edge-caddy.yml                    @branchLeft/branchleft-admin
 /.github/workflows/publish-hetzner-host.yml                  @branchLeft/branchleft-admin
+/.github/workflows/secret-alert-pager.yml                    @branchLeft/branchleft-admin
 /.github/workflows/tenants-state-rewrap.yml                  @branchLeft/branchleft-admin
 /.github/workflows/verify-package-attestations.yml           @branchLeft/branchleft-admin
 /.image-scan-exemptions.json                                 @branchLeft/branchleft-admin
@@ -64,11 +69,11 @@
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 
-# Released, with no owner: documents, the workflows nothing requires and no deploy waits on
-# (the drift check, the offline render, the pin checks, the secret-alert pager), the Dependabot
-# settings and the pager script, and the checks that guard no gate: the agreement tests and
-# probes in ansible/checks/ run in the required lint's checks and slow legs, but they hold a host
-# role or a stack to its siblings and do not judge a merge or a deploy.
+# Released, with no owner: documents, the workflows that hold no secret and no write permission
+# (the offline render, the ghost pin lag), the Dependabot settings, and the checks that guard no
+# gate: the agreement tests and probes in ansible/checks/ run in the required lint's checks and
+# slow legs, but they hold a host role or a stack to its siblings and do not judge a merge or a
+# deploy.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
