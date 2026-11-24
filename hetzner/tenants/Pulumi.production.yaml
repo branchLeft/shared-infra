@@ -45,16 +45,18 @@ config:
   branchleft-hetzner-tenants:dbt1Adopt:
     serverId: 174988939
     stage: converge
-  # app-t1 is declared in the program behind `appt1Enabled`, which is absent here, so
-  # the stack plans nothing for it. CX23 is the owner's ruling of 7 Nov 2026, as for the
-  # two hosts above. The owner sets `appt1Enabled` and `appt1DeployPublicKey` in the change
-  # that brings the hand-made server under the stack, and moves `appt1Adopt` to
-  # `stage: converge` at the runbook's last app-t1 step: see its app-t1 section. The deploy
-  # key is generated at adoption and does not exist yet, so none is committed.
+  # app-t1 is declared in the program behind `appt1Enabled`. With `appt1Adopt` at
+  # `stage: import` the stack imports the hand-made server by id and creates only its
+  # firewall, which is declared and never attached. CX23 is the owner's ruling of 7 Nov
+  # 2026, as for the two hosts above. `appt1Adopt` moves to `stage: converge` at the
+  # runbook's last app-t1 step: see its app-t1 section.
+  # `appt1DeployPublicKey` is the public half of the key generated for app-t1 at
+  # adoption, as `dbt1DeployPublicKey` is for db-t1. Only the public half is committed.
+  branchleft-hetzner-tenants:appt1Enabled: "true"
+  branchleft-hetzner-tenants:appt1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIADZS0tXSwb79JH2PAI0wjY3ATFTztuvC8Ewjf2BSTso deploy@app-t1
   branchleft-hetzner-tenants:appt1ServerType: cx23
   # The hand-made server's Hetzner id, as the owner read it in the Console on 13 Nov 2026
-  # at 21:58Z: case B (no IPv4, a public IPv6 address only, on no network). Inert while
-  # `appt1Enabled` is absent.
+  # at 21:58Z: case B (no IPv4, a public IPv6 address only, on no network).
   branchleft-hetzner-tenants:appt1Adopt:
     serverId: 174988938
     stage: import
