@@ -55,6 +55,7 @@ hyphens, 26 characters at most); the volume program stays the authority on reser
 | `claim`   | none                                       | Takes the lowest free uid in 30000 to 30999 and the first free block of four ports from 40000, writes the slug's marker, and asks the volume program to make the volumes and claim the uid. Prints the uid and the three ports (colour a, colour b, health router).              | the slug exists nowhere |
 | `secrets` | `template`, `values`                       | Writes the template to a closed temporary file and passes the values on the secrets program's stdin. The program writes the tenant's secrets file.                                                                                                                               | `claim`                 |
 | `stack`   | `size`, `mail`, `environment`              | Builds `compose.yml` from the host's template, the claim's uid and ports and these parameters, judges it with the judge `tenant_compose` runs and, only if it passes, writes it. No pin. The same parameters again succeed; never over a different file, never outside the slot. | `secrets` file in place |
+| `restack` | `size`, `mail`, `environment`              | For a tenant already live: rebuilds `compose.yml` the same way `stack` does, judges it, and only if the judge passes replaces the file in one rename. Then restarts the unit if it is running (never starts one). A retry finds the file in place and restarts again.            | `enable` and `stack`    |
 | `enable`  | none                                       | Enables the tenant's compose unit, never starts it: the unit has no image pin until its first deploy, and without one it stays inactive.                                                                                                                                         | `secrets` file in place |
 | `key`     | `public_key`                               | Grants the slug's deploy slot to one ed25519 public key through the slot program, once. A slot that exists is never replaced.                                                                                                                                                    | `enable`                |
 | `owner`   | `colour`, `name`, `site_url`, `site_title` | Finds the running colour's container and runs the platform's own owner script, so the Ghost owner exists before the hostname is served.                                                                                                                                          | `enable`                |
@@ -100,6 +101,16 @@ and never a value, and the program withholds the whole line if it repeats a secr
 `status` also prints the claim: `uid=`, `port_a=`, `port_b=` and `port_health=` for a slug this entry
 point claimed, so a caller that was not there for the claim reads the host's own numbers. `stack=yes`
 means the compose file is in place; it says nothing about a pin.
+
+`restack` is the one way to change an existing tenant's environment after onboarding. It takes the
+same three parameters as `stack`, builds the file from the same template and the claim, and runs the
+same judge before anything is written, so a judge refusal (`judge-refused`) leaves the file on disk
+byte for byte as it was. It refuses `stack-first` when no compose file is in place, and
+`enable-first` when the unit is not enabled. It restarts the running unit (`systemctl restart`) so
+the colour reads the new environment, and reports `not restarted: not running` for a unit that is
+down, which it does not start. A restart that fails is `failed: restart`; the file already holds the
+new text, so a repeat of the request restarts again. Restart in place is the MVP's; the colour-swap
+apply replaces it when it lands. The verb takes no uid, port, compose text or pin.
 
 ### The first pin, and a unit with no pin
 
@@ -194,7 +205,7 @@ restrict,from="ADDRESSES",command="sudo /usr/local/sbin/branchleft-tenant-entry 
 
 A request on a running host changes more, through the programs it calls: volumes, the uid claim, the
 secrets file, the unit's enable link and the deploy slot. Those are the programs' changes and are
-described in their own documents. The `stack` verb writes one file itself, as root: the stack
+described in their own documents. The `stack` and `restack` verbs write one file itself, as root: the stack
 directory `/opt/branchleft/SLUG` (`0755`) with `compose.yml` in it (`0644`), the names and modes
 `tenant_compose` uses. It never writes `/etc/branchleft/SLUG.image.env`.
 
