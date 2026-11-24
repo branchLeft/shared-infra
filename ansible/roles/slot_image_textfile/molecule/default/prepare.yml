@@ -1,31 +1,34 @@
 ---
-# The container has no tenant stacks, so the test writes two pin files that the writer must
-# read: one digest pin that is exported, and one tag that is refused. Values are test values
-# and carry no secret; the digest is the one the role's unit tests use.
+# The container has no app stacks, so the test writes two pin files that the writer must read:
+# one digest pin that is exported, and one tag that is refused. The values are test values and
+# carry no secret; the digest is the one the role's unit tests use. The directory is built from
+# a variable, so the pin paths are written as a directory plus a stack name.
 - name: Prepare the config directory and the pin files
   hosts: all
   gather_facts: false
+  vars:
+    prepare_config_dir: '/etc/branchleft'
+    prepare_pins:
+      - name: slot-a
+        content: "IMAGE=registry.example/ghost@sha256:{{ 'a' * 64 }}\n"
+      - name: slot-b
+        content: "IMAGE=registry.example/ghost:latest\n"
   tasks:
     - name: Make the config directory the deploy program writes to
       ansible.builtin.file:
-        path: /etc/branchleft
+        path: '{{ prepare_config_dir }}'
         state: directory
         owner: root
         group: root
         mode: '0755'
 
-    - name: Write a digest pin for a valid stack
+    - name: Write each test pin file
       ansible.builtin.copy:
-        dest: /etc/branchleft/tenant-a.image.env
-        content: "IMAGE=registry.example/ghost@sha256:{{ 'a' * 64 }}\n"
+        dest: '{{ prepare_config_dir }}/{{ item.name }}.image.env'
+        content: '{{ item.content }}'
         owner: root
         group: root
         mode: '0600'
-
-    - name: Write a tag pin that must be refused
-      ansible.builtin.copy:
-        dest: /etc/branchleft/tenant-b.image.env
-        content: "IMAGE=registry.example/ghost:latest\n"
-        owner: root
-        group: root
-        mode: '0600'
+      loop: '{{ prepare_pins }}'
+      loop_control:
+        label: '{{ item.name }}'

@@ -20,8 +20,8 @@ A root timer runs a typed Python program every five minutes. It reads each
 
 ## What it does not do
 
-- It does not read the newest attested image or compare the two. The drift alert is a sibling issue
-  under branchLeft/workspace#283.
+- It does not read the newest attested image or compare the two. The drift alert is a separate
+  change.
 - It does not run on a host by SSH from an agent. The timer on the host reads the files.
 - Check mode does not enable the timer (a stated skip, ANS-10).
 

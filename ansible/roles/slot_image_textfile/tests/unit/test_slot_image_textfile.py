@@ -68,25 +68,25 @@ def variable_in(path: Path, name: str) -> str:
 class ExportsOnlyDigests(unittest.TestCase):
     def test_a_digest_pin_is_exported_with_its_stack_and_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            pin(Path(directory), "tenant-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
+            pin(Path(directory), "slot-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
             pins, refusals = PROG.collect(Path(directory))
-        self.assertEqual(pins, [("tenant-a", DIGEST)])
+        self.assertEqual(pins, [("slot-a", DIGEST)])
         self.assertEqual(refusals, [])
 
     def test_a_tag_is_refused_and_the_valid_stack_is_still_exported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            pin(Path(directory), "tenant-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
-            pin(Path(directory), "tenant-b", "IMAGE=registry.example/ghost:latest\n")
+            pin(Path(directory), "slot-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
+            pin(Path(directory), "slot-b", "IMAGE=registry.example/ghost:latest\n")
             pins, refusals = PROG.collect(Path(directory))
-        self.assertEqual(pins, [("tenant-a", DIGEST)])
+        self.assertEqual(pins, [("slot-a", DIGEST)])
         self.assertEqual(len(refusals), 1)
-        self.assertIn("tenant-b.image.env", refusals[0])
+        self.assertIn("slot-b.image.env", refusals[0])
         self.assertNotIn("latest", refusals[0], "a refusal names the rule, never the value")
 
     def test_a_short_digest_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             short = "IMAGE=registry.example/ghost@sha256:" + "a" * 63 + "\n"
-            pin(Path(directory), "tenant-a", short)
+            pin(Path(directory), "slot-a", short)
             pins, refusals = PROG.collect(Path(directory))
         self.assertEqual(pins, [])
         self.assertEqual(len(refusals), 1)
@@ -94,7 +94,7 @@ class ExportsOnlyDigests(unittest.TestCase):
     def test_two_lines_are_refused_even_when_one_is_a_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             two = f"IMAGE=registry.example/ghost@{DIGEST}\nIMAGE=x@{OTHER}\n"
-            pin(Path(directory), "tenant-a", two)
+            pin(Path(directory), "slot-a", two)
             pins, refusals = PROG.collect(Path(directory))
         self.assertEqual(pins, [])
         self.assertEqual(len(refusals), 1)
@@ -115,8 +115,8 @@ class WritesOneAtomicFile(unittest.TestCase):
     def test_the_output_has_one_series_per_stack_and_no_leftover_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
-            pin(base, "tenant-b", f"IMAGE=registry.example/ghost@{OTHER}\n")
-            pin(base, "tenant-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
+            pin(base, "slot-b", f"IMAGE=registry.example/ghost@{OTHER}\n")
+            pin(base, "slot-a", f"IMAGE=registry.example/ghost@{DIGEST}\n")
             output = base / "branchleft_slot_image.prom"
             status = PROG.main(["--config-dir", str(base), "--output", str(output)])
             text = output.read_text(encoding="utf-8")
@@ -126,8 +126,8 @@ class WritesOneAtomicFile(unittest.TestCase):
         self.assertEqual(
             series,
             [
-                f'branchleft_slot_image_info{{stack="tenant-a",digest="{DIGEST}"}} 1',
-                f'branchleft_slot_image_info{{stack="tenant-b",digest="{OTHER}"}} 1',
+                f'branchleft_slot_image_info{{stack="slot-a",digest="{DIGEST}"}} 1',
+                f'branchleft_slot_image_info{{stack="slot-b",digest="{OTHER}"}} 1',
             ],
         )
         self.assertEqual(leftovers, [])
@@ -135,14 +135,14 @@ class WritesOneAtomicFile(unittest.TestCase):
     def test_a_refusal_exits_one_and_prints_the_file_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
-            pin(base, "tenant-b", "IMAGE=ghost:latest\n")
+            pin(base, "slot-b", "IMAGE=ghost:latest\n")
             output = base / "out.prom"
             stderr = io.StringIO()
             with redirect_stderr(stderr):
                 status = PROG.main(["--config-dir", str(base), "--output", str(output)])
             text = output.read_text(encoding="utf-8")
         self.assertEqual(status, 1)
-        self.assertIn("tenant-b.image.env", stderr.getvalue())
+        self.assertIn("slot-b.image.env", stderr.getvalue())
         self.assertNotIn("branchleft_slot_image_info{", text)
 
     def test_the_output_file_is_world_readable_for_the_exporter(self) -> None:

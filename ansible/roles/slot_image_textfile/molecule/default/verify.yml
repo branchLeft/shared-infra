@@ -61,7 +61,7 @@
       ansible.builtin.assert:
         that:
           - slot_image_textfile_verify_run.rc == 1
-          - '''branchleft_slot_image_info{stack="tenant-a",digest="sha256:'' ~ (''a'' * 64) ~ ''"} 1'' in (slot_image_textfile_verify_gauge.content | b64decode)'
-          - "'tenant-b' not in (slot_image_textfile_verify_gauge.content | b64decode)"
+          - '''branchleft_slot_image_info{stack="slot-a",digest="sha256:'' ~ (''a'' * 64) ~ ''"} 1'' in (slot_image_textfile_verify_gauge.content | b64decode)'
+          - "'slot-b' not in (slot_image_textfile_verify_gauge.content | b64decode)"
         quiet: true
         fail_msg: The gauge does not hold the valid digest pin alone, or the refused pin was exported.

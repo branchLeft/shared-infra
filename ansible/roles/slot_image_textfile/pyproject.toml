@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 
 [tool.mypy]
 strict = true
+mypy_path = "$MYPY_CONFIG_FILE_DIR/files"
 disallow_any_explicit = true
 python_version = "3.12"
 
