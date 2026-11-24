@@ -9,6 +9,7 @@ import pathlib
 import re
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -280,6 +281,15 @@ class MainTests(Harness):
         self.assertEqual("", self.recorded())
         self.assertIn("FAILED", err)
         self.assertIn("x:Domain/set should be forbidden", err)
+
+    def test_a_scope_proof_that_raises_destroys_the_fresh_key_and_reraises(self):
+        def probe(token, method, args):
+            raise urllib.error.URLError("connection refused")
+
+        with self.assertRaises(urllib.error.URLError):
+            self.run_main(probe=probe)
+        self.assertEqual([], self.fake.keys)
+        self.assertEqual("", self.recorded())
 
     def test_an_existing_key_that_fails_the_proof_is_reported_and_left_for_revoke(self):
         self.run_main()

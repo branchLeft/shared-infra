@@ -366,7 +366,14 @@ def main(argv: list[str] | None = None, probe: Probe = http_probe, now: datetime
     else:
         secret = str(recorded)
 
-    problems = verify_scope(probe, secret)
+    try:
+        problems = verify_scope(probe, secret)
+    except BaseException:
+        # A transport error, a timeout or an interrupt: the fresh key is unproven, so it goes.
+        if fresh:
+            _destroy_keys(auth, str(account["id"]))
+            remove_recorded_secret(SERVICE_CREDENTIALS_PATH, CREDENTIAL_LABEL)
+        raise
     if problems:
         if fresh:
             _destroy_keys(auth, str(account["id"]))
