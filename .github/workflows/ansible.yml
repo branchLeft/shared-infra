@@ -574,6 +574,10 @@ jobs:
       github.event_name != 'merge_group'
     strategy:
       fail-fast: false
+      # A pull request runs at most 6 shards at once, so one large PR cannot take the whole
+      # org-wide pool of CI runners (branchLeft/workspace#4319). The schedule and a manual
+      # run keep every shard at once: 256 is GitHub's matrix ceiling.
+      max-parallel: ${{ github.event_name == 'pull_request' && 6 || 256 }}
       matrix: ${{ fromJSON(needs.discover.outputs.blocking_matrix) }}
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
@@ -678,6 +682,8 @@ jobs:
       github.event_name != 'merge_group'
     strategy:
       fail-fast: false
+      # Capped on a pull request, as the blocking shards are (branchLeft/workspace#4319).
+      max-parallel: ${{ github.event_name == 'pull_request' && 6 || 256 }}
       matrix: ${{ fromJSON(needs.discover.outputs.advisory_matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
