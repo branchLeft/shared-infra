@@ -75,139 +75,89 @@ def owners_of(path: str, rules: list[Rule]) -> list[str]:
 # called everything owned, or nothing, is seen. Paths that name a file the repository does not
 # hold yet are in PENDING.
 SAMPLES: tuple[Sample, ...] = (
-    # Rules, gates and exemption files.
+    # Guardrails: the review rule, instructions, hooks, workflows and the gates they run.
     Sample(".github/CODEOWNERS", "rule: the review rule itself", True),
+    Sample("ansible/checks/test_codeowners.py", "rule: the review rule's proof", True),
+    Sample("ansible/checks/codeowners_match.py", "rule: the review rule's matcher", True),
     Sample(".github/workflows/ci.yml", "rule: a workflow", True),
+    Sample(".github/actions/ci-skip/action.yml", "rule: an action", True),
     Sample("CLAUDE.md", "rule: the repository's instructions", True),
+    Sample(".claude/.gitignore", "rule: the agent hook directory", True),
     Sample(".pre-commit-config.yaml", "rule: the hook set", True),
     Sample(".ansible-lint", "rule: a lint floor", True),
     Sample(".image-scan-exemptions.json", "rule: an exemption file", True),
     Sample(".docs-lint.mode", "rule: the docs-lint setting", True),
+    Sample("tools/floors.tsv", "rule: the floors file", True),
     Sample("ansible/checks/check_delivery.py", "gate: a CI gate check", True),
     Sample("ansible/checks/check_enrolment.py", "gate: the host-role check", True),
-    Sample("ansible/checks/host_roles/edge1.yml", "gate: a host's role list", True),
+    Sample("ansible/checks/host_roles/edge1.yml", "gate: a host's role allowlist", True),
     Sample("ansible/checks/test_check_delivery.py", "gate: a kept gate's test", True),
-    Sample("scripts/assert-no-hetzner-deletes.py", "gate: a script a secret job runs", True),
-    Sample("hetzner/provision/branchleft_deploy.py", "gate: the deploy account command", True),
+    Sample("ansible/harness/run_harness.py", "gate: the Ansible harness", True),
+    Sample("scripts/assert-no-hetzner-deletes.py", "gate: the delete guard a secret job", True),
+    Sample("scripts/choose-apply-environment.py", "gate: the apply approval routing", True),
+    Sample("hetzner/scripts/check-crowdsec-hub-pin.py", "gate: a script gating a write step", True),
+    Sample("hetzner/scripts/test_check_crowdsec_hub_pin.py", "gate: that script's test", True),
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
+    Sample("hetzner/provision/test_counts/test_suite_size.txt", "gate: a suite-size floor", True),
+    Sample("ansible/trust/mx1.yml", "gate: a pull signer allowlist", True),
+    Sample("ansible/playbooks/bootstrap/dbt1.yml", "access: a bootstrap run by hand, outside the gate", True),
+    Sample("ansible/playbooks/includes/require_signers.yml", "gate: the signer requirement", True),
+    Sample("ansible/roles/deploy_verifier/files/trusted_root.jsonl", "gate: verifier trust", True),
     Sample(
-        "hetzner/provision/test_counts/test_suite_size.txt",
-        "gate: a per-module suite-size floor",
-        True,
+        "ansible/roles/deploy_verifier/files/branchleft-verify-image.py", "gate: the verifier", True
     ),
-    Sample(
-        "hetzner/scripts/check-crowdsec-hub-pin.py",
-        "gate: a script whose exit code gates a write-token step",
-        True,
-    ),
-    Sample(
-        "hetzner/scripts/test_check_crowdsec_hub_pin.py",
-        "gate: that script's test",
-        True,
-    ),
-    Sample(
-        "ansible/checks/test_deploy_verifier_coverage.py", "gate: what the verifier trusts", True
-    ),
-    Sample("hetzner/estate.guard.test.ts", "gate: a Pulumi guard test", True),
-    Sample("hetzner/projectGuard.test.ts", "gate: the project guard test", True),
-    # Trust, keys and access.
-    Sample("ansible/trust/mx1.yml", "trust: a signer list", True),
-    Sample("ansible/owner_vars/edge1.yml", "trust: the owner's values for a host", True),
-    Sample("ansible/roles/ci_jump/tasks/main.yml", "access: ssh key options", True),
-    Sample("ansible/roles/ci_login/tasks/_sudoers.yml", "access: sudoers", True),
-    Sample("ansible/roles/db1_grants/tasks/main.yml", "access: database grants", True),
-    Sample("ansible/roles/host_baseline/tasks/_ssh.yml", "access: sshd", True),
-    Sample("ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml", "access: verifier keys", True),
-    Sample("ansible/roles/deploy_slot_keys/tasks/main.yml", "access: deploy account keys", True),
-    Sample("ansible/roles/deploy_verifier/vars/main.yml", "access: the verifier's pinned gh", True),
-    Sample("ansible/roles/broker_deploy/tasks/main.yml", "access: the broker account", True),
-    Sample("ansible/roles/demo1_build/tasks/_accounts.yml", "access: demo1 accounts", True),
-    Sample("ansible/roles/node_exporter/tasks/_node_exporter.yml", "access: its account", True),
-    Sample("ansible/roles/backup_worker/tasks/main.yml", "access: the backup account", True),
-    Sample("hetzner-host/cloudInit.test.ts", "access: a test of key injection", True),
-    Sample("ansible/roles/db1_grants/tests/unit/test_db1_grants.py", "access: a grants test", True),
-    Sample(
-        "ansible/roles/breakglass_mint_host/molecule/default/verify.yml",
-        "access: a break-glass test",
-        True,
-    ),
-    Sample(
-        "ansible/roles/tunnel_account/molecule/default/verify.yml", "access: a tunnel test", True
-    ),
-    Sample("ansible/roles/r/library/x.py", "loader: a role's library", True),
-    Sample("ansible/library/x.py", "loader: the top-level library", True),
-    Sample("hetzner/control-plane/stack/postgres/pg_hba.conf", "access: database access", True),
-    Sample(
-        "ansible/playbooks/bootstrap/dbt1.yml",
-        "access: a bootstrap run by hand, outside the gate",
-        True,
-    ),
-    # Mail.
-    Sample("mail/provision/provision_mailboxes.py", "mail: a program run on mx1", True),
-    Sample("ansible/playbooks/mx1.yml", "mail: the mx1 playbook", True),
-    Sample("ansible/inventories/production/hosts.yml", "mail: the host inventory", True),
-    # Billed resources, install-time controls, DNS zone data.
-    Sample("hetzner/estate.ts", "billed: a Pulumi program", True),
-    Sample("hetzner-host/host.ts", "billed: the published host package", True),
-    Sample("hetzner/Pulumi.production.yaml", "billed: a stack file", True),
-    Sample("hetzner/package.json", "billed: install-time scripts", True),
-    Sample("hetzner/pnpm-workspace.yaml", "billed: install-time allowBuilds", True),
-    Sample("ovh/copy2/stack.ts", "billed: object storage with object lock", True),
-    Sample("hetzner/dns/zone.json", "dns: live zone data", True),
-    # The launch page, the owner's words.
-    Sample("hetzner/edge/publicpress/index.html", "public: the launch page", True),
-    Sample("LICENSE", "public: the licence", True),
-    Sample("sites.ts", "public: the hostname registry", True),
-    Sample("hetzner/edge/render.ts", "public: the edge renderer", True),
-    Sample("hetzner/edge/render.test.ts", "public: the test that holds the Caddyfile", True),
-    Sample("hetzner/edge/stack/caddy/Caddyfile", "public: the committed Caddyfile", True),
-    Sample("hetzner/edge/validation/Caddyfile.enforcing", "public: the enforcing Caddyfile", True),
-    # Backups: the timers, the retention window and the schedule.
-    Sample("ansible/roles/db1_backup_timers/tasks/main.yml", "backup: dump and prune timers", True),
-    Sample(
-        "ansible/roles/db1_backup_timers/tests/unit/test_db1_backup_timers.py",
-        "backup: a timer test",
-        True,
-    ),
-    Sample("ansible/roles/db1_stack/templates/branchleft.cnf.j2", "backup: binlog expiry", True),
-    Sample("ansible/roles/db_t1/templates/branchleft.cnf.j2", "backup: binlog expiry", True),
-    Sample(
-        "ansible/roles/backup_worker/defaults/main.yml", "backup: the nightly timer switch", True
-    ),
-    Sample("ansible/roles/backup_restore/defaults/main.yml", "backup: the state-copy timer", True),
-    # Released: documents, lockfiles and pins, host configuration, tests, checkers, probes.
-    Sample("README.md", "released: a document", False),
-    Sample("mail/RUNBOOK-mx1-provision.md", "released: a mail document", False),
-    Sample("ansible/trust/README.md", "released: a trust document", False),
-    Sample("ansible/roles/ci_jump/README.md", "released: a kept role's document", False),
+    Sample("hetzner/scripts/lib/proof_harness.py", "gate: what the owned proofs import", True),
+    Sample("hetzner/estate.guard.test.ts", "guard: a Pulumi guard test", True),
+    Sample("hetzner/projectGuard.ts", "guard: the project guard", True),
+    Sample("hetzner/projectGuard.test.ts", "guard: the project guard test", True),
+    Sample("ovh/copy2/configGuard.test.ts", "guard: a config guard test", True),
+    Sample("ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py", "guard", True),
+    # Human-facing documents and the owner's words.
+    Sample("README.md", "doc: the readme", True),
+    Sample("LICENSE", "doc: the licence", True),
+    Sample("hetzner-host/LICENSE", "doc: a licence", True),
+    Sample("hetzner/edge/publicpress/index.html", "doc: the launch page", True),
+    # Released: trust extended to agents on sensitive code, merged on reviewer approval.
+    Sample("sites.ts", "released: the hostname registry", False),
+    Sample("hetzner/edge/render.ts", "released: the edge renderer", False),
+    Sample("hetzner/edge/render.test.ts", "released: the test that holds the Caddyfile", False),
+    Sample("hetzner/edge/stack/caddy/Caddyfile", "released: the committed Caddyfile", False),
+    Sample("hetzner/edge/validation/Caddyfile.enforcing", "released: enforcing Caddyfile", False),
+    Sample("hetzner/estate.ts", "released: a Pulumi program", False),
+    Sample("hetzner-host/firewalls.ts", "released: the firewall", False),
+    Sample("hetzner/Pulumi.production.yaml", "released: a stack file", False),
+    Sample("hetzner/package.json", "released: a package manifest", False),
+    Sample("hetzner/pnpm-workspace.yaml", "released: install-time allowBuilds", False),
+    Sample("ovh/copy2/stack.ts", "released: object storage", False),
+    Sample("hetzner/dns/zone.json", "released: zone data", False),
+    Sample("mail/provision/provision_mailboxes.py", "released: a program run on mx1", False),
+    Sample("ansible/playbooks/mx1.yml", "released: the mx1 playbook", False),
+    Sample("ansible/inventories/production/hosts.yml", "released: the host inventory", False),
+    Sample("ansible/owner_vars/edge1.yml", "released: host values", False),
+    Sample("ansible/roles/ci_jump/tasks/main.yml", "released: ssh key options", False),
+    Sample("ansible/roles/ci_login/tasks/_sudoers.yml", "released: sudoers", False),
+    Sample("ansible/roles/host_baseline/tasks/_ssh.yml", "released: sshd", False),
+    Sample("ansible/roles/pull_trigger/tasks/main.yml", "released: a pull role", False),
+    Sample("ansible/roles/backup_worker/defaults/main.yml", "released: a backup role", False),
+    Sample("hetzner/provision/branchleft_deploy.py", "released: the deploy account command", False),
+    Sample("hetzner/control-plane/stack/postgres/pg_hba.conf", "released: database access", False),
+    Sample("ansible/roles/edge_stack/tasks/main.yml", "released: host configuration", False),
+    Sample("ansible/playbooks/edge1.yml", "released: a host playbook", False),
+    Sample("ansible/library/x.py", "released: a loader directory", False),
+    Sample("ansible/roles/ci_jump/README.md", "released: an engineering document", False),
+    Sample("ansible/checks/README.md", "released: a document in a gate directory", False),
     Sample("pnpm-lock.yaml", "released: a lockfile", False),
     Sample("hetzner/pnpm-lock.yaml", "released: a lockfile", False),
     Sample("ansible/requirements.txt", "released: a hash-locked pin", False),
-    Sample("ansible/roles/edge_stack/tasks/main.yml", "released: host configuration", False),
-    Sample("ansible/roles/egress_nat/tasks/main.yml", "released: host configuration", False),
-    Sample("ansible/roles/mx1_stack/tasks/main.yml", "released: host configuration", False),
-    Sample("ansible/roles/deploy_tooling/tasks/main.yml", "released: deploy wiring", False),
-    Sample("ansible/roles/broker_deploy/templates/broker.env.j2", "released: broker wiring", False),
-    Sample("ansible/roles/node_exporter/tasks/main.yml", "released: host configuration", False),
-    Sample("ansible/roles/backup_worker/README.md", "released: a backup role's document", False),
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
-    Sample("ansible/checks/test_ci_jump_hosts.py", "released: an agreement test", False),
     Sample("hetzner/dns/zonecheck.py", "released: a checker", False),
     Sample("hetzner/scripts/probe-object-storage.py", "released: a probe", False),
     Sample("hetzner/scripts/check-address-plan-drift.py", "released: a read-only checker", False),
-    Sample("ansible/playbooks/edge1.yml", "released: a host playbook", False),
 )
 
-# Samples that stand for a file the repository does not hold, so they are not looked up on disk:
-# the launch page is listed before a file is in it, and a loader file is any file in the directory.
-PENDING: frozenset[str] = frozenset(
-    {
-        "hetzner/edge/publicpress/index.html",
-        "ansible/roles/r/library/x.py",
-        "ansible/library/x.py",
-    }
-)
+# Samples that stand for a file the repository does not hold, so they are not looked up on disk.
+PENDING: frozenset[str] = frozenset({"ansible/library/x.py", "hetzner/edge/publicpress/index.html"})
 
 
 def mismatches(rules: list[Rule], samples: Sequence[Sample] = SAMPLES) -> list[Sample]:
