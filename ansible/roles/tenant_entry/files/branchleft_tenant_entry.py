@@ -159,7 +159,7 @@ class Paths:
     judge_module: str = "/usr/local/lib/branchleft-tenant-entry/tenant_compose_check.py"
     systemctl: str = "/usr/bin/systemctl"
     docker: str = "/usr/bin/docker"
-    node: str = "/usr/bin/node"
+    node: str = "/usr/local/lib/branchleft-tenant-entry/node/bin/node"
     root_uid: int = 0
 
 

@@ -127,3 +127,43 @@
         owner: root
         group: root
         mode: '0644'
+
+    # What the host's Docker is to the owner verb: it lists the one running container of the
+    # colour and runs the owner script's inner program in it. This stand-in answers the list with
+    # one container id, and the exec with the result line a fresh Ghost gives, after writing down
+    # what it was asked: the words before the inner program (the program text itself is left out),
+    # and the keys of the one JSON object it was given on stdin. The real node runs the real owner
+    # script against it, so the scenario shows the script is installed, runs, reads the address
+    # from the secrets file and sends it nowhere but stdin. It is not Ghost: the script's own
+    # tests are in ghost-platform and the first live request is the evidence for the rest.
+    - name: Put a stand-in for Docker where the owner verb looks for it
+      ansible.builtin.copy:
+        content: |
+          #!/usr/bin/python3 -I
+          import json
+          import sys
+
+          LOG = "/var/tmp/stand-in-docker.log"
+          CONTAINER = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+          args = sys.argv[1:]
+          if args[:1] == ["ps"]:
+              print(CONTAINER)
+              sys.exit(0)
+          if args[:3] == ["exec", "-i", CONTAINER] and args[3:5] == ["node", "-e"]:
+              given = json.loads(sys.stdin.read())
+              with open(LOG, "a", encoding="utf-8") as handle:
+                  handle.write(json.dumps({"argv": args[:5], "stdin_keys": sorted(given),
+                                           "address_given": given.get("email") == "owner@example.invalid"}) + "\n")
+              print(json.dumps({"created": True, "alreadySetUp": False, "linkRequested": True}))
+              sys.exit(0)
+          sys.exit(2)
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+      # The stand-in holds the scenario's placeholder owner address, which the leak scan in
+      # verify reads as a secret value. Its diff would print that literal into this run's log,
+      # so the scan would fail on the stand-in and not on the role. The stand-in is test
+      # scaffolding; the address check still runs through its log at /var/tmp/stand-in-docker.log.
+      diff: false

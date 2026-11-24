@@ -53,9 +53,10 @@ The role takes no secret from the repository. The secrets arrive as arguments at
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every variable, and
 [`defaults/main.yml`](defaults/main.yml) holds the defaults. The role reads three:
 
-- `tenant_compose_stacks` is required and has no default. It is a list with one entry for each
-  tenant of this host: `slug`, `uid`, `compose_text`, `secrets_env_text` and `image_env_text`. The
-  list names tenants, so it is never kept in this repository.
+- `tenant_compose_stacks` is optional and defaults to an empty list: when it is absent the role
+  delivers no tenant and fails nothing. Given, it is a list with one entry for each tenant of
+  this host: `slug`, `uid`, `compose_text`, `secrets_env_text` and `image_env_text`. The list
+  names tenants, so it is never kept in this repository.
 - `tenant_compose_mail_spool_text` is the mail spool's compose file. It is empty by default, which
   means this host has no spool to deliver.
 - `tenant_compose_spool_isolation_required` is `true` by default. Leave it so.
