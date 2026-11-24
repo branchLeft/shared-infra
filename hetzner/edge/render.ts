@@ -6,6 +6,8 @@ import type { EdgeSite, HostRedirect, SiteMedia, StaticSite } from '../../siteTy
 import {
   BAN_LADDER_MINUTES,
   BAN_LADDER_WINDOW,
+  MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS,
+  MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
   NEXTCLOUD_RATE_LIMIT_EVENTS,
@@ -103,6 +105,10 @@ const UPLOAD_REFUSAL_STATUS = 403;
 // Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
 // LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
+
+// Why: a second zone, not a longer window on the first: caddy-ratelimit shares a
+// zone by name, so one name cannot carry two windows. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
+const MEMBERS_MAGIC_LINK_HOURLY_ZONE = 'members_magic_link_hourly_per_ip';
 
 /** Where Caddy writes the access log CrowdSec parses. */
 export const ACCESS_LOG = '/var/log/caddy/access.log';
@@ -760,6 +766,23 @@ function membersMagicLinkRateLimitDirective(): string[] {
 }
 
 /**
+ * The longer, hourly cap on the same path. Its own zone and its own counter, so
+ * the per-minute budget and this one are independent; the same matcher, so it
+ * applies to exactly the requests the per-minute throttle sees.
+ */
+function membersMagicLinkHourlyRateLimitDirective(): string[] {
+  return [
+    'rate_limit @members_magic_link {',
+    `\tzone ${MEMBERS_MAGIC_LINK_HOURLY_ZONE} {`,
+    '\t\tkey {http.request.remote.host}',
+    `\t\twindow ${MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS}s`,
+    `\t\tevents ${MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS}`,
+    '\t}',
+    '}',
+  ];
+}
+
+/**
  * The tight, dedicated throttle of an inbound-webhook site, in a zone no other
  * block names and keyed on the direct peer like the others. Not keyed on
  * posture: it guards a route that is public the moment it exists, so no
@@ -808,6 +831,7 @@ export function protectionChain(
   }
   if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
     lines.push(...membersMagicLinkRateLimitDirective());
+    lines.push(...membersMagicLinkHourlyRateLimitDirective());
   }
   if (options.webhookZone !== undefined) {
     lines.push(...webhookRateLimitDirective(options.webhookZone));
