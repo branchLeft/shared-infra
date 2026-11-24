@@ -20,6 +20,26 @@ argument_specs:
       check mode.
     author: branchLeft
     options:
+      edge_stack_profile:
+        type: str
+        choices:
+          - estate
+          - tenant
+        description: >-
+          Which edge the role delivers. `estate` is edge1's stack (hetzner/edge/stack). `tenant`
+          is edge-t's (hetzner/edge-t/stack): its own Caddyfile with one catch-all and no site,
+          its own CrowdSec files with no hostname in any of them, and no verified-session parser
+          or Nextcloud profile. The two profiles share the paths, the unit, the stamps and every
+          action; only the stack directory and the lists of files and directories differ.
+        default: estate
+      edge_stack_tenant_source_dir:
+        type: path
+        description: >-
+          Absolute path, on the machine that runs Ansible, of the directory the tenant profile is
+          delivered from. The default is the link files/stack-tenant, which points at
+          hetzner/edge-t/stack in this repository. Read only when edge_stack_profile is `tenant`.
+          A caller has no reason to change it; the role's container test points it at fixtures.
+        default: '{{ role_path }}/files/stack-tenant'
       edge_stack_source_dir:
         type: path
         description: >-

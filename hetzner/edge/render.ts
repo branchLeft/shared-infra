@@ -25,14 +25,16 @@ import { SHARED_TENANT_FILES, type StaticTextFile } from './sharedTenantFiles';
 // stack/, hand-copied. Registry is the only hostname list. See render.md
 // §"Module: Caddy configuration rendering".
 
-const GENERATED_BANNER = [
+export const GENERATED_BANNER = [
   '# Generated from sites.ts and hetzner/edge/posture.ts.',
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
-// Why: exempts author-written HTML/code/SQL from AppSec on preview-only sites;
-// removes ALL AppSec evaluation (not just injection). See render.md §"AUTHORING_API_PATHS".
-const AUTHORING_API_PATHS = ['/ghost/api/*'];
+// Why: exempts author-written HTML/code/SQL from AppSec on an authoring site that
+// has no verified sessions, on Ghost's authenticated admin API only, never the
+// Content API; removes ALL AppSec evaluation on it. A site with verified
+// sessions has no path exemption at all. See render.md §"AUTHORING_API_PATHS".
+const AUTHORING_API_PATHS = ['/ghost/api/admin/*'];
 
 /**
  * Ghost's members send-magic-link route, both trailing-slash forms, case
@@ -109,7 +111,7 @@ const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
 const MEMBERS_MAGIC_LINK_HOURLY_ZONE = 'members_magic_link_hourly_per_ip';
 
 /** Where Caddy writes the access log CrowdSec parses. */
-const ACCESS_LOG = '/var/log/caddy/access.log';
+export const ACCESS_LOG = '/var/log/caddy/access.log';
 
 /**
  * The probe listener's log, deliberately a different file: CrowdSec acquires
@@ -121,17 +123,17 @@ const ACCESS_LOG = '/var/log/caddy/access.log';
 const PROBE_LOG = '/var/log/caddy/probe.log';
 
 /** Loopback-published port the runbook's verification commands talk to. */
-const PROBE_PORT = 8080;
+export const PROBE_PORT = 8080;
 
 // Why: host-qualified probe exercises site routing (unlike bare :port); .invalid
 // never resolves; global magic-link zone testable. See render.md §"PROBE_HOSTNAME".
-const PROBE_HOSTNAME = 'edge-probe.invalid';
+export const PROBE_HOSTNAME = 'edge-probe.invalid';
 
 // Why: status code alone cannot distinguish delivered config from skipped rsync;
 // marker header is the only discriminator. See render.md §"PROBE_MARKER_* constants".
 const PROBE_MARKER_HEADER = 'X-Edge-Probe';
-const PROBE_MARKER_HOST = 'host-routed';
-const PROBE_MARKER_BARE = 'bare-port';
+export const PROBE_MARKER_HOST = 'host-routed';
+export const PROBE_MARKER_BARE = 'bare-port';
 
 /**
  * Port carrying Caddy's own Prometheus metrics, on a listener separate from
@@ -340,7 +342,7 @@ export function servableSites(sites: readonly EdgeSite[]): EdgeSite[] {
   return sites.filter((site) => site.privateUpstream !== undefined);
 }
 
-interface Block {
+export interface Block {
   addresses: string[];
   body: string[];
 }
@@ -407,7 +409,7 @@ function redactingFormat(): string[] {
   ];
 }
 
-function logDirective(path: string): string[] {
+export function logDirective(path: string): string[] {
   return [
     'log {',
     `\toutput file ${path} {`,
@@ -800,7 +802,7 @@ function webhookRateLimitDirective(zone: string): string[] {
 
 // Why: throttle runs before WAF (unlike Cloud Armor baseline); order protects vCPUs
 // from floods reaching inspection. See render.md §"protectionChain: handler evaluation order".
-function protectionChain(
+export function protectionChain(
   posture: EdgePosture,
   zone: string,
   options: {
@@ -846,7 +848,7 @@ function protectionChain(
   if (options.appsec === 'all') {
     lines.push(`appsec${unlessVerified}`);
   } else if (options.appsec === 'except-authoring') {
-    // `@inspected` itself carries the verified-session condition on such a site.
+    // Only a site with no verified sessions: `@inspected` is its admin API path.
     lines.push('appsec @inspected');
   }
   return lines;
@@ -1236,14 +1238,11 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   const address = resolvePrivateAddress(upstream.host, upstream.port);
   const verification = sessionVerification(site, address);
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly && verification !== undefined) {
-    body.push(
-      '@inspected {',
-      `\tnot path ${AUTHORING_API_PATHS.join(' ')}`,
-      `\tnot vars ${TRUSTED_SESSION_VAR} 1`,
-      '}'
-    );
-  } else if (site.injectionWafPreviewOnly) {
+  // Only a site whose sessions the edge cannot verify keeps a path exemption: a
+  // verified session is the exemption for the rest (`unlessVerified` in
+  // `protectionChain`), so no anonymous request skips AppSec on any path.
+  const pathExemption = site.injectionWafPreviewOnly && verification === undefined;
+  if (pathExemption) {
     body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
   body.push(...sessionVerificationMatchers(site));
@@ -1281,7 +1280,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
-      appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
+      appsec: pathExemption ? 'except-authoring' : 'all',
       ...(site.backend === 'nextcloud' ? { rateLimitEvents: NEXTCLOUD_RATE_LIMIT_EVENTS } : {}),
       membersMagicLink: true,
       beforeAppsec: [
@@ -1418,7 +1417,7 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
 
 // Why: loopback listener makes posture observable before hostnames resolve;
 // rendered twice (bare port and host-qualified). See render.md §"probeBlock".
-function probeBlock(
+export function probeBlock(
   posture: EdgePosture,
   address: string,
   generalZone: string,
@@ -1467,14 +1466,14 @@ function probeBlock(
  * user-facing traffic, and there is nothing here for the throttle or
  * CrowdSec to usefully evaluate.
  */
-function metricsBlock(): Block {
+export function metricsBlock(): Block {
   return {
     addresses: [`:${METRICS_PORT}`],
     body: ['metrics'],
   };
 }
 
-function globalOptions(): string[] {
+export function globalOptions(): string[] {
   return [
     '{',
     // No stable ACME account and no expiry notice without one. Read from the
@@ -1521,7 +1520,7 @@ function globalOptions(): string[] {
   ];
 }
 
-function renderBlock(block: Block): string[] {
+export function renderBlock(block: Block): string[] {
   return [`${block.addresses.join(', ')} {`, ...block.body.map((line) => `\t${line}`), '}'];
 }
 
@@ -1691,11 +1690,27 @@ export function renderCaddyLogAcquisition(): string {
 }
 
 /**
- * The hostnames of every Ghost tenant, for the two CrowdSec files below. Each
- * is checked against `HOSTNAME`, which admits no quote, so it can be written
- * into an expression as a quoted literal.
+ * Which hostnames a Ghost-specific CrowdSec file narrows to. The estate's edge
+ * serves more than Ghost, so its files name the registry's Ghost hostnames.
+ * `EVERY_HOST` is for an edge on which every site is a tenant's Ghost and the
+ * names are data this repository does not hold (the tenant edge,
+ * `hetzner/edge-t/`): the file then carries no hostname at all, so no name of
+ * the estate can be written into it. Why: `render.md`, "Host scope of the
+ * Ghost files".
  */
-function ghostHostnames(entries: EdgeSite[]): string[] {
+export const EVERY_HOST = 'every-host' as const;
+export type HostScope = EdgeSite[] | typeof EVERY_HOST;
+
+/**
+ * The hostnames of every Ghost tenant, for the three CrowdSec files below, or
+ * `null` when the scope is `EVERY_HOST`. Each is checked against `HOSTNAME`,
+ * which admits no quote, so it can be written into an expression as a quoted
+ * literal.
+ */
+function ghostHostnames(entries: HostScope): string[] | null {
+  if (entries === EVERY_HOST) {
+    return null;
+  }
   const hostnames = entries
     .filter((site) => site.backend === 'ghost')
     .flatMap((site) => site.hostnames);
@@ -1718,7 +1733,7 @@ const quotedList = (values: readonly string[]): string =>
  * including the same one with a body, is evaluated by every rule. Why:
  * `render.md`, "Ghost admin preview exclusion".
  */
-export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
+export function renderGhostAdminAppsecConfig(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1728,7 +1743,7 @@ export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
     'pre_eval:',
     '  - filter: >-',
     '      IsOutBand == true &&',
-    `      req.Host in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`      req.Host in ${quotedList(hosts)} &&`]),
     "      req.Method == 'POST' &&",
     "      req.URL.Path == '/' &&",
     '      req.ContentLength == 0 &&',
@@ -1770,7 +1785,7 @@ export function renderHubAdminProbingPostoverflow(): string {
  * scenario for that address everywhere for a minute. Why, and what the copy
  * costs: `render.md`, "Ghost admin API and admin-interface probing".
  */
-export function renderAdminProbingScenario(entries: EdgeSite[]): string {
+export function renderAdminProbingScenario(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1783,7 +1798,7 @@ export function renderAdminProbingScenario(entries: EdgeSite[]): string {
     "  evt.Meta.http_status in ['404', '403'] &&",
     '  any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # }) &&',
     '  not (',
-    `    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`]),
     `    evt.Meta.http_path startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
     "    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
     '  )',
@@ -1837,7 +1852,7 @@ export function renderTrustedSessionWhitelist(): string {
  * and from ours, which does not count these paths at all. Why, and the
  * limits it carries: `render.md`, "Ghost admin brute force".
  */
-export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
+export function renderGhostBruteForceScenario(entries: HostScope): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
@@ -1847,7 +1862,7 @@ export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
     'filter: >-',
     "  evt.Meta.service == 'http' &&",
     "  evt.Meta.log_type == 'http_access-log' &&",
-    `  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    ...(hosts === null ? [] : [`  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`]),
     '  (',
     "    (evt.Meta.http_verb == 'POST' &&",
     "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/session/?(?:[?]|$)' &&",

@@ -844,7 +844,7 @@ describe('the rendered Caddyfile', () => {
 
   it('narrows the authoring exemption to the admin API rather than the whole hostname', () => {
     const rendered = render(ENFORCING, [site({ injectionWafPreviewOnly: true })]);
-    expect(rendered).toContain('@inspected not path /ghost/api/*');
+    expect(rendered).toContain('@inspected not path /ghost/api/admin/*\n');
     expect(rendered).toContain('appsec @inspected');
     // The IP-decision handler is not exempted with it: this is a matcher on one
     // handler, not a hole in the route. Anchored, because an unanchored
@@ -860,6 +860,36 @@ describe('the rendered Caddyfile', () => {
     // `/ghost` itself, the admin UI bundle, stays inspected.
     expect(rendered).not.toContain('/ghost/*');
     expect(rendered).not.toContain('not path /ghost ');
+  });
+
+  // Why: the exemption once covered the whole `/ghost/api/` tree for every
+  // client, which includes the public Content API.
+  it.each([
+    ['with no verified sessions', {}],
+    [
+      'with verified sessions',
+      { backend: 'ghost' as const, trustedSession: 'ghost-staff' as const },
+    ],
+  ])('never exempts the Content API or an unauthenticated client, %s', (_name, extra) => {
+    const rendered = render(ENFORCING, [site({ injectionWafPreviewOnly: true, ...extra })]);
+    const exempted = [...rendered.matchAll(/not path ([^\n]+)/g)].flatMap(([, paths]) =>
+      (paths ?? '').split(' ')
+    );
+    for (const pattern of exempted) {
+      expect(pattern, 'an exempted path must stay inside the admin API').toMatch(
+        /^\/ghost\/api\/admin\//
+      );
+    }
+    expect(rendered).not.toMatch(/not path[^\n]*\/ghost\/api\/(\*|content)/);
+  });
+
+  it('exempts no path at all where the edge verifies staff sessions, and only a verified one skips', () => {
+    const rendered = render(ENFORCING, [
+      site({ injectionWafPreviewOnly: true, backend: 'ghost', trustedSession: 'ghost-staff' }),
+    ]);
+    expect(rendered).not.toContain('@inspected');
+    expect(rendered).not.toMatch(/not path/);
+    expect(rendered).toContain('appsec @edge_untrusted');
   });
 
   it('inspects every path of a site with no authoring surface', () => {
@@ -1697,10 +1727,6 @@ const BLOG_BLOCK = `
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -1765,7 +1791,7 @@ const BLOG_BLOCK = `
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}${TENANT_MEDIA_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
@@ -2004,10 +2030,11 @@ describe('the owner console and tenant portal routes', () => {
       }
     });
 
-    it('keeps the blog admin API outside AppSec so author-written HTML is not blocked', () => {
+    it('skips AppSec on the blog only for a verified staff session, never by path', () => {
       const blog = blockOf(rendered, 'blog.branchleft.co.uk');
-      expect(blog).toContain('@inspected {\n\t\tnot path /ghost/api/*\n');
-      expect(blog).toContain('appsec @inspected');
+      expect(blog).not.toContain('@inspected');
+      expect(blog).not.toMatch(/not path/);
+      expect(blog).toContain('appsec @edge_untrusted');
     });
 
     it('keeps sign-in and members sign-up proxied to the blog with no refusal in front of them', () => {
@@ -2789,7 +2816,7 @@ describe('verified sessions', () => {
       'log_append edge_trusted {http.vars.edge_trusted}',
       'reverse_proxy @edge_session_candidate 10.20.1.100:2368 {',
       'crowdsec @edge_untrusted',
-      'appsec @inspected',
+      'appsec @edge_untrusted',
       'respond @ghost_setup 403',
       'reverse_proxy 10.20.1.100:2368',
     ].map(at);
@@ -2809,11 +2836,11 @@ describe('verified sessions', () => {
     expect(route).toContain('reverse_proxy @edge_session_candidate 10.20.1.100:2369 {');
   });
 
-  it('keeps the authoring exemption and adds the verified condition to it', () => {
+  it('drops the authoring path exemption: only a verified session skips AppSec', () => {
     const block = blockOf(rendered, 'tenant-one.test');
-    expect(block).toContain(
-      '@inspected {\n\t\tnot path /ghost/api/*\n\t\tnot vars edge_trusted 1\n\t}'
-    );
+    expect(block).not.toContain('@inspected');
+    expect(block).not.toMatch(/not path/);
+    expect(block).toContain('appsec @edge_untrusted');
   });
 
   it('asks only on /ghost/ with the staff cookie, never on a members cookie', () => {
@@ -2851,7 +2878,7 @@ describe('verified sessions', () => {
       'tenant-one.test'
     );
     expect(plain).not.toContain('edge_');
-    expect(plain).toContain('@inspected not path /ghost/api/*');
+    expect(plain).toContain('@inspected not path /ghost/api/admin/*');
     expect(plain.split('\n').map((line) => line.trim())).toContain('crowdsec');
   });
 

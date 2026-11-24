@@ -103,8 +103,18 @@ attributes is the Ghost platform repository's test, and is cited here, not copie
 - It uses a local engine only. When `DOCKER_HOST` is set it does not run, because
   the engine may be remote; locally it skips with the reason, and when `CI` is set it
   fails instead, so CI cannot pass without having run it.
-- The container is named with a run id and labelled with it. The test removes only
-  the containers it started, with their anonymous volumes. It publishes no port.
+- The container is named with a run id and labelled `branchleft.test-run=<run id>`. When
+  the class ends, whether its servers started or not, it removes every container that
+  carries its own run's label, with their anonymous volumes, and nothing else. It publishes
+  no port.
+- A Docker whose bind-mount path is wedged answers a run with no bind mount at once and
+  never answers a run with one, and its removals of such containers hang too. Before any
+  server starts, one short run of the pinned image with one read-only bind mount must return
+  in 30 s; if it does not, the class fails at once with a message naming the wedge, and the
+  next class fails the same way without waiting. A server's start that times out names the
+  wedge in the same words. The cleanup bounds its listing and every removal at 20 s, removes
+  side by side, carries on past one that fails, and writes the containers left and the sweep
+  command to standard error. `WedgedDockerTests` shows all three without an engine.
 - The administrator's password is random for the run. It reaches the container
   through the environment, never the command line, and is never printed or written.
   The migrator's is the same, and reaches the server on standard input.

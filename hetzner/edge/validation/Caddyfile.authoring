@@ -46,7 +46,7 @@ authoring.invalid {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected not path /ghost/api/*
+	@inspected not path /ghost/api/admin/*
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
