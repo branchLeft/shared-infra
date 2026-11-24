@@ -1933,9 +1933,7 @@ class DeliveryRouteTests(unittest.TestCase):
         for host in ("dbt1", "appt1", "db1"):
             with self.subTest(host):
                 play = (ROOT / "ansible" / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-                self.assertLess(
-                    play.index("roles/pull_trigger"), play.index("roles/host_inputs")
-                )
+                self.assertLess(play.index("roles/pull_trigger"), play.index("roles/host_inputs"))
 
 
 if __name__ == "__main__":
