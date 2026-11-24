@@ -7,6 +7,8 @@ import { sites } from '../../sites';
 import type { EdgeSite } from '../../siteTypes';
 import {
   blackboxTargets,
+  BINLOG_PULL_GAP_FOR,
+  BINLOG_PULL_STALE_SECONDS,
   CONTROL_PLANE_BACKUP_STALE_SECONDS,
   DB_BINLOG_ABSENT_FOR,
   DB_BINLOG_STALE_SECONDS,
@@ -67,6 +69,17 @@ describe('blackboxTargets', () => {
     ]);
   });
 
+  it("probes a site's own probePath on each hostname, because its root is refused by design", () => {
+    const listed = site({
+      hostnames: ['a.test', 'b.test'],
+      probePath: '/.well-known/openid-configuration',
+    });
+    expect(blackboxTargets([listed])).toEqual([
+      'https://a.test/.well-known/openid-configuration',
+      'https://b.test/.well-known/openid-configuration',
+    ]);
+  });
+
   it('includes a redirect source, not only a servable site', () => {
     // Unlike the edge renderer, a probe target has nothing to do with which
     // backend currently serves a hostname -- www.example.test redirecting to
@@ -80,7 +93,7 @@ describe('blackboxTargets', () => {
     expect(() => renderPrometheusConfig(sites)).not.toThrow();
     const targets = blackboxTargets(sites);
     for (const hostname of sites.flatMap((entry) => entry.hostnames)) {
-      expect(targets).toContain(`https://${hostname}`);
+      expect(targets.some((target) => new URL(target).hostname === hostname)).toBe(true);
     }
   });
 });
@@ -579,6 +592,23 @@ describe('the rendered alert rules', () => {
     expect(block).not.toContain('severity: page');
   });
 
+  it('alerts when the edge lets requests through because its AppSec checker is down, reading the bouncer failure counter -- see alert_rules_test.yml for the promtool proof it fires above the rate and stays silent on a quiet five minutes', () => {
+    expect(rendered).toContain('alert: AppSecFailingOpen');
+    const block = rendered
+      .split('      - alert: AppSecFailingOpen')[1]
+      .split('\n      - alert: ')[0];
+    // The rate and its hold are the whole rule: dropping the `for:` pages on a
+    // CrowdSec restart, and a wider threshold misses a checker that is down.
+    expect(block).toContain(
+      'expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5\n        for: 10m'
+    );
+    // Owner-routed warning: the off-host mailbox, never the pager. The edge
+    // is serving and its other protections still hold.
+    expect(block).toContain('severity: warning');
+    expect(block).toContain('owner_action: "true"');
+    expect(block).not.toContain('severity: page');
+  });
+
   it('alerts on Alertmanager failing to deliver an email notification -- see alert_rules_test.yml for the promtool proof it is scoped to the email integration', () => {
     expect(rendered).toContain('alert: AlertEmailDeliveryFailing');
     expect(rendered).toContain(
@@ -731,6 +761,37 @@ describe('the rendered alert rules', () => {
     expect(block).toContain(
       'control_plane_backup_last_success_timestamp_seconds{host="ops1", stage="shipped_offsite"} > on(instance)'
     );
+  });
+
+  it('watches the tenant database host binary-log pull from ops1 as two warnings that never page', () => {
+    for (const name of ['BinlogPullGap', 'BinlogPullStale']) {
+      const block = ruleBlock(name);
+      expect(block).toContain('severity: warning');
+      expect(block).toContain('{host="ops1"}');
+      expect(block).not.toContain('notify: on-host');
+      expect(block).not.toContain('owner_action');
+      expect(block).not.toContain('absent(');
+    }
+  });
+
+  it('fires the gap alert on a hole or an unshipped log held for two pull periods', () => {
+    const block = ruleBlock('BinlogPullGap');
+    expect(BINLOG_PULL_GAP_FOR).toBe('30m');
+    expect(block).toContain(
+      'binlog_pull_gap_logs{host="ops1"} > 0 or binlog_pull_unshipped_logs{host="ops1"} > 0'
+    );
+    expect(block).toContain('for: 30m');
+  });
+
+  it('calls the pull stale after three missed 15 minute runs, clear of one healthy gap', () => {
+    const block = ruleBlock('BinlogPullStale');
+    expect(BINLOG_PULL_STALE_SECONDS).toBe(3600);
+    expect(block).toContain(
+      'time() - binlog_pull_last_success_timestamp_seconds{host="ops1"} > 3600'
+    );
+    expect(block).not.toContain('for:');
+    // One healthy gap is the 15m period plus the 10m unit timeout.
+    expect(BINLOG_PULL_STALE_SECONDS).toBeGreaterThan(25 * 60);
   });
 
   it('keeps the existing worker-copy alert untouched beside them', () => {
@@ -959,6 +1020,7 @@ describe('the owner_action="true" label', () => {
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
       'EdgeBanUnowned',
+      'AppSecFailingOpen',
       'HostMemoryPressure',
       'HostCPUSaturated',
       'HostDiskSpaceLow',
@@ -1114,6 +1176,15 @@ describe('the Alertmanager template', () => {
   });
 });
 
+describe('the demo wildcard TLS probe hand-off', () => {
+  it('names the file the host renders into the Prometheus scrape config', () => {
+    const rendered = renderPrometheusConfig(sites);
+    expect(rendered).toContain('scrape_config_files:\n  - /etc/prometheus/demo_tls_probe.yml');
+    // The probe is not a static target: its name never appears in the committed config.
+    expect(rendered).not.toContain('blackbox_demo_tls');
+  });
+});
+
 describe('the edge ban classifier toggle', () => {
   const defaultsPath = join(
     __dirname,
@@ -1182,14 +1253,15 @@ describe('the tenant hosts', () => {
     .map((file) => readFileSync(join(__dirname, file), 'utf8'))
     .join('\n');
 
-  it("scrapes each one's node_exporter on its tenants-network address, expected down until it is enrolled", () => {
+  it("reads each one's node_exporter through edge1's tunnel, relabelled to its tenants-network address, expected down until it is enrolled", () => {
     for (const { name, address } of tenantHosts) {
       const host = MONITORED_NODE_HOSTS.find((candidate) => candidate.name === name);
       expect(host?.address, `${name} address`).toBe(address);
       expect(host?.expectedUp, `${name} expectedUp`).toBe(false);
-      expect(promConfig).toContain(
-        `targets: ['${address}:${NODE_EXPORTER_PORT}']\n        labels: {host: ${name}, expected_up: 'false'}`
-      );
+      // edge1 cannot reach the tenants network, so the tunnel's local port stands in for a direct row.
+      expect(promConfig).not.toContain(`targets: ['${address}:${NODE_EXPORTER_PORT}']`);
+      expect(promConfig).toContain(`labels: {host: ${name}, expected_up: 'false'}`);
+      expect(promConfig).toContain(`replacement: '${address}:${NODE_EXPORTER_PORT}'`);
     }
   });
 

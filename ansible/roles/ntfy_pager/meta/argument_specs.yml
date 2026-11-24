@@ -8,7 +8,8 @@ argument_specs:
       /etc/branchleft/monitoring.env and this role never writes it) closed to
       root when it is absent, writes
       the four NTFY_ credential lines into it, each under its own key and the
-      others left in place, and copies the Alertmanager renderer into the project
+      others left in place, and the fifth line, the mail host's publish-only
+      token, when one is given (and removes that line when it is not), and copies the Alertmanager renderer into the project
       directory (/opt/branchleft/monitoring, also a constant, not an input: it
       is the unit's WorkingDirectory). The four credentials arrive as values from the caller, each a
       non-empty single line (the role refuses an empty, blank or multi-line value
@@ -38,3 +39,11 @@ argument_specs:
         required: true
         no_log: true
         description: The password hash of the ntfy machine account, the value of NTFY_MACHINE_PASSWORD_HASH. Supplied by the caller; no default.
+      ntfy_pager_mx1_token:
+        type: str
+        required: false
+        no_log: true
+        description: >-
+          The publish-only access token of the mail host, the value of NTFY_MX1_TOKEN. Optional: empty means the mail
+          host has no token, and the role removes the line. When given it must be a single line (a value of only spaces
+          is refused). Supplied by the caller; the role never reads or generates one.

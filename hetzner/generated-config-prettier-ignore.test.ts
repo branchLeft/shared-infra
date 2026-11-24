@@ -30,6 +30,9 @@ const GENERATED_FILES = [
   'hetzner/edge-t/stack/crowdsec/acquis.d/appsec.yaml',
   'hetzner/edge-t/stack/crowdsec/acquis.d/caddy.yaml',
   'hetzner/edge/validation/Caddyfile.state-gateway',
+  'hetzner/edge-t/stack/caddy/Caddyfile',
+  'hetzner/edge-t/stack/crowdsec/acquis.d/appsec.yaml',
+  'hetzner/edge-t/stack/crowdsec/acquis.d/caddy.yaml',
 ];
 
 describe('generated config stays off Prettier and the pre-commit whitespace hooks', () => {

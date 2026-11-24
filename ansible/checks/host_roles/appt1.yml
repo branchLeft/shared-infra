@@ -1,10 +1,16 @@
 ---
-# appt1, the tenant app host app-t1. The roles of dbt1 without its database stack, and no
-# host_inputs (the host has no private inputs). egress_nat is applied bare with its gateway
-# switch unset: this host is no gateway. deploy_tooling (class internal) installs the deploy
-# wrapper the tenant stack role will use, so it follows deploy_verifier.
+# appt1, the tenant app host app-t1. The roles of dbt1 without its database stack, and host_inputs
+# first (R11): the host has the controller's key and source addresses as private inputs, which the
+# tenant entry role reads. egress_nat is applied bare with its gateway switch unset: this host is no
+# gateway. deploy_tooling (class internal) installs the deploy wrapper the tenant stack role will
+# use, so it follows deploy_verifier. deploy_slot_keys and tenant_onboarding install the programs
+# tenant_entry calls, so both come before it; node_exporter stays last.
+- host_inputs
 - host_baseline
 - egress_nat
 - deploy_verifier
 - deploy_tooling
+- deploy_slot_keys
+- tenant_onboarding
+- tenant_entry
 - node_exporter

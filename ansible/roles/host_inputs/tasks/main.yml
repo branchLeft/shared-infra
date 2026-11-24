@@ -211,6 +211,7 @@
     ntfy_pager_watcher_token: "{{ host_inputs_doc['ntfy_pager_watcher_token'] | default(omit) }}"
     ntfy_pager_owner_password_hash: "{{ host_inputs_doc['ntfy_pager_owner_password_hash'] | default(omit) }}"
     ntfy_pager_machine_password_hash: "{{ host_inputs_doc['ntfy_pager_machine_password_hash'] | default(omit) }}"
+    ntfy_pager_mx1_token: "{{ host_inputs_doc['ntfy_pager_mx1_token'] | default(omit) }}"
     ci_jump_user: "{{ host_inputs_doc['ci_jump_user'] | default(omit) }}"
     backup_worker_db_host: "{{ host_inputs_doc['backup_worker_db_host'] | default(omit) }}"
     backup_worker_db_user: "{{ host_inputs_doc['backup_worker_db_user'] | default(omit) }}"
@@ -242,6 +243,12 @@
     website_app1_smtp_user: "{{ host_inputs_doc['website_app1_smtp_user'] | default(omit) }}"
     website_app1_smtp_password: "{{ host_inputs_doc['website_app1_smtp_password'] | default(omit) }}"
     deploy_slot_keys_slots: "{{ host_inputs_doc['deploy_slot_keys_slots'] | default(omit) }}"
+    tenant_entry_key: "{{ host_inputs_doc['tenant_entry_key'] | default(omit) }}"
+    tenant_entry_from: "{{ host_inputs_doc['tenant_entry_from'] | default(omit) }}"
+    tenant_entry_bind_address: "{{ host_inputs_doc['tenant_entry_bind_address'] | default(omit) }}"
+    db_t1_tenant_entry_controller_key: "{{ host_inputs_doc['db_t1_tenant_entry_controller_key'] | default(omit) }}"
+    db_t1_tenant_entry_controller_address: "{{ host_inputs_doc['db_t1_tenant_entry_controller_address'] | default(omit) }}"
+    mx1_abuse_page_token: "{{ host_inputs_doc['mx1_abuse_page_token'] | default(omit) }}"
     broker_deploy_owner_due_diligence_email: "{{ host_inputs_doc['broker_deploy_owner_due_diligence_email'] | default(omit) }}"
   no_log: true
   diff: false

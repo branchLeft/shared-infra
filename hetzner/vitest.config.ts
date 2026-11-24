@@ -13,6 +13,7 @@ export default defineConfig(
       'index.ts',
       'network.ts',
       'estate.ts',
+      'media.ts',
       'dns.ts',
     ],
   })

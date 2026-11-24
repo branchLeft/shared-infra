@@ -37,6 +37,7 @@ DEPLOY_TIME_SOURCES = {
         "./alertmanager/alertmanager.yml",
         "./ntfy/server.yml",
         "./prometheus/mx1-metrics-password",
+        "./prometheus/demo_tls_probe.yml",
     },
 }
 

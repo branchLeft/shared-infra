@@ -227,13 +227,15 @@ jobs:
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
             hetzner/monitoring/alert_rules_memory_test.yml \
+            hetzner/monitoring/alert_rules_reporting_clock_test.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
           timeout --kill-after=10 600 python3 hetzner/monitoring/promtool_shards.py \
             --image docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
             --shards 4 --jobs 4 \
             hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
-            hetzner/monitoring/alert_rules_memory_test.yml
+            hetzner/monitoring/alert_rules_memory_test.yml \
+            hetzner/monitoring/alert_rules_reporting_clock_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
         if: steps.skip.outputs.run != 'false'

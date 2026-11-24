@@ -137,16 +137,17 @@ export function renderTenantGhostAdminAppsecConfig(): string {
 }
 
 /**
- * The post-overflow whitelist that silences the hub's admin-interface probing
- * scenario, so that ours is the only one that bans. It names no hostname.
+ * The post-overflow that silences the hub's admin-interface probing scenario, as the
+ * estate's, which names no hostname: ours below is the one that bans.
  */
-export function renderTenantGhostAdminPostoverflow(): string {
+export function renderTenantHubAdminProbingPostoverflow(): string {
   return tenantBanner(renderHubAdminProbingPostoverflow());
 }
 
 /**
- * The admin-interface probing scenario, with no hostname list: every site this
- * edge serves is a tenant's Ghost, so a Ghost admin API answer is never counted.
+ * The admin-interface probing scenario, with no hostname list: every site this edge
+ * serves is a tenant's Ghost, so a 403 or 404 on the Ghost admin API prefix is never
+ * counted, on any name (`render.md`, "Host scope of the Ghost files").
  */
 export function renderTenantAdminProbingScenario(): string {
   return tenantBanner(renderAdminProbingScenario(EVERY_HOST));
@@ -183,8 +184,9 @@ export function renderTenantStack(
     ['crowdsec/appsec-configs/ghost-admin-previews.yaml', renderTenantGhostAdminAppsecConfig()],
     [
       'crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml',
-      renderTenantGhostAdminPostoverflow(),
+      renderTenantHubAdminProbingPostoverflow(),
     ],
+    ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/scenarios/ghost-admin-login-bruteforce.yaml', renderTenantGhostBruteForceScenario()],
     ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/remediation/profiles.yaml', renderTenantProfiles()],

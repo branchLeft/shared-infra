@@ -62,6 +62,15 @@ soon as the block renders, and a failed HTTP-01 validation costs the account's f
 budget. Once set, the monitoring and status probes read `/healthz`, not the root, which the
 gateway answers 404 by design.
 
+## Public path allow-lists
+
+An entry with `publicPaths` is the sign-in service: its upstream also serves an
+administration console and management APIs, so the edge forwards only the listed paths
+(plus a read of `publicReadOnlyPaths`) and answers 404 to the rest. It names a `probePath`
+too, because its root is refused. What the block lets through, and why a list: `hetzner/edge/render.md`,
+"`siteBlock`: public path allow-list". When a new application needs another path of the
+service, add it to the list in the same change as the application.
+
 ## Copying a tenant's port and ceiling
 
 Both values on a tenant's entry belong to that tenant's own stack and neither
@@ -105,16 +114,19 @@ by this edge at all and needs none.
 
 ## The authoring exemption
 
-`injectionWafPreviewOnly` keeps the injection WAF rules (sqli/xss/rce) in
-preview for a site's hostnames instead of enforcing them. Set it for any site
-with an authenticated authoring surface: a Ghost admin API request body carries
-author-written HTML, code samples and SQL, which is indistinguishable from an
-injection payload at sensitivity 1. A false positive there locks the owner out
-of publishing rather than degrading a page.
+`injectionWafPreviewOnly` marks a site with an authenticated authoring surface: a
+Ghost admin API request body carries author-written HTML, code samples and SQL,
+which is indistinguishable from an injection payload at sensitivity 1. A false
+positive there locks the owner out of publishing rather than degrading a page.
 
-The Hetzner edge honours this as one path prefix rather than a whole hostname,
-and on that prefix it removes _every_ AppSec rule, `lfi` included: the handler
-is per-request, so a rule family cannot be kept back individually.
+Who is exempt depends on whether the edge can verify the site's sessions. With
+`trustedSession` set, only a verified staff session skips AppSec, and no path is
+exempt for anyone else: the Content API and the pre-sign-in admin paths are
+inspected. Without it, the Hetzner edge exempts one path prefix, the admin API
+(`/ghost/api/admin/*`), for every client, and on that prefix it removes _every_
+AppSec rule, `lfi` included: the handler is per-request, so a rule family cannot
+be kept back individually. Set `trustedSession` on every Ghost site; see
+`hetzner/edge/render.md`, "`AUTHORING_API_PATHS`".
 
 ## Static sites
 
@@ -176,3 +188,10 @@ does two things:
 
 Theme assets, the admin and `/content/public/` are untouched. An `other` site
 changes in no way.
+
+A `ghost` entry may also carry `media`, its object-storage host and bucket
+(`branchleft-media-<slug>`, copied from the tenant stack like the port). The
+edge then answers those three upload paths itself by reading the bucket, so a
+reader's browser need not contact the storage host: `hetzner/edge/render.md`,
+"Tenant media". The renderer refuses a bucket that is not a tenant media
+bucket name, so an entry cannot point the edge at a state or backup bucket.

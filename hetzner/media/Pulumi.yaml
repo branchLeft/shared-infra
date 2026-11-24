@@ -1,0 +1,14 @@
+name: branchleft-hetzner-media
+runtime: nodejs
+
+# `main` is mandatory: this directory has no package.json of its own, so Pulumi
+# would otherwise read the package root's `main` and run the network program.
+# See ../README.md, "Two Pulumi projects, one npm package".
+main: ../media.ts
+
+# Pinned like every other project here; `pulumi login` is global state. Both the
+# endpoint host and `region` name the state bucket's location (hel1), not the
+# buckets' (nbg1).
+backend:
+  url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
+description: 'The three shared media buckets behind the storage gateway (branchLeft/workspace#1772). Object Storage in nbg1, created over Hetzner S3 interface with the bucket-admin key. Holds no hosts and no key: the three access keys are made in the owner Console session and reach this stack only as config.'

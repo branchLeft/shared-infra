@@ -75,10 +75,10 @@ A file added to `hetzner/edge/stack` is refused until it is in a class: add it t
 
 The role delivers one of two stacks, chosen by `edge_stack_profile`, and every path, the unit, the stamps, the pin, the lock and every action are the same for both:
 
-| Profile  | Host           | Stack directory (the link)                    | CrowdSec files                                                                                                                                |
-| -------- | -------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `estate` | edge1          | `hetzner/edge/stack` (`files/stack`)          | the eight named in `edge_stack_crowdsec_files`, and every file in `crowdsec/acquis.d`                                                         |
-| `tenant` | edge-t (edget) | `hetzner/edge-t/stack` (`files/stack-tenant`) | the six named in `edge_stack_tenant_crowdsec_files` (no verified-session parser, no Nextcloud profile), and every file in `crowdsec/acquis.d` |
+| Profile  | Host           | Stack directory (the link)                    | CrowdSec files                                                                                                                                  |
+| -------- | -------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `estate` | edge1          | `hetzner/edge/stack` (`files/stack`)          | the eight named in `edge_stack_crowdsec_files`, and every file in `crowdsec/acquis.d`                                                           |
+| `tenant` | edge-t (edget) | `hetzner/edge-t/stack` (`files/stack-tenant`) | the seven named in `edge_stack_tenant_crowdsec_files` (no verified-session parser, no Nextcloud profile), and every file in `crowdsec/acquis.d` |
 
 The tenant stack is its own because the estate's names the estate's hostnames in its Caddyfile and in four CrowdSec files, and a tenant edge serves names that are data, not repository text. Its files, and why each differs, are in `hetzner/edge-t/render.md`. The profile is a play variable of the host's playbook (`playbooks/edget.yml`, not yet wired); a host that sets nothing is the estate.
 

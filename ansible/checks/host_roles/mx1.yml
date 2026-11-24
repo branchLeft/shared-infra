@@ -1,9 +1,14 @@
 ---
-# mx1, the mail host. Three roles after the pull roles, no host_inputs: the host has no private
-# inputs file, so the loader has nothing to read (R11 applies only when it is listed).
-# host_baseline comes first for the Docker the stack needs. mail_reconcilers is on this list for
+# mx1, the mail host. The loader of its private inputs first (R11), then three roles and the
+# abuse-report page. The loader's only input is the publish-only pager token, and it is optional:
+# until the owner seeds the host's inputs file the plan stops at host_inputs[file-missing], and
+# once the file is there an absent token leaves mx1_abuse_page off.
+# host_baseline comes next for the Docker the stack needs. mail_reconcilers is on this list for
 # its plain apply, which places programs and runs none; the host has no owner_vars file, so none
-# of its steps can be requested through the pull (R10).
+# of its steps can be requested through the pull (R10). mx1_abuse_page is last: it reads the
+# mailbox through the Stalwart that mx1_stack brings up.
+- host_inputs
 - host_baseline
 - mx1_stack
 - mail_reconcilers
+- mx1_abuse_page

@@ -14,7 +14,8 @@ delivered by the same role, `ansible/roles/edge_stack`, selected by
 1. **No hostname is written into any file.** The estate's files name the registry's
    hostnames. A tenant's name is data (ISSUE branchLeft/workspace#1802), so this
    profile's renderer takes no registry and no hostname. The three Ghost-specific
-   CrowdSec files are rendered with the `EVERY_HOST` scope
+   CrowdSec files (the admin preview exclusion and the two scenarios, admin-interface probing
+   and admin brute force) are rendered with the `EVERY_HOST` scope
    (`hetzner/edge/render.md`, "Host scope of the Ghost files"). `render.test.ts` scans every
    rendered and every committed file for every name the estate registry serves or
    redirects, and for the estate's domain, and fails on one.
@@ -43,7 +44,8 @@ posture change on one edge does not move the other.
   Dependabot entry or hub-pin check of its own.
 - The meaningful lines of `stack/crowdsec/config.yaml.local` equal the estate's.
 - The bytes the estate renderer makes without a hostname (the acquisition files, the
-  ban ladder, the watch-only list) are reused, under this profile's banner. The banner
+  post-overflow that silences the hub's admin-interface probing scenario so the edge's own
+  scenario is the one that bans, the ban ladder, the watch-only list) are reused, under this profile's banner. The banner
   swap refuses a file that does not begin with the estate's banner.
 - The CrowdSec pin is the only image held equal to the estate's. The media-cache image is
   the tenant stack's own and has its own Dependabot entry.
