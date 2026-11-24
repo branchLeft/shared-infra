@@ -159,9 +159,11 @@ STEPS_KEY = "pull_trigger_steps"
 STEP_ENTRY = frozenset(("id", "tag", "word"))
 OWNER_KEY_ENTRY = frozenset(("key", "mode"))
 OWNER_KEY_MODES = frozenset(("apply", "check"))
-# A ci_jump_keys entry is the public key and nothing else: the options of the written line are
-# the role's, and the destinations are one list for every key (the role takes none per key).
+# A ci_jump_keys entry is the public key and, if the key is to reach fewer hosts than the shared
+# list names, the list of destinations that key alone has. The options of the written line are the
+# role's, so no other field has a place.
 JUMP_KEY_ENTRY = frozenset(("key",))
+JUMP_KEY_ENTRY_FIELDS = frozenset(("key", "destinations"))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
@@ -945,12 +947,28 @@ def _jump_list_problems(doc: dict[str, object], name: str) -> list[str]:
     problems: list[str] = []
     keys = doc.get(name, [])
     if not isinstance(keys, list):
-        return [f"{name} must be a list of {{key}} entries"]
+        problems.append(f"{name} must be a list of {{key}} or {{key, destinations}} entries")
+        return problems
     for entry in keys:
-        if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
-            problems.append(f"a {name} entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+        if (
+            not isinstance(entry, dict)
+            or not JUMP_KEY_ENTRY <= set(entry)
+            or set(entry) - JUMP_KEY_ENTRY_FIELDS
+        ):
+            problems.append(
+                f"a {name} entry must hold exactly {sorted(JUMP_KEY_ENTRY)} and, at most,"
+                " destinations"
+            )
         elif not isinstance(entry["key"], str):
             problems.append(f"a {name} entry needs a text key")
+        elif "destinations" in entry and (
+            not isinstance(entry["destinations"], list)
+            or not entry["destinations"]
+            or not all(isinstance(item, str) for item in entry["destinations"])
+        ):
+            problems.append(
+                f"a {name} entry's destinations must be a non-empty list of text entries"
+            )
     return problems
 
 
