@@ -860,7 +860,7 @@ class FailureMessageCase(unittest.TestCase):
 
     The scan reads a host's failed output and withholds the whole plan on a hit, even when the
     failed task copies nothing. A failing assert prints its fail_msg, so a message that names a
-    token with `=` and a word after it withholds demo1's plan (issue branchLeft/workspace#4305).
+    token with `=` and a word after it withholds demo1's plan.
     """
 
     PLAY = ROOT / "ansible" / "playbooks" / "demo1.yml"
