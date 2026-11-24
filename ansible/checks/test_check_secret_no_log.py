@@ -411,8 +411,8 @@ class SecretNoLogTest(unittest.TestCase):
         cases = (
             (
                 "ansible/roles/deploy_slot_keys/tasks/main.yml",
-                "  failed_when: false\n  no_log: true\n  diff: false\n  when: not (ansible",
-                "  failed_when: false\n  diff: false\n  when: not (ansible",
+                "  failed_when: false\n  no_log: true\n  diff: false\n  when: >-\n",
+                "  failed_when: false\n  diff: false\n  when: >-\n",
                 "Make the deploy slots exactly the declared list",
             ),
             (

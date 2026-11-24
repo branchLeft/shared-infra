@@ -101,7 +101,7 @@ scrape_configs:
           - https://book.branchleft.co.uk
           - https://portal.publicpress.co.uk
           - https://console.branchleft.co.uk
-          - https://id.publicpress.co.uk
+          - https://id.publicpress.co.uk/.well-known/openid-configuration
           - https://ntfy.branchleft.co.uk
           - https://publicpress.co.uk
           - https://status.branchleft.co.uk

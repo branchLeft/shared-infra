@@ -12,16 +12,24 @@ platforms:
   - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
     # Third-party Debian 13 test base, the release every production host runs,
     # trusted by digest. The same image and digest as the compose_stack pattern.
-    # This scenario needs no init system, so it takes none of the systemd settings.
+    # The role installs a systemd timer (the 90-day uptime collector), so the platform runs
+    # systemd as PID 1, a platform the author justifies here, per ANS-15. The settings are those
+    # of the exporters_and_collectors scenario: no privileged mode, no added capabilities.
     image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
     # Pre-built, so that the reference can carry a digest.
     pre_build_image: true
     # The image declares /sys/fs/cgroup as a volume, so each start creates an
     # anonymous volume. Destroy removes it with the container.
     keep_volumes: false
-    # Nothing here uses systemd, so the container just stays up for Ansible to
-    # connect to.
-    command: sleep infinity
+    # No private cgroup namespace: on a cgroup v2 host systemd exits at once over a private
+    # namespace on the read-write cgroup mount, so the host namespace is the least that works.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
     # The run's label, so the harness can check that a destroy removed only
     # this run's container.
     labels:

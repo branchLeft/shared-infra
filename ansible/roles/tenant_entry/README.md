@@ -19,6 +19,9 @@ it:
   limited to the declared source addresses, and forced to the program;
 - the register directory of the tenants the program has claimed;
 - the tenant secrets program, fetched from ghost-platform at one pinned commit;
+- the owner script, fetched from ghost-platform at one pinned commit and held to its sha256, and
+  the node it runs under, the tarball nodejs.org publishes held to its published sha256, in a
+  root-owned directory of its own (the `owner` verb runs the one with the other as root);
 - the judge of a tenant's compose text, a byte-identical copy of `tenant_compose`'s module, which
   the program loads from a root-owned file;
 - the host's own private address, kept in a root-owned file beside the register, where the stack
@@ -156,7 +159,10 @@ in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them
 - Target: Debian 13 with Python 3.13, `sudo` and `visudo`, and the program directory made by
   `tenant_onboarding` with its volume program in it.
 - On the host when a request runs: the slot program at the path `deploy_slot_keys` installs it at,
-  `systemctl`, and for `owner` the docker command, node and the platform's owner script.
+  `systemctl`, and for `owner` the docker command (this role does not install it).
+- To unpack node, `/usr/bin/xz` on the host when node has to be installed (`xz-utils`, a standard
+  Debian package); the role stops by name when it is missing. The host must be `x86_64` or
+  `aarch64`, the two builds with a pinned digest.
 
 ## What it changes on a host
 
@@ -166,6 +172,12 @@ in [`vars/main.yml`](vars/main.yml), where an inventory value cannot change them
   `0600`).
 - `/root/platform-provision/render_tenant_secrets.py`: the secrets program, the pinned bytes
   (`root:root`, `0755`).
+- `/root/platform-provision/provision-owner.mjs`: the owner script, the pinned bytes
+  (`root:root`, `0644`), in the directory `tenant_onboarding` makes.
+- `/usr/local/lib/branchleft-tenant-entry/node`: the node runtime, unpacked whole from the pinned
+  tarball (`root:root`, `0755`); the program runs `bin/node` in it, never a node found on `PATH`.
+  A different version, or no node, is put back whole: the directory is removed and unpacked
+  again. The download goes through `/var/tmp/branchleft-tenant-entry-node.tar.xz`, removed after.
 - `/usr/local/lib/branchleft-tenant-entry/tenant_compose_check.py`: the judge, a copy of
   `tenant_compose`'s module (`root:root`, `0644`, in a `root:root` `0755` directory).
 - The account `tenant-entry`: a system account with a home, a real shell and a locked password. An
@@ -232,9 +244,7 @@ because they live in files a role change may not edit (`ansible/checks/`, `ansib
    does not exist.
    _Done when:_ the answer is `claimed-here=no`, and a request with any other first word is
    refused with `refused: unknown-verb`.
-4. **Place what the `owner` verb needs.** The owner script from ghost-platform and node are not
-   installed by any role yet; until they are, `owner` fails closed with `failed: program-missing`.
-5. **Run the penetration test the storage decision requires** before the first live tenant.
+4. **Run the penetration test the storage decision requires** before the first live tenant.
 
 ## How to change it safely
 
@@ -281,8 +291,13 @@ has a case that goes red when the guard is removed:
   that repeats a secret is withheld.
 - The judge file is a byte-identical copy of `tenant_compose`'s, and the stack paths and modes are
   those `tenant_compose` uses.
+- The owner script and node are where the program looks for them (`owner_program`, `node`), the
+  script is pinned to a full commit and a sha256, node's version and both digests are the ones
+  `broker_deploy` pins (ANS-12: a copy, held equal), and neither node nor the script appears in a
+  sudoers line or in the key options, so installing them gives the account nothing it did not have.
 
-The container scenario then runs the real program through sudo as the entry account: another mode,
+The container scenario then runs the real program through sudo as the entry account (a stand-in
+Docker answers the owner verb: see "Named limits"): another mode,
 an extra or doubled argument and another program are refused by sudo, hostile requests are refused
 by word with nothing written, the account cannot read the register, a claim takes the first uid and
 ports and writes a closed marker, and the later verbs refuse in order. It then runs a fresh tenant
@@ -313,7 +328,21 @@ same parameters again succeed.
   `Refuse a host whose python3 has no PyYAML`), and the verb fails `judge-yaml-missing` if it is
   removed later.
 - **The `owner` verb is untested against a live Ghost.** It calls the platform's owner script with
-  checked arguments. The script's own tests are in ghost-platform.
+  checked arguments. The script's own tests are in ghost-platform. The scenario runs the real
+  node and the real script, installed by the role, against the real secrets file, and gives them a
+  stand-in Docker that lists one container and answers the script's inner program with the result a
+  fresh Ghost gives. It shows the script is there, runs under the pinned node, reads the address
+  from the secrets file and sends it only on stdin; it does not show a Ghost owner is made.
+- **The owner script is pinned to a main commit, and node to a build.** A new script on
+  ghost-platform's main is not picked up until the commit and digest are bumped together
+  (`tenant_entry_owner_ghost_commit` and `tenant_entry_owner_program_sha256`). Node is the one
+  version `broker_deploy` pins; a bump of one is a bump of both, and a test holds them equal.
+- **No node means `program-missing`; no script means `failed: owner`.** The program names a node it
+  cannot start `program-missing`. A node that runs and finds no script exits non-zero, and the
+  program reports that step as `failed: owner` with node's own message. The scenario shows both,
+  and that the role puts each back.
+- **The role is in no host's list yet.** `tenant_entry` is not in `ansible/checks/host_roles/appt1.yml`
+  or any playbook; adding it is the owner's merge (Owner steps, 1).
 - **A port assigned by hand inside the reserved range is not seen.** The program knows only the
   ports it gave out.
 - **A step that failed after its program changed the host is not undone.** `status` shows how far a
@@ -329,7 +358,8 @@ same parameters again succeed.
 
 ## Clauses this role exercises
 
-ANS-2 (a typed program), ANS-7 (no default for either input), ANS-10 (check mode: the checks and
-the fetch are skipped there, with the reason in the task), ANS-11 (idempotence), ANS-12 (no role
+ANS-2 (a typed program), ANS-7 (no default for either input), ANS-10 (check mode: the checks, the
+fetches and the unpack are skipped there, with the reason in the task; the version probe is a read
+and runs), ANS-11 (idempotence), ANS-12 (no role
 imports another), ANS-14 (this README), ANS-15 (a container test), ANS-16 (`no_log` and `diff: false`
 where a key passes) and ANS-17 (the gated pull).

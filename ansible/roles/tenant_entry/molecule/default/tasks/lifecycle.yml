@@ -299,6 +299,132 @@
         'port_health=40002', 'volumes=yes', 'secrets=yes', 'stack=yes', 'enabled=yes', 'slot=no']
     quiet: true
 
+# ----- owner: the platform's own script, under the node this role installs -----
+
+# The verb takes four fields. An address is never one of them (the script reads it from the
+# secrets file), and a colour is a or b.
+- name: Refuse an owner request that carries an address
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_with_address }}'
+    expect: payload-keys
+
+- name: Refuse an owner request for a colour that is not a or b
+  ansible.builtin.include_tasks: stack_refused.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_with_other_colour }}'
+    expect: field-colour
+
+# The control case: the real node runs the real script, which reads the address from the real
+# secrets file and hands it to the stand-in Docker on stdin.
+- name: Make the owner of the tenant
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_request }}'
+
+- name: Assert the owner script ran and said what a fresh Ghost says
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 0
+      - tenant_entry_request.stdout == '{"created":true,"alreadySetUp":false,"linkRequested":true}'
+      - tenant_entry_request.stderr == ''
+    quiet: true
+
+- name: Read what the stand-in Docker was asked
+  ansible.builtin.slurp:
+    src: '{{ scenario_docker_log }}'
+  register: tenant_entry_lifecycle_docker_log
+
+- name: Assert it was asked once, for the colour's container, with the address on stdin and in no argument
+  vars:
+    tenant_entry_lifecycle_docker_asked: '{{ tenant_entry_lifecycle_docker_log.content | b64decode | trim | from_json }}'
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_lifecycle_docker_asked.argv[:2] == ['exec', '-i']
+      - tenant_entry_lifecycle_docker_asked.argv[3:] == ['node', '-e']
+      - tenant_entry_lifecycle_docker_asked.stdin_keys == ['email', 'name', 'siteTitle', 'siteUrl']
+      - tenant_entry_lifecycle_docker_asked.address_given == true
+      - "'example.invalid' not in (tenant_entry_lifecycle_docker_log.content | b64decode)"
+    quiet: true
+
+# Red: the owner script taken away. The verb must fail closed and name the step, not make an owner.
+# Green: the role puts it back, byte for byte, and the verb works again.
+- name: Take the owner script away
+  ansible.builtin.file:
+    path: '{{ scenario_owner_program }}'
+    state: absent
+
+- name: Ask for the owner with no owner script
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_request }}'
+
+- name: Assert the verb failed by name and printed no result
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 4
+      - tenant_entry_request.stdout == ''
+      - "tenant_entry_request.stderr is match('failed: owner')"
+    quiet: true
+
+- name: Put the owner script back by applying the role
+  ansible.builtin.include_tasks: reapply.yml
+
+- name: Make the owner of the tenant again
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_request }}'
+
+- name: Assert the verb works with the script back
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 0
+      - tenant_entry_request.stdout == '{"created":true,"alreadySetUp":false,"linkRequested":true}'
+    quiet: true
+
+# Red: node taken away, which is what a host has before this role installs it.
+- name: Take node away
+  ansible.builtin.file:
+    path: '{{ scenario_node_dir }}'
+    state: absent
+
+- name: Ask for the owner with no node
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_request }}'
+
+- name: Assert the verb failed closed as program-missing
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 4
+      - tenant_entry_request.stdout == ''
+      - "tenant_entry_request.stderr | trim == 'failed: program-missing'"
+    quiet: true
+
+- name: Put node back by applying the role
+  ansible.builtin.include_tasks: reapply.yml
+
+- name: Assert the host is as the role makes it, node and the script included
+  ansible.builtin.include_tasks: assert_state.yml
+
+- name: Make the owner of the tenant once more
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request: owner example-tenant
+    request_stdin: '{{ tenant_entry_owner_request }}'
+
+- name: Assert the verb works with node back
+  ansible.builtin.assert:
+    that:
+      - tenant_entry_request.rc | int == 0
+    quiet: true
+
 # ----- Nothing outside the slot -----
 
 # A second tenant is claimed and given its secrets; its stack directory is then made a link to a

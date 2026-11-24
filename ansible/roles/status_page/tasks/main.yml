@@ -383,3 +383,6 @@
     group: root
     mode: '0600'
   when: status_page_compose_file_stat.stat.exists
+
+- name: Install the 90-day uptime collector and its timer
+  ansible.builtin.include_tasks: _uptime.yml
