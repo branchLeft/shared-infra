@@ -11,11 +11,11 @@
     owned_accounts: '{{ ci_jump_owned_accounts }}'
     destinations: '{{ ci_jump_destinations + ci_jump_spool_destinations }}'
     account_destinations: >-
-      {{ {ci_jump_user: ci_jump_destinations}
-         | combine({ci_jump_spool_user: ci_jump_spool_destinations} if ci_jump_spool_user is defined else {}) }}
+      {{ (({ci_jump_user: ci_jump_destinations} if ci_jump_user is defined else {})
+         | combine({ci_jump_spool_user: ci_jump_spool_destinations} if ci_jump_spool_user is defined else {})) }}
     account_keys: >-
-      {{ {ci_jump_user: ci_jump_keys}
-         | combine({ci_jump_spool_user: ci_jump_spool_keys} if ci_jump_spool_user is defined else {}) }}
+      {{ (({ci_jump_user: ci_jump_keys | default([])} if ci_jump_user is defined else {})
+         | combine({ci_jump_spool_user: ci_jump_spool_keys} if ci_jump_spool_user is defined else {})) }}
     own_address: '{{ ci_jump_own_address }}'
   register: ci_jump_report
   changed_when: false

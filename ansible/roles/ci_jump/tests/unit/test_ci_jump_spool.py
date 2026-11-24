@@ -299,7 +299,7 @@ class SpoolProfile(unittest.TestCase):
 
         def check(
             own: str, destinations: list[str]
-        ) -> Callable[[], tuple[str, str, list[str], list[tuple[str, str]]]]:
+        ) -> Callable[[], object]:
             return partial(
                 jump._checked_inputs,  # noqa: SLF001
                 SPOOL_USER,
