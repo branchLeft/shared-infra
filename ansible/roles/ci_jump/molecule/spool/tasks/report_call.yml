@@ -1,0 +1,18 @@
+---
+# Calls the role's module with action report over the converged host, as the role's report task
+# does on a host with both accounts (the owner's list is both accounts' destinations), and keeps
+# the result where verify.yml reads it. In an included file because the lint reads a play for the
+# module's name and cannot find the role's library from there.
+- name: Run the report over the converged host
+  ci_jump_authorized_keys:
+    action: report
+    owned_accounts:
+      root: root
+      ci_login: ansible-ci
+      tunnel_account: dbtunnel
+    destinations:
+      - '{{ scenario_listed }}'
+      - '{{ scenario_own }}'
+      - '{{ scenario_unlisted }}'
+    own_address: '{{ scenario_own }}'
+  register: ci_jump_scenario_verify_report
