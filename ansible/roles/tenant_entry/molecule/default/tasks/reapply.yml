@@ -1,0 +1,9 @@
+---
+# Applies the role again with the scenario's good inputs, to put back what a case took away.
+- name: Apply the role again
+  ansible.builtin.include_role:
+    name: branchleft.tenant_entry
+  vars:
+    tenant_entry_key: '{{ scenario_entry_public }}'
+    tenant_entry_from: '{{ scenario_from }}'
+    tenant_entry_bind_address: '{{ scenario_bind_address }}'

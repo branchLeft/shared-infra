@@ -180,6 +180,16 @@ class FindingLag(unittest.TestCase):
         with self.assertRaises(check.CheckError):
             check.find_lag(self.consumers(), fake_fetch(table), MAIN)
 
+    def test_a_pin_that_resolves_to_nothing_stops_the_check(self) -> None:
+        # A 40-character sha can be well formed and still not be fetchable (unreachable from any
+        # branch or tag). Then every file at the pin is absent, and the check must stop rather
+        # than report every file as changed.
+        table = same_everywhere()
+        for key in [key for key in table if key[0] == OLD_PIN]:
+            del table[key]
+        with self.assertRaises(check.CheckError):
+            check.find_lag(self.consumers(), fake_fetch(table), MAIN)
+
     def test_a_changed_then_restored_file_is_not_lag(self) -> None:
         table = same_everywhere()
         table[(MAIN, "db/one.py")] = table[(OLD_PIN, "db/one.py")]

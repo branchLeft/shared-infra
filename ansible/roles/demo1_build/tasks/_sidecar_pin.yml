@@ -1,0 +1,24 @@
+---
+# Internal to the role. The drain sidecar's pin file, which nothing else on the host writes.
+# The colour units name it as an EnvironmentFile and refuse to start without it
+# (AssertPathExists), and the slot wrapper's `load` reads it to name the pushed sidecar
+# image, so the file must be in place before the signed sidecar push: a push made first is
+# tagged as a slot image and has to be repeated. Its content is the one line
+# DEMO_SIDECAR_IMAGE=<name>@<digest>, from the attested digest the role is pinned to
+# (_inputs.yml has already refused anything else).
+#
+# The wrapper believes the file only when it is a regular file owned by root and writable by
+# no one else, opened without following a link. copy replaces a link at the path with the
+# file (follow is false), writes root:root 0644, and the directory above it is root's and
+# closed to group and others (_preconditions.yml). A file already there with another line,
+# placed by hand, is replaced: the role's pin is the one the colour units start from.
+# Written in a plan as the change it would be; the diff shows the one line, which holds no
+# secret.
+- name: Write the drain sidecar's pinned image reference
+  ansible.builtin.copy:
+    content: "{{ demo1_build_sidecar_image_line }}\n"
+    dest: '{{ demo1_build_sidecar_image_env_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+    follow: false
