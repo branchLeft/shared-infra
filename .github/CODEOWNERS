@@ -24,7 +24,6 @@
 /.github/actions/                                            @branchLeft/branchleft-admin
 /.github/workflows/ansible-delivery.yml                      @branchLeft/branchleft-admin
 /.github/workflows/ansible-environment-probe.yml             @branchLeft/branchleft-admin
-/.github/workflows/ansible-supersede.yml                     @branchLeft/branchleft-admin
 /.github/workflows/ansible.yml                               @branchLeft/branchleft-admin
 /.github/workflows/ci-config-validate.yml                    @branchLeft/branchleft-admin
 /.github/workflows/ci.yml                                    @branchLeft/branchleft-admin

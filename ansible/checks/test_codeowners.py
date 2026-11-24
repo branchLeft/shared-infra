@@ -59,7 +59,6 @@ GUARDRAIL_PATHS = [
     ".github/workflows/ci-config-validate.yml",
     ".github/workflows/ansible.yml",
     ".github/workflows/ansible-delivery.yml",
-    ".github/workflows/ansible-supersede.yml",
     ".github/workflows/ansible-environment-probe.yml",
     ".github/workflows/ovh-copy2-probe.yml",
     ".github/workflows/publish-edge-caddy.yml",
