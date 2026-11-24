@@ -3,14 +3,19 @@
 # validate every candidate, place every file, then act, then record. Nothing in
 # the files below notifies a handler: the restart shape is the fingerprint and the
 # stamp (README, "Restart shape").
-- name: Check the pin, the secrets file and the Caddyfile on the host before anything is written
-  ansible.builtin.include_tasks: _assert.yml
+# The profile is chosen before anything reads the stack. The tenant profile hands the stack
+# directory and the two lists that name its files and directories to _run.yml as task vars of
+# that include, so they last for that include only: a set_fact would stay on the host and
+# reach the next run of the role in the same play (README, "Profiles"). The estate profile
+# sets nothing, so a caller's edge_stack_source_dir still reaches it.
+- name: Run the role with the tenant profile's stack directory, CrowdSec files and directories
+  ansible.builtin.include_tasks: _run.yml
+  vars:
+    edge_stack_source_dir: '{{ edge_stack_tenant_source_dir }}'
+    edge_stack_crowdsec_files: '{{ edge_stack_tenant_crowdsec_files }}'
+    edge_stack_dirs: '{{ edge_stack_tenant_dirs }}'
+  when: edge_stack_profile == 'tenant'
 
-- name: Classify every file of the stack and refuse one that is in no class
-  ansible.builtin.include_tasks: _classify.yml
-
-- name: Work out what is due
-  ansible.builtin.include_tasks: _decide.yml
-
-- name: Validate, deliver, apply and record
-  ansible.builtin.include_tasks: _deliver.yml
+- name: Run the role with the estate profile
+  ansible.builtin.include_tasks: _run.yml
+  when: edge_stack_profile != 'tenant'

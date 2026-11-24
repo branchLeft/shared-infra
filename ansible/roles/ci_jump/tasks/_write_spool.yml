@@ -1,0 +1,205 @@
+---
+# The second account's root-owned key file and sshd drop-in, written together, checked as a whole,
+# reloaded and read back. A failed check or read-back puts both files back as they were and
+# reloads sshd again. The same shape as _write.yml without the migration of the hand-made layout,
+# which the second account never had: no old file is found, kept or removed here. It touches
+# neither of the first account's files, so a failure here leaves the first account as _write.yml
+# left it. Runs under --check: the files are compared and nothing changes; the whole-configuration
+# check, the reload and the read-back are skipped there because nothing was written (ANS-10: the
+# reason is that sshd -t and sshd -T read the files on disk, which a plan has not changed).
+#
+# The account's name is held out of this public repository and every public log. It is in the text
+# of the drop-in, so every task that handles it hides its result and its diff. The paths are made
+# without the name and may be printed.
+- name: Look at the directory of the sshd drop-ins for the spool account
+  ansible.builtin.stat:
+    path: '{{ ci_jump_sshd_config_dir }}'
+  register: ci_jump_spool_dropin_dir_stat
+  check_mode: false
+
+- name: Refuse a host without the sshd drop-in directory for the spool account
+  ansible.builtin.assert:
+    that:
+      - ci_jump_spool_dropin_dir_stat.stat.exists
+      - ci_jump_spool_dropin_dir_stat.stat.isdir
+    quiet: true
+    fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+
+# No checksum: the files hold the account's name and its keys. Results 0 and 1 are the drop-in and
+# the key file, 2 the reload marker.
+- name: Look at the spool account's managed files and its reload marker
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ ci_jump_spool_sshd_dropin }}'
+    - '{{ ci_jump_spool_key_file }}'
+    - '{{ ci_jump_spool_reload_marker }}'
+  register: ci_jump_spool_before
+  check_mode: false
+  no_log: true
+
+# Kept in memory, not on disk: a rollback writes these back byte for byte.
+- name: Keep the spool account's current files for a rollback
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ ci_jump_spool_before.results[0:2] }}'
+  loop_control:
+    label: 'file {{ ansible_loop.index }}'
+    extended: true
+  when: item.stat.exists
+  register: ci_jump_spool_prev
+  check_mode: false
+  no_log: true
+
+# The directory of the key files is the first account's too. The same task with the same values
+# changes nothing when the first account's run has made it.
+- name: Make the directory of the key files, root's and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ ci_jump_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Before the first file is written, so a pull that dies between a write and the reload leaves the
+# marker and the next run reloads sshd even though the files by then read as wanted. Made only when
+# the module's plan says a write is owed, so a finished host is not changed (ANS-11).
+- name: Note that a reload of sshd is owed for the spool account
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ ci_jump_spool_reload_marker }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  when: ci_jump_spool_plan.pending | default(true) | bool
+
+- name: Write the spool account's files, check them, reload sshd and read them back
+  block:
+    - name: Write the spool account's key file
+      ansible.builtin.template:
+        src: authorized_keys_spool.j2
+        dest: '{{ ci_jump_spool_key_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: ci_jump_spool_keys_written
+      no_log: true
+      diff: false
+
+    - name: Write the spool account's sshd drop-in
+      ansible.builtin.template:
+        src: sshd-drop-in-spool.conf.j2
+        dest: '{{ ci_jump_spool_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: ci_jump_spool_dropin_written
+      no_log: true
+      diff: false
+
+    # Checked as a whole, because sshd -t on a single drop-in cannot see the main configuration.
+    - name: Check the whole sshd configuration before it is reloaded for the spool account
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Reload sshd when either spool file changed or a reload was owed
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: >-
+        not ansible_check_mode and (ci_jump_spool_keys_written.changed or
+        ci_jump_spool_dropin_written.changed or ci_jump_spool_before.results[2].stat.exists)
+
+    - name: Read the spool account's files back and ask sshd what it applies
+      ansible.builtin.import_tasks: _readback_spool.yml
+      when: not ansible_check_mode
+
+    # Last, so a failure anywhere above leaves the marker and the next run reloads again.
+    - name: Note that no reload of sshd is owed any more for the spool account
+      ansible.builtin.file:
+        path: '{{ ci_jump_spool_reload_marker }}'
+        state: absent
+
+  rescue:
+    # Both files go back as they were, newest change first. A file the host did not have is
+    # removed. The configuration sshd reads never names a file that is not there: the drop-in goes
+    # (or is put back as it was) before sshd is checked and reloaded, and the key file is touched
+    # only after that reload. A reload that fails stops the play here, loudly, and the marker
+    # stays for the next run.
+    - name: Put back the spool account's sshd drop-in that was there before
+      ansible.builtin.copy:
+        content: '{{ ci_jump_spool_prev.results[0].content | b64decode }}'
+        dest: '{{ ci_jump_spool_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ci_jump_spool_before.results[0].stat.exists
+      no_log: true
+      diff: false
+
+    - name: Remove the spool account's sshd drop-in when there was none before
+      ansible.builtin.file:
+        path: '{{ ci_jump_spool_sshd_dropin }}'
+        state: absent
+      when: not ci_jump_spool_before.results[0].stat.exists
+
+    # A check that fails here is not a reason to hide the step: it means sshd cannot take the
+    # previous files either. Then nothing is reloaded, the new key file stays (the running sshd
+    # still serves from it), the marker stays, and the step is named below.
+    - name: Check the whole sshd configuration with the spool account's previous files back
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      register: ci_jump_spool_rescue_check
+      failed_when: false
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Reload sshd with the spool account's previous files back
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode and ci_jump_spool_rescue_check.rc | default(1) == 0
+
+    - name: Note that no reload of sshd is owed, the spool account's previous files being back
+      ansible.builtin.file:
+        path: '{{ ci_jump_spool_reload_marker }}'
+        state: absent
+      when: not ansible_check_mode and ci_jump_spool_rescue_check.rc | default(1) == 0
+
+    - name: Put back the spool account's key file that was there before
+      ansible.builtin.copy:
+        content: '{{ ci_jump_spool_prev.results[1].content | b64decode }}'
+        dest: '{{ ci_jump_spool_key_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ci_jump_spool_before.results[1].stat.exists and ci_jump_spool_rescue_check.rc | default(1) == 0
+      no_log: true
+      diff: false
+
+    - name: Remove the spool account's key file when there was none before
+      ansible.builtin.file:
+        path: '{{ ci_jump_spool_key_file }}'
+        state: absent
+      when: not ci_jump_spool_before.results[1].stat.exists and ci_jump_spool_rescue_check.rc | default(1) == 0
+
+    # The message names the step and nothing else: no path, and no result text, since a module's
+    # message can carry the account's name.
+    - name: Fail with the step that failed, after the spool account's previous files are back
+      ansible.builtin.fail:
+        msg: 'ci_jump spool failed at {{ ansible_failed_task.name }}; previous files restored.'
+
+  always:
+    - name: Empty the copies of the spool account's previous files
+      ansible.builtin.set_fact:
+        ci_jump_spool_prev: {}
+      no_log: true
