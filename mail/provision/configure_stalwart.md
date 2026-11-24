@@ -143,3 +143,39 @@ as Python `None` from `.get`, so a live Rate diffing against a `None`
 target compares unequal (change needed) and an already-`None` field
 diffing against a `None` target compares equal (no-op) with no
 special-casing required here.
+
+## Diagnostic JMAP route
+
+Lets agents make read-only diagnostic requests to Stalwart from outside the
+host, without an SSH tunnel, through the one path v0.16's management API
+uses: `POST /jmap` on the public listener. It is **closed unless the run is
+given an address**: `STALWART_DIAGNOSTIC_SOURCES`, one or two comma-separated
+single IPv4 addresses, adds one allow rule per address ahead of the blanket
+421, each pinned to the listener, the path `/jmap` and that source. The
+address is read from the environment, not committed, because it is the
+owner's own.
+
+What keeps it read-only is not this rule. The rule only decides who can reach
+the path; the credential presented there is the API key that
+`provision_diagnostic_credential.py` makes, whose account holds a role of
+`Get` and `Query` permissions for seven objects and nothing else, so the server
+refuses any write and any other object whatever arrives. An address that
+reaches `/jmap` without that key can only fail to authenticate, the same as on
+587 or 993 today.
+
+- **Closing it.** Run the reconciler again without the variable: the policy
+  returns to the committed one and the rule is gone. This is also what a
+  reconciler run by anything that does not pass the variable does, so the route
+  is fail-closed, and the variable must go on every run that should keep it
+  open.
+- **Validated before any write.** `main` parses the variable first. A range,
+  IPv6, a loopback or unspecified address, a duplicate or a third address
+  raises before the first call, so a bad value cannot half-apply a run.
+- **IPv4 only, and `-4` at the caller.** Same reason as the metrics rule: the
+  rendered form of an IPv6 `remote_ip` was never observed, so none is allowed.
+  The diagnostic allowlist entries pass `curl -4`.
+- **Forwarded headers stay untrusted.** `useXForwarded` is still managed to
+  `False`; the rule matches the connecting address only.
+- **A home address changes.** When the owner's address changes, the route
+  stops answering (421) until the reconciler is run again with the new one.
+  That restarts Stalwart, as any run that changes this rule does.
