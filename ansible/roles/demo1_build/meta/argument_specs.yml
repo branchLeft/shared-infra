@@ -129,3 +129,16 @@ argument_specs:
           image that is not loaded, the production candidate is not staged, and
           the plan and apply say so.
         default: 'demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'
+      demo1_build_sidecar_digest:
+        type: str
+        description: >-
+          The manifest digest of the attested drain sidecar image, sha256: and 64
+          lower-case hex digits and nothing else. The role writes it to
+          /etc/branchleft/demo-sidecar.image.env as one line,
+          DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@<digest>, root:root, mode 0644.
+          The colour units start the sidecar from that reference with --pull never, and
+          the slot wrapper tags a pushed image with the sidecar's name only when its id
+          is this digest. The name is the host's own label (no registry host) and is a
+          constant of the role, not an input. The file must exist before the signed
+          sidecar push.
+        default: sha256:d181d72055ab1e0c30c11c65595e1b79206fd5cdf519ab06d17271107eb0b954
