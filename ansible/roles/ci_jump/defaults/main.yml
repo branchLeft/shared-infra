@@ -3,3 +3,11 @@ ci_jump_manage_keys: false
 ci_jump_own_address: ''
 ci_jump_destinations: []
 ci_jump_keys: []
+
+# The second account, for ops1's spool tunnels (README, "The second account: spool"). Inert unless
+# ci_jump_spool_manage_keys is true. Its list is the spool hosts' private addresses on the one
+# port the far host's sshd listens on, and nothing else: the jump host's own address is refused.
+ci_jump_spool_manage_keys: false
+ci_jump_spool_destinations: []
+ci_jump_spool_port: 22
+ci_jump_spool_keys: []

@@ -27,6 +27,8 @@ from check_enrolment import (
     OWNER_VARS_KEYS,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
+    SPOOL_JUMP_HOSTS,
+    SPOOL_JUMP_VARS,
     _AnyTagLoader,
     _construct_any_tag,
     _load,
@@ -1210,6 +1212,126 @@ class Sabotage(unittest.TestCase):
             {"ci_jump_keys", "ci_jump_manage_keys", "ci_jump_own_address", "ci_jump_destinations"},
         )
 
+    # The second jump account (the spool account) is edge-t's alone. Its four variables are
+    # optional there, so the file may carry them or not, and no other host's file may carry them.
+    # The control comes first: the real tree passes and a file that carries them passes, so a check
+    # that refused the keys would not pass for a strict one.
+    def test_r10_the_second_jump_account_is_edgets_alone_and_its_keys_are_optional(self) -> None:
+        self.assertEqual(check(self.root), [])
+        self.assertEqual(SPOOL_JUMP_HOSTS, {"edget"})
+        self.assertLessEqual(SPOOL_JUMP_HOSTS, JUMP_HOSTS)
+        self.assertEqual(
+            SPOOL_JUMP_VARS,
+            {
+                "ci_jump_spool_keys",
+                "ci_jump_spool_manage_keys",
+                "ci_jump_spool_destinations",
+                "ci_jump_spool_port",
+            },
+        )
+        self.assertNotIn("ci_jump_spool_user", SPOOL_JUMP_VARS)
+        self.assertEqual(OWNER_VARS_KEYS["edget"], OWNER_VARS_KEYS["edget"] | SPOOL_JUMP_VARS)
+        self.assertFalse(SPOOL_JUMP_VARS & OWNER_VARS_KEYS["edge1"])
+        self.assertFalse(SPOOL_JUMP_VARS & OWNER_VARS_KEYS["ops1"])
+
+    SPOOL_INERT = (
+        "ci_jump_spool_manage_keys: false\n"
+        "ci_jump_spool_destinations: []\n"
+        "ci_jump_spool_port: 22\n"
+        "ci_jump_spool_keys: []\n"
+    )
+
+    def test_r10_edget_may_carry_the_second_accounts_values(self) -> None:
+        self._inert_edget()
+        self._edit(
+            "owner_vars/edget.yml", "ci_jump_keys: []\n", "ci_jump_keys: []\n" + self.SPOOL_INERT
+        )
+        self.assertEqual(check(self.root), [])
+        self._reset()
+        self._inert_edget()
+        self._edit(
+            "owner_vars/edget.yml",
+            "ci_jump_keys: []\n",
+            "ci_jump_keys: []\nci_jump_spool_manage_keys: false\n",
+        )
+        self.assertEqual(check(self.root), [])
+
+    def test_r10_a_host_other_than_edget_refuses_the_second_accounts_values(self) -> None:
+        for host in ("edge1", "ops1"):
+            with self.subTest(host=host):
+                path = self.ansible / "owner_vars" / f"{host}.yml"
+                self._write(
+                    f"owner_vars/{host}.yml", path.read_text(encoding="utf-8") + self.SPOOL_INERT
+                )
+                self._assert_one(f"R10 owner_vars/{host}.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_the_second_accounts_name_is_never_a_key_of_the_file(self) -> None:
+        for value in ("''", "spooler", "[spooler]"):
+            with self.subTest(value=value):
+                self._inert_edget()
+                self._edit(
+                    "owner_vars/edget.yml",
+                    "ci_jump_keys: []\n",
+                    f"ci_jump_keys: []\nci_jump_spool_user: {value}\n",
+                )
+                self._assert_one("R10 owner_vars/edget.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_the_second_accounts_values_have_their_shapes(self) -> None:
+        for old, new, expected in (
+            (
+                "ci_jump_spool_manage_keys: false",
+                "ci_jump_spool_manage_keys: 'false'",
+                "ci_jump_spool_manage_keys must be a bool",
+            ),
+            (
+                "ci_jump_spool_destinations: []",
+                "ci_jump_spool_destinations: ['10.20.1.201', 5]",
+                "ci_jump_spool_destinations must be a list of text entries",
+            ),
+            (
+                "ci_jump_spool_port: 22",
+                "ci_jump_spool_port: '22'",
+                "ci_jump_spool_port must be a whole number",
+            ),
+            (
+                "ci_jump_spool_port: 22",
+                "ci_jump_spool_port: true",
+                "ci_jump_spool_port must be a whole number",
+            ),
+            (
+                "ci_jump_spool_keys: []",
+                "ci_jump_spool_keys: [{key: a, mode: apply}]",
+                "a ci_jump_spool_keys entry must hold exactly ['key']",
+            ),
+            (
+                "ci_jump_spool_keys: []",
+                "ci_jump_spool_keys: [{key: 5}]",
+                "a ci_jump_spool_keys entry needs a text key",
+            ),
+            (
+                "ci_jump_spool_keys: []",
+                "ci_jump_spool_keys: x",
+                "ci_jump_spool_keys must be a list",
+            ),
+        ):
+            with self.subTest(new=new):
+                self._inert_edget()
+                self._edit(
+                    "owner_vars/edget.yml",
+                    "ci_jump_keys: []\n",
+                    "ci_jump_keys: []\n" + self.SPOOL_INERT,
+                )
+                self._edit("owner_vars/edget.yml", old, new)
+                self._assert_one(f"R10 owner_vars/edget.yml: {expected}")
+                self._reset()
+
+    def test_r10_a_second_account_host_that_is_not_a_jump_host_is_refused(self) -> None:
+        self.assertEqual(check(self.root), [])
+        with mock.patch("check_enrolment.SPOOL_JUMP_HOSTS", frozenset(("edget", "ops1"))):
+            self._assert_one("R10 ops1 is in SPOOL_JUMP_HOSTS but is not in JUMP_HOSTS")
+
     def test_r10_owner_vars_ci_jump_own_address_is_a_number(self) -> None:
         self._inert_edget()
         self._edit("owner_vars/edget.yml", "ci_jump_own_address: ''", "ci_jump_own_address: 5")
@@ -1415,7 +1537,10 @@ class Sabotage(unittest.TestCase):
     def test_r10_ops1_control_plane_pin_is_optional_and_ops1s_alone(self) -> None:
         self.assertEqual(check(self.root), [])
         self.assertEqual(
-            {"ops1": frozenset(("control_plane_app_image",)) | MAIL_COLLECTOR_KEYS},
+            {
+                "ops1": frozenset(("control_plane_app_image",)) | MAIL_COLLECTOR_KEYS,
+                "edget": SPOOL_JUMP_VARS,
+            },
             dict(OPTIONAL_OWNER_KEYS),
         )
         self.assertNotIn("control_plane_app_image", self._ops1_keys())

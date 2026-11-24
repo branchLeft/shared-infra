@@ -310,7 +310,7 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_mx1_token",
                     "ci_jump_user",
                 ],
-                "edget": ["ci_jump_user"],
+                "edget": ["ci_jump_user", "ci_jump_spool_user"],
                 "ops1": [
                     "backup_worker_db_host",
                     "backup_worker_db_user",
@@ -370,7 +370,7 @@ class RealTree(unittest.TestCase):
                     "broker_tunnel_client_demo1_address",
                     "broker_tunnel_client_demo1_host_key",
                 ],
-                "edget": ["ci_jump_user"],
+                "edget": ["ci_jump_user", "ci_jump_spool_user"],
                 "mx1": ["mx1_abuse_page_token"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
             },
@@ -519,7 +519,9 @@ class Mutations(unittest.TestCase):
     def test_an_optional_host_with_no_row_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/vars/main.yml",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
             "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
             "  mx1:\n    - mx1_abuse_page_token\n  app2:\n    - ci_jump_user\n\n# A value",
         )
         self._expect("optional app2: the host has no row")
@@ -529,7 +531,9 @@ class Mutations(unittest.TestCase):
         # it would stop the play, so the plan would fail the way the missing key did.
         self._edit(
             "roles/host_inputs/vars/main.yml",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
             "  mx1:\n    - mx1_abuse_page_token\n\n# A value",
+            "  edget:\n    - ci_jump_user\n    - ci_jump_spool_user\n"
             "  mx1:\n    - mx1_abuse_page_token\n"
             "  db1:\n    - db1_stack_exporter_password\n\n# A value",
         )
