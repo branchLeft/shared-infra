@@ -538,8 +538,12 @@ When `systemctl restart branchleft-compose@<stack>` fails, the only account of w
 journal, and CI receives only this script's stderr: a failed tenant deploy used to read "restart
 failed; rolled back" with no cause, and no agent can log in to read one. Straight after the failed
 restart, before the rollback restarts the unit and moves its status on, `restart_diagnosis` runs
-`systemctl status` and `journalctl -u <unit> -n 50` and prints them to stderr as one labelled block,
-which the deploy account's ssh session returns to the CI log.
+`systemctl status`, `journalctl -u <unit> -n 120` and `docker compose -f <stack>/compose.yml config
+--quiet`, and prints them to stderr as one labelled block, which the deploy account's ssh session
+returns to the CI log. The Compose check is validation only: `--quiet` prints nothing on success, and
+without it `config` would print the resolved file with its environment values. It runs with the
+unit's environment (the pin, then `/etc/branchleft/<stack>.env`), so an unset required variable is
+named rather than reported as a missing pin. Its exit status is printed first.
 
 The log is public, so every line goes through `redact_diagnostic_line` first. It redacts, in order:
 private-key blocks, authorization and cookie headers, bearer/basic/token credentials, credentials in
@@ -551,8 +555,14 @@ exit facts (`code`, `status`, `signal`, `result` with a short plain value), and 
 image digest after `sha256:` is kept: it is public and is the thing being diagnosed. A line starting
 `::` would be read by the runner as a workflow command, so `::` is broken up.
 
-The block is bounded: 30 status lines, 50 journal lines, 400 characters a line, 8 KiB in all, keeping
-the end, where the failure is. Reading is best effort: a missing `journalctl`, a timeout or an empty
+On top of the pattern rules, a line carrying any value of at least 8 characters from the stack's env
+file is replaced whole. A bare value that no name introduces cannot be matched by a pattern, so it is
+matched by the value itself. Shorter values are not matched as text, since a one-character value would
+blank the log; they are still caught when their line names them as an assignment. If the env file
+exists but cannot be read, nothing is printed, because its values could not be kept out of the log.
+
+The block is bounded: 30 status lines, 120 journal lines, 40 Compose lines, 400 characters a line, 8 KiB
+in all, keeping the end, where the failure is. Reading is best effort: a missing `journalctl`, a timeout or an empty
 journal prints nothing and changes neither the exit status nor the rollback. A rollback that also
 fails is not diagnosed a second time; its lines follow the first in the same journal.
 
