@@ -5,7 +5,7 @@
 # Not carried, on purpose: render_alertmanager_config.py and its notes, and
 # snds/collect_snds_metrics.py. The README says which work owns each.
 #
-# monitoring_stack_files is the one list of the fifteen stack files in the whole
+# monitoring_stack_files is the one list of the sixteen stack files in the whole
 # repository. No other role delivers any of them, and
 # ansible/checks/test_monitoring_single_home.py fails if one does.
 #
@@ -43,6 +43,7 @@ monitoring_stack_files:
   - grafana/provisioning/dashboard-json/tenant-health.json
   - grafana/provisioning/dashboards/dashboards.yaml
   - grafana/provisioning/datasources/prometheus.yaml
+  - ntfy/alertmanager.yml
   - ntfy/server.yml.tmpl
   - prometheus/alerts.yml
   - prometheus/demo_tls_probe.yml.tmpl
