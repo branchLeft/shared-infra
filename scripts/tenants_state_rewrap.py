@@ -168,12 +168,21 @@ def inspect_export(doc: JsonObject) -> Inspection:
     )
 
 
-def gate_problems(found: Inspection) -> list[str]:
-    """Why this state may not be re-keyed. Empty when it may."""
+def gate_problems(found: Inspection, *, dropping: bool = False) -> list[str]:
+    """Why this state may not be re-keyed. Empty when it may.
+
+    With `dropping`, `found` is the inspection of the document after the reproducible
+    ciphertexts were removed, so what is left is what no allowlist entry covers.
+    """
     problems: list[str] = []
     if found.provider_type != "passphrase":
         problems.append(f"the secrets provider is `{found.provider_type}`, not `passphrase`")
-    if found.encrypted_values:
+    if found.encrypted_values and dropping:
+        problems.append(
+            f"{found.encrypted_values} encrypted value(s) remain after dropping the reproducible "
+            "ones: a new passphrase would orphan them, so this route stops here"
+        )
+    elif found.encrypted_values:
         problems.append(
             f"{found.encrypted_values} encrypted value(s) are in the state: a new passphrase would "
             "orphan them, so this route stops here"
@@ -200,6 +209,205 @@ def describe(found: Inspection, report: Report) -> None:
     report.line(f"encrypted values: {found.encrypted_values}")
     report.line(f"plaintext values: {found.plaintext_values}")
     report.line(f"pending operations: {found.pending_operations}")
+
+
+# ---------------------------------------------------------------------------
+# Encrypted values: where each one sits, and which can be re-derived
+# ---------------------------------------------------------------------------
+
+PathKey = str | int
+
+
+def is_secret_object(obj: Mapping[str, object]) -> bool:
+    """The test `count_encrypted` applies: a `ciphertext` key, or the secret signature."""
+    return "ciphertext" in obj or obj.get(SECRET_SIG_KEY) == SECRET_SIG_VALUE
+
+
+def path_order(path: tuple[PathKey, ...]) -> tuple[tuple[int, int, str], ...]:
+    """A sort key that keeps list positions numeric and puts the same paths in the same order."""
+    return tuple((0, k, "") if isinstance(k, int) else (1, 0, k) for k in path)
+
+
+@dataclasses.dataclass(frozen=True)
+class Ciphertext:
+    """Where one encrypted value sits. Never the value, and never the resource id."""
+
+    resource_type: str
+    name: str  # the last segment of the resource's URN
+    side: str  # `inputs`, `outputs`, or another key of the resource, or `(outside resources)`
+    key_path: tuple[PathKey, ...]  # below the side
+    location: tuple[PathKey, ...]  # from the document root
+
+    @property
+    def key_text(self) -> str:
+        return ".".join(f"[{k}]" if isinstance(k, int) else k for k in self.key_path) or "(whole)"
+
+
+def locate(doc: JsonObject, location: tuple[PathKey, ...]) -> Ciphertext:
+    """Name the place `location` is in: its resource's type and URN name, and the side."""
+    if (
+        len(location) >= 5
+        and location[0] == "deployment"
+        and location[1] == "resources"
+        and isinstance(location[2], int)
+    ):
+        resources = deployment_of(doc).get("resources")
+        owner = resources[location[2]] if isinstance(resources, list) else None
+        if isinstance(owner, dict):
+            kind = owner.get("type")
+            urn = owner.get("urn")
+            return Ciphertext(
+                resource_type=kind if isinstance(kind, str) else "(no type)",
+                name=urn.split("::")[-1] if isinstance(urn, str) else "(no urn)",
+                side=str(location[3]),
+                key_path=location[4:],
+                location=location,
+            )
+    return Ciphertext("(none)", "(none)", "(outside resources)", location, location)
+
+
+def find_ciphertexts(doc: JsonObject) -> list[Ciphertext]:
+    """Every encrypted value in the export, named by where it sits, in document order."""
+    found: list[tuple[PathKey, ...]] = []
+    pending: list[tuple[tuple[PathKey, ...], object]] = [((), without_secrets_providers(doc))]
+    while pending:
+        path, node = pending.pop()
+        if isinstance(node, dict):
+            if is_secret_object(node):
+                found.append(path)
+                continue
+            pending.extend(((*path, str(k)), v) for k, v in node.items())
+        elif isinstance(node, list):
+            pending.extend(((*path, i), v) for i, v in enumerate(node))
+    found.sort(key=path_order)
+    return [locate(doc, path) for path in found]
+
+
+@dataclasses.dataclass(frozen=True)
+class Reproducible:
+    """One place whose encrypted value is re-derived from the environment on every run."""
+
+    resource_type: str  # exact
+    side: str
+    key_path: tuple[str, ...]  # exact: a nested or longer path is never matched
+    why: str
+
+
+# The allowlist. An entry is added only for a value that CI itself supplies at run time, so
+# that dropping it from the state loses nothing. The tenants program passes HCLOUD_TOKEN by
+# environment; the Hetzner provider records the token it was configured with, as a secret,
+# in the default provider's inputs and outputs.
+REPRODUCIBLE: tuple[Reproducible, ...] = (
+    Reproducible(
+        "pulumi:providers:hcloud",
+        "inputs",
+        ("token",),
+        "the provider's token, set from HCLOUD_TOKEN on every run",
+    ),
+    Reproducible(
+        "pulumi:providers:hcloud",
+        "outputs",
+        ("token",),
+        "the provider's token, set from HCLOUD_TOKEN on every run",
+    ),
+)
+
+
+def reproducible_entry(found: Ciphertext) -> Reproducible | None:
+    for entry in REPRODUCIBLE:
+        if (
+            found.resource_type == entry.resource_type
+            and found.side == entry.side
+            and found.key_path == entry.key_path
+        ):
+            return entry
+    return None
+
+
+@dataclasses.dataclass(frozen=True)
+class DropPlan:
+    """The document to re-key, what was taken out of it, and what encrypted value is left."""
+
+    doc: JsonObject
+    dropped: tuple[Ciphertext, ...]
+    remaining: tuple[Ciphertext, ...]
+
+
+def removed_paths(old: object, new: object) -> list[tuple[PathKey, ...]]:
+    """The keys `old` has and `new` lacks.
+
+    Raises:
+        RefusalError: when `new` differs from `old` in any other way.
+    """
+    removed: list[tuple[PathKey, ...]] = []
+    pending: list[tuple[tuple[PathKey, ...], object, object]] = [((), old, new)]
+    while pending:
+        path, a, b = pending.pop()
+        if isinstance(a, dict) and isinstance(b, dict):
+            if any(k not in a for k in b):
+                raise RefusalError("the document gained a key")
+            for k, v in a.items():
+                if k in b:
+                    pending.append(((*path, str(k)), v, b[k]))
+                else:
+                    removed.append((*path, str(k)))
+        elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+            pending.extend(((*path, i), x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
+        elif canonical(a) != canonical(b):
+            raise RefusalError("the document differs in a value, not only in dropped keys")
+    return sorted(removed, key=path_order)
+
+
+def require_only_dropped(old: JsonObject, new: JsonObject, dropped: Sequence[Ciphertext]) -> None:
+    """Prove `new` is `old` with exactly the `dropped` keys removed, and nothing else.
+
+    `deployment.secrets_providers` is left out of both sides, as everywhere.
+
+    Raises:
+        RefusalError: when anything else differs, or a dropped key is still there.
+    """
+    gone = removed_paths(without_secrets_providers(old), without_secrets_providers(new))
+    want = sorted((c.location for c in dropped), key=path_order)
+    if gone != want:
+        raise RefusalError("the document lost keys other than the ones dropped")
+
+
+def plan_drop(doc: JsonObject, *, enabled: bool) -> DropPlan:
+    """Take out the encrypted values the allowlist covers, when `enabled`; name what is left.
+
+    The input document is not changed.
+
+    Raises:
+        RefusalError: when the drop did more or less than the allowlist says.
+    """
+    found = find_ciphertexts(doc)
+    if not enabled:
+        return DropPlan(doc, (), tuple(found))
+    dropped = tuple(c for c in found if reproducible_entry(c) is not None)
+    result = copy.deepcopy(doc)
+    for c in dropped:
+        parent: object = result
+        for key in c.location[:-1]:
+            parent = parent[key]  # type: ignore[index]
+        del parent[c.location[-1]]  # type: ignore[attr-defined]
+    require_only_dropped(doc, result, dropped)
+    return DropPlan(result, dropped, tuple(find_ciphertexts(result)))
+
+
+def describe_ciphertexts(report: Report, before: Sequence[Ciphertext], plan: DropPlan) -> None:
+    """Each encrypted value by resource type, URN name, side and key path. Never a value."""
+    dropping = set(plan.dropped)
+    for c in before:
+        entry = reproducible_entry(c)
+        if entry is not None and c in dropping:
+            verdict = f"DROP ({entry.why})"
+        elif entry is not None:
+            verdict = "re-derivable, kept (--drop-reproducible is not set)"
+        else:
+            verdict = "KEPT, not on the allowlist"
+        report.line(
+            f"  encrypted: {c.resource_type} | {c.name} | {c.side} | {c.key_text} | {verdict}"
+        )
 
 
 def canonical(doc: object) -> str:
@@ -655,6 +863,7 @@ class Context:
     now: Callable[[], datetime.datetime]
     delete_guard: pathlib.Path | None = None
     github_output: str | None = None
+    drop_reproducible: bool = False
 
     @property
     def state_key(self) -> str:
@@ -683,21 +892,46 @@ def export_document(ctx: Context, name: str) -> JsonObject:
     return doc
 
 
+def report_gate(ctx: Context, doc: JsonObject) -> tuple[DropPlan, list[str]]:
+    """Describe the export, list its encrypted values, and apply the gate.
+
+    With `ctx.drop_reproducible` the gate reads the document after the allowlisted
+    ciphertexts are taken out.
+
+    Raises:
+        RefusalError: when the export is not shaped like a checkpoint, or the drop is unsound.
+    """
+    describe(inspect_export(doc), ctx.report)
+    before = find_ciphertexts(doc)
+    plan = plan_drop(doc, enabled=ctx.drop_reproducible)
+    describe_ciphertexts(ctx.report, before, plan)
+    if ctx.drop_reproducible:
+        ctx.report.line(
+            f"after dropping {len(plan.dropped)} reproducible value(s): "
+            f"{len(plan.remaining)} encrypted value(s) remain"
+        )
+    return plan, gate_problems(inspect_export(plan.doc), dropping=ctx.drop_reproducible)
+
+
 def run_inspect(ctx: Context) -> int:
     """Read-only: the gate's counts, for the owner to read before approving the rewrap."""
     ctx.report.line(f"stack: {ctx.project}/{ctx.stack}")
     try:
-        found = inspect_export(export_document(ctx, "inspect-export.json"))
+        plan, problems = report_gate(ctx, export_document(ctx, "inspect-export.json"))
     except RefusalError as exc:
         ctx.report.line(f"REFUSED: {exc}")
         return EXIT_REFUSED
-    describe(found, ctx.report)
-    problems = gate_problems(found)
     for problem in problems:
         ctx.report.line(f"REFUSED: {problem}")
     if problems:
         return EXIT_REFUSED
-    ctx.report.line("CLEAN: no encrypted value, no pending operation; a rewrap may proceed")
+    if plan.dropped:
+        ctx.report.line(
+            f"CLEAN: only the {len(plan.dropped)} listed reproducible value(s) are encrypted "
+            "and a rewrap would drop them; no pending operation; a rewrap may proceed"
+        )
+    else:
+        ctx.report.line("CLEAN: no encrypted value, no pending operation; a rewrap may proceed")
     return EXIT_OK
 
 
@@ -810,22 +1044,35 @@ def copy_aside(ctx: Context) -> tuple[bytes, str]:
     return original, aside_key
 
 
-def mutate_and_verify(ctx: Context, old_doc: JsonObject) -> None:
+def mutate_and_verify(ctx: Context, plan: DropPlan, exported: JsonObject) -> None:
     """The steps after the point of no return. Any exception here means: put the copy back.
 
+    `plan.doc` is `exported` with the dropped keys removed (all of `exported` when none).
+
     Raises:
-        RefusalError: when the fresh stack is not empty or the rewrite changes more than one key.
+        RefusalError: when the fresh stack is not empty or the rewrite changes more than the
+            provider block and the dropped keys.
     """
     ctx.pulumi.require("stack", "rm", ctx.stack, "--force", "--yes", "--preserve-config")
     ctx.pulumi.require("stack", "init", ctx.stack, "--secrets-provider", "passphrase")
     fresh = deployment_of(export_document(ctx, "fresh-export.json"))
     if fresh.get("resources"):
         raise RefusalError("the freshly initialised stack is not empty")
-    new_doc = swap_secrets_provider(old_doc, fresh.get("secrets_providers"))
+    new_doc = swap_secrets_provider(plan.doc, fresh.get("secrets_providers"))
+    # What is imported is the export minus exactly the dropped keys, and the new provider block.
+    require_only_dropped(exported, new_doc, plan.dropped)
     new_file = ctx.scratch / "new-export.json"
     new_file.write_text(json.dumps(new_doc), encoding="utf-8")
     ctx.pulumi.require("stack", "import", "--stack", ctx.stack, "--file", str(new_file))
-    ctx.report.line("imported: only `deployment.secrets_providers` differs from the old checkpoint")
+    if plan.dropped:
+        ctx.report.line(
+            f"imported: only `deployment.secrets_providers` and the {len(plan.dropped)} dropped "
+            "key(s) differ from the old checkpoint"
+        )
+    else:
+        ctx.report.line(
+            "imported: only `deployment.secrets_providers` differs from the old checkpoint"
+        )
     verify_after_import(ctx)
 
 
@@ -848,12 +1095,10 @@ def run_rewrap(ctx: Context) -> int:
     try:
         require_clean_start(ctx)
         old_doc = export_document(ctx, "old-export.json")
-        found = inspect_export(old_doc)
+        plan, problems = report_gate(ctx, old_doc)
     except RefusalError as exc:
         ctx.report.line(f"REFUSED: {exc}")
         return EXIT_REFUSED
-    describe(found, ctx.report)
-    problems = gate_problems(found)
     for problem in problems:
         ctx.report.line(f"REFUSED: {problem}")
     if problems:
@@ -867,7 +1112,7 @@ def run_rewrap(ctx: Context) -> int:
             fh.write(f"aside_key={aside_key}\n")
 
     try:
-        mutate_and_verify(ctx, old_doc)
+        mutate_and_verify(ctx, plan, old_doc)
     except (KeyboardInterrupt, SystemExit):
         recover(ctx, original, aside_key, "INTERRUPTED after the removal")
         raise
@@ -927,6 +1172,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="names this run's aside copy (default: Actions run id and attempt)",
     )
+    parser.add_argument(
+        "--drop-reproducible",
+        action="store_true",
+        help="inspect or rewrap: first remove the encrypted values on the allowlist "
+        "(REPRODUCIBLE), which CI re-derives from its environment on every run",
+    )
     parser.add_argument("--summary-file", default=None)
     parser.add_argument("--github-output", default=None)
     return parser
@@ -946,7 +1197,10 @@ def execute(ctx: Context, command: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.drop_reproducible and args.command == "restore":
+        parser.error("--drop-reproducible is for inspect and rewrap only")
     env_in = dict(os.environ if environ is None else environ)
     project_dir = pathlib.Path(args.project_dir).resolve()
     if shutil.which(args.pulumi) is None and not os.path.isfile(args.pulumi):
@@ -997,6 +1251,7 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             now=lambda: datetime.datetime.now(datetime.UTC),
             delete_guard=pathlib.Path(args.delete_guard).resolve() if args.delete_guard else None,
             github_output=args.github_output,
+            drop_reproducible=args.drop_reproducible,
         )
         code = execute(ctx, args.command)
         report.flush_summary(f"Tenants state {args.command}")

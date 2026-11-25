@@ -18,13 +18,30 @@ The tool does not assume it: the count of encrypted values is its first gate.
 
 `inspect` (read only, no passphrase, no environment): exports the stack with its secrets
 left encrypted and prints counts and resource types: the secrets provider, resources by
-type, encrypted values, plaintext values, pending operations. Exit 1 if any gate fails.
+type, encrypted values, plaintext values, pending operations. It also lists each encrypted
+value by resource type, URN name, side (`inputs` or `outputs`) and key path, never a
+value, with what `--drop-reproducible` would do to it. Exit 1 if any gate fails.
+
+`--drop-reproducible` (for `inspect` and `rewrap`, off by default): the encrypted values
+cannot be read once the passphrase is lost, so the only ones the route may go past are
+those CI itself re-derives on every run. `REPRODUCIBLE` in the script is that allowlist, by
+exact resource type, side and key path: the `token` key, in `inputs` and in `outputs`, of
+a `pulumi:providers:hcloud` resource (the tenants program passes `HCLOUD_TOKEN` by
+environment, and the provider records the token it was given). Those keys are deleted from
+the export before anything else. If any other encrypted value remains, the gate refuses
+and the listing names it. The equality proof then allows exactly the dropped keys: the
+document imported is the export minus those keys and with a new `secrets_providers`, and
+nothing else, or the run restores the aside copy. The aside copy is the unmodified original.
+Whether a state imported without the token still previews with no change is read from the
+real preview: a change there is a failure, and it restores. A new entry is added only for a
+value CI supplies at run time, with a test.
 
 `rewrap` (needs the new passphrase in `PULUMI_CONFIG_PASSPHRASE`):
 
 1. Refuse unless the stack config carries no `encryptionsalt`, a passphrase is set, and
    Pulumi reports the backend this run is for.
-2. Export the stack and apply the gate. It refuses on any encrypted value, any
+2. Export the stack and apply the gate (with `--drop-reproducible`, to the export after the
+   drop). It refuses on any encrypted value, any
    `plaintext` value, any pending operation, a provider that is not `passphrase`, or an
    empty state.
 3. Copy the raw state object to `aside/<project>/<stack>.<UTC stamp>.<run tag>.json`
@@ -50,7 +67,8 @@ when the run copied nothing aside.
 
 ## What it prints
 
-Counts and resource types only. No id, no URN, no salt, no value, and no text from Pulumi's
+Counts and resource types, and for each encrypted value the resource type, the URN's last
+segment (its name), the side and the key path. No id, no full URN, no salt, no value, and no text from Pulumi's
 own stderr (a correct passphrase over a corrupt document makes Pulumi quote the plaintext
 it could not parse, so stderr is classified and dropped). A test pins this.
 
