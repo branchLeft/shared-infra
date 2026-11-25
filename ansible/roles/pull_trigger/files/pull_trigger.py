@@ -197,7 +197,11 @@ LOOK_LOOPBACK: Final = "127.0.0.1"
 # The declared services an http fact may name: the fact's ``name`` maps to the only loopback ports
 # that fact may GET. A name not here, or a port not in its set, is refused before any request.
 # Adding a service or a port is a change to this program, reviewed by the owner, as a new kind is.
-LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {}
+LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {
+    # demo1's health routers: one loopback port per slot, from 10100 (health_router.py's base).
+    **{f"demo1-router-{slot}": frozenset({10100 + slot}) for slot in range(7)},
+    "demo1-slot0-port": frozenset({10100}),
+}
 LOOK_NAME_PATTERN: Final = re.compile(r"[a-z][a-z0-9-]{0,47}")
 # The plan job withholds a host's output that matches the credential words of its scan, and that
 # would fail the plan of every host. A name can never be the cause.
