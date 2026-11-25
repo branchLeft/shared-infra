@@ -9,7 +9,7 @@ is over 300,000 bytes (900,000 in all) or matches the secret scan. demo1's plan 
   many items as the host has links. A loop over a fixed list or a registered result of one is
   bounded by the role, and is not a finding. The one loop over a host list that remains is named in
   BOUNDED_HOST_LOOPS with the reason it is small.
-- the refusal of the host scan (roles/demo1_build/tasks/_secret_holders.yml) names a bounded part of
+- the refusal of the host scan (roles/demo1_build/tasks/_holder_scan.yml) names a bounded part of
   the unlisted paths. A host once held thousands, and a message naming every one was 486,151 bytes,
   printed twice, in front of the credential scan.
 - the files the roles copy, with their diffs shown, add up to less than SHOWN_DIFF_BUDGET bytes.
@@ -59,7 +59,7 @@ HOST_LISTS = re.compile(r"\.(stdout_lines|stdout|files|content)\b")
 LOOP_KEYS = ("loop", "with_items", "with_list", "with_dict", "with_fileglob", "with_lines")
 
 
-SECRET_HOLDERS = ROOT / "ansible" / "roles" / "demo1_build" / "tasks" / "_secret_holders.yml"
+SECRET_HOLDERS = ROOT / "ansible" / "roles" / "demo1_build" / "tasks" / "_holder_scan.yml"
 DEMO1_VARS = ROOT / "ansible" / "roles" / "demo1_build" / "vars" / "main.yml"
 # The most paths and directories a refusal may name, and what one full message may weigh.
 MOST_PATHS_NAMED = 50
