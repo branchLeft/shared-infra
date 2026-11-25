@@ -51,10 +51,11 @@ the key shapes are constants in [`vars/main.yml`](vars/main.yml), so an inventor
 them. The program path is the one `pull_trigger` owns, held equal by the pins test; the key
 shapes are the `sudoers_and_keys` pattern's, held equal by the same test.
 
-Where the values come from on edge1: `ansible/owner_vars/edge1.yml`, loaded by
-`ansible/playbooks/edge1.yml`. That file is the owner's alone and is shipped with the flag
-`false` and an empty list, so merging the role changes nothing about the keys until the owner
-fills it. The public keys are not secrets, but every task that handles them sets `no_log: true`
+Where the values come from: each host's `ansible/owner_vars/<host>.yml`, loaded by that host's
+playbook. `edge1` has one; `dbt1` and `appt1` have none yet, so the role runs there with the flag
+off. Those files are the owner's alone, and each is shipped with the flag `false` and an empty
+list, so merging the role changes nothing about the keys until the owner fills it. A host that
+gets a key file must also be named in `checks/check_enrolment.py` (R10), which is a separate change. The public keys are not secrets, but every task that handles them sets `no_log: true`
 and `diff: false` (ANS-16), and the test scans the log for them. The sudoers task is the
 exception on purpose: a sudoers file holds command paths, not secrets, so it shows its diff in
 the plan, and `test_ci_login_pins.py` fails if `no_log` or `diff: false` returns on it.
@@ -89,6 +90,9 @@ describes (the harness runs in CI, never against a host):
   exactly; removes a key it was not given; refuses a usable password, a `nologin` shell, an
   empty or wrong-sized list, a repeated key and a malformed key (with every line-break
   character); leaves the keys alone with the flag false; and keeps every key out of the log.
+- `no_keys` is the form dbt1 and appt1 run: no account, the flag off and keys declared. It proves
+  the role makes the account and the sudoers file, writes no key file on this run or the next,
+  and keeps the key bodies out of the log.
 - `hand_made` starts from a hand-made state: a `*` account, the sudoers file and
   two key lines written by hand. It proves the role changes none of them with the flag false,
   that the flag true with the same keys rewrites nothing, and that other keys do rewrite the
@@ -99,9 +103,9 @@ the run. The missing source limit has a red-then-green test in `test_ci_login_pi
 
 ## How it is delivered
 
-Only through the gated workflow (ANS-17): the role is on edge1's list in
-`ansible/checks/host_roles.yml` and applied by `ansible/playbooks/edge1.yml`. The plan job
-shows edge1's check-mode diff first. The owner reads the sudoers diff there, line by line; the
+Only through the gated workflow (ANS-17): the role is on each enrolled host's list in
+`ansible/checks/host_roles/<host>.yml` and applied by that host's playbook (`edge1`, `dbt1`,
+`appt1`). The plan job shows each host's check-mode diff first. The owner reads the sudoers diff there, line by line; the
 key tasks hide their content (`no_log`, `diff: false`), so for those the owner reads only
 whether each would change. The first run is the proof that the hand-made
 account, sudoers file and (once the flag is on) key lines already match: the role is expected
@@ -109,7 +113,8 @@ to report no change.
 
 ## Named limits
 
-- **The hand state was not read.** It exists on edge1 only. The sudoers text comes from the
+- **The hand state was not read.** It exists on edge1 only; dbt1 and appt1 get the role's own text
+  for the first time. The sudoers text comes from the
   `pull_trigger` README, and the key lines use `restrict`, the form that README documents, where
   the `sudoers_and_keys` pattern writes four separate options. If the first gated plan shows a
   difference, the role's text wins over the hand-made file unless the owner says otherwise.
