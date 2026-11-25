@@ -884,7 +884,7 @@ class FailureMessageCase(unittest.TestCase):
         seen = list(self.messages())
         # The walk must reach the message this change is about, or a pass proves nothing.
         self.assertTrue(
-            any(path.endswith("demo1_egress_spool/tasks/_token.yml") for path, _ in seen)
+            any(path.endswith("demo1_egress_spool/tasks/_drain_file.yml") for path, _ in seen)
         )
         # Only the file and the rule are reported: a message is prose, but a CI log is shared.
         # The scan first removes a ${NAME} or ${NAME:?...} reference (its second shape), so a

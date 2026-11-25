@@ -783,7 +783,7 @@
   vars:
     converge_case: {}
 
-# The host scan (_secret_holders.yml) refuses a secret-bearing file the holder list does not
+# The host scan (_holder_scan.yml) refuses a secret-bearing file the holder list does not
 # name, by its content, its name or where it sits, and names the path, never a value. The
 # control is the host as prepared, which holds only what the list names, and is accepted.
 - name: Accept the host as prepared, which holds only the files the holder list names

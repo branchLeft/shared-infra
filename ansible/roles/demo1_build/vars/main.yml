@@ -333,7 +333,7 @@ demo1_build_installed_pins: |-
 # One upstream snippet per slot in the edge fragment.
 demo1_build_edge_snippet_pattern: '(?m)^\(slot[0-9]+-upstream\) \{$'
 
-# The host scan (tasks/_secret_holders.yml). demo1 holds only the secrets listed here. A row names
+# The host scan (tasks/_holder_scan.yml). demo1 holds only the secrets listed here. A row names
 # a file, by path_regex (no anchors; the scan adds them), what it reaches, and who holds it. A row
 # names where a secret is, never its value. A file the scan finds that no row names is refused.
 # The reaches column says what a holder can reach. It does not say the value is worthless off the
@@ -408,10 +408,10 @@ demo1_build_secret_holders:
 demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(attribute='path_regex') | join('|')) ~ ')\\Z' }}"
 
 # The roots the scan reads. A root the host does not have is skipped. /root is read by file list
-# (see tasks/_secret_holders.yml), not grep, so its own .ansible can be pruned and no other .ansible is.
+# (see tasks/_holder_scan.yml), not grep, so its own .ansible can be pruned and no other .ansible is.
 demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /srv, /var/backups, /var/lib]
 
-# How much of a refusal is printed (tasks/_secret_holders.yml): the first paths, in order, and the
+# How much of a refusal is printed (tasks/_holder_scan.yml): the first paths, in order, and the
 # directories with the most unlisted paths. The refusal is read by a person and by the plan scan, and
 # must not grow with the host. A path is named in full only inside the first demo1_build_secret_refusal_paths_shown.
 demo1_build_secret_refusal_paths_shown: 20
@@ -421,7 +421,7 @@ demo1_build_secret_refusal_directories_shown: 10
 # (the client certificates in certs.d) is scanned. /var/lib/docker and /var/lib/containerd are the
 # container runtime's image stores, pinned by digest and not host secrets. /root/.ansible/tmp is
 # Ansible's module payload directory for root: the scan's own run writes there. No other path is pruned.
-# Every find in tasks/_secret_holders.yml takes this argument list ahead of its tests.
+# Every find in tasks/_holder_scan.yml takes this argument list ahead of its tests.
 demo1_build_secret_prune_argv:
   [
     '(',
