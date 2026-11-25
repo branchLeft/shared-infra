@@ -20,8 +20,11 @@ It does, in order:
    rule: a program, its boot unit and a drop-in that makes Docker follow and require that
    unit, then loads the rule and reads it back (see "The listener rule").
 3. Enables the stack's unit without starting it.
-4. When an image is given and the host has no image pin: checks the shape of the
-   owner-placed root file, then runs `branchleft-deploy dbt1 <image>`, which verifies
+4. When the host's inputs give the registry login and token: writes the registry key the
+   private image is pulled with (below). Given one without the other, or either in the wrong
+   shape, it refuses before anything is written.
+5. When an image is given and the host has no image pin: checks the shape of the
+   owner-placed root file and that the registry key file is on the host, then runs `branchleft-deploy dbt1 <image>`, which verifies
    the image's attestation, writes the pin and starts the stack and waits for its health
    check.
 
@@ -46,10 +49,12 @@ It does not:
 
 ## Interface
 
-[`meta/argument_specs.yml`](meta/argument_specs.yml) declares the one input,
-`db_t1_image`, and [`defaults/main.yml`](defaults/main.yml) gives it the digest of the
-image to deploy. Empty prepares the stack and deploys nothing, and is accepted. No
-variable is a secret (ANS-16). Everything else is fixed in [`vars/main.yml`](vars/main.yml)
+[`meta/argument_specs.yml`](meta/argument_specs.yml) declares `db_t1_image` and two optional
+inputs of the host's private inputs file, `db_t1_registry_login` and `db_t1_registry_token`
+(below), and [`defaults/main.yml`](defaults/main.yml) gives it the digest of the
+image to deploy. Empty prepares the stack and deploys nothing, and is accepted. The token is the
+role's one secret (`no_log`, no default: the loader leaves an absent input unset, and the role reads
+it through `db_t1_registry_token_value`). Everything else is fixed in [`vars/main.yml`](vars/main.yml)
 with the reason beside it, and an inventory value does not move it.
 
 The default is `ghcr.io/branchleft/percona-server@sha256:20e400e5...3696`: the digest that
@@ -138,7 +143,7 @@ Decisions a reviewer should know the reasons for:
   per container.
 - **Where the data lives.** A named Docker volume on the root disk, as on the other
   database host. A separate block volume would be spend, which is the owner's.
-- **Root file and secrets.** The role takes no secret as input. The owner places
+- **Root file and secrets.** The root value is not an input: the role never reads or writes it. The owner places
   `/etc/branchleft/dbt1.env` (root, group root, mode `0600`) with exactly one line,
   `MYSQL_ROOT_PASSWORD=` followed by 32 to 128 letters and digits. The alphabet is what
   the image's first-start script can put into a SQL string and what the unit's
@@ -150,6 +155,45 @@ Decisions a reviewer should know the reasons for:
 - **Why the deploy is once.** See "What the role does". Two further refusals protect data:
   a pin that exists and differs from the input, and an initialised data directory with no
   pin.
+
+## The registry read key
+
+`ghcr.io/branchleft/percona-server` is a private package, so the host needs a read key to pull it
+and to read its attestation. The key is the owner's decision of 25 Nov 2026: db-t1 has its own
+read-only key, a classic personal access token with only `read:packages`, on a reader account
+(`github / branchleft / ghcr-read-key` in the credential register). The owner seeds the account's
+login and the token into the host's root-only inputs file, each with
+`seed_host_inputs.py --host dbt1 --set <name>`, typed hidden. The `mysqld-exporter` image is
+public and needs no key.
+
+The role writes one file, `/etc/branchleft/registry/docker/config.json` (root, `0600`, in a root
+`0700` directory under a root `0755` `/etc/branchleft/registry`):
+
+```text
+{"auths": {"ghcr.io": {"auth": "<base64 of login:token>"}}}
+```
+
+That is the shape `deploy_verifier` holds the file to (one entry, one registry, no credential
+helper), and the directory `branchleft-compose@.service` and `branchleft-deploy` already set as
+`DOCKER_CONFIG`. This role sets `DOCKER_CONFIG` nowhere, because it starts no image itself.
+
+- Neither input given: nothing is written and a file the host already holds is left as it is, so
+  a key placed by hand keeps working. The role does not remove a key when the inputs go.
+- Both given: the file is written whole and a changed token rewrites it. A second run changes
+  nothing.
+- One given: refused (`rule: registry key pair`). A login that is not a GitHub login, or a token
+  that is not a classic token (`ghp_` and letters and digits; a fine-grained token cannot read a
+  package): refused (`rule: registry key shape`). Neither refusal prints a value.
+- A deploy that is due and finds no key file on the host, or one that is not a plain file owned by
+  root with mode `0600`, is refused (`rule: registry read key`) before the deploy program runs. In a
+  plan, the inputs given count as the key to come.
+- Every task that names the token has `no_log: true` and `diff: false`, and the write is one
+  `copy` whose result (it carries a digest of the content) is hidden whole. In check mode on a fresh
+  host the directories are shown and the file is not, because the write waits for the directory
+  (ANS-10).
+- The token never reaches a command line, a variable of the plan or a log. The token's authority is
+  the reader account's, so revoking it on GitHub ends the host's access; rotating is `--set` again
+  and one apply.
 
 ## The listener rule
 

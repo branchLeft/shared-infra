@@ -12,6 +12,11 @@
         name: branchleft.db_t1
       vars:
         db_t1_image: '{{ scenario_image }}'
+        # What the host's inputs file gives on the real host: the login is a plain name and the
+        # token a throwaway made by prepare.yml. No no_log on the include, as for the image: the
+        # role's own tasks must keep the token out of the log.
+        db_t1_registry_login: scenario-reader
+        db_t1_registry_token: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/registry_token') }}"
 
     # The control case for the log check in verify.yml: a task with no no_log that
     # is given a known value. If the log did not show it, an empty result of the

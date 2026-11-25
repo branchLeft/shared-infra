@@ -129,7 +129,12 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "deploy_slot_keys_slots",
     ),
     "appt1": ("tenant_entry_key", "tenant_entry_from", "tenant_entry_bind_address"),
-    "dbt1": ("db_t1_tenant_entry_controller_key", "db_t1_tenant_entry_controller_address"),
+    "dbt1": (
+        "db_t1_tenant_entry_controller_key",
+        "db_t1_tenant_entry_controller_address",
+        "db_t1_registry_login",
+        "db_t1_registry_token",
+    ),
     # The mail host's one input is typed: the publish-only ntfy token has no live file on mx1, and
     # the same value is the edge1 input above.
     "mx1": ("mx1_abuse_page_token",),
@@ -144,7 +149,12 @@ NOT_YET_ROUTED: Final = frozenset({STACKS_KEY})
 # Optional inputs (host_inputs_optional_by_host) that the fill never asks for: each is added on
 # its own with --set once the owner turns its role on, and a file without it is complete.
 SET_ONLY: Final = frozenset(
-    {"broker_tunnel_client_demo1_address", "broker_tunnel_client_demo1_host_key"}
+    {
+        "broker_tunnel_client_demo1_address",
+        "broker_tunnel_client_demo1_host_key",
+        "db_t1_registry_login",
+        "db_t1_registry_token",
+    }
 )
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
@@ -234,6 +244,10 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "tenant_entry_bind_address": (Source(IPV4, ""),),
     "db_t1_tenant_entry_controller_key": (Source(KEYLINE, ""),),
     "db_t1_tenant_entry_controller_address": (Source(IPV4, ""),),
+    # The registry read key of db-t1: the reader account's login and its classic token. Typed once
+    # with --set; neither has a live file.
+    "db_t1_registry_login": (Source(TYPED, ""),),
+    "db_t1_registry_token": (Source(TYPED, ""),),
     # Typed on mx1 and on edge1, the same value: the token is the mail host's credential and the
     # pager's server config must list it. It has no live file the role does not itself write.
     "ntfy_pager_mx1_token": (Source(TYPED, ""),),
