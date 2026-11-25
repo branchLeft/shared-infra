@@ -7,7 +7,8 @@ argument_specs:
       unit, and, when an image is given, checks the owner-placed root credential file
       (shape only, never printed) and has the host's deploy program pin that digest and
       start the stack, once, on a host that has no pin and no data. It never replaces
-      the image of a database that has been deployed, and it holds no secret.
+      the image of a database that has been deployed. Its one secret is the optional registry
+      read token, which it writes into the registry key file the deploy pulls with.
     author: branchLeft
     options:
       db_t1_image:
@@ -17,3 +18,19 @@ argument_specs:
           and 64 lower-case hex digits. Empty means no deploy. The deploy program must
           also have the image registered as attested, or it refuses the deploy.
         default: ''
+      db_t1_registry_login:
+        type: str
+        required: false
+        description: >-
+          The login of the reader account whose classic token reads the private images. Optional,
+          and given together with the token or not at all. Supplied by the caller from the host's
+          private inputs file.
+      db_t1_registry_token:
+        type: str
+        required: false
+        no_log: true
+        description: >-
+          The reader account's classic personal access token, with only read:packages. Optional:
+          empty means the role writes no registry key and leaves any file the host holds. Given,
+          the role writes the Docker config the deploy program pulls with. Supplied by the caller
+          from the host's private inputs file; the role never reads or generates one.

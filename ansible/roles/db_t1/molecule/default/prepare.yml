@@ -26,6 +26,17 @@
       no_log: true
       diff: false
 
+    # The registry token the converge hands the role, the way the host inputs would: a throwaway in
+    # the shape of a classic token. verify.yml requires it in no log and compares the delivered
+    # file with it.
+    - name: Make the registry token sentinel
+      ansible.builtin.copy:
+        content: "ghp_{{ lookup('ansible.builtin.password', '/dev/null seed=registry_token chars=ascii_letters,digits length=36') }}"
+        dest: '{{ scenario_sentinel_dir }}/registry_token'
+        mode: '0600'
+      no_log: true
+      diff: false
+
 - name: Prepare the instance
   hosts: all
   gather_facts: false

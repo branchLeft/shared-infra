@@ -7,8 +7,10 @@
 # secret file checks and the deploy are in tasks/_pin.yml, last, so a refusal there
 # leaves the delivered files in place and nothing started.
 #
-# The role holds no secret. It never reads the database's root value: tasks/_pin.yml
-# checks the shape of the owner-placed file with no output and no value in a result.
+# The role never reads the database's root value: tasks/_pin.yml checks the shape of the
+# owner-placed file with no output and no value in a result. The one secret it handles is the
+# registry read token, an optional host input it writes into the registry key file
+# (tasks/_registry_key.yml) with no_log and diff: false on every task that names it.
 
 # ----- The input -----
 
@@ -147,6 +149,13 @@
 # the server: the rule is loaded in this run, and Docker is ordered after it for every boot.
 - name: Load the rule that admits the application host to the database port and drops every other source
   ansible.builtin.include_tasks: _listener_rule.yml
+
+# ----- The registry read key -----
+
+# Before the deploy, which pulls and verifies the private image with it. Writes nothing when the
+# two optional inputs are not given.
+- name: Write the registry read key the deploy pulls with
+  ansible.builtin.include_tasks: _registry_key.yml
 
 # ----- The unit, the pin and the one deploy -----
 

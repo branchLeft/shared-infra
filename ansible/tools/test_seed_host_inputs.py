@@ -1874,6 +1874,48 @@ class TenantEntryInputTests(unittest.TestCase):
             rig.document(),
         )
 
+    def test_the_fill_of_dbt1_never_asks_for_the_registry_key(self) -> None:
+        # The two registry inputs are optional and set only with --set, so a fill asks for the
+        # controller's key and address and nothing more.
+        rig = Rig(self, answers=[DBT1_KEY, "203.0.113.8"])
+        self.assertEqual(0, rig.run("--host", "dbt1"))
+        self.assertEqual(2, len(rig.prompts))
+        self.assertNotIn("db_t1_registry_login", rig.document())
+        self.assertNotIn("db_t1_registry_token", rig.document())
+
+    def test_set_adds_the_registry_login_and_token_one_by_one_and_keeps_the_rest(self) -> None:
+        fake_token = "ghp_" + "A1b2" * 9
+        rig = Rig(self, answers=["reader-account"])
+        rig.put(
+            tool.DEST_NAME,
+            json.dumps(
+                {
+                    "db_t1_tenant_entry_controller_key": DBT1_KEY,
+                    "db_t1_tenant_entry_controller_address": "203.0.113.8",
+                }
+            ),
+        )
+        self.assertEqual(0, rig.run("--host", "dbt1", "--set", "db_t1_registry_login"))
+        rig_token = Rig(self, answers=[fake_token])
+        rig_token.put(tool.DEST_NAME, rig.dest.read_text(encoding="utf-8"))
+        self.assertEqual(0, rig_token.run("--host", "dbt1", "--set", "db_t1_registry_token"))
+        self.assertEqual(
+            {
+                "db_t1_tenant_entry_controller_key": DBT1_KEY,
+                "db_t1_tenant_entry_controller_address": "203.0.113.8",
+                "db_t1_registry_login": "reader-account",
+                "db_t1_registry_token": fake_token,
+            },
+            rig_token.document(),
+        )
+        self.assertNotIn(fake_token, rig_token.everything)
+
+    def test_set_of_the_registry_token_is_refused_on_another_host(self) -> None:
+        rig = Rig(self, answers=["ghp_" + "A" * 36])
+        rig.put(tool.DEST_NAME, json.dumps({"tenant_entry_key": APPT1_KEY}))
+        self.assertEqual(1, rig.run("--host", "appt1", "--set", "db_t1_registry_token"))
+        self.assertNotIn("ghp_", rig.everything)
+
 
 class TypedValueCheckTests(unittest.TestCase):
     """The key lines and the controller address are checked when typed, before any write."""

@@ -13,6 +13,7 @@ A missing ansible-playbook is a failure, not a skip: the suite of a role is a co
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -32,6 +33,10 @@ OTHER_DIGEST = "b" * 64
 IMAGE = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
 OTHER_IMAGE = f"ghcr.io/branchleft/percona-server@sha256:{OTHER_DIGEST}"
 GOOD_LINE = "MYSQL_ROOT_PASSWORD=abcdefghijklmnopqrstuvwxyz012345ABCD\n"
+# A throwaway, in the shape of a classic token. Never a real value.
+LOGIN = "reader-account"
+TOKEN = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"
+REGISTRY_REFUSAL = "registry read key"
 REPORT = "Report in check mode that the image would be pinned and the stack started"
 TASK_LINE = re.compile(r"^TASK \[(?P<name>.*?)\] \*+$")
 RESULT_LINE = re.compile(r"^(?P<status>ok|changed|skipping|fatal|failed): \[localhost\]")
@@ -107,6 +112,9 @@ class Lab(unittest.TestCase):
         self.pin = self.root / "etc" / "dbt1.image.env"
         self.secrets = self.root / "etc" / "dbt1.env"
         self.log = self.root / "deploy.log"
+        self.registry_parent = self.root / "etc" / "registry"
+        self.registry_dir = self.registry_parent / "docker"
+        self.key_file = self.registry_dir / "config.json"
         self.program = self.root / "branchleft-deploy"
         self.program.write_text(
             f"#!{sys.executable}\n"
@@ -134,14 +142,36 @@ class Lab(unittest.TestCase):
         self.secrets.write_text(content, encoding="utf-8")
         self.secrets.chmod(mode)
 
-    def run_role(self, image: str, *, check: bool = False) -> Outcome:
-        """Run the included task file once with the given image."""
+    def place_key(self, mode: int = 0o600) -> None:
+        """Place a registry key file the way a hand placement or an earlier apply would."""
+        self.registry_dir.mkdir(parents=True, exist_ok=True)
+        self.key_file.write_text('{"auths": {"ghcr.io": {"auth": "x"}}}\n', encoding="utf-8")
+        self.key_file.chmod(mode)
+
+    def run_role(
+        self,
+        image: str,
+        *,
+        check: bool = False,
+        registry: dict[str, str] | None = None,
+        place_key: bool = True,
+    ) -> Outcome:
+        """Run the included task file once with the given image.
+
+        A key file is in the scratch tree unless the case says otherwise, so the cases about the
+        deploy are not about the key. `registry` gives the two optional inputs.
+        """
+        if place_key and not self.key_file.exists():
+            self.place_key()
         variables: dict[str, object] = {
             "db_t1_image": image,
             "db_t1_image_env_path": str(self.pin),
             "db_t1_secrets_path": str(self.secrets),
             "db_t1_data_directory": str(self.root / "data"),
             "db_t1_deploy_program": str(self.program),
+            "db_t1_registry_parent_directory": str(self.registry_parent),
+            "db_t1_registry_docker_directory": str(self.registry_dir),
+            "db_t1_registry_config_path": str(self.key_file),
             "db_t1_systemd_running_path": str(self.root / "no-systemd"),
             "db_t1_root_user_id": os.getuid(),
             "db_t1_root_group_id": os.getgid(),
@@ -150,6 +180,9 @@ class Lab(unittest.TestCase):
         if self.secrets.exists():
             # Whatever group the scratch tree gives a new file is the group the check wants.
             variables["db_t1_root_group_id"] = self.secrets.stat().st_gid
+        if not self.secrets.exists() and self.key_file.exists():
+            variables["db_t1_root_group_id"] = self.key_file.stat().st_gid
+        variables.update(registry or {})
         extra = self.root / "extra.json"
         extra.write_text(json.dumps(variables), encoding="utf-8")
         command = [str(ansible_playbook()), "-i", "localhost,", "-e", f"@{extra}"]
@@ -218,6 +251,156 @@ class PlanAndApply(Lab):
         self.assertEqual(outcome.code, 0, outcome.output)
         self.assertNotIn(GOOD_LINE.strip().split("=", 1)[1], outcome.output)
         self.assertEqual((self.secrets.read_bytes(), self.secrets.stat().st_mtime_ns), before)
+
+
+class RegistryKeyDeploy(Lab):
+    """The deploy needs the registry read key, from the host's inputs or placed by hand."""
+
+    def refused(self, outcome: Outcome) -> None:
+        """Assert the run failed on the key and the stand-in was never called."""
+        self.assertNotEqual(outcome.code, 0, outcome.output)
+        self.assertIn(REGISTRY_REFUSAL, outcome.output)
+        self.assertEqual(self.deploys(), [])
+
+    def test_a_deploy_with_no_key_on_the_host_is_refused(self) -> None:
+        self.write_secrets()
+        self.refused(self.run_role(IMAGE, place_key=False))
+
+    def test_a_key_open_to_others_is_refused(self) -> None:
+        self.write_secrets()
+        self.place_key(mode=0o644)
+        self.refused(self.run_role(IMAGE))
+
+    def test_a_key_that_is_a_link_is_refused(self) -> None:
+        self.write_secrets()
+        self.registry_dir.mkdir(parents=True)
+        target = self.root / "elsewhere.json"
+        target.write_text("{}", encoding="utf-8")
+        target.chmod(0o600)
+        self.key_file.symlink_to(target)
+        self.refused(self.run_role(IMAGE, place_key=False))
+
+    def test_a_key_in_place_lets_the_deploy_go_through(self) -> None:
+        self.write_secrets()
+        outcome = self.run_role(IMAGE)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(self.deploys(), [f"dbt1 {IMAGE}"])
+
+    def test_a_plan_with_the_inputs_given_and_no_file_yet_goes_through(self) -> None:
+        # The write is skipped in check mode (the directory is not made), so the plan reads the
+        # file as absent. The inputs given are the key to come, and the plan still names the deploy.
+        self.write_secrets()
+        given = {"db_t1_registry_token_given": "true"}
+        outcome = self.run_role(IMAGE, check=True, registry=given, place_key=False)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertEqual(outcome.status_of(REPORT), "changed")
+
+    def test_a_plan_with_no_inputs_and_no_file_is_refused(self) -> None:
+        self.write_secrets()
+        outcome = self.run_role(IMAGE, check=True, place_key=False)
+        self.assertNotEqual(outcome.code, 0, outcome.output)
+        self.assertIn(REGISTRY_REFUSAL, outcome.output)
+
+    def test_no_deploy_due_needs_no_key(self) -> None:
+        outcome = self.run_role("", place_key=False)
+        self.assertEqual(outcome.code, 0, outcome.output)
+
+
+class RegistryKeyWrite(Lab):
+    """The key file the role writes from the two optional inputs."""
+
+    include = "_registry_key.yml"
+    GIVEN = {"db_t1_registry_login": LOGIN, "db_t1_registry_token": TOKEN}
+
+    def run_keys(self, registry: dict[str, str] | None, *, check: bool = False) -> Outcome:
+        """Run the key tasks alone, with no key placed first."""
+        return self.run_role("", check=check, registry=registry, place_key=False)
+
+    def assert_no_secret_in(self, outcome: Outcome) -> None:
+        """Assert the token, and its two encodings, are in no output."""
+        auth = base64.b64encode(f"{LOGIN}:{TOKEN}".encode()).decode()
+        for needle in (TOKEN, auth, TOKEN[4:]):
+            self.assertNotIn(needle, outcome.output)
+
+    def test_both_inputs_write_one_entry_for_the_one_registry_root_closed(self) -> None:
+        outcome = self.run_keys(self.GIVEN)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        document = json.loads(self.key_file.read_text(encoding="utf-8"))
+        auth = base64.b64encode(f"{LOGIN}:{TOKEN}".encode()).decode()
+        self.assertEqual(document, {"auths": {"ghcr.io": {"auth": auth}}})
+        self.assertEqual(stat.S_IMODE(self.key_file.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.registry_dir.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.registry_parent.stat().st_mode), 0o755)
+        self.assert_no_secret_in(outcome)
+
+    def test_a_second_run_changes_nothing_and_a_new_token_rewrites_the_file(self) -> None:
+        self.assertEqual(self.run_keys(self.GIVEN).code, 0)
+        again = self.run_keys(self.GIVEN)
+        self.assertEqual(again.code, 0, again.output)
+        self.assertEqual(again.status_of("Write the registry key"), "ok")
+        rotated = {**self.GIVEN, "db_t1_registry_token": TOKEN[:-1] + "A"}
+        third = self.run_keys(rotated)
+        self.assertEqual(third.status_of("Write the registry key"), "changed")
+        self.assert_no_secret_in(third)
+
+    def test_a_plan_writes_nothing_and_shows_no_value(self) -> None:
+        outcome = self.run_keys(self.GIVEN, check=True)
+        self.assertEqual(outcome.code, 0, outcome.output)
+        self.assertGreaterEqual(outcome.changed, 1)
+        self.assertFalse(self.key_file.exists())
+        self.assert_no_secret_in(outcome)
+
+    def test_neither_input_writes_nothing_and_leaves_a_placed_file_alone(self) -> None:
+        self.place_key()
+        before = (self.key_file.read_bytes(), self.key_file.stat().st_mtime_ns)
+        for registry in (None, {"db_t1_registry_login": "", "db_t1_registry_token": ""}):
+            with self.subTest(registry):
+                outcome = self.run_keys(registry)
+                self.assertEqual(outcome.code, 0, outcome.output)
+                self.assertEqual(outcome.changed, 0, outcome.output)
+                after = (self.key_file.read_bytes(), self.key_file.stat().st_mtime_ns)
+                self.assertEqual(after, before)
+
+    def test_neither_input_makes_no_directory(self) -> None:
+        self.assertEqual(self.run_keys(None).code, 0)
+        self.assertFalse(self.registry_parent.exists())
+
+    def test_one_input_without_the_other_is_refused_and_writes_nothing(self) -> None:
+        for name, registry in (
+            ("login only", {"db_t1_registry_login": LOGIN}),
+            ("token only", {"db_t1_registry_token": TOKEN}),
+        ):
+            with self.subTest(name):
+                outcome = self.run_keys(registry)
+                self.assertNotEqual(outcome.code, 0, outcome.output)
+                self.assertIn("rule: registry key pair", outcome.output)
+                self.assertFalse(self.registry_parent.exists())
+                self.assert_no_secret_in(outcome)
+
+    def test_a_login_or_a_token_of_the_wrong_shape_is_refused_and_writes_nothing(self) -> None:
+        bad = {
+            "a colon in the login": {**self.GIVEN, "db_t1_registry_login": "reader:account"},
+            "a double hyphen in the login": {**self.GIVEN, "db_t1_registry_login": "read--er"},
+            "a hyphen at the end of the login": {**self.GIVEN, "db_t1_registry_login": "reader-"},
+            "a login of forty characters": {**self.GIVEN, "db_t1_registry_login": "a" * 40},
+            "a fine-grained token": {
+                **self.GIVEN,
+                "db_t1_registry_token": "github_pat_" + "A1" * 30,
+            },
+            "a short token": {**self.GIVEN, "db_t1_registry_token": "ghp_short"},
+            "a token with a line break": {**self.GIVEN, "db_t1_registry_token": TOKEN + "\nx"},
+            "a token with a template": {
+                **self.GIVEN,
+                "db_t1_registry_token": "ghp_{{ 7 * 7 }}" + "A" * 30,
+            },
+        }
+        for name, registry in bad.items():
+            with self.subTest(name):
+                outcome = self.run_keys(registry)
+                self.assertNotEqual(outcome.code, 0, outcome.output)
+                self.assertIn("rule: registry key shape", outcome.output)
+                self.assertFalse(self.registry_parent.exists())
+                self.assertNotIn(TOKEN, outcome.output)
 
 
 class Refusals(Lab):

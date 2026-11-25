@@ -352,6 +352,8 @@ class RealTree(unittest.TestCase):
                 "dbt1": [
                     "db_t1_tenant_entry_controller_key",
                     "db_t1_tenant_entry_controller_address",
+                    "db_t1_registry_login",
+                    "db_t1_registry_token",
                 ],
                 "mx1": ["mx1_abuse_page_token"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
@@ -375,6 +377,7 @@ class RealTree(unittest.TestCase):
                 "edget": ["ci_jump_user", "ci_jump_spool_user"],
                 "mx1": ["mx1_abuse_page_token"],
                 "demo1": ["broker_deploy_owner_due_diligence_email"],
+                "dbt1": ["db_t1_registry_login", "db_t1_registry_token"],
             },
         )
 

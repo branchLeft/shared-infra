@@ -1,0 +1,96 @@
+---
+# The registry read key: the Docker config the host pulls its one private image with. Included
+# by tasks/main.yml after the configuration directory exists and before the deploy.
+#
+# Owner and group are the numeric root ids the role's variables hold (0 and 0 on a host), so that a
+# behaviour test can run the same tasks as an ordinary user in a scratch tree.
+#
+# The key is two optional host inputs (the owner's root-only inputs file, set with
+# seed_host_inputs.py --set): the reader account's login and its classic token with only
+# read:packages. Neither is given: the role writes nothing and leaves whatever file the host
+# holds (a key placed by hand keeps working). Both are given: the role writes the one file the
+# unit, the deploy program and the verifier read through DOCKER_CONFIG. One of them is refused.
+#
+# The token is a secret. Every task that names it has no_log and diff: false (ANS-16). The
+# copy result carries a digest of the file's content, so the write is hidden whole. The checks
+# reduce the inputs to truth values first, so the refusal can name its rule and show nothing.
+
+# Literal keys: a templated mapping given to set_fact sets nothing and does not fail.
+- name: Reduce the registry key inputs to truth values
+  ansible.builtin.set_fact:
+    db_t1_registry_login_given: '{{ db_t1_registry_login_value | string | length > 0 }}'
+    db_t1_registry_token_given: '{{ db_t1_registry_token_value | string | length > 0 }}'
+    db_t1_registry_login_valid: '{{ db_t1_registry_login_value | string is match(db_t1_registry_login_pattern) }}'
+    db_t1_registry_token_valid: '{{ db_t1_registry_token_value | string is match(db_t1_registry_token_pattern) }}'
+  no_log: true
+  diff: false
+
+- name: Refuse one of the two registry key inputs without the other
+  ansible.builtin.assert:
+    that:
+      - db_t1_registry_login_given | bool == db_t1_registry_token_given | bool
+    quiet: true
+    fail_msg: >-
+      db_t1 refused (rule: registry key pair): the registry login and the registry token are
+      given together or not at all. Seed the missing one with seed_host_inputs.py --set. No value
+      is printed here.
+
+- name: Refuse a registry login that is not a GitHub login, and a token that is not a classic token
+  ansible.builtin.assert:
+    that:
+      - not (db_t1_registry_login_given | bool) or db_t1_registry_login_valid | bool
+      - not (db_t1_registry_token_given | bool) or db_t1_registry_token_valid | bool
+    quiet: true
+    fail_msg: >-
+      db_t1 refused (rule: registry key shape): the registry login must be a GitHub login (letters,
+      digits and single hyphens, 39 characters at most) and the registry token a classic personal
+      access token (ghp_ and then letters and digits). A fine-grained token cannot read a package.
+      No value is printed here.
+
+- name: Create the directory above the registry key directory
+  ansible.builtin.file:
+    path: '{{ db_t1_registry_parent_directory }}'
+    state: directory
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0755'
+  when: db_t1_registry_token_given | bool
+
+- name: Create the registry key directory, closed to everyone but root
+  ansible.builtin.file:
+    path: '{{ db_t1_registry_docker_directory }}'
+    state: directory
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0700'
+  when: db_t1_registry_token_given | bool
+
+# In check mode the directories above are not made, and a copy into a directory that is not
+# there fails, so the write is gated on what is there (ANS-10). A first plan shows the two
+# directories and not the file; the apply writes it.
+- name: Look at the registry key directory
+  ansible.builtin.stat:
+    path: '{{ db_t1_registry_docker_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_registry_directory_stat
+  when: db_t1_registry_token_given | bool
+
+# One entry, for the one registry, and no credential helper: the shape deploy_verifier holds the
+# file to. The file is written whole, with its owner and mode set by the task that makes it. The
+# diff is hidden by no_log and by diff: false, and the result is not kept.
+- name: Write the registry key as a Docker config with one entry
+  ansible.builtin.copy:
+    content: >-
+      {{ {'auths': {db_t1_registry_host: {'auth': (db_t1_registry_login_value ~ ':' ~ db_t1_registry_token_value) | b64encode}}}
+      | to_json }}{{ db_t1_line_end }}
+    dest: '{{ db_t1_registry_config_path }}'
+    owner: '{{ db_t1_root_user_id }}'
+    group: '{{ db_t1_root_group_id }}'
+    mode: '0600'
+  no_log: true
+  diff: false
+  when:
+    - db_t1_registry_token_given | bool
+    - db_t1_registry_directory_stat.stat.isdir | default(false)
