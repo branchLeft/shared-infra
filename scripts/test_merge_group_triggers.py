@@ -207,7 +207,8 @@ class MergeGroupTriggerTests(unittest.TestCase):
         for name, gate in (("docs-lint.yml", "docs-lint"), ("standards.yml", "standards")):
             with self.subTest(workflow=name):
                 block = job_block(read(name), gate)
-                self.assertRegex(block, r"(?m)^    needs: queue-proof$")
+                # docs-lint's gate also needs the decision and the lint run, so it lists them.
+                self.assertRegex(block, r"(?m)^    needs: (?:queue-proof|\[[^\]]*\bqueue-proof\b[^\]]*\])$")
                 condition = job_if(block) or ""
                 self.assertIn("!cancelled()", condition)
                 self.assertNotIn("always()", condition)

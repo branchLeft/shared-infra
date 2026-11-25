@@ -59,11 +59,12 @@ services:
       # HostOrServiceDown, which is the intended failure mode. See
       # RUNBOOK-monitoring.md.
       - ./prometheus/mx1-metrics-password:/etc/prometheus/mx1-metrics-password:ro
-      # The CA, client certificate and client key the `node` job presents to
-      # demo1's exporter (ca.crt, client.crt, client.key). Placed on edge1 by
-      # the owner before this config is delivered; the repository ships none of
-      # them. Prometheus reads them at start, so a missing file stops it, and
-      # the first delivery of this line waits for the files:
+      # The pin, client certificate and client key the `node` job presents to
+      # demo1's exporter (ca.crt, client.crt, client.key), written on edge1 by
+      # the host_tls_identity role; the repository ships none of them. Prometheus
+      # reads each file a config names when it loads it, so a missing one stops
+      # it: the config that names them is delivered as prometheus.yml only once
+      # the pin is set, and until then this mount is unused. See
       # render.md#demo1s-node-target.
       - /etc/branchleft/demo1-metrics-tls:/etc/prometheus/demo1-metrics-tls:ro
       - prometheus-data:/prometheus

@@ -1,0 +1,14 @@
+# Written by the provisioning_controller_host role. Read with -F by the controller's ssh, and by
+# the ssh it starts for each jump hop. Public text only: the key is named by its path, which is
+# the one systemd makes for a pass. Only the two hops are named here: the target is reached with
+# the same key by the controller's own command line, and the slot's deploy key is given there
+# too, so no extra identity is offered to a host that has not asked for it. Every hop is pinned
+# to the host keys file alone and logs in by key only.
+Host {{ provisioning_controller_host_edge1_address }} {{ provisioning_controller_host_edget_address }}
+  IdentityFile {{ provisioning_controller_host_ssh_key_runtime_path }}
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile {{ provisioning_controller_host_known_hosts_file }}
+  GlobalKnownHostsFile /dev/null
+  ForwardAgent no

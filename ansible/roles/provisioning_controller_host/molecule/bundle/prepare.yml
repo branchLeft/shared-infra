@@ -1,0 +1,66 @@
+---
+# Test setup only. The parents stand in for the roles that run earlier on ops1, and two bundles
+# are built here for a file:// URL (the role's own fetch has no network to reach in the test). Both hold only a
+# stand-in program. The first is a root-owned executable, as a bundle must be. The second holds the
+# program without its execute bit, so the role must refuse it.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    # The stand-in for the executor. It writes what the real one would: a line in its state file
+    # when a run completes, and it fails for an approval whose id ends in -stuck. It also keeps
+    # one line per invocation, so a test can read which approvals a pass ran.
+    scenario_stand_in: |
+      #!/bin/sh
+      umask 077
+      id="$4"
+      echo "$id" >> /var/lib/branchleft/provisioning-controller/invocations.log
+      case "$id" in
+        *-stuck) exit 1 ;;
+      esac
+      printf '{"at":"2026-01-01T00:00:00Z","approvalId":"%s","event":"run-complete"}\n' "$id" >> /var/lib/branchleft/provisioning-controller/run-state.jsonl
+      exit 0
+  tasks:
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+        - /var/lib/branchleft
+        - '{{ scenario_fixture_dir }}'
+        - '{{ scenario_fixture_dir }}/good/bin'
+        - '{{ scenario_fixture_dir }}/noexec/bin'
+
+    - name: Put the stand-in program in each bundle's tree
+      ansible.builtin.copy:
+        content: '{{ scenario_stand_in }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '{{ item.mode }}'
+      loop:
+        - dest: '{{ scenario_fixture_dir }}/good/bin/provisioning-controller'
+          mode: '0755'
+        - dest: '{{ scenario_fixture_dir }}/noexec/bin/provisioning-controller'
+          mode: '0644'
+
+    - name: Build each bundle
+      ansible.builtin.command:
+        argv:
+          [
+            tar,
+            -czf,
+            '{{ scenario_fixture_dir }}/bundle-{{ item }}.tar.gz',
+            -C,
+            '{{ scenario_fixture_dir }}/{{ item }}',
+            bin,
+          ]
+        creates: '{{ scenario_fixture_dir }}/bundle-{{ item }}.tar.gz'
+      loop:
+        - good
+        - noexec

@@ -15,6 +15,7 @@ Pulumi.*.yaml
 # YAML quote-style rewrite (double to single) disagrees with the renderer, so
 # the two fight over the same bytes every time either one runs.
 hetzner/monitoring/stack/prometheus/prometheus.yml
+hetzner/monitoring/stack/prometheus/prometheus.demo1.yml
 hetzner/monitoring/stack/prometheus/alerts.yml
 hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl
 
