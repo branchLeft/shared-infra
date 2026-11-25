@@ -3,11 +3,20 @@ name: tenants-state-rewrap
 # Re-keys the tenants stack's state under a new passphrase, once, when the old one is lost.
 # Run by hand from main (Actions tab, "Run workflow"); no schedule, no pull-request trigger.
 # `inspect` reads the state with no environment. `rewrap` waits for the owner's approval in
-# `production`. The steps, the gates and the way back are in scripts/tenants_state_rewrap.md.
+# `production`. The boolean input `drop_reproducible` (default false) is the only way
+# the tool's drop option reaches either job. The steps, the gates and the way back are in scripts/tenants_state_rewrap.md.
 # Delete this file in the pull request after the stack has applied once from CI.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      drop_reproducible:
+        description: >-
+          Drop the encrypted values CI re-derives on every run (the hcloud provider's token)
+          from the state before it is re-keyed. Any other encrypted value still refuses.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -49,10 +58,16 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
           AWS_REGION: hel1
-        run: >-
-          python3 scripts/tenants_state_rewrap.py inspect
-          --project-dir hetzner/tenants
-          --summary-file "$GITHUB_STEP_SUMMARY"
+          DROP_REPRODUCIBLE: ${{ inputs.drop_reproducible }}
+        run: |
+          args=()
+          if [ "${DROP_REPRODUCIBLE}" = "true" ]; then
+            args+=(--drop-reproducible)
+          fi
+          python3 scripts/tenants_state_rewrap.py inspect \
+            --project-dir hetzner/tenants \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            "${args[@]}"
 
   rewrap:
     name: Re-key the tenants state (production)
@@ -166,12 +181,18 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
           AWS_REGION: hel1
-        run: >-
-          python3 scripts/tenants_state_rewrap.py rewrap
-          --project-dir hetzner/tenants
-          --delete-guard scripts/assert-no-hetzner-deletes.py
-          --summary-file "$GITHUB_STEP_SUMMARY"
-          --github-output "$GITHUB_OUTPUT"
+          DROP_REPRODUCIBLE: ${{ inputs.drop_reproducible }}
+        run: |
+          args=()
+          if [ "${DROP_REPRODUCIBLE}" = "true" ]; then
+            args+=(--drop-reproducible)
+          fi
+          python3 scripts/tenants_state_rewrap.py rewrap \
+            --project-dir hetzner/tenants \
+            --delete-guard scripts/assert-no-hetzner-deletes.py \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT" \
+            "${args[@]}"
 
       # For a runner that was killed between the removal and the restore. A no-op when
       # this run copied nothing aside, and idempotent when the tool already restored.
