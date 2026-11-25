@@ -48,6 +48,31 @@
   loop: '{{ demo1_build_slots }}'
   loop_control:
     label: '{{ demo1_build_health_port_base | int + (item | int) }}'
+  register: demo1_build_routers_port
+  ignore_errors: true
+  when: not ansible_check_mode
+
+# A router whose port never opened is refused with its own journal, so the cause is in the
+# run's output and not only on the host.
+- name: Read the journal of each health router whose port did not open
+  ansible.builtin.command:
+    argv: [journalctl, -u, 'branchleft-health-router@{{ item.item }}.service', -n, '40', --no-pager]
+  loop: '{{ demo1_build_routers_port.results | default([]) | selectattr("failed", "defined") | selectattr("failed") | list }}'
+  loop_control:
+    label: '{{ item.item }}'
+  register: demo1_build_routers_journal
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Refuse a health router whose port did not open, naming its journal
+  ansible.builtin.fail:
+    msg: >-
+      The health router of slot {{ item.item.item }} did not listen on
+      {{ demo1_build_health_port_base | int + (item.item.item | int) }} within 30 seconds. Its journal:
+      {{ item.stdout_lines | default([]) | join(' | ') }}
+  loop: '{{ demo1_build_routers_journal.results | default([]) }}'
+  loop_control:
+    label: '{{ item.item.item }}'
   when: not ansible_check_mode
 
 # Read back what systemd now holds for each router, changing nothing (ANS-10). A router
