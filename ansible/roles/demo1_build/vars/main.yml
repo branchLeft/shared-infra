@@ -388,6 +388,15 @@ demo1_build_secret_holders:
     owner: root
     mode: '0640'
 
+  # The node exporter's TLS server key, written once by host_tls_identity (its vars, the demo1 row;
+  # its README, the files table). It is the exporter's own TLS identity: edge1 pins the certificate
+  # (server.crt), not this key, and the key authenticates nothing outward.
+  - name: Node exporter TLS server key
+    path_regex: '/etc/branchleft/node-exporter-tls/server\.key'
+    reaches: "the node exporter's TLS identity on this host; edge1 pins the certificate, not this key, and the key authenticates nothing outward"
+    owner: root
+    mode: '0640'
+
   # The CI keys of demo1's ansible-ci account (enrol runbook Part 3; ansible-ci-jump-through-edge1
   # runbook step 8.8, owner ruling demo1-ci-login-r2). Each key runs one forced command only.
   - name: CI keys in the ansible-ci account's authorised keys
