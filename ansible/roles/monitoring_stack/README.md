@@ -342,7 +342,8 @@ their own user, so a file or directory tighter than this makes a container fail.
   `grafana/provisioning/dashboard-json/{backups,host-health,mail-queue,support-access,tenant-health}.json`,
   `grafana/provisioning/dashboards/dashboards.yaml`,
   `grafana/provisioning/datasources/prometheus.yaml`, `ntfy/server.yml.tmpl`,
-  `prometheus/alerts.yml` and `prometheus/prometheus.yml`.
+  `prometheus/alerts.yml` and `prometheus/prometheus.yml`. The last is one of two
+  renderings of the same config and the role picks the source (next section).
 - `/etc/systemd/system/branchleft-compose@monitoring.service.d/`, mode `0755`,
   holding `override.conf`, mode `0644`.
 - `/etc/branchleft/`, mode `0755`, if absent, and `/etc/branchleft/monitoring.env`,
@@ -359,6 +360,26 @@ their own user, so a file or directory tighter than this makes a container fail.
   restart is due, run before the restart.
 - A restart of the monitoring unit when "Restart" says so.
 - No port, no user, no firewall rule, no container, no first start.
+
+### Which Prometheus config
+
+The stack holds two renderings of `prometheus/prometheus.yml`
+(`hetzner/monitoring/render.ts`): `prometheus.yml`, which names no TLS file, and
+`prometheus.demo1.yml`, which scrapes demo1 and names `ca.crt`, `client.crt` and `client.key` in
+`/etc/branchleft/demo1-metrics-tls`. Prometheus reads each named file when it loads its config and
+a missing one stops it, with every alert on edge1. `host_tls_identity` writes the key and
+certificate always and the pin (`ca.crt`) only once `host_tls_identity_peer_cert` is non-empty.
+
+So the delivery task for the config chooses its source. It takes `prometheus.demo1.yml` while
+`monitoring_stack_demo1_scrape` is true, that is while `host_tls_identity_peer_cert`, trimmed, is
+not empty (the test the pin role makes; an absent value counts as empty), and `prometheus.yml`
+otherwise. Either way the destination is `prometheus/prometheus.yml`, which is the one file the
+container mounts and the fingerprint hashes, so setting the value changes the hash and the unit
+restarts onto the config that names the pin. This role reads the variable but does not own it: it
+is `host_tls_identity`'s one input, set in `ansible/owner_vars/edge1.yml`.
+
+`ansible/checks/test_edge1_prometheus_tls_files.py` holds both renderings to the files the pin
+role writes and holds this choice to that same value.
 
 ### One home for every file
 
@@ -600,6 +621,10 @@ is not shown to fail):
   through the converge rows);
 - the assertion that every image in the Compose file is pinned by digest;
 - the assertion that each file named in `verify_not_carried` still exists;
+- the delivery of `prometheus.demo1.yml` under a set `host_tls_identity_peer_cert`: no scenario
+  sets the value, so the harness runs only the plain path, and `tests/unit/test_demo1_variant.py`
+  holds the choice by running the task's own `src` through Ansible's templating for a set, an
+  empty, a blank and an absent value;
 - the always-changed variant of the idempotence step: the step is the harness's, not
   run against a deliberately non-idempotent edit of this role.
 

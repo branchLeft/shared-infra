@@ -18,6 +18,7 @@ const PRE_COMMIT_CONFIG = path.join(REPO_ROOT, '.pre-commit-config.yaml');
 
 const GENERATED_FILES = [
   'hetzner/monitoring/stack/prometheus/prometheus.yml',
+  'hetzner/monitoring/stack/prometheus/prometheus.demo1.yml',
   'hetzner/monitoring/stack/prometheus/alerts.yml',
   'hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl',
   'hetzner/edge/stack/caddy/Caddyfile',
