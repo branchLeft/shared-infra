@@ -389,8 +389,8 @@ demo1_build_secret_holders:
     mode: '0640'
 
   # The node exporter's TLS server key, written once by host_tls_identity (its vars, the demo1 row;
-  # its README, the files table). It is the exporter's own TLS identity: edge1 pins the certificate
-  # (server.crt), not this key, and the key authenticates nothing outward.
+  # its README, the files table). It is the exporter's own TLS identity: the handshake proves
+  # demo1's exporter to edge1's Prometheus with this key, and edge1 pins the certificate (server.crt).
   - name: Node exporter TLS server key
     path_regex: '/etc/branchleft/node-exporter-tls/server\.key'
     reaches: "proves demo1's node exporter to edge1's Prometheus over TLS (edge1 pins server.crt, and the handshake needs this key); root and the exporter's group, prometheus, can read it"
