@@ -481,6 +481,371 @@ class ChildEnvTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Dropping the encrypted values CI re-derives (synthetic states, no real state)
+# ---------------------------------------------------------------------------
+
+PROVIDER_URN = "urn:pulumi:production::proj::pulumi:providers:hcloud::default_1_60_0"
+
+
+def cipher(tag: str) -> dict[str, object]:
+    return {**SIG, "ciphertext": f"v1:FAKE-{tag}"}
+
+
+def hcloud_provider(
+    *, inputs: dict[str, object] | None = None, outputs: dict[str, object] | None = None
+) -> dict[str, object]:
+    """The default hcloud provider as the state records it: its token, encrypted, both sides."""
+    return {
+        "urn": PROVIDER_URN,
+        "type": "pulumi:providers:hcloud",
+        "id": "0000-fake",
+        "inputs": {"version": "1.60.0", "token": cipher("in")} if inputs is None else inputs,
+        "outputs": {"version": "1.60.0", "token": cipher("out")} if outputs is None else outputs,
+    }
+
+
+def server_with(key: str) -> dict[str, object]:
+    return {
+        "urn": "urn:pulumi:production::proj::hcloud:index/server:Server::db-t1",
+        "type": "hcloud:index/server:Server",
+        "id": "222",
+        "inputs": {"name": "db-t1"},
+        "outputs": {"ipv4": "203.0.113.8", key: cipher("other")},
+    }
+
+
+def stack_resource() -> dict[str, object]:
+    return export_doc()["deployment"]["resources"][0]  # type: ignore[index,no-any-return]
+
+
+class CiphertextListingTests(unittest.TestCase):
+    def test_each_ciphertext_is_named_by_type_urn_name_side_and_key_path(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        found = rw.find_ciphertexts(doc)
+        self.assertEqual(
+            [(c.resource_type, c.name, c.side, c.key_text) for c in found],
+            [
+                ("pulumi:providers:hcloud", "default_1_60_0", "inputs", "token"),
+                ("pulumi:providers:hcloud", "default_1_60_0", "outputs", "token"),
+                ("hcloud:index/server:Server", "db-t1", "outputs", "password"),
+            ],
+        )
+
+    def test_a_nested_key_path_and_a_list_position_are_spelled_out(self) -> None:
+        provider = hcloud_provider(inputs={"cfg": {"list": [{"k": cipher("n")}]}}, outputs={})
+        (found,) = rw.find_ciphertexts(export_doc(resources=[provider]))
+        self.assertEqual(found.key_text, "cfg.list.[0].k")
+
+    def test_the_listing_agrees_with_the_count(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        self.assertEqual(len(rw.find_ciphertexts(doc)), rw.count_encrypted(doc))
+
+    def test_the_description_names_places_and_never_a_value(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        report = rw.Report()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rw.describe_ciphertexts(
+                report, rw.find_ciphertexts(doc), rw.plan_drop(doc, enabled=True)
+            )
+        text = "\n".join(report.lines)
+        self.assertIn("pulumi:providers:hcloud | default_1_60_0 | inputs | token | DROP", text)
+        self.assertIn("hcloud:index/server:Server | db-t1 | outputs | password | KEPT", text)
+        for private in (
+            "FAKE",
+            "ciphertext",
+            rw.SECRET_SIG_VALUE,
+            "urn:pulumi",
+            "203.0.113.8",
+        ):
+            self.assertNotIn(private, text)
+
+
+class PlanDropTests(unittest.TestCase):
+    def test_only_the_provider_token_is_dropped_from_both_sides(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        before = copy.deepcopy(doc)
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        self.assertEqual(plan.remaining, ())
+        self.assertEqual(rw.count_encrypted(plan.doc), 0)
+        provider = resource(plan.doc, 1)
+        self.assertEqual(provider["inputs"], {"version": "1.60.0"})
+        self.assertEqual(provider["outputs"], {"version": "1.60.0"})
+        self.assertEqual(doc, before, "the input document is not mutated")
+        self.assertEqual(rw.gate_problems(rw.inspect_export(plan.doc), dropping=True), [])
+
+    def test_a_token_and_one_other_ciphertext_leaves_the_other_named_and_refuses(
+        self,
+    ) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        self.assertEqual(
+            [(c.resource_type, c.name, c.side, c.key_text) for c in plan.remaining],
+            [("hcloud:index/server:Server", "db-t1", "outputs", "password")],
+        )
+        problems = rw.gate_problems(rw.inspect_export(plan.doc), dropping=True)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("1 encrypted value(s) remain", problems[0])
+        self.assertEqual(resource(plan.doc, 2), server_with("password"), "the other is untouched")
+
+    def test_no_ciphertext_means_the_document_is_unchanged(self) -> None:
+        doc = export_doc()
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(plan.remaining, ())
+        self.assertEqual(plan.doc, doc)
+
+    def test_nothing_is_dropped_unless_asked(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        plan = rw.plan_drop(doc, enabled=False)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(len(plan.remaining), 2)
+        self.assertIs(plan.doc, doc)
+        self.assertTrue(rw.gate_problems(rw.inspect_export(plan.doc)))
+
+    def test_the_allowlist_matches_the_exact_place_and_nothing_near_it(self) -> None:
+        other_provider = {**hcloud_provider(), "type": "pulumi:providers:aws"}
+        near_miss = {**hcloud_provider(), "type": "pulumi:providers:hcloud-other"}
+        not_a_provider = {**hcloud_provider(), "type": "hcloud:index/server:Server"}
+        other_key = hcloud_provider(inputs={"password": cipher("a")}, outputs={"auth": cipher("b")})
+        nested = hcloud_provider(inputs={"cfg": {"token": cipher("c")}}, outputs={})
+        listed = hcloud_provider(inputs={"token": [cipher("d")]}, outputs={})
+        other_side = {
+            **hcloud_provider(inputs={}, outputs={}),
+            "propertyDependencies": {},
+        }
+        other_side["extra"] = {"token": cipher("e")}
+        for label, doc_resource, kept in (
+            ("another provider", other_provider, 2),
+            ("a near-miss type", near_miss, 2),
+            ("a non-provider type", not_a_provider, 2),
+            ("other keys", other_key, 2),
+            ("a nested token", nested, 1),
+            ("a token in a list", listed, 1),
+            ("another side", other_side, 1),
+        ):
+            with self.subTest(label):
+                plan = rw.plan_drop(export_doc(resources=[doc_resource]), enabled=True)
+                self.assertEqual(plan.dropped, ())
+                self.assertEqual(len(plan.remaining), kept)
+
+    def test_a_ciphertext_outside_any_resource_is_never_dropped(self) -> None:
+        doc = export_doc(resources=[hcloud_provider()])
+        deployment(doc)["metadata"] = {"token": cipher("m")}
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        (left,) = plan.remaining
+        self.assertEqual((left.resource_type, left.side), ("(none)", "(outside resources)"))
+
+
+class RequireOnlyDroppedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.old = export_doc(resources=[stack_resource(), hcloud_provider()])
+        self.plan = rw.plan_drop(self.old, enabled=True)
+
+    def test_exactly_the_dropped_keys_pass(self) -> None:
+        rw.require_only_dropped(self.old, self.plan.doc, self.plan.dropped)
+
+    def test_the_provider_block_is_left_out_of_the_comparison(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        deployment(new)["secrets_providers"] = new_block()
+        rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_one_more_key_removed_is_refused(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        del child(resource(new, 1), "inputs")["version"]
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_a_dropped_key_left_in_place_is_refused(self) -> None:
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, self.old, self.plan.dropped)
+
+    def test_a_changed_value_or_an_added_key_is_refused(self) -> None:
+        changed = copy.deepcopy(self.plan.doc)
+        child(resource(changed, 1), "inputs")["version"] = "9.9.9"
+        added = copy.deepcopy(self.plan.doc)
+        child(resource(added, 1), "inputs")["extra"] = 1
+        for new in (changed, added):
+            with self.assertRaises(rw.RefusalError):
+                rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_a_removed_resource_is_refused(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        resources = deployment(new)["resources"]
+        assert isinstance(resources, list)  # noqa: S101
+        resources.pop()
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+
+class FakePulumi(rw.Pulumi):
+    """Answers the calls the route makes from a synthetic state; nothing real is touched."""
+
+    def __init__(self, state: dict[str, object]) -> None:
+        super().__init__(
+            binary="pulumi",
+            project_dir=pathlib.Path("."),
+            env={"PULUMI_CONFIG_PASSPHRASE": "x"},
+        )
+        self.state = state
+        self.calls: list[tuple[str, ...]] = []
+        self.imported: dict[str, object] | None = None
+
+    def call(self, *args: str, stdout_to: pathlib.Path | None = None) -> rw.Completed:
+        self.calls.append(args)
+        out = ""
+        if args[:2] == ("stack", "export"):
+            out = json.dumps(self.state)
+        elif args[:2] == ("stack", "init"):
+            self.state = export_doc(resources=[])
+            deployment(self.state)["secrets_providers"] = new_block()
+        elif args[:2] == ("stack", "import"):
+            self.imported = json.loads(pathlib.Path(args[args.index("--file") + 1]).read_text())
+            self.state = self.imported
+        elif args[0] == "preview":
+            urn = "urn:pulumi:production::proj::hcloud:index/server:Server::edge"
+            out = json.dumps({"steps": [{"op": "same", "urn": urn}]})
+        elif args[0] == "refresh":
+            out = json.dumps({"changeSummary": {"same": 2}, "steps": []})
+        if stdout_to is not None:
+            stdout_to.write_text(out, encoding="utf-8")
+        return rw.Completed(0, "other")
+
+    def verbs(self) -> list[str]:
+        return [" ".join(c[:2]) for c in self.calls]
+
+
+class DropRouteTests(unittest.TestCase):
+    """The whole route, `run_inspect` and `run_rewrap`, over a synthetic state."""
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="rewrap-drop-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def start(self, doc: dict[str, object], *, drop: bool) -> tuple[rw.Context, FakePulumi, bytes]:
+        raw = json.dumps(doc).encode()
+        store = rw.DirStore(self.tmp / "bucket")
+        store.write(".pulumi/stacks/proj/production.json", raw)
+        scratch = self.tmp / "scratch"
+        scratch.mkdir(exist_ok=True)
+        fake = FakePulumi(doc)
+        ctx = rw.Context(
+            pulumi=fake,
+            store=store,
+            project="proj",
+            stack="production",
+            project_dir=self.tmp,
+            scratch=scratch,
+            run_tag="t-1",
+            report=rw.Report(),
+            now=lambda: datetime.datetime(2026, 11, 25, 12, 0, 0, tzinfo=datetime.UTC),
+            drop_reproducible=drop,
+        )
+        return ctx, fake, raw
+
+    def run_it(self, fn: object, ctx: rw.Context) -> tuple[int, str]:
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = fn(ctx)  # type: ignore[operator]
+        return code, "\n".join(ctx.report.lines)
+
+    def test_only_the_token_is_dropped_and_the_route_completes(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("encrypted values: 2", out)
+        self.assertIn("after dropping 2 reproducible value(s): 0 encrypted value(s) remain", out)
+        self.assertIn("imported: only `deployment.secrets_providers` and the 2 dropped", out)
+        assert fake.imported is not None  # noqa: S101
+        self.assertEqual(rw.count_encrypted(fake.imported), 0)
+        self.assertEqual(deployment(fake.imported)["secrets_providers"], new_block())
+        self.assertEqual(
+            rw.canonical(rw.without_secrets_providers(fake.imported)),
+            rw.canonical(rw.without_secrets_providers(rw.plan_drop(doc, enabled=True).doc)),
+        )
+        aside = ctx.store.read(
+            "aside/proj/production.20261125T120000Z.t-1.json",
+        )
+        self.assertEqual(aside, raw, "the aside copy is the original, token included")
+        self.assertIn("refresh preview", out)
+        for private in ("FAKE", "ciphertext", rw.SECRET_SIG_VALUE):
+            self.assertNotIn(private, out)
+
+    def test_a_second_ciphertext_refuses_names_it_and_touches_nothing(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("hcloud:index/server:Server | db-t1 | outputs | password | KEPT", out)
+        self.assertIn("1 encrypted value(s) remain after dropping", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+        self.assertEqual(ctx.store.keys("aside"), [], "nothing was copied aside")
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_the_token_alone_is_refused_without_the_flag(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        ctx, fake, _ = self.start(doc, drop=False)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("re-derivable, kept (--drop-reproducible is not set)", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+
+    def test_no_ciphertext_takes_the_unchanged_path_with_or_without_the_flag(
+        self,
+    ) -> None:
+        for drop in (False, True):
+            with self.subTest(drop=drop):
+                ctx, fake, _ = self.start(export_doc(), drop=drop)
+                code, out = self.run_it(rw.run_rewrap, ctx)
+                self.assertEqual(code, rw.EXIT_OK, out)
+                self.assertIn(
+                    "imported: only `deployment.secrets_providers` differs from the old",
+                    out,
+                )
+                self.assertNotIn("and the", out)
+                assert fake.imported is not None  # noqa: S101
+                self.assertEqual(
+                    rw.canonical(rw.without_secrets_providers(fake.imported)),
+                    rw.canonical(rw.without_secrets_providers(export_doc())),
+                )
+
+    def test_inspect_lists_every_ciphertext_and_exits_refused_without_the_flag(
+        self,
+    ) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, fake, _ = self.start(doc, drop=False)
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertEqual(out.count("  encrypted: "), 3)
+        self.assertEqual(fake.verbs(), ["stack export"])
+
+    def test_inspect_with_the_flag_passes_for_the_token_alone_and_refuses_for_another(
+        self,
+    ) -> None:
+        ctx, _, _ = self.start(
+            export_doc(resources=[stack_resource(), hcloud_provider()]), drop=True
+        )
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("CLEAN: only the 2 listed reproducible value(s)", out)
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, _, _ = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("db-t1", out)
+
+    def test_the_flag_is_refused_for_restore(self) -> None:
+        with (
+            self.assertRaises(SystemExit) as caught,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            rw.main(["restore", "--project-dir", ".", "--drop-reproducible"])
+        self.assertEqual(caught.exception.code, rw.EXIT_USAGE)
+
+
+# ---------------------------------------------------------------------------
 # A real pulumi binary on a throwaway file backend
 # ---------------------------------------------------------------------------
 
