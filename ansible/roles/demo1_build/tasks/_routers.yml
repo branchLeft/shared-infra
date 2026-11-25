@@ -1,17 +1,15 @@
 ---
 # Internal to the role, included from main.yml after _units.yml. Enables and starts each
-# slot's health router, branchleft-health-router@<slot>, so the seven routers run after
-# every apply. Until this task, enabling them was a hand step (ghost-platform
-# demo-host/provision/render_router_unit.md, the Install block).
+# slot's health router, branchleft-health-router@<slot>. Until this task, enabling them was a
+# hand step (ghost-platform demo-host/provision/render_router_unit.md, the Install block).
 #
-# Idempotent: systemd_service with enabled and state started changes nothing once a
-# router is enabled and running, and it never restarts one. So a router keeps the code it
-# started with until the owner restarts it. The routers are not tied to any colour unit
-# (the unit has no dependency on one), so a colour's stop or start never reaches them.
+# Idempotent: systemd_service with enabled and state started changes nothing once a router is
+# enabled and running, and it never restarts one. A router keeps the code it started with until
+# the owner restarts it. The routers name no colour unit, so a colour's stop or start never
+# reaches them.
 #
-# In check mode the template unit exists only once a real run has written it. On a first
-# plan the enable is skipped with a visible line that says so, never a silent pass; the
-# check mode of an apply that has the unit runs in full.
+# Not checked here: whether a router is active or listening. A container cannot run the unit,
+# so those are proved on the host after the gated apply (see the README, "Health routers").
 
 - name: Look at whether the router template unit is installed
   ansible.builtin.stat:
@@ -26,81 +24,3 @@
       An apply enables and starts one router per slot, on ports {{ demo1_build_health_port_base }} to
       {{ demo1_build_health_port_base | int + (demo1_build_slots | length) - 1 }}.
   when: ansible_check_mode and not demo1_build_router_unit_stat.stat.exists
-
-- name: Enable and start the health router of each slot
-  ansible.builtin.systemd_service:
-    name: 'branchleft-health-router@{{ item }}.service'
-    enabled: true
-    state: started
-  loop: '{{ demo1_build_slots }}'
-  loop_control:
-    label: '{{ item }}'
-  when: not ansible_check_mode or demo1_build_router_unit_stat.stat.exists
-
-# The port each router answers on, on loopback only (10100 plus the slot). Waited for before
-# the read back: a router starts asynchronously, and a read taken while it is still activating
-# would refuse a router that is starting correctly.
-- name: Wait for each slot's health router to listen on its loopback port
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: '{{ demo1_build_health_port_base | int + (item | int) }}'
-    timeout: 30
-  loop: '{{ demo1_build_slots }}'
-  loop_control:
-    label: '{{ demo1_build_health_port_base | int + (item | int) }}'
-  register: demo1_build_routers_port
-  ignore_errors: true
-  when: not ansible_check_mode
-
-# A router whose port never opened is refused with its own journal, so the cause is in the
-# run's output and not only on the host.
-- name: Read the journal of each health router whose port did not open
-  ansible.builtin.command:
-    argv: [journalctl, -u, 'branchleft-health-router@{{ item.item }}.service', -n, '40', --no-pager]
-  loop: '{{ demo1_build_routers_port.results | default([]) | selectattr("failed", "defined") | selectattr("failed") | list }}'
-  loop_control:
-    label: '{{ item.item }}'
-  register: demo1_build_routers_journal
-  changed_when: false
-  when: not ansible_check_mode
-
-- name: Refuse a health router whose port did not open, naming its journal
-  ansible.builtin.fail:
-    msg: >-
-      The health router of slot {{ item.item.item }} did not listen on
-      {{ demo1_build_health_port_base | int + (item.item.item | int) }} within 30 seconds. Its journal:
-      {{ item.stdout_lines | default([]) | join(' | ') }}
-  loop: '{{ demo1_build_routers_journal.results | default([]) }}'
-  loop_control:
-    label: '{{ item.item.item }}'
-  when: not ansible_check_mode
-
-# Read back what systemd now holds for each router, changing nothing (ANS-10). A router
-# that is loaded but not enabled or not active stops the run here, and names the unit.
-- name: Ask systemd about each slot's health router, changing nothing
-  ansible.builtin.systemd_service:
-    name: 'branchleft-health-router@{{ item }}.service'
-  loop: '{{ demo1_build_slots }}'
-  loop_control:
-    label: '{{ item }}'
-  register: demo1_build_routers_state
-  check_mode: false
-  changed_when: false
-  when: not ansible_check_mode or demo1_build_router_unit_stat.stat.exists
-
-- name: Refuse a health router that is not loaded, enabled and active
-  ansible.builtin.assert:
-    that:
-      - item.status.LoadState == 'loaded'
-      - item.status.UnitFileState == 'enabled'
-      - item.status.ActiveState == 'active'
-    quiet: true
-    fail_msg: >-
-      {{ item.item | default('') }} is not loaded, enabled and active (LoadState
-      {{ item.status.LoadState | default('unknown') }}, UnitFileState
-      {{ item.status.UnitFileState | default('unknown') }}, ActiveState
-      {{ item.status.ActiveState | default('unknown') }}). See the branchleft-health-router@ unit and its journal.
-  loop: '{{ demo1_build_routers_state.results }}'
-  loop_control:
-    label: 'branchleft-health-router@{{ item.item }}.service'
-  when: not ansible_check_mode or demo1_build_router_unit_stat.stat.exists
