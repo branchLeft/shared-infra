@@ -161,9 +161,10 @@ class PlanOutputSizeCase(unittest.TestCase):
                 self.assertIn(listed, SHOWN_LISTS, f"{name}: joins {listed}, which grows with the host")
         self.assertNotIn("demo1_build_secret_unlisted |", messages[refusal].replace("demo1_build_secret_unlisted | length", ""))
         document, _problem = load_yaml(DEMO1_VARS)
-        self.assertIsInstance(document, dict)
-        shown = document["demo1_build_secret_refusal_paths_shown"]
-        directories = document["demo1_build_secret_refusal_directories_shown"]
+        if not isinstance(document, dict):
+            self.fail("vars/main.yml is not a mapping")
+        shown = document.get("demo1_build_secret_refusal_paths_shown")
+        directories = document.get("demo1_build_secret_refusal_directories_shown")
         self.assertTrue(isinstance(shown, int) and 1 <= shown <= MOST_PATHS_NAMED)
         self.assertTrue(isinstance(directories, int) and 1 <= directories <= MOST_DIRECTORIES_NAMED)
 
