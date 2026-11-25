@@ -1,0 +1,41 @@
+# ntfy's Alertmanager template, with a priority. Mounted over the built-in
+# template of the same name (ntfy's default template dir is /etc/ntfy/templates).
+#
+# ntfy v2.28.0 ignores the `priority` query parameter when a file template is
+# used (server/server_template.go, renderTemplateFromFile): the priority comes
+# only from this file's `priority` field. The built-in template has none, so pages
+# were sent with no priority and did not bypass do-not-disturb (ws#3990).
+#
+# Firing pages are priority 5, the level that bypasses do-not-disturb on the
+# phone. Resolved notices are priority 3 so they do not wake the phone.
+#
+# The title and message are copied unchanged from ntfy's built-in template: a
+# file that replaces it replaces all three fields.
+priority: '{{ if eq .status "firing" }}5{{ else }}3{{ end }}'
+title: |
+  {{- if eq .status "firing" }}
+  🚨 Alert: {{ (first .alerts).labels.alertname }}
+  {{- else if eq .status "resolved" }}
+  ✅ Resolved: {{ (first .alerts).labels.alertname }}
+  {{- else }}
+  {{ fail "Unsupported Alertmanager status." }}
+  {{- end }}
+message: |
+  Status: {{ .status | title }}
+  Receiver: {{ .receiver }}
+
+  {{- range .alerts }}
+  Alert: {{ .labels.alertname }}
+  Instance: {{ .labels.instance }}
+  Severity: {{ .labels.severity }}
+  Starts at: {{ .startsAt }}
+  {{- if .endsAt }}Ends at: {{ .endsAt }}{{ end }}
+  {{- if .annotations.summary }}
+  Summary: {{ .annotations.summary }}
+  {{- end }}
+  {{- if .annotations.description }}
+  Description: {{ .annotations.description }}
+  {{- end }}
+  Source: {{ .generatorURL }}
+
+  {{ end }}

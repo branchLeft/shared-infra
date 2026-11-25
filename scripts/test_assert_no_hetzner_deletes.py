@@ -10,7 +10,6 @@ shares an exit code with success.
 """
 
 import contextlib
-import importlib.util
 import io
 import json
 import pathlib
@@ -18,17 +17,13 @@ import tempfile
 import unittest
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "assert-no-hetzner-deletes.py"
-    spec = importlib.util.spec_from_file_location("assert_no_hetzner_deletes", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-guard = _load_module()
+guard = load_script(
+    pathlib.Path(__file__).resolve().parent / "assert-no-hetzner-deletes.py",
+    "assert_no_hetzner_deletes",
+)
 
 
 _STACK = "urn:pulumi:production::branchleft-mail::"

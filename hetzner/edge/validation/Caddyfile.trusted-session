@@ -46,10 +46,6 @@ tenant-one.test {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -85,6 +81,13 @@ tenant-one.test {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		vars edge_trusted 0
 		log_append edge_trusted {http.vars.edge_trusted}
 		reverse_proxy @edge_session_candidate 10.20.1.100:2368 {
@@ -107,7 +110,7 @@ tenant-one.test {
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403
 		@uploads_by_path {
 			path /content/files/* /content/images/* /content/media/*
@@ -189,6 +192,13 @@ tenant-two.test {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		vars edge_trusted 0
@@ -284,6 +294,13 @@ http://edge-probe.invalid:8080 {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -330,6 +347,13 @@ http://edge-probe.invalid:8080 {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec

@@ -43,3 +43,21 @@ status_page_stamp_file: '{{ status_page_project_dir }}/.status_page_stamp'
 
 # The health check polls this many seconds apart.
 status_page_health_delay: 2
+
+# The 90-day uptime collector (files/branchleft_status_uptime.py). Gatus keeps its own history
+# for 32 days at most, so this program records the probe samples itself, from the page's API,
+# and works out each component's 90-day uptime from them. Constants, not inputs.
+status_page_uptime_program_dir: /opt/branchleft/status-uptime
+status_page_uptime_program: branchleft_status_uptime.py
+status_page_uptime_python: /usr/bin/python3
+# The state directory holds the samples (a directory of its own, root only) and the report
+# the timer's service writes after every collection: the one file that carries the figure.
+status_page_uptime_state_dir: /var/lib/branchleft/status-uptime
+status_page_uptime_samples_dir: '{{ status_page_uptime_state_dir }}/samples'
+status_page_uptime_report_file: '{{ status_page_uptime_state_dir }}/report.json'
+status_page_uptime_unit_dir: /etc/systemd/system
+status_page_uptime_service: branchleft-status-uptime-collect.service
+status_page_uptime_timer: branchleft-status-uptime-collect.timer
+# The page keeps the last 100 results per endpoint, one a minute, so a collection must run at
+# least every 100 minutes to miss none; the timer runs it every 30.
+status_page_uptime_every_minutes: 30

@@ -394,6 +394,26 @@ jobs:
         if: steps.skip.outputs.run != 'false'
         run: python3 -m unittest discover -s probe -p 'test_*.py' -v
 
+  edge-widget-pins:
+    name: Edge widget files match ghost-platform pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The seven /bl-assets/ files the edge image adds must be the bytes, and
+      # the sha256 sums, that ghost-platform's pins.json names at the commit the
+      # edge Dockerfile pins. The live step fetches that commit's files from GitHub.
+      - name: Unit tests
+        run: python3 -m unittest discover -s hetzner/edge -p 'test_check_widget_pins.py' -v
+
+      - name: Live check against the pinned ghost-platform commit
+        run: python3 hetzner/edge/check_widget_pins.py
+
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)
     runs-on: ubuntu-latest
@@ -507,6 +527,12 @@ jobs:
 
       - name: Python unit tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+      - name: Test and type-check .github/scripts
+        run: |
+          python3 -m pip install --quiet mypy==2.4.1
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+          python3 -m mypy --strict .github/scripts/secret_alert_pager.py
 
       # demo1's roles carry ghost-platform files and hold each to a sha256 in this
       # repository, which a change to a file and its pin together passes. This fetches

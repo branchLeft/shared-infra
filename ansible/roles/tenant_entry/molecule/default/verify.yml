@@ -39,6 +39,12 @@
       - 'claim /etc/passwd'
       - 'claim Example'
       - 'revoke example-tenant'
+      - 'owner'
+      - 'owner example-tenant --email EXAMPLE@example.invalid'
+      - 'owner example-tenant; /usr/local/lib/branchleft-tenant-entry/node/bin/node -e id'
+      - 'node example-tenant'
+      - 'exec example-tenant'
+      - 'run provision-owner example-tenant'
       - 'claim example-tenant extra'
       - "claim example-tenant\nid"
       - ''
@@ -83,18 +89,29 @@
           - tenant_entry_verify_refused_runs.results | map(attribute='stdout') | select('search', 'claimed-here') | list | length == 0
         quiet: true
 
+    # The owner verb runs node and the owner script as root, for the entry program. Neither is
+    # the account's to run: sudo grants it one program with one argument, so node, the script,
+    # Docker and a shell each stay refused. The control case is the first run above.
     - name: Run another program through sudo as the entry account
       ansible.builtin.command:
-        argv: [runuser, -u, '{{ scenario_user }}', --, sudo, -n, /bin/true]
-      register: tenant_entry_verify_other_run
+        argv: "{{ ['runuser', '-u', scenario_user, '--', 'sudo', '-n'] + item }}"
+      register: tenant_entry_verify_other_runs
       changed_when: false
       failed_when: false
       check_mode: false
+      loop:
+        - [/bin/true]
+        - ['{{ scenario_node }}', --version]
+        - ['{{ scenario_node }}', '{{ scenario_owner_program }}']
+        - ['{{ scenario_node }}', -e, 'console.log(1)']
+        - [/usr/bin/docker, ps]
+        - [/bin/sh, -c, id]
 
-    - name: Assert sudo refused the other program
+    - name: Assert sudo refused every other program
       ansible.builtin.assert:
         that:
-          - tenant_entry_verify_other_run.rc != 0
+          - tenant_entry_verify_other_runs.results | map(attribute='rc') | select('equalto', 0) | list | length == 0
+          - tenant_entry_verify_other_runs.results | map(attribute='stdout') | select('ne', '') | list | length == 0
         quiet: true
 
     - name: List what the entry account may run through sudo

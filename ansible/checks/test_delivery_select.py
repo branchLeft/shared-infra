@@ -27,10 +27,8 @@ from unittest import mock
 import check_delivery
 import ci_select
 import delivery_select
-from check_pins import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / check_delivery.CALLER
 SHA = "a" * 40
 BEFORE = "b" * 40
 OLDER = "c" * 40
@@ -606,111 +604,12 @@ class GitTest(unittest.TestCase):
             delivery_select.changed_since(self.root, "e" * 40, self.shas[2])
 
 
-class StepFallbackTest(unittest.TestCase):
-    """The shell step of ansible-delivery.yml, run as written, with the program replaced."""
+class ProgramTest(unittest.TestCase):
+    """The committed program, run as the workflow runs it (delivery_prepare.py wraps it)."""
 
-    def step_text(self) -> str:
-        document, problem = load_yaml(WORKFLOW)
-        self.assertIsNone(problem)
-        jobs = document["jobs"] if isinstance(document, dict) else {}
-        steps = jobs[check_delivery.SELECT_JOB]["steps"]
-        for step in steps:
-            if step.get("id") == check_delivery.SELECT_STEP:
-                return str(step["run"])
-        message = "the select step is not in the workflow"
-        raise AssertionError(message)
-
-    def run_step(self, program: str) -> dict[str, str]:
-        """Run the step in a directory whose delivery_select.py is ``program``."""
-        with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory)
-            (work / "ansible" / "checks").mkdir(parents=True)
-            (work / "ansible" / "checks" / "delivery_select.py").write_text(program, "utf-8")
-            output = work / "github_output"
-            output.write_text("", encoding="utf-8")
-            done = subprocess.run(  # noqa: S603
-                ["bash", "-c", self.step_text()],  # noqa: S607
-                cwd=work,
-                capture_output=True,
-                check=False,
-                text=True,
-                env={
-                    "PATH": os.environ["PATH"],
-                    "RUNNER_TEMP": directory,
-                    "GITHUB_OUTPUT": str(output),
-                    "BEFORE": BEFORE,
-                    "SHA": SHA,
-                    "REPO": "o/r",
-                    "GH_TOKEN": "x",
-                },
-            )
-            self.assertEqual(0, done.returncode, done.stderr)
-            return outputs_of(output.read_text(encoding="utf-8"))
-
-    def assert_every_shard(self, answer: dict[str, str]) -> None:
-        self.assertEqual({"shards": "true", "directories": FULL}, answer)
-
-    def test_a_program_that_exits_with_an_error_runs_every_shard(self) -> None:
-        self.assert_every_shard(self.run_step("import sys\nsys.exit(3)\n"))
-
-    def test_a_program_that_crashes_runs_every_shard(self) -> None:
-        self.assert_every_shard(self.run_step("raise RuntimeError('boom')\n"))
-
-    def test_a_program_that_cannot_be_parsed_runs_every_shard(self) -> None:
-        self.assert_every_shard(self.run_step("def (:\n"))
-
-    def test_a_program_that_prints_nothing_runs_every_shard(self) -> None:
-        self.assert_every_shard(self.run_step("pass\n"))
-
-    def test_a_program_that_prints_no_directories_runs_every_shard(self) -> None:
-        self.assert_every_shard(self.run_step("print('shards=false')\n"))
-
-    def test_a_program_that_prints_a_garbled_verdict_runs_every_shard(self) -> None:
-        self.assert_every_shard(
-            self.run_step(
-                "print('shards=maybe')\nprint('directories<<E')\nprint('roles/a')\nprint('E')\n"
-            )
-        )
-
-    def test_a_missing_program_runs_every_shard(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory)
-            output = work / "github_output"
-            output.write_text("", encoding="utf-8")
-            done = subprocess.run(  # noqa: S603
-                ["bash", "-c", self.step_text()],  # noqa: S607
-                cwd=work,
-                capture_output=True,
-                check=False,
-                text=True,
-                env={
-                    "PATH": os.environ["PATH"],
-                    "RUNNER_TEMP": directory,
-                    "GITHUB_OUTPUT": str(output),
-                    "BEFORE": BEFORE,
-                    "SHA": SHA,
-                },
-            )
-            self.assertEqual(0, done.returncode, done.stderr)
-            self.assert_every_shard(outputs_of(output.read_text(encoding="utf-8")))
-
-    def test_a_good_answer_passes_through_unchanged(self) -> None:
-        program = (
-            "print('shards=true')\nprint('directories<<DIRECTORIES_END')\n"
-            "print('roles/a')\nprint('DIRECTORIES_END')\n"
-        )
-        self.assertEqual({"shards": "true", "directories": "roles/a"}, self.run_step(program))
-
-    def test_a_none_answer_passes_through_so_the_savings_are_real(self) -> None:
-        program = (
-            "print('shards=false')\nprint('directories<<DIRECTORIES_END')\n"
-            "print('roles/*')\nprint('patterns/*')\nprint('DIRECTORIES_END')\n"
-        )
-        self.assertEqual({"shards": "false", "directories": FULL}, self.run_step(program))
-
-    def test_the_real_program_run_by_the_step_answers_in_the_format_the_step_accepts(self) -> None:
-        # Not a stub: the committed program, with no way to read GitHub, must give the full
-        # answer through the step.
+    def test_the_real_program_with_no_way_to_read_github_gives_the_full_answer(self) -> None:
+        # Not a stub: the committed program, with no history to read, must give the full answer in
+        # the format the step of the reusable workflow accepts.
         source = Path(delivery_select.__file__).read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
@@ -721,8 +620,6 @@ class StepFallbackTest(unittest.TestCase):
                     else (ROOT / "ansible" / "checks" / "ci_select.py").read_text("utf-8"),
                     encoding="utf-8",
                 )  # fmt: skip
-            output = work / "github_output"
-            output.write_text("", encoding="utf-8")
             done = subprocess.run(  # noqa: S603
                 [
                     sys.executable,
@@ -739,7 +636,7 @@ class StepFallbackTest(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(0, done.returncode, done.stderr)
-        self.assert_every_shard(outputs_of(done.stdout))
+        self.assertEqual({"shards": "true", "directories": FULL}, outputs_of(done.stdout))
 
 
 if __name__ == "__main__":

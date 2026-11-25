@@ -818,5 +818,88 @@ class RealTreeCase(unittest.TestCase):
         self.assertTrue(any(s.startswith("edge_stack:") and "acquis.d/" in s for s in scanned))
 
 
+class TenantStackCase(unittest.TestCase):
+    """The tenant profile's files go to a host by the same tasks, so none may read as secret.
+
+    The walk above resolves the role's copy tasks against the estate profile's stack directory. The
+    tenant profile reads `hetzner/edge-t/stack` instead, which that walk does not reach, so each of
+    its files is read here with the same pattern and the same rule about a name held apart.
+    """
+
+    STACK = ROOT / "hetzner" / "edge-t" / "stack"
+
+    def files(self) -> list[Path]:
+        return sorted(path for path in self.STACK.rglob("*") if path.is_file())
+
+    def test_the_walk_has_files_to_read(self) -> None:
+        names = {path.relative_to(self.STACK).as_posix() for path in self.files()}
+        self.assertIn("compose.yml", names)
+        self.assertIn("crowdsec/acquis.d/caddy.yaml", names)
+
+    def test_no_file_of_the_tenant_stack_matches_the_secret_scan(self) -> None:
+        for path in self.files():
+            shown = path.relative_to(ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual([], matching_lines(text, shown), shown)
+            self.assertEqual([], held_apart_lines(text), shown)
+
+    def test_control_the_scan_finds_a_secret_in_a_tenant_file(self) -> None:
+        text = self.STACK.joinpath("compose.yml").read_text(encoding="utf-8")
+        self.assertNotEqual([], matching_lines(text + "api_key: abcdef\n", "compose.yml"))
+
+
+# The second shape of the scan's SHAPES (host_output_scan.py at github-workflows v1.2.7).
+VARIABLE_REFERENCE = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(:?\?[^}]*)?\}",
+    re.IGNORECASE | re.ASCII,
+)
+
+
+class FailureMessageCase(unittest.TestCase):
+    """A failed task's message is read by the scan too, so it must not match the pattern.
+
+    The scan reads a host's failed output and withholds the whole plan on a hit, even when the
+    failed task copies nothing. A failing assert prints its fail_msg, so a message that names a
+    token with `=` and a word after it withholds demo1's plan.
+    """
+
+    PLAY = ROOT / "ansible" / "playbooks" / "demo1.yml"
+
+    def messages(self) -> Iterator[tuple[str, str]]:
+        """Yield (file, text) for each fail_msg or msg of a task the demo1 play's roles run."""
+        document, _problem = load_yaml(self.PLAY)
+        for play in document if isinstance(document, list) else []:
+            for entry in play.get("roles", []) if isinstance(play, dict) else []:
+                value = entry.get("role", entry.get("name")) if isinstance(entry, dict) else entry
+                role = ROOT / "ansible" / "playbooks" / str(value)
+                for path, task, _off in tasks_of(role.resolve()):
+                    for args in task.values():
+                        if isinstance(args, dict):
+                            for key in ("fail_msg", "msg"):
+                                text = args.get(key)
+                                if isinstance(text, str):
+                                    yield path.relative_to(ROOT).as_posix(), text
+
+    def test_no_message_the_demo1_play_prints_on_failure_matches_the_pattern(self) -> None:
+        seen = list(self.messages())
+        # The walk must reach the message this change is about, or a pass proves nothing.
+        self.assertTrue(
+            any(path.endswith("demo1_egress_spool/tasks/_token.yml") for path, _ in seen)
+        )
+        # Only the file and the rule are reported: a message is prose, but a CI log is shared.
+        # The scan first removes a ${NAME} or ${NAME:?...} reference (its second shape), so a
+        # Compose interpolation is not a credential; the rest of the message is read as it is.
+        found = [
+            path
+            for path, text in seen
+            if CREDENTIAL_ASSIGNMENT.search(VARIABLE_REFERENCE.sub("", text))
+        ]
+        self.assertEqual([], found, "\n".join(found))
+
+    def test_control_a_message_with_an_assignment_is_found(self) -> None:
+        message = "holds no SHIM_DRAIN_TOKEN= line with a value"
+        self.assertTrue(CREDENTIAL_ASSIGNMENT.search(message))
+
+
 if __name__ == "__main__":
     unittest.main()

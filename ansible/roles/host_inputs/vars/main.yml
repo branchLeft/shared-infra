@@ -49,6 +49,7 @@ host_inputs_required_by_host:
     - ci_jump_user
   edget:
     - ci_jump_user
+    - ci_jump_spool_user
   ops1:
     - backup_worker_db_host
     - backup_worker_db_user
@@ -72,6 +73,7 @@ host_inputs_required_by_host:
     - backup_restore_state_copy_tenant_access_key_id
     - broker_tunnel_client_demo1_address
     - broker_tunnel_client_demo1_host_key
+    - control_plane_portal_support_smtp_password
   db1:
     - db1_stack_exporter_password
     - db1_grants_tenants
@@ -82,6 +84,13 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - deploy_slot_keys_slots
+  appt1:
+    - tenant_entry_key
+    - tenant_entry_from
+    - tenant_entry_bind_address
+  dbt1:
+    - db_t1_tenant_entry_controller_key
+    - db_t1_tenant_entry_controller_address
   mx1:
     - mx1_abuse_page_token
   demo1:
@@ -100,6 +109,7 @@ host_inputs_optional_by_host:
   ops1:
     - broker_tunnel_client_demo1_address
     - broker_tunnel_client_demo1_host_key
+    - control_plane_portal_support_smtp_password
   demo1:
     - broker_deploy_owner_due_diligence_email
   edge1:
@@ -107,6 +117,7 @@ host_inputs_optional_by_host:
     - ci_jump_user
   edget:
     - ci_jump_user
+    - ci_jump_spool_user
   mx1:
     - mx1_abuse_page_token
 

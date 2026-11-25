@@ -75,6 +75,13 @@ branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -132,10 +139,6 @@ blog.branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected {
-		not path /ghost/api/*
-		not vars edge_trusted 1
-	}
 	@edge_session_candidate {
 		path /ghost/*
 		header Cookie *ghost-admin-api-session=*
@@ -171,6 +174,13 @@ blog.branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		vars edge_trusted 0
 		log_append edge_trusted {http.vars.edge_trusted}
 		reverse_proxy @edge_session_candidate 10.20.1.100:8101 {
@@ -193,7 +203,7 @@ blog.branchleft.co.uk {
 			}
 		}
 		crowdsec @edge_untrusted
-		appsec @inspected
+		appsec @edge_untrusted
 		respond @ghost_setup 403
 		@uploads_by_path {
 			path /content/files/* /content/images/* /content/media/*
@@ -356,6 +366,13 @@ cloud.branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -442,6 +459,13 @@ portal.publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -503,6 +527,13 @@ console.branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		header @discard Allow POST
 		respond @discard_post 204
@@ -530,6 +561,16 @@ id.publicpress.co.uk {
 	}
 	tls {
 		protocols tls1.2 tls1.3
+	}
+	@not_public {
+		not path /.well-known/* /oauth/v2/* /oidc/v1/* /ui/login/* /debug/healthz /debug/ready
+		not {
+			method GET HEAD
+			path /assets/v1/*
+		}
+	}
+	@public_dot_segments {
+		expression `{http.request.orig_uri}.matches('^[^?]*(?:/|%2[Ff])(?:[.]|%2[Ee])(?:[.]|%2[Ee])?(?:/|%2[Ff]|[?]|$)')`
 	}
 	@members_magic_link {
 		method POST
@@ -560,7 +601,16 @@ id.publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
+		respond @public_dot_segments 400
+		respond @not_public 404
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8300
@@ -612,6 +662,13 @@ ntfy.branchleft.co.uk {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec
@@ -668,6 +725,13 @@ publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -720,6 +784,13 @@ status.branchleft.co.uk {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec
@@ -818,6 +889,13 @@ http://edge-probe.invalid:8080 {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -864,6 +942,13 @@ http://edge-probe.invalid:8080 {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec

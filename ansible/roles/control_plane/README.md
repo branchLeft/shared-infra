@@ -241,6 +241,16 @@ Two switches, `control_plane_bring_up` and `control_plane_start_units`, default 
 
 An empty string counts as not given.
 
+- **The portal's support mail** (Professional enquiries). Its addresses and the mx1 host are
+  literals in `compose.yml`, which the role copies; the test
+  `test_the_portal_support_mail_goes_to_sales_through_mx1_as_its_own_login` pins them. Its
+  password is the optional input `control_plane_portal_support_smtp_password` (the sales@
+  submission credential on mx1), delivered from the host's inputs (`host_inputs`, ops1's row, key
+  of the same name). Given, the role writes `/etc/branchleft/control-plane/portal-support/smtp-password`
+  (root:1000, 0440, no_log) on every run; absent, nothing is written and the portal starts with
+  support off, every `/support` path answering 404. A changed value is written by the next run but
+  reaches the portal only when the portal restarts.
+
 - **The two secrets** are write-once, so the role needs a value only for a file that
   holds none. If `/etc/branchleft/control-plane.env` (or the master key file) is absent
   or empty and its content was not given, the run stops first with

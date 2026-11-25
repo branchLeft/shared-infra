@@ -275,11 +275,25 @@ def malformed_commit(work: Path, parent: str, signer: Signer) -> str:
     return run([*argv, tree], cwd=work, extra=extra)
 
 
-def make_bundle(work: Path, sha: str, name: str) -> Path:
-    """Write a bundle of the commit the way the pushing workflow does: of a detached HEAD."""
+MAIN_REF = "refs/remotes/origin/main"
+
+
+def make_bundle(work: Path, sha: str, name: str, main: str | None = None) -> Path:
+    """Write a bundle of the commit the way the pushing workflow does: of a detached HEAD.
+
+    The workflow puts the tip of main beside HEAD, as ``refs/remotes/origin/main``. ``main`` is
+    the commit that tip is, or None for a bundle of HEAD alone, which is what the workflow made
+    before it carried main.
+    """
     run(["git", "update-ref", "--no-deref", "HEAD", sha], cwd=work)
     path = BUNDLES / f"{name}.bundle"
-    run(["git", "bundle", "create", str(path), "HEAD"], cwd=work)
+    refs = ["HEAD"]
+    if main is not None:
+        run(["git", "update-ref", MAIN_REF, main], cwd=work)
+        refs.append(MAIN_REF)
+    run(["git", "bundle", "create", str(path), *refs], cwd=work)
+    if main is not None:
+        run(["git", "update-ref", "-d", MAIN_REF], cwd=work)
     return path
 
 
@@ -328,8 +342,14 @@ def push_fixtures() -> int:
     ids["no_playbook"] = commit(work, {PLAYBOOK: None}, ids["c2"], "no playbook", w)
     ids["symlink"] = commit(work, {PLAYBOOK: "->../../../etc/hostname"}, ids["c2"], "link", w)
     ids["malformed"] = malformed_commit(work, ids["c2"], w)
+    # Each commit's own bundle names the commit itself as the tip of main, so a case that is about
+    # something other than where the commit sits reaches its own check. The three below are the
+    # ones about where it sits: a fork commit sent beside the real tip of main, a commit of main
+    # sent with no tip, and a fork commit that names itself as main (the named limit).
     for name, sha in ids.items():
-        make_bundle(work, sha, name)
+        make_bundle(work, sha, name, main=sha)
+    make_bundle(work, ids["fork"], "fork_under_main", main=ids["main_next"])
+    make_bundle(work, ids["c2"], "c2_no_main")
     whole = (BUNDLES / "c1.bundle").read_bytes()
     (BUNDLES / "truncated.bundle").write_bytes(whole[: len(whole) * 2 // 3])
     (BUNDLES / "junk.bundle").write_text("this is not a bundle\n" * 50, encoding="utf-8")

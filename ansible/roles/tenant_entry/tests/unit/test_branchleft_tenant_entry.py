@@ -39,6 +39,7 @@ OWNER_EMAIL = "owner@example.invalid"
 TEMPLATE = "GHOST_DB_PASSWORD=\nGHOST_OWNER_EMAIL=\n"
 VALUES = {"GHOST_DB_PASSWORD": CANARY, "GHOST_OWNER_EMAIL": OWNER_EMAIL}
 CONTAINER_ID = "a" * 64
+DEFERRED = "deferred: restart queued, the new file is read when the unit starts"
 IMAGE_DIGEST = "sha256:" + "b" * 64
 PIN = f"IMAGE=ghcr.io/branchleft/ghost-tenant@{IMAGE_DIGEST}\n"
 BIND = "10.20.2.30"
@@ -172,6 +173,14 @@ class FakeHost:
         self.calls: list[Call] = []
         self.claims: dict[str, int] = {}
         self.enabled: set[str] = set()
+        self.running: set[str] = set()
+        # `try-restart` queued on a running unit; `restart` is a plain start-or-restart, which the
+        # program must never use for a stopped unit. Both are recorded, so a test tells them apart.
+        self.restarted: list[str] = []
+        self.started: list[str] = []
+        self.restart_returncode = 0
+        # A unit state the fake reports from `is-active` whatever else is true (e.g. "activating").
+        self.states: dict[str, str] = {}
         self.volume_returncode = 0
         self.secrets_stderr = ""
         self.secrets_returncode = 0
@@ -222,10 +231,28 @@ class FakeHost:
         return entry.Outcome(0, "written\nkey GHOST_DB_PASSWORD\n", "")
 
     def systemctl(self, args: list[str]) -> entry.Outcome:
-        unit = args[1]
+        unit = args[-1]
         if args[0] == "enable":
             self.enabled.add(unit)
             return entry.Outcome(0, "", "")
+        if args[0] == "try-restart":
+            self.case.assertEqual(args[1:-1], ["--no-block"])
+            if unit in self.running:
+                self.restarted.append(unit)
+            if self.restart_returncode:
+                return entry.Outcome(self.restart_returncode, "", "EXAMPLE restart refusal")
+            return entry.Outcome(0, "", "")
+        if args[0] == "restart":
+            self.started.append(unit)
+            self.running.add(unit)
+            return entry.Outcome(0, "", "")
+        if args[0] == "is-active":
+            if unit in self.states:
+                state = self.states[unit]
+                return entry.Outcome(0 if state == "active" else 3, state + "\n", "")
+            if unit in self.running:
+                return entry.Outcome(0, "active\n", "")
+            return entry.Outcome(3, "inactive\n", "")
         self.case.assertEqual(args[0], "is-enabled")
         if unit in self.enabled:
             return entry.Outcome(0, "enabled\n", "")
@@ -1584,6 +1611,143 @@ class StackTests(EntryTestCase):
             self.assertNotIn(CANARY, " ".join(call.argv))
 
 
+class RestackTests(EntryTestCase):
+    """`restack` replaces an enabled tenant's compose file in place, judged, then restarts it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.host.get_to("enable")
+        self.assertEqual(self.host.stack()[0], entry.EXIT_DONE)
+        self.host.running.add(f"branchleft-compose@{SLUG}.service")
+        self.compose = self.host.opt / SLUG / "compose.yml"
+        self.unit = f"branchleft-compose@{SLUG}.service"
+
+    def restack(self, **changes: object) -> tuple[int, str, str]:
+        return self.host.request(f"restack {SLUG}", {**stack_parameters(), **changes})
+
+    def document(self) -> object:
+        loaded: object = json.loads(self.compose.read_text())
+        return loaded
+
+    def test_a_judged_file_replaces_the_old_one_and_the_running_colour_restarts(self) -> None:
+        # Guard: the rename over the old file, then the restart of the unit that is running.
+        before = self.compose.read_text()
+        code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
+        self.assertEqual(
+            (code, out, err),
+            (entry.EXIT_DONE, f"compose.yml replaced\n{DEFERRED}\n", ""),
+        )
+        self.assertNotEqual(self.compose.read_text(), before)
+        environment = jmap(self.document(), "services", "ghost-a", "environment")
+        self.assertEqual(environment, {"url": "https://new.example.invalid"})
+        self.assertEqual(stat.S_IMODE(self.compose.stat().st_mode), 0o644)
+        self.assertEqual([p.name for p in self.compose.parent.iterdir()], ["compose.yml"])
+        self.assertEqual(self.host.restarted, [self.unit])
+        self.assertEqual(self.host.log[-1], f"verb=restack slug={SLUG} result=done")
+
+    def test_a_judge_refusal_leaves_the_file_on_disk_and_restarts_nothing(self) -> None:
+        # Guard: judge_stack runs before the rename. A secret the secrets file lacks is the
+        # judge's refusal for this environment; the old file must survive it byte for byte.
+        before = self.compose.read_bytes()
+        code, out, err = self.restack(
+            environment={"x": {"secret": "GHOST_NOT_IN_THE_SECRETS_FILE"}}
+        )
+        self.assertEqual((code, out), (entry.EXIT_REFUSED, ""))
+        self.assertTrue(err.startswith("refused: judge-refused\n"), err)
+        self.assertIn("secrets file has no key GHOST_NOT_IN_THE_SECRETS_FILE", err)
+        self.assertNotIn(CANARY, err)
+        self.assertEqual(self.compose.read_bytes(), before)
+        self.assertEqual(self.host.restarted, [])
+        self.assertEqual([p.name for p in self.compose.parent.iterdir()], ["compose.yml"])
+
+    def test_a_restack_of_the_same_parameters_restarts_again_and_changes_no_file(self) -> None:
+        # Guard: a retry after a failed restart settles itself: the file is there, so it restarts.
+        self.host.restart_returncode = 1
+        self.assertEqual(self.restack()[0], entry.EXIT_FAILED)
+        self.host.restart_returncode = 0
+        before = self.host.files()
+        inode = self.compose.stat().st_ino
+        code, out, err = self.restack()
+        self.assertEqual(
+            (code, out, err),
+            (entry.EXIT_DONE, f"compose.yml already in place\n{DEFERRED}\n", ""),
+        )
+        self.assertEqual(self.host.files(), before)
+        self.assertEqual(self.compose.stat().st_ino, inode)
+        self.assertEqual(self.host.restarted, [self.unit, self.unit])
+
+    def test_a_restart_that_fails_is_a_failed_step_named_by_the_program(self) -> None:
+        self.host.restart_returncode = 1
+        code, out, err = self.restack()
+        self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
+        self.assertTrue(err.startswith("failed: restart\n"), err)
+
+    def test_a_unit_that_is_not_running_is_not_started(self) -> None:
+        # Guard: the restart is `try-restart`, which acts only on a running unit. A plain `restart`
+        # would start a stopped one; the fake records that as `started`, and a sabotage of the
+        # program to `restart` turns this case red.
+        self.host.running.discard(self.unit)
+        code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
+        self.assertEqual(code, entry.EXIT_DONE, err)
+        self.assertIn("not restarted: not running", out)
+        self.assertEqual(self.host.started, [])
+        self.assertNotIn(self.unit, self.host.running)
+        self.assertEqual(self.host.restarted, [])
+
+    def test_a_unit_still_starting_is_deferred_not_a_failed_timeout(self) -> None:
+        # Guard: --no-block returns at once, so a start that outlasts the step timeout is reported
+        # as deferred, not as `failed: timeout`. Only a unit in a failed state fails the request.
+        self.host.states[self.unit] = "activating"
+        code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
+        self.assertEqual((code, err), (entry.EXIT_DONE, ""))
+        self.assertIn(DEFERRED, out)
+        self.assertEqual(self.host.started, [])
+
+    def test_a_unit_in_a_failed_state_fails_the_restart_step(self) -> None:
+        self.host.states[self.unit] = "failed"
+        code, out, err = self.restack()
+        self.assertEqual((code, out), (entry.EXIT_FAILED, ""))
+        self.assertTrue(err.startswith("failed: restart\n"), err)
+
+    def test_a_slug_never_claimed_here_is_refused(self) -> None:
+        self.host.hand_made_tenant(OTHER)
+        self.assert_refused(
+            self.host.request(f"restack {OTHER}", stack_parameters()), "not-claimed-here"
+        )
+
+    def test_a_tenant_that_is_not_enabled_is_refused_and_nothing_restarts(self) -> None:
+        # Guard: require_enabled. A stack that was never enabled must not be restarted into life.
+        self.host.enabled.discard(self.unit)
+        self.assert_refused(self.restack(), "enable-first")
+        self.assertEqual(self.host.restarted, [])
+
+    def test_a_tenant_without_a_stack_file_is_refused_stack_first(self) -> None:
+        self.compose.unlink()
+        self.assert_refused(self.restack(), "stack-first")
+
+    def test_a_request_that_names_a_uid_a_port_or_a_pin_is_refused_by_name(self) -> None:
+        # Guard: the claim is never changed by a request. Only the stack's own parameters pass.
+        cases: dict[str, tuple[dict[str, object], str]] = {
+            "uid": ({"uid": 30999}, "payload-keys"),
+            "ports": ({"port_a": 40100}, "payload-keys"),
+            "pin": ({"image_env_text": PIN}, "pin-not-accepted"),
+            "compose": ({"compose_text": "{}"}, "compose-not-accepted"),
+        }
+        for case, (extra, reason) in cases.items():
+            with self.subTest(case=case):
+                code, out, err = self.restack(**extra)
+                self.assertEqual((code, out), (entry.EXIT_REFUSED, ""))
+                self.assertEqual(err, f"refused: {reason}\n")
+        self.assertEqual(self.host.restarted, [])
+
+    def test_the_request_that_changes_nothing_but_the_claim_is_not_a_stack_change(self) -> None:
+        # The claim's uid and ports come from the marker: the file gets them, whatever the request.
+        self.assertEqual(self.restack(size="small")[0], entry.EXIT_DONE)
+        document = self.document()
+        self.assertEqual(jget(document, "services", "ghost-a", "user"), "30000:30000")
+        self.assertEqual(jget(document, "services", "ghost-a", "ports"), [f"{BIND}:40000:2368"])
+
+
 class StatusTests(EntryTestCase):
     def test_status_says_only_that_for_a_slug_this_entry_point_never_claimed(self) -> None:
         self.host.hand_made_tenant()
@@ -1754,6 +1918,78 @@ class RoleContractTests(unittest.TestCase):
         )
         program = (ROLE / "files" / "branchleft_tenant_entry.py").read_text(encoding="utf-8")
         self.assertEqual(program.splitlines()[0], f"#!{own['tenant_entry_python']} -I")
+
+    def test_the_owner_script_and_node_are_where_the_role_installs_them(self) -> None:
+        own = self.variables("tenant_entry")
+        paths = entry.Paths()
+        self.assertEqual(own["tenant_entry_owner_program"], paths.owner_program)
+        self.assertEqual(
+            os.path.dirname(paths.owner_program),
+            self.variables("tenant_onboarding")["tenant_onboarding_program_dir"],
+        )
+        self.assertEqual(own["tenant_entry_node"], "{{ tenant_entry_node_dir }}/bin/node")
+        self.assertEqual(own["tenant_entry_node_dir"], "{{ tenant_entry_judge_dir }}/node")
+        self.assertEqual(
+            os.path.join(str(own["tenant_entry_judge_dir"]), "node", "bin", "node"), paths.node
+        )
+
+    def test_the_owner_script_is_pinned_to_a_commit_and_a_digest(self) -> None:
+        own = self.variables("tenant_entry")
+        self.assertRegex(str(own["tenant_entry_owner_ghost_commit"]), r"\A[0-9a-f]{40}\Z")
+        self.assertRegex(str(own["tenant_entry_owner_program_sha256"]), r"\A[0-9a-f]{64}\Z")
+        url = str(own["tenant_entry_owner_program_url"])
+        self.assertTrue(
+            url.startswith(
+                "https://raw.githubusercontent.com/branchLeft/ghost-platform/"
+                "{{ tenant_entry_owner_ghost_commit }}/"
+            )
+        )
+        self.assertTrue(url.endswith("/adapters/sso/scripts/provision-owner.mjs"))
+        self.assertEqual(
+            os.path.basename(str(own["tenant_entry_owner_program"])),
+            "provision-owner.mjs",
+        )
+
+    def test_node_is_the_pin_broker_deploy_holds(self) -> None:
+        # ANS-12: no role imports another, so the version and both digests are copies, and
+        # held to the original here. Every digest is a published sha256 and the fetch is https.
+        own = self.variables("tenant_entry")
+        broker: dict[str, object] = YAML(typ="safe").load(
+            (ROLES / "broker_deploy" / "defaults" / "main.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(own["tenant_entry_node_version"], broker["broker_deploy_node_version"])
+        self.assertEqual(own["tenant_entry_node_checksums"], broker["broker_deploy_node_checksums"])
+        self.assertEqual(own["tenant_entry_node_base_url"], broker["broker_deploy_node_base_url"])
+        self.assertTrue(str(own["tenant_entry_node_base_url"]).startswith("https://"))
+        checksums = own["tenant_entry_node_checksums"]
+        self.assertIsInstance(checksums, dict)
+        if not isinstance(checksums, dict):
+            self.fail("tenant_entry_node_checksums is not a mapping")
+        for arch, digest in checksums.items():
+            self.assertRegex(str(digest), r"\Asha256:[0-9a-f]{64}\Z", arch)
+        machines = own["tenant_entry_node_arch_by_machine"]
+        self.assertIsInstance(machines, dict)
+        if not isinstance(machines, dict):
+            self.fail("tenant_entry_node_arch_by_machine is not a mapping")
+        self.assertEqual(set(machines.values()), set(checksums))
+
+    def test_the_sudoers_grant_and_the_forced_command_name_the_entry_program_only(self) -> None:
+        # Installing node and the owner script must not give the account anything beyond the one
+        # program: neither path appears in a sudoers line or in the key options.
+        own = self.variables("tenant_entry")
+        lines = [str(line) for line in own["tenant_entry_sudoers_lines"]]  # type: ignore[attr-defined]
+        self.assertEqual(len(lines), 2)
+        grants = [line for line in lines if "NOPASSWD" in line]
+        self.assertEqual(
+            grants,
+            [
+                "{{ tenant_entry_user }} ALL=(root) NOPASSWD: "
+                "{{ tenant_entry_program }} {{ tenant_entry_serve_flag }}"
+            ],
+        )
+        for needle in ("node", "provision-owner", "docker", "platform-provision"):
+            for line in [*lines, str(own["tenant_entry_key_options"])]:
+                self.assertNotIn(needle, line)
 
     def test_the_stack_paths_and_modes_are_the_ones_tenant_compose_writes(self) -> None:
         compose = self.variables("tenant_compose")

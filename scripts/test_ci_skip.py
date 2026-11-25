@@ -39,6 +39,7 @@ EXPECTED_ALWAYS_RUN = {
     "hetzner-typecheck",
     "hetzner-host-typecheck",
     "hetzner-provision-checks",
+    "edge-widget-pins",
 }
 RULED_ALWAYS_RUN = {"scripts-tests", "pulumi-inventory-audit"}
 

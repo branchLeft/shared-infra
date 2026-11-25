@@ -45,8 +45,11 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, edget (edge-t), ops1, app1 and mx1. edget has one input, `ci_jump_user`, typed because it
-exists nowhere on the host. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
+seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1), dbt1 (db-t1) and mx1. appt1 and dbt1 have
+only typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
+space-separated) and for dbt1 its address. edget has two inputs, `ci_jump_user` and
+`ci_jump_spool_user` (the names of its two jump accounts), each typed because it exists nowhere on
+the host; the second is added later with `--set ci_jump_spool_user` when the spool tunnels are wanted. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:
@@ -149,12 +152,19 @@ and claim rules equal its module's.
 
 Usage, on the host as root:
 
-    python3 -I seed_host_inputs.py --host edge1|ops1|app1|mx1 [--replace]
-    python3 -I seed_host_inputs.py --host edge1|ops1|app1|mx1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 --set KEY
+
+The one seed command per host that this change adds, run as root on that host:
+
+    python3 -I seed_host_inputs.py --host appt1
+    python3 -I seed_host_inputs.py --host dbt1
 
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
-holds it has been applied on the host; before that the file is copied there by hand from the
-branch.
+holds it has been applied on the host. On `appt1` and `dbt1` the owner's bootstrap
+(`playbooks/bootstrap/HOST.yml`, `checks/check_enrolment.md` R12) also installs it, root-only (`0700`),
+at `/usr/local/sbin/seed_host_inputs.py`, because a plan runs in check mode and never replaces `current`:
+the host is seeded from that path before it joins the gated list, and no hand copy is made.
 
 ## The three guards of the demo1 root bootstrap
 

@@ -3,11 +3,12 @@
 Owns the two things that decide which private hosts the gated Ansible run may reach through a jump
 host: the jump account's root-owned `authorized_keys` file and the sshd drop-in whose `Match User`
 block gives the account its settings. Each key line allows port 22 of the named hosts and nothing
-else, and sshd's own `PermitOpen` for the account carries the same list, so adding a tenant host is
+else, and sshd's own `PermitOpen` for the account carries the union of the keys' lists, so adding a tenant host is
 one reviewed line in the host's `owner_vars` file and a gated run, not a hand edit on the jump
 host. The role works on any jump host: `edge1` and `edge-t`, each with its own
 `owner_vars/HOST.yml`, its own jump account and its own address. Nothing in the role is specific to
-one host.
+one host. A host may also carry a second account, for the spool tunnels of ops1 (see "The second
+account: spool"); only `edget` does, and the role leaves it switched off until the owner turns it on.
 
 ## What the role does, and what it does not
 
@@ -35,11 +36,19 @@ one host.
     then the key type and body, and nothing else (the key's comment is dropped);
   - `/etc/ssh/sshd_config.d/40-branchleft-jump.conf` holds the `Match User` block the private
     jump-host runbook documents (the key file as `AuthorizedKeysFile`, `AuthenticationMethods publickey`,
-    `AllowTcpForwarding local`, `PermitOpen` with the same destinations on port 22, and every
+    `AllowTcpForwarding local`, `PermitOpen` with the union of the keys' destinations on port 22, and every
     other forwarding and tty setting off, `ForceCommand /usr/sbin/nologin`), closed by `Match all`.
-    Both are made from the one list `ci_jump_destinations`, so the key lines' `permitopen` and the
-    block's `PermitOpen` cannot differ; `test_ci_jump_pins.py` proves both templates read that one
-    variable and render the same destinations.
+    Both are made from the same two variables, `ci_jump_destinations` and `ci_jump_keys`, so the key
+    lines' `permitopen` and the block's `PermitOpen` cannot differ; `test_ci_jump_pins.py` proves
+    both templates read only those and render what the module expects.
+  - **A key may have a list of its own.** An entry `{key, destinations}` makes that key's line
+    carry its `destinations` and no other: it reaches those hosts and none that only the shared
+    list holds. An entry with no `destinations` takes the shared `ci_jump_destinations`. sshd's
+    `PermitOpen` for the account cannot differ per key, so it holds the union of every key's list
+    and each key line narrows it to its own; the union adds nothing a key line does not name. A
+    key's own list need not hold the jump host's own address (only the shared list must), and an
+    empty or null one is refused, never read as the shared list. The plan prints each key's
+    wanted and live `permitopen` set by fingerprint.
   - **No path is made from the account's name.** The owner ruled that the account's
     name is not published. A path
     is printed by a lot of tooling, so the two files and the directory are named for the role's
@@ -119,10 +128,11 @@ one host.
     A refusal message is a code and an entry number, never a value.
 - **One account has one owning role.** The jump account may not be root, the `ci_login` account or
   the `tunnel_account` account. Two roles writing one account's keys would remove each other's
-  keys, so the role refuses rather than share.
+  keys, so the role refuses rather than share. The same holds for the role's own two accounts: the
+  second may not be the first (`E-USER-FORBIDDEN`), and each has its own two files.
 
 It does not create, edit or lock an account, install a package, or manage a key anywhere but the one
-file, and it takes no destination per key: every key line carries the same destinations. It writes
+file. It writes
 no file but the two above, the directory `/etc/ssh/authorized_keys.d` and the marker, and it
 removes the old hand-made layout only as the migration above says.
 
@@ -142,8 +152,8 @@ host's private inputs file through `host_inputs` and is in no file of this repos
 | `ci_jump_manage_keys`  | `false` | `false`: report only. `true`: guards, write, check, reload, read-back.                                               |
 | `ci_jump_user`         | none    | Optional input. The jump account, from `host_inputs`; never committed or printed. Needed only when the flag is true. |
 | `ci_jump_own_address`  | `''`    | The jump host's own private IPv4 address; it must be a destination.                                                  |
-| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22.                                                        |
-| `ci_jump_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on.                                          |
+| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22. The list of every key that has none of its own.        |
+| `ci_jump_keys`         | `[]`    | `{key}` or `{key, destinations}` entries: public keys, one per entry. Read only when the flag is on.                 |
 
 The port (22), the fixed options (`restrict,port-forwarding`), the forced command, the paths of the
 key file and the drop-in, the name of the sshd service and the accounts other roles own are constants
@@ -155,6 +165,17 @@ to the module's text. `ansible/checks/check_enrolment.py` (R10) allows the four 
 the `owner_vars` file of every host in `JUMP_HOSTS`, which must be the hosts whose row in
 `ansible/checks/host_roles.yml` lists the role, and refuses an `owner_vars` file that holds
 `ci_jump_user`.
+
+The second account's five variables are in the next table, and its account name `ci_jump_spool_user`
+comes from the host's private inputs file the way `ci_jump_user` does.
+
+| Variable                     | Default | Meaning                                                                                        |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `ci_jump_spool_manage_keys`  | `false` | `false`: the second account is not looked at. `true`: guards, write, check, reload, read-back. |
+| `ci_jump_spool_user`         | none    | Optional input. The second account, from `host_inputs`; never committed or printed.            |
+| `ci_jump_spool_destinations` | `[]`    | The spool hosts' private IPv4 addresses, no port, written plainly. The role adds the port.     |
+| `ci_jump_spool_port`         | `22`    | The one port every spool destination is opened on: the far host's sshd port.                   |
+| `ci_jump_spool_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on.                    |
 
 A destination must be the exact text the runner's `ssh` sends for the host: sshd matches `permitopen`
 and `PermitOpen` literally, so a name in the list and an address on the command line do not match each
@@ -203,6 +224,10 @@ also kept out of the plan scan of the gated apply (below).
 ## What it changes on a host
 
 - With the flag false: nothing.
+- With `ci_jump_spool_manage_keys` true: also `/etc/ssh/authorized_keys.d/branchleft-jump-spool` and
+  `/etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf` (`root:root`, `0644`), the marker
+  `/run/branchleft-jump-spool-reload-owed` while a reload is owed, and a reload of `ssh.service`
+  when either file changed or the marker was left. Nothing of the first account's.
 - With the flag true: `/etc/ssh/authorized_keys.d` (`root:root`, `0755`),
   `/etc/ssh/authorized_keys.d/branchleft-jump` and `/etc/ssh/sshd_config.d/40-branchleft-jump.conf`
   (`root:root`, `0644`), the marker `/run/branchleft-jump-reload-owed` while a reload is owed, a
@@ -246,6 +271,10 @@ cd ansible/roles/ci_jump && PYTHONPATH=library ../../../.venv/bin/python -m unit
   with its own key that runs `cat`: the listed target gives the standard input back, and the unlisted
   target, another port, the jump host's own loopback and a wrong or replaced key do not (see "Push
   hosts" below).
+- `spool` imports the host of `default` and adds the second account and two keys of its own. It
+  applies the role with both accounts, then proves over real SSH connections what "The second
+  account: spool" says it proves, through the pipeline's own client shape too. Run it with
+  `.venv/bin/python ansible/harness/run_harness.py ansible/roles/ci_jump --scenario spool`.
 - `refusals` applies the role once and then runs each guard alone against the bad input or the bad
   state, expecting the guard's own code, with a control beside each group that must be accepted. The
   read-back cases put a `Match` block ahead of the role's, which outranks it, or change a file or its
@@ -301,6 +330,66 @@ way back is the runbook's hand edit of the two files, or the previous commit's f
 owner. In the plan of the jump host itself the action relabels that host's address as `host N` or
 `the jump host`, so the report cannot carry that one destination over to the owner's list character
 for character: the owner supplies its exact spelling.
+
+## The second account: spool
+
+ops1's mail collector reaches the mail spool of each tenants host through `spool_paths`: one
+supervised `ssh -N -L` per host, which dials the far host's sshd through edge-t as a `ProxyJump`
+hop and carries the forward to the spool's drain port inside the far ssh session (the
+`spool_paths` README, "What the path is"). The hop needs an account on edge-t, and it must not be
+the CI account: that account's list holds the hosts the pipeline reaches, and its key is a secret
+of the pipeline, so ops1's key must never open them. The role therefore manages a second account,
+on `edget` only (`SPOOL_JUMP_HOSTS` in `ansible/checks/check_enrolment.py`), from its own
+variables, with its own files, and with a destination list that holds the spool hosts and nothing
+else.
+
+- **Its own files.** `/etc/ssh/authorized_keys.d/branchleft-jump-spool` and
+  `/etc/ssh/sshd_config.d/41-branchleft-jump-spool.conf`, `root:root` at `0644`, made by the same
+  steps as the first account's (guards, write, `sshd -t`, reload, read-back, with the same rollback
+  on a failed check or read-back), from templates of their own. The first account's files, its
+  reload marker and its migration of the hand-made layout are not touched: the first account's tasks
+  are the ones that ran before, and `tests/unit/test_ci_jump_spool.py`, class `CiAccountIsUnchanged`,
+  holds the text made for it to the text it had.
+- **Its own list, and what the list may hold.** A destination is a private IPv4 address written
+  plainly: a host name (`E-SPOOL-ADDRESS`), a public address, an address with leading zeros, and a
+  loopback address on a real jump host (`E-SPOOL-LOOPBACK`) are refused, and the jump host's own
+  address is refused (`E-SPOOL-OWN`), so the second account's key reaches the spool hosts' sshd and
+  never the jump host's own sshd or any other host. The first account is the other way round: its
+  list must hold the jump host's own address (`E-DEST-OWN`), because the runner reaches the jump host
+  through itself. `ci_jump_spool_port` is the far host's sshd port, 22 unless the owner sets it, and
+  is the one port on every key line's `permitopen` and in the block's `PermitOpen`.
+- **Which port.** The drain port of the spool is not opened here. The path dials the far host's
+  sshd through this account and opens the forward to the drain port inside that ssh session, on the
+  far host's loopback, where the far host's own account (`spool_path_account`) lets its key open that
+  port only. So the port this account opens is the far host's sshd port, and the spool port stays
+  behind the far host's own control.
+- **Judged before either account is written.** `tasks/_guards_spool.yml` runs ahead of both writes,
+  so a second account that is the first (`E-USER-FORBIDDEN`: the first account's name is passed to
+  the module as an owned account), an address on its list that is the jump host's own, or a missing
+  name (`ci_jump[spool-user-missing]`) stops the run with nothing written.
+- **The report.** It describes both accounts by index, as it describes any account, and takes both
+  accounts' destinations as the owner's list; the second account's key file counts as managed.
+  It prints the port of each destination as the key lines and sshd carry it.
+- **Delivery, in steps, each a gated run.** (1) This change: inert. The plan's report shows both
+  accounts. (2) The owner seeds `ci_jump_spool_user` once on edge-t, as root, hidden prompt:
+  `python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edget --set
+ci_jump_spool_user` (the account exists, `nologin`, made by the owner as the first is). (3) A
+  change to `owner_vars/edget.yml` alone: `ci_jump_spool_manage_keys: true`, the spool hosts'
+  addresses, the port and ops1's public key. The plan prints no line of the second account (a
+  task that names its result hides its output, and the secret-no-log baseline takes no new entry),
+  so the owner reads the change in the diff of `owner_vars/edget.yml`, and the report's lines (each
+  destination live against wanted, each key) once the apply has run. The apply
+  reloads sshd and proves with sshd's own answer that remote forwarding is off for the account and
+  that its `PermitOpen` is the list.
+- **What proves it.** The unit tests (every code above with a control beside it); the `spool`
+  scenario of the Molecule shard, over the real sshd: the second account's key reaches the spool host
+  and refuses the first account's two listed addresses, the jump host's own sshd, its loopback and
+  the spool host's other port, each logged by sshd as denied; the first account's key reaches its own
+  list and is refused the spool host; each account's key is turned away from the other account; a
+  control puts one more address on the second list and the connection goes through, and with the
+  list put back it is refused again; the role refuses the second account named as the first with the
+  first account's four files byte for byte as they were; neither account's name is in any path under
+  `/etc/ssh` or in the log.
 
 ## The jump hosts: edge1 and edge-t
 

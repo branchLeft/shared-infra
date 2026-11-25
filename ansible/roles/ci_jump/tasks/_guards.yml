@@ -26,7 +26,7 @@
     user: '{{ ci_jump_user }}'
     own_address: '{{ ci_jump_own_address }}'
     destinations: '{{ ci_jump_destinations }}'
-    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    keys: '{{ ci_jump_keys }}'
     owned_accounts: '{{ ci_jump_owned_accounts }}'
     legacy_files: '{{ ci_jump_legacy_files }}'
   register: ci_jump_plan

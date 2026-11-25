@@ -11,6 +11,11 @@
     group: root
     mode: '0755'
 
+# ANS-16: the judge's digest input is a mapping whose key is the word "secrets", and its
+# keyword argument names the secrets text. Both are the judge's own variable names, which the
+# digest and the controller's contract read, so they cannot be reworded here. The file holds no
+# secret: the text arrives on the module's parameters, marked no_log. The diff of this copy is
+# hidden under the owner's ruling of 2 November on the plan-diff scan, choice A.
 - name: Install the tenant compose judge
   ansible.builtin.copy:
     src: tenant_compose_check.py
@@ -18,6 +23,7 @@
     owner: root
     group: root
     mode: '0644'
+  diff: false
 
 # The program runs the judge under the host's own python3, which needs PyYAML to read the
 # compose text (ansible-core depends on it, so a host that runs the pull has it). Reading it is

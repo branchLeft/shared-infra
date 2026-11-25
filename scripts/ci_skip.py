@@ -34,7 +34,7 @@ UNITS: dict[str, tuple[str, ...]] = {
         "hetzner/dns/zone.json",
         "hetzner/dns/publicpress.co.uk.json",
     ),
-    "edge-config-validate": ("hetzner/edge/",),
+    "edge-config-validate": ("hetzner/edge/", "hetzner/edge-t/"),
     "monitoring-config-validate": ("hetzner/monitoring/", "hetzner/RUNBOOK-monitoring.md"),
     "nextcloud1-config-validate": ("hetzner/nextcloud1/",),
     "shim-image-starts": ("mail/provision/",),
@@ -58,6 +58,7 @@ ALWAYS_RUN: frozenset[str] = frozenset(
         "hetzner-typecheck",
         "hetzner-host-typecheck",
         "hetzner-provision-checks",
+        "edge-widget-pins",
     }
 )
 

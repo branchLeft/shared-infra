@@ -1,8 +1,8 @@
-"""One home for the monitoring stack's fifteen files and for its unit's restart.
+"""One home for the monitoring stack's sixteen files and for its unit's restart.
 
-Only monitoring_stack delivers the fifteen files and restarts the unit. These tests
+Only monitoring_stack delivers the sixteen files and restarts the unit. These tests
 read the roles' code and fail when another role names one of the files or the unit.
-The fifteen are read from monitoring_stack's vars. The reasoning is in
+The sixteen are read from monitoring_stack's vars. The reasoning is in
 ansible/roles/monitoring_stack/README.md, "Restart".
 """
 
@@ -70,7 +70,7 @@ def delivers_from_stack(role: Path, stack: Path) -> bool:
 
 
 def violations(role: Path, files: list[str], stack: Path = STACK) -> list[str]:
-    """Return every way a role names one of the fifteen files or the monitoring unit."""
+    """Return every way a role names one of the sixteen files or the monitoring unit."""
     found: list[str] = []
     from_stack = delivers_from_stack(role, stack)
     for name, text in code_of(role).items():
@@ -105,9 +105,9 @@ class MonitoringSingleHomeTest(unittest.TestCase):
         owner_vars = (ROLES / OWNER / "vars" / "main.yml").read_text(encoding="utf-8")
         self.files = owned_files(owner_vars)
 
-    def test_the_owner_lists_fifteen_files_and_each_is_in_the_stack_directory(self) -> None:
+    def test_the_owner_lists_sixteen_files_and_each_is_in_the_stack_directory(self) -> None:
         self.assertEqual(
-            15, len(self.files), "monitoring_stack_files must hold the fifteen stack files"
+            16, len(self.files), "monitoring_stack_files must hold the sixteen stack files"
         )
         self.assertEqual([], [f for f in self.files if not (STACK / f).is_file()])
         self.assertNotIn(RENDERER, self.files)

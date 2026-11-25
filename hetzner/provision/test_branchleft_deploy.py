@@ -18,6 +18,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -63,12 +64,26 @@ class FakeRun:
     the environment and stdin a subprocess was started with.
     """
 
-    def __init__(self, responses):
+    def __init__(self, responses, diagnosis=None):
         self.responses = list(responses)
         self.calls = []
         self.kwargs = []
+        # The read-only restart diagnosis (`systemctl status`, `journalctl`, `docker compose
+        # config`) is answered here, outside the queue and outside `calls`, so the rollback
+        # tests keep describing the rollback sequence. `diagnosis` maps argv[0] to stdout.
+        self.diagnosis = dict(diagnosis or {})
+        self.diagnosis_calls = []
 
     def __call__(self, argv, check=False, capture_output=False, text=False, **kwargs):
+        if (
+            argv[0] == "journalctl"
+            or list(argv[:2]) == ["systemctl", "status"]
+            or (list(argv[:2]) == ["docker", "compose"] and "config" in argv)
+        ):
+            self.diagnosis_calls.append((list(argv), kwargs))
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=self.diagnosis.get(argv[0], ""), stderr=""
+            )
         self.calls.append(list(argv))
         self.kwargs.append(kwargs)
         response = self.responses.pop(0) if self.responses else 0
@@ -355,6 +370,167 @@ class DeployLockTests(unittest.TestCase):
         self.assertEqual(sleeps, [])
 
 
+class RedactionTests(unittest.TestCase):
+    """The redaction is what keeps a public CI log from carrying a host secret."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+        os.makedirs(os.path.join(self.stack_dir, "edge"))
+        with open(os.path.join(self.config_dir, "edge.image.env"), "w", encoding="utf-8") as handle:
+            handle.write(f"IMAGE={VALID_IMAGE}\n")
+
+    def diagnose(self, run):
+        return bd.restart_diagnosis(
+            "edge", run=run, config_dir=self.config_dir, stack_dir=self.stack_dir
+        )
+
+    SECRET_LINES = {
+        "env assignment": "DATABASE_URL=mysql://ghost:hunter2@db/ghost",
+        "unnamed setting": "FOO=hunter2",
+        "named secret": "database__connection__password: hunter2",
+        "secret flag": "docker login --password hunter2 ghcr.io",
+        "bearer": "Authorization: Bearer hunter2hunter2",
+        "scheme credential": "curl failed with token hunter2hunter2",
+        "url userinfo": "pull from https://robot:hunter2@registry.example/v2/",
+        "github token": "using ghp_" + "A1b2C3d4E5" * 4,
+        "long token": "session " + "x9Y8z7W6" * 6,
+        "private key": "key: -----BEGIN OPENSSH PRIVATE KEY----- hunter2 -----END OPENSSH PRIVATE KEY-----",
+        "logfmt inner env": 'level=error msg="start failed: SMTP_PASS=hunter2"',
+    }
+
+    def test_no_secret_shaped_line_survives(self):
+        for name, line in self.SECRET_LINES.items():
+            with self.subTest(name):
+                shown = bd.redact_diagnostic_line(line)
+                self.assertNotIn("hunter2", shown)
+                self.assertNotRegex(shown, r"[A-Za-z0-9]{32,}")
+
+    def test_the_redaction_test_is_sensitive_to_the_redactor(self):
+        # Sabotage, kept: with the redactor reduced to identity every line above leaks.
+        with mock.patch.object(bd, "redact_diagnostic_line", lambda line: line):
+            for name, line in self.SECRET_LINES.items():
+                with self.subTest(name):
+                    shown = bd.redact_diagnostic_line(line)
+                    self.assertTrue("hunter2" in shown or re.search(r"[A-Za-z0-9]{32,}", shown))
+
+    def test_a_secret_in_the_journal_never_reaches_stderr_through_deploy(self):
+        text = "\n".join(self.SECRET_LINES.values())
+        out = self.diagnose(FakeRun([], diagnosis={"journalctl": text, "systemctl": ""}))
+        self.assertNotIn("hunter2", out)
+        with mock.patch.object(bd, "redact_diagnostic_line", lambda line: line):
+            leaked = self.diagnose(FakeRun([], diagnosis={"journalctl": text, "systemctl": ""}))
+        self.assertIn("hunter2", leaked)
+
+    def test_a_bare_value_from_the_env_file_is_dropped_whole_even_without_a_name(self):
+        with open(os.path.join(self.config_dir, "edge.env"), "w", encoding="utf-8") as handle:
+            handle.write("# operator-written\nOPAQUE_THING=zq8vN2kPw7Lx\nSHORT=ab\n")
+        text = "\n".join(
+            [
+                "Nov 23 08:45:11 host docker[9]: upstream rejected zq8vN2kPw7Lx",
+                "Nov 23 08:45:12 host docker[9]: short ab is not a secret to match",
+                "Nov 23 08:45:13 host docker[9]: unrelated line",
+            ]
+        )
+        out = self.diagnose(FakeRun([], diagnosis={"journalctl": text}))
+        self.assertNotIn("zq8vN2kPw7Lx", out)
+        self.assertIn("line carries a value from the stack's env file", out)
+        self.assertIn("unrelated line", out)
+        self.assertIn("short ab is not a secret", out)
+
+    def test_the_env_value_filter_is_sensitive_to_its_own_rule(self):
+        # Sabotage, kept: with the value filter disabled the bare value reaches the log.
+        with open(os.path.join(self.config_dir, "edge.env"), "w", encoding="utf-8") as handle:
+            handle.write("OPAQUE_THING=zq8vN2kPw7Lx\n")
+        text = "Nov 23 08:45:11 host docker[9]: upstream rejected zq8vN2kPw7Lx"
+        with mock.patch.object(bd, "DIAGNOSIS_MIN_SECRET_VALUE", 10**6):
+            leaked = self.diagnose(FakeRun([], diagnosis={"journalctl": text}))
+        self.assertIn("zq8vN2kPw7Lx", leaked)
+
+    def test_compose_config_is_run_validation_only_with_the_unit_environment(self):
+        with open(os.path.join(self.config_dir, "edge.env"), "w", encoding="utf-8") as handle:
+            handle.write("OPAQUE_THING=zq8vN2kPw7Lx\n")
+        run = FakeRun([], diagnosis={"docker": "", "systemctl": "", "journalctl": ""})
+        out = self.diagnose(run)
+        config_calls = [(argv, kwargs) for argv, kwargs in run.diagnosis_calls if argv[0] == "docker"]
+        self.assertEqual(len(config_calls), 1)
+        argv, kwargs = config_calls[0]
+        self.assertEqual(
+            argv,
+            ["docker", "compose", "-f", os.path.join(self.stack_dir, "edge", "compose.yml"),
+             "config", "--quiet"],
+        )
+        self.assertEqual(kwargs["env"]["IMAGE"], VALID_IMAGE)
+        self.assertEqual(kwargs["env"]["OPAQUE_THING"], "zq8vN2kPw7Lx")
+        self.assertEqual(kwargs["cwd"], os.path.join(self.stack_dir, "edge"))
+        self.assertIn("--- docker compose config --quiet ---\nexit status 0", out)
+        self.assertNotIn("zq8vN2kPw7Lx", out)
+
+    def test_compose_validation_errors_are_shown_redacted(self):
+        class ConfigFails(FakeRun):
+            def __call__(self, argv, **kwargs):
+                if list(argv[:2]) == ["docker", "compose"]:
+                    self.diagnosis_calls.append((list(argv), kwargs))
+                    return subprocess.CompletedProcess(
+                        argv,
+                        1,
+                        stdout="",
+                        stderr='env var "GHOST_URL" is required; DSN=mysql://a:hunter2hunter2@db\n',
+                    )
+                return super().__call__(argv, **kwargs)
+
+        out = self.diagnose(ConfigFails([]))
+        self.assertIn("--- docker compose config --quiet ---\nexit status 1", out)
+        self.assertIn('env var "GHOST_URL" is required', out)
+        self.assertNotIn("hunter2", out)
+
+    def test_an_unreadable_env_file_stops_the_diagnosis_rather_than_printing_unredacted(self):
+        run = FakeRun([], diagnosis={"journalctl": "Nov 23 08:45:11 host docker[9]: boom"})
+        with mock.patch.object(bd, "read_env_file", side_effect=PermissionError(13, "denied")):
+            self.assertEqual(self.diagnose(run), "")
+        self.assertEqual(run.diagnosis_calls, [])
+
+    def test_the_facts_a_diagnosis_exists_to_show_are_kept(self):
+        digest = f"ghcr.io/branchleft/ghost-tenant@sha256:{'6' * 64}"
+        for line in (
+            "Active: failed (Result: exit-code) since Sun 2026-11-23 08:45:11 UTC",
+            "Process: 9 ExecStart=/usr/bin/docker compose up (code=exited, status=1/FAILURE)",
+            f"Container blog-ghost-1  Error pulling {digest}",
+            "/opt/branchleft/blog/compose.yml: no such file or directory",
+            'level=error msg="required variable GHOST_URL is missing a value"',
+        ):
+            with self.subTest(line):
+                shown = bd.redact_diagnostic_line(line)
+                for kept in ("Result: exit-code", "status=1/FAILURE", digest,
+                             "/opt/branchleft/blog/compose.yml", "GHOST_URL is missing"):
+                    if kept in line:
+                        self.assertIn(kept, shown)
+
+    def test_workflow_commands_are_defanged(self):
+        for line in ("::error::x", "::add-mask::y", "::stop-commands::z"):
+            self.assertNotIn("::", bd.redact_diagnostic_line(line))
+
+    def test_lines_and_the_total_are_bounded(self):
+        long_line = "word " * 500
+        self.assertLessEqual(
+            len(bd.redact_diagnostic_line(long_line)),
+            bd.DIAGNOSIS_LINE_CHARS + len(" ...[truncated]"),
+        )
+        many = "\n".join(f"line {n} " + "word " * 60 for n in range(500))
+        out = self.diagnose(FakeRun([], diagnosis={"journalctl": many, "systemctl": many}))
+        self.assertLessEqual(len(out.encode()), bd.DIAGNOSIS_TOTAL_BYTES + 100)
+        self.assertIn("line 499", out)
+        self.assertNotIn("line 0 ", out)
+
+    def test_an_empty_journal_has_no_journal_section(self):
+        out = self.diagnose(FakeRun([]))
+        self.assertNotIn("journalctl", out)
+        self.assertIn("--- docker compose config --quiet ---\nexit status 0", out)
+
+
 class DeployTests(unittest.TestCase):
     def setUp(self):
         exempt_example_image(self)
@@ -442,6 +618,103 @@ class DeployTests(unittest.TestCase):
         self.assertNotIn("needs an operator", message)
         self.assertEqual(len(run.calls), 4)
         self.assertEqual(run.calls[3], ["systemctl", "restart", "branchleft-compose@edge"])
+
+    def test_failed_restart_prints_a_redacted_diagnosis_before_the_rollback(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+        run = FakeRun(
+            [1, (0, "Exited (1) 2 seconds ago"), 0, 0],
+            diagnosis={
+                "systemctl": "Active: failed (Result: exit-code)\n"
+                "Process: 9 ExecStart=/usr/bin/docker compose up (code=exited, status=1/FAILURE)",
+                "journalctl": "\n".join(
+                    [f"Nov 23 08:45:11 host docker[9]: line {n}" for n in range(200)]
+                    + [
+                        'Nov 23 08:45:12 host docker[9]: required variable GHOST_URL is missing a value',
+                        "Nov 23 08:45:13 host docker[9]: DATABASE_URL=mysql://ghost:hunter2@db/ghost",
+                        "Nov 23 08:45:14 host docker[9]: ::error::injected " + "Zz9" * 20,
+                    ]
+                ),
+            },
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(bd.DeployError):
+            self.deploy(VALID_IMAGE, run)
+        out = stderr.getvalue()
+
+        self.assertIn("unit diagnosis (redacted, bounded)", out)
+        self.assertIn("status=1/FAILURE", out)
+        self.assertIn("required variable GHOST_URL is missing a value", out)
+        self.assertNotIn("hunter2", out)
+        self.assertNotIn("Zz9" * 20, out)
+        self.assertNotIn("::error::", out)
+        self.assertNotIn("line 0\n", out)
+        # 200 numbered lines and three more; the last DIAGNOSIS_JOURNAL_LINES kept leave 117 numbered.
+        self.assertEqual(out.count("docker[9]: line "), bd.DIAGNOSIS_JOURNAL_LINES - 3)
+        self.assertLessEqual(len(out.encode()), bd.DIAGNOSIS_TOTAL_BYTES + 200)
+        # Read before the rollback restarts the unit, and never from a caller's stdin.
+        self.assertEqual(
+            [argv[0] for argv, _ in run.diagnosis_calls],
+            ["systemctl", "journalctl", "docker"],
+        )
+        self.assertEqual(run.diagnosis_calls[1][0][:3], ["journalctl", "-u", "branchleft-compose@edge"])
+        self.assertEqual(run.diagnosis_calls[1][1]["stdin"], subprocess.DEVNULL)
+        self.assertEqual(run.diagnosis_calls[2][0][-1], "--quiet")
+        self.assertEqual(len(run.calls), 4)
+
+    def test_unreadable_diagnosis_changes_neither_the_outcome_nor_the_rollback(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        class Unreadable(FakeRun):
+            def __call__(self, argv, **kwargs):
+                if argv[0] == "journalctl":
+                    raise subprocess.TimeoutExpired(argv, 20)
+                if argv[0] == "systemctl" and argv[1] == "status":
+                    raise FileNotFoundError("systemctl")
+                if argv[0] == "docker" and "config" in argv:
+                    raise FileNotFoundError("docker")
+                return super().__call__(argv, **kwargs)
+
+        run = Unreadable([1, (0, "Exited (1) 2 seconds ago"), 0, 0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(bd.DeployError) as caught:
+            self.deploy(VALID_IMAGE, run)
+        self.assertIn("rolled back to", str(caught.exception))
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(bd.read_current_image(self.env_path()), previous)
+
+    def test_closed_stderr_does_not_stop_the_rollback(self):
+        previous = f"ghcr.io/branchleft/example@sha256:{'c' * 64}"
+        self.deploy(previous, FakeRun([0]))
+
+        class ClosedPipe:
+            def write(self, _text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        run = FakeRun(
+            [1, (0, "Exited (1) 2 seconds ago"), 0, 0],
+            diagnosis={"journalctl": "Nov 23 08:45:11 host docker[9]: boom"},
+        )
+        with mock.patch.object(sys, "stderr", ClosedPipe()), self.assertRaises(
+            bd.DeployError
+        ) as caught:
+            self.deploy(VALID_IMAGE, run)
+        self.assertIn("rolled back to", str(caught.exception))
+        self.assertEqual(bd.read_current_image(self.env_path()), previous)
+        self.assertEqual(len(run.calls), 4)
+        self.assertEqual(run.calls[3], ["systemctl", "restart", "branchleft-compose@edge"])
+
+    def test_successful_restart_prints_no_diagnosis(self):
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy(VALID_IMAGE, run)
+        self.assertEqual(run.diagnosis_calls, [])
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_failed_restart_rolls_back_to_previous_image_when_the_pinned_image_is_down(
         self,

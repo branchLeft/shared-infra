@@ -17,23 +17,21 @@ exercised here; `_parse_latest_payload` carries the logic and is.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import pathlib
+import sys
 import unittest
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "check-crowdsec-hub-pin.py"
-    spec = importlib.util.spec_from_file_location("check_crowdsec_hub_pin", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# The shared loader lives in scripts/, which is not on this directory's import path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from script_loader import load_script  # noqa: E402
 
 
-chp = _load_module()
+chp = load_script(
+    pathlib.Path(__file__).resolve().parent / "check-crowdsec-hub-pin.py",
+    "check_crowdsec_hub_pin",
+)
 
 
 def _compose(image_line: str) -> str:

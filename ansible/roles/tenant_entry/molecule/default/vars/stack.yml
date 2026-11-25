@@ -32,3 +32,14 @@ tenant_entry_stack_with_reference: "{{ tenant_entry_stack_parameters | combine({
 tenant_entry_stack_with_key_injection: "{{ tenant_entry_stack_parameters | combine({'environment': {'user: 0:0': 'x'}}) | to_json }}"
 tenant_entry_stack_with_unknown_secret: "{{ tenant_entry_stack_parameters | combine({'environment': {'k': {'secret': 'GHOST_NOT_IN_THE_FILE'}}}) | to_json }}"
 tenant_entry_stack_larger: "{{ tenant_entry_stack_parameters | combine({'size': 'large'}) | to_json }}"
+
+# The owner verb's request: the four fields and no more. The address is not among them: the owner
+# script reads it from the tenant's secrets file.
+tenant_entry_owner_fields:
+  colour: a
+  name: EXAMPLE Owner
+  site_url: https://blog.example.invalid
+  site_title: EXAMPLE Site
+tenant_entry_owner_request: '{{ tenant_entry_owner_fields | to_json }}'
+tenant_entry_owner_with_address: "{{ tenant_entry_owner_fields | combine({'email': 'EXAMPLE@example.invalid'}) | to_json }}"
+tenant_entry_owner_with_other_colour: "{{ tenant_entry_owner_fields | combine({'colour': 'c'}) | to_json }}"

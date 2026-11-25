@@ -507,8 +507,7 @@ jobs:
       # A tree with no library reports that and passes: it does not fail, and it
       # does not pass in silence. A library with no tests/unit fails, because a
       # module with no test is not checked (TEST-1). ansible/patterns/*/library is
-      # not covered: the typed_module pattern keeps its tests where they are, and
-      # moving them into CI is a separate change.
+      # not covered here: the typed_module pattern is checked by its own steps below.
       - name: Check each role's own library modules
         if: matrix.part == 'static'
         run: |
@@ -544,6 +543,26 @@ jobs:
             echo "Checked the library of $checked role(s)."
           fi
 
+      # The typed_module pattern keeps its module and tests under its own directory, not in a
+      # role, so the steps above never reach them. Its whole-directory type check is the test
+      # ansible/checks/test_patterns_typecheck.py ("Test the checks"); these steps run the strict
+      # type check of its module and tests, its lint and its format check, from the pattern's
+      # directory so its pyproject.toml is the one the tools read.
+      - name: Type-check the typed_module pattern
+        if: matrix.part == 'static'
+        working-directory: ansible/patterns/typed_module
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m mypy --strict library tests/unit'
+
+      - name: Lint the typed_module pattern
+        if: matrix.part == 'static'
+        working-directory: ansible/patterns/typed_module
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m ruff check library tests'
+
+      - name: Check the typed_module pattern's formatting
+        if: matrix.part == 'static'
+        working-directory: ansible/patterns/typed_module
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m ruff format --check library tests'
+
       # Every role's unit tests, through one script: the single home for the glob
       # and the run. A new role is picked up with no edit here, and the script fails
       # when no role has tests, when a tests/unit holds no test_*.py, when a suite
@@ -553,6 +572,16 @@ jobs:
       - name: Run every role's unit tests
         if: matrix.part == 'units'
         run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" python3 ansible/checks/run_role_unit_tests.py ansible'
+
+      # The typed_module pattern's unit tests. Its module is imported by name, so its library/
+      # directory is on PYTHONPATH from the pattern's directory, as the role suites have files/
+      # and library/ on theirs.
+      - name: Run the typed_module pattern's unit tests
+        if: matrix.part == 'units'
+        working-directory: ansible/patterns/typed_module/tests/unit
+        env:
+          PYTHONPATH: ../../library
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -p "test_*.py"'
 
   # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every
   # shard on a scheduled or manual run. The gate job waits for this job and fails with it.
@@ -574,6 +603,10 @@ jobs:
       github.event_name != 'merge_group'
     strategy:
       fail-fast: false
+      # A pull request runs at most 6 shards at once, so one large PR cannot take the whole
+      # org-wide pool of CI runners. The schedule and a manual run keep every shard at once:
+      # 256 is GitHub's matrix ceiling.
+      max-parallel: ${{ github.event_name == 'pull_request' && 6 || 256 }}
       matrix: ${{ fromJSON(needs.discover.outputs.blocking_matrix) }}
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
@@ -678,6 +711,8 @@ jobs:
       github.event_name != 'merge_group'
     strategy:
       fail-fast: false
+      # Capped on a pull request, as the blocking shards are.
+      max-parallel: ${{ github.event_name == 'pull_request' && 6 || 256 }}
       matrix: ${{ fromJSON(needs.discover.outputs.advisory_matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45

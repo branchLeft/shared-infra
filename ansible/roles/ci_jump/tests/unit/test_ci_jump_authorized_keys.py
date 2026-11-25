@@ -1141,5 +1141,173 @@ class WantedTextTests(unittest.TestCase):
         self.assertEqual(jump.EXPECTED_EFFECTIVE["allowtcpforwarding"], "local")
 
 
+class KeyOwnDestinationTests(unittest.TestCase):
+    """A key may have a list of its own: its line names that list and no other, and sshd's
+    PermitOpen is the union. The controller's key reaches two hosts through a jump host whose
+    other key reaches more, and the two lists must never merge."""
+
+    SHARED = ["db-t1", OWN, "app-t1"]
+    CONTROLLER = ["app-t1", "db-t1"]
+    CONTROLLER_ONLY = ["10.0.0.9"]
+
+    def entries(self, controller: list[str] | None) -> list[object]:
+        """The CI key takes the shared list; the controller's key has the list it is given."""
+        return [KEY_A, KEY_B if controller is None else {"key": KEY_B, "destinations": controller}]
+
+    def deliver(self, host: FakeHost, controller: list[str], permitted: list[str]) -> None:
+        """The host as a run leaves it with the controller's key on its own list."""
+        host.put(
+            MANAGED,
+            live_file(wanted_line(self.SHARED, KEY_A), wanted_line(controller, KEY_B)),
+        )
+        host.put(DROPIN, wanted_dropin(permitted))
+        host.infos["/etc/ssh/authorized_keys.d"] = jump.FileInfo(0, 0, 0o755, False, True)
+        host.settings = delivered_settings(permitted)
+
+    def verify(self, host: FakeHost, controller: list[str] | None) -> list[str]:
+        """Verify the host against the shared list and the two key entries."""
+        return jump.do_verify(host, "jumper", OWN, self.SHARED, self.entries(controller), OWNED)
+
+    def test_the_union_is_each_host_once_in_the_order_met(self) -> None:
+        self.assertEqual(
+            jump.permitted_destinations(self.SHARED, [None, ["APP-T1", *self.CONTROLLER_ONLY]], 2),
+            ["db-t1", OWN, "app-t1", "10.0.0.9"],
+        )
+
+    def test_with_no_list_of_its_own_every_key_takes_the_shared_list(self) -> None:
+        self.assertEqual(jump.permitted_destinations(self.SHARED, [None, None], 2), self.SHARED)
+        self.assertEqual(
+            jump.wanted_lines(self.SHARED, [("ssh-ed25519", "AAAA")] * 2, None),
+            jump.wanted_lines(self.SHARED, [("ssh-ed25519", "AAAA")] * 2, [None, None]),
+        )
+
+    def test_a_key_with_its_own_list_carries_that_list_and_no_other(self) -> None:
+        lines = jump.wanted_lines(
+            self.SHARED,
+            [("ssh-ed25519", body(KEY_A)), ("ssh-ed25519", body(KEY_B))],
+            [None, self.CONTROLLER],
+        )
+        self.assertEqual(lines[0], wanted_line(self.SHARED, KEY_A))
+        self.assertEqual(lines[1], wanted_line(self.CONTROLLER, KEY_B))
+        self.assertNotIn(f'permitopen="{OWN}:22"', lines[1])
+
+    def test_control_the_files_of_a_key_with_its_own_list_are_accepted(self) -> None:
+        host = FakeHost()
+        self.deliver(host, self.CONTROLLER, self.SHARED)
+        self.assertIn("2 key line(s)", self.verify(host, self.CONTROLLER)[0])
+
+    def test_a_key_line_that_carries_the_shared_list_is_refused(self) -> None:
+        """The sabotage the controller's list exists for: its line widened to the shared list."""
+        host = FakeHost()
+        self.deliver(host, self.CONTROLLER, self.SHARED)
+        host.put(MANAGED, live_file(*[wanted_line(self.SHARED, key) for key in (KEY_A, KEY_B)]))
+        self.assertEqual(
+            refusal_code(lambda: self.verify(host, self.CONTROLLER)), "E-READBACK-MISMATCH"
+        )
+
+    def test_a_host_the_controller_may_not_reach_is_refused_then_accepted_when_listed(self) -> None:
+        host = FakeHost()
+        self.deliver(host, [*self.CONTROLLER, OWN], self.SHARED)
+        self.assertEqual(
+            refusal_code(lambda: self.verify(host, self.CONTROLLER)), "E-READBACK-MISMATCH"
+        )
+        self.assertIn("2 key line(s)", self.verify(host, [*self.CONTROLLER, OWN])[0])
+
+    def test_a_match_block_that_leaves_out_a_keys_host_is_refused(self) -> None:
+        host = FakeHost()
+        self.deliver(host, self.CONTROLLER_ONLY, [*self.SHARED, *self.CONTROLLER_ONLY])
+        self.assertIn("2 key line(s)", self.verify(host, self.CONTROLLER_ONLY)[0])
+        host.put(DROPIN, wanted_dropin(self.SHARED))
+        self.assertEqual(
+            refusal_code(lambda: self.verify(host, self.CONTROLLER_ONLY)), "E-READBACK-MISMATCH"
+        )
+
+    def test_a_match_block_that_permits_more_than_the_union_is_refused(self) -> None:
+        host = FakeHost()
+        self.deliver(host, self.CONTROLLER, self.SHARED)
+        host.settings = delivered_settings([*self.SHARED, "10.0.0.77"])
+        self.assertEqual(
+            refusal_code(lambda: self.verify(host, self.CONTROLLER)), "E-SSHD-PERMITOPEN"
+        )
+
+    def test_the_plan_shows_each_keys_permitopen_set(self) -> None:
+        host = FakeHost()
+        self.deliver(host, [*self.CONTROLLER, OWN], self.SHARED)
+        text = "\n".join(
+            jump.do_plan(host, "jumper", OWN, self.SHARED, self.entries(self.CONTROLLER), OWNED)
+        )
+        controller = jump.fingerprint(body(KEY_B))
+        self.assertIn(
+            f"key ssh-ed25519 fingerprint {controller} permitopen wanted app-t1, db-t1,"
+            f" live {OWN}, app-t1, db-t1",
+            text,
+        )
+        self.assertIn("live options differ from the wanted options", text)
+
+    def test_a_plan_of_a_host_with_no_list_of_its_own_still_shows_the_shared_set(self) -> None:
+        # Main's output form: a host with no per-key lists plans exactly as before, with the
+        # shared set in the summary and no per-key permitopen line.
+        host = FakeHost()
+        host.deliver(self.SHARED, [KEY_A, KEY_B])
+        lines = jump.do_plan(host, "jumper", OWN, self.SHARED, [KEY_A, KEY_B], OWNED)
+        self.assertEqual(
+            lines[0],
+            "ci_jump plan for the jump account: every key line is wanted with the options "
+            "restrict, port-forwarding, one permitopen per destination and a forced command, "
+            "and sshd gets the same list as its PermitOpen",
+        )
+        self.assertFalse(any("permitopen wanted" in line for line in lines))
+        self.assertIn("sshd drop-in is identical to the wanted text", lines)
+
+    def test_a_pending_host_is_one_whose_key_line_is_on_the_wrong_list(self) -> None:
+        host = FakeHost()
+        self.deliver(host, self.CONTROLLER, self.SHARED)
+        result = jump.plan_result(
+            host, "jumper", OWN, self.SHARED, self.entries(self.CONTROLLER), OWNED
+        )
+        self.assertFalse(result[1])
+        result = jump.plan_result(host, "jumper", OWN, self.SHARED, [KEY_A, KEY_B], OWNED)
+        self.assertTrue(result[1])
+
+    def test_each_way_a_keys_own_list_can_be_wrong_has_a_code(self) -> None:
+        cases: dict[str, tuple[object, str]] = {
+            "empty": ({"key": KEY_B, "destinations": []}, "E-DEST-EMPTY"),
+            "null": ({"key": KEY_B, "destinations": None}, "E-DEST-EMPTY"),
+            "text": ({"key": KEY_B, "destinations": "db-t1"}, "E-DEST-EMPTY"),
+            "wildcard": ({"key": KEY_B, "destinations": ["*"]}, "E-DEST-WILDCARD"),
+            "port": ({"key": KEY_B, "destinations": ["db-t1:22"]}, "E-DEST-PORT"),
+            "repeat": ({"key": KEY_B, "destinations": ["db-t1", "DB-T1"]}, "E-DEST-DUPLICATE"),
+            "extra field": ({"key": KEY_B, "options": ["no-pty"]}, "E-KEY-SHAPE"),
+            "no key": ({"destinations": ["db-t1"]}, "E-KEY-SHAPE"),
+        }
+        for label, (entry, code) in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(refusal_code(partial(self.plan_with, entry)), code)
+
+    def plan_with(self, entry: object) -> list[str]:
+        """Plan a host with the CI key and one more entry."""
+        host = FakeHost()
+        host.deliver(self.SHARED, [KEY_A, KEY_B])
+        return jump.do_plan(host, "jumper", OWN, self.SHARED, [KEY_A, entry], OWNED)
+
+    def test_a_refusal_names_the_key_and_never_the_text(self) -> None:
+        try:
+            jump.check_key_destinations([None, ["db-t1", "EXAMPLE_HOSTILE*"]], 2)
+        except jump.RefusalError as error:
+            self.assertIn("key 2", str(error))
+            self.assertIn("destination 2", str(error))
+            self.assertNotIn("EXAMPLE_HOSTILE", str(error))
+        else:
+            self.fail("the wildcard was accepted")
+
+    def test_a_key_list_need_not_hold_the_jump_hosts_own_address(self) -> None:
+        self.assertEqual(
+            jump.check_key_destinations([None, self.CONTROLLER], 2)[1], self.CONTROLLER
+        )
+        self.assertEqual(
+            refusal_code(lambda: jump.check_own_address(OWN, self.CONTROLLER)), "E-DEST-OWN"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

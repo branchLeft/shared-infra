@@ -1,0 +1,27 @@
+---
+# The spool account's read-back: the module compares both of its files with the wanted text
+# exactly and asks sshd, for the account and from the jump host's own address, what it applies:
+# local forwarding only and the spool list, on the spool port, as PermitOpen.
+- name: Read the spool account's files back and ask sshd what it applies to the account
+  ci_jump_authorized_keys:
+    action: verify
+    profile: spool
+    port: '{{ ci_jump_spool_port }}'
+    user: '{{ ci_jump_spool_user }}'
+    own_address: '{{ ci_jump_own_address }}'
+    destinations: '{{ ci_jump_spool_destinations }}'
+    keys: '{{ ci_jump_spool_keys }}'
+    owned_accounts: "{{ ci_jump_owned_accounts | combine({'ci_jump': ci_jump_user} if ci_jump_user is defined else {}) }}"
+  register: ci_jump_spool_readback
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the spool account's files or sshd are not what was wanted
+  ansible.builtin.assert:
+    that:
+      - ci_jump_spool_readback.msg is not defined
+    fail_msg: "{{ ci_jump_spool_readback.msg | default('the module returned no result') }}"
+    quiet: true
+  no_log: true

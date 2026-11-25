@@ -10,6 +10,7 @@ import {
   renderOwnedEdgeBanRoute,
   renderPageReceiverBlock,
   renderPageRoute,
+  renderPageTimingLines,
   type PageRegisterEntry,
 } from './pageRegister';
 import {
@@ -398,9 +399,11 @@ function tunnelRelabelRule(tunnel: TunnelledHost): string[] {
 export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
   return sites.flatMap((site) =>
     // A signed object gateway answers 404 at `/` by design; its health path is
-    // the one the edge forwards for a probe.
-    site.hostnames.map((hostname) =>
-      site.signedObjectGateway === true ? `https://${hostname}/healthz` : `https://${hostname}`
+    // the one the edge forwards for a probe. A site with a public path allow-list
+    // names its own probe path for the same reason.
+    site.hostnames.map(
+      (hostname) =>
+        `https://${hostname}${site.probePath ?? (site.signedObjectGateway === true ? '/healthz' : '')}`
     )
   );
 }
@@ -1941,6 +1944,12 @@ export function renderAlertmanagerTemplate(
     '    - matchers:',
     '        - severity = "critical"',
     `      receiver: ${PAGE_RECEIVER_NAME}`,
+    // The page timings, not the root's email ones: this node sends to the
+    // phone with the page node and the owned-ban node, so a recovery notice
+    // and a re-page are not held for an hour or a day. The owned-ban node
+    // keeps its own, shorter-than-root timings and inherits the 24-hour
+    // repeat. The email routes below are siblings and keep the slow ones.
+    ...renderPageTimingLines(6),
     '      continue: true',
     '    - matchers:',
     '        - severity = "critical"',

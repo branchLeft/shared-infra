@@ -1,0 +1,5 @@
+---
+# Runs at the end of the play, or where meta: flush_handlers asks for it.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true

@@ -360,7 +360,10 @@ step's own named tasks changing, not the count alone.
 A host that has no route to the remote cannot pull, so one host, `demo1`, takes its
 commit pushed to it instead. It is the same program and the same checks, with a second
 way to get the commit: the caller sends a full-history git bundle on standard input and
-the program unpacks it into a throwaway repository instead of fetching `main`. The way
+the program unpacks it into a throwaway repository instead of fetching `main`. The bundle
+holds `HEAD` (the commit) and `refs/remotes/origin/main` (the tip of `main` as the pushing
+workflow's checkout knows it); the program asks of that tip the question the pull route asks
+of the tip it fetched. The way
 the commit arrives is a root-owned configuration value, `source` (`remote`, the
 default, or `bundle`). The role writes the key only for a host named in
 `pull_trigger_bundle_hosts` (a constant of the role, `demo1` only), matched against the
@@ -403,9 +406,14 @@ The order of the checks on this source, each before the next and none after a ch
    is `bad-bundle`, with its own sentence on standard error. Nothing in the quarantine
    is trusted until the next steps pass, and the quarantine and the spool are removed
    whatever the outcome.
-5. The signature, the allowlist of signers, the floor and the playbook are checked by
+5. The commit must be the tip of main the bundle carries or an ancestor of it, by the same
+   method as the pull route (`Repository.require_ancestor_of_main`), over the quarantine in
+   place of the cache. A bundle that carries no tip of main, or one that is not a commit, is
+   refused for that, and so is a commit that is not behind the tip. The answer is
+   `not-on-main`, before the signature is read.
+6. The signature, the allowlist of signers, the floor and the playbook are checked by
    the same code as the pull route, over the quarantine in place of the cache.
-6. Checkout from the quarantine, then the run, as for a pull.
+7. Checkout from the quarantine, then the run, as for a pull.
 
 Two checks differ from the pull route, and both are stated here because they are the
 point of this source:
@@ -417,16 +425,18 @@ point of this source:
   every request as `no-floor` (exit 20, and nothing is checked out): the role writes the
   floor once, from `pull_trigger_floor_seed`, only if the file is absent, and never
   moves one that exists. The seed is a reviewed commit id in the host's playbook.
-- **There is no "ancestor of `main`" test.** The host has no `main` to compare with.
-  A commit signed by an allowlisted key and descending from the floor is accepted
-  whether or not it is on `main`. The signer on the host is the hosting platform's web
-  signing key, and that key also signs commits made in the web interface on branches
-  other than `main`. This is the named limit of the owner's ruling
-  (the check is "signed by that key, not older than the floor, playbook allowlisted"):
-  a non-`main` commit that descends from the floor is applied, and a later `main`
-  commit that does not descend from it is then refused as `rollback`. The way out is the
-  floor reset in the operator runbook (in `ghost-platform-docs`), which a person runs.
-  The unit tests and the push scenario both run this case.
+- **The tip of `main` is the sender's word.** The host has no route to `main`, so the tip
+  it compares with is the one the bundle carries. That stops a commit that is not behind
+  the real tip: a commit made in the web interface on a fork or another branch, signed by the
+  same web signing key, sent beside the real tip, and a bundle of `HEAD` alone, which is what
+  the workflow sent before it carried the tip. It does not stop a sender that builds its own
+  bundle and names the fork commit as the tip of `main`: nothing on the host can tell that tip
+  from the real one, and the signature is the same. Whoever holds a key that may push or check
+  can do that, so the receiver is no proof against such a holder. The closure is a ref the
+  host can verify on its own, the signed release tag of `docs/pull-signer-trust.md` (T8, C6,
+  C11); until it exists, a floor that sits off `main` is reset by the floor reset in the
+  operator runbook (in `ghost-platform-docs`), which a person runs. A unit test and the push
+  scenario show both halves, the refusal and the limit.
 
 The summary line has the same fixed fields as the pull route, with its own prefix and
 with `changed` always a digit on this source, so the workflow that reads it can match
@@ -523,6 +533,9 @@ does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-iss
 (also a name holding a word the plan job's secret scan reads, which would fail the plan of every
 host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
 four directories, or not a plain name), `bad-unit` (not a plain unit name), `bad-port`,
+`service-not-declared` (an `http_status` fact whose name is not in `LOOK_HTTP_PORTS`, the
+program's allow-list of loopback ports per declared service), `port-not-allowed` (a port its
+service does not declare; the request path refuses it too, before any connection),
 `bad-url-path` (a query, a fragment, `..`, a doubled slash), `bad-host-name`, `line-shape` (a line
 that is not of the one shape, which is not printed) and `look-fault` (the look itself failed;
 the run is as it would have been without it).
@@ -565,7 +578,8 @@ receiver") there are three more: `mode-mismatch` (the request's mode word is not
 as many uploads, or as many bytes, as it may) and `bad-bundle` (standard input is not a
 bundle that stands alone, passes the object check and has the requested commit as its
 `HEAD`, or it was too large or too slow); a refusal of the bundle source also prints
-`changed=0`.
+`changed=0`. On the bundle source `not-on-main` also means the bundle carries no tip of
+`main`.
 
 Exit 40 usually means the playbook was never reached, but `io-error` and
 `internal-error` can also follow a playbook that ran to its end (for example a full
@@ -680,14 +694,14 @@ unit test makes each of them.
   to, but anyone who can write as root can change what it does.
 - **The playbook is what is trusted.** The program makes sure that the signed
   playbook is the one that runs. It does not judge what the playbook does.
-- **The push receiver accepts a commit that is not on `main`.** It checks the signer, the
-  floor and the playbook, and has no `main` to compare with (see "Push receiver"). A commit
-  made in the web interface on another branch and signed by the same key is applied if it
-  descends from the floor. This is the owner's ruling, and the floor reset is a person's
+- **The push receiver believes the tip of `main` the bundle carries.** It refuses a commit that
+  is not behind that tip and a bundle with none, and checks the signer, the floor and the
+  playbook (see "Push receiver"). A sender that names a fork commit as the tip is believed:
+  the host has no `main` of its own. This is the named limit, and the floor reset is a person's
   step in the operator runbook. A host told to require a release tag does not have this
-  limit: it needs no `main`, because the owner's signature on the tag is the trust root (see
-  "The release-tag route"). The program has the route; no host's configuration turns it on
-  yet, so on every host this limit still stands.
+  limit: a commit must then also be named by a tag the owner's release key signed, which the
+  holder of the push key cannot make alone (see "The release-tag route"). The program has the
+  route; no host's configuration turns it on yet, so on every host this limit still stands.
 - **The floor of a bundle host is a seed.** The first floor comes from
   `pull_trigger_floor_seed`, a commit id chosen when the host is enrolled; the receiver
   refuses everything before then. A wrong seed that is newer than the commits to be pushed
@@ -806,12 +820,12 @@ then, in `prepare.yml` and before the role runs, removes the container from ever
 network, so everything after the package refresh runs with no network at all. A control
 connect from the container must fail. It then sends real bundles to the installed program on
 standard input: a check and an apply, the second pass of the same commit (`unchanged`), a later
-commit, a signed commit that is not on `main` (applied, and the named limit shown by running
-it), then a `main` commit that does not descend from it (refused as `rollback`). It sends the
+commit, a signed commit that is not behind the tip of `main` the bundle carries (refused as
+`not-on-main`, never run), then the next commit of `main` (applied). It sends the
 refusals (a mode word that is not the key's, a playbook that is not the configured one, no
-floor, a commit older than the floor or not descending from it, an unrelated history, a truncated bundle, junk, a bundle that is not stand-alone,
+floor, a bundle with no tip of `main`, a commit older than the floor or not descending from it, an unrelated history, a truncated bundle, junk, a bundle that is not stand-alone,
 a bundle whose `HEAD` is another commit, an unsigned, tampered or unlisted-key commit) and
-checks each leaves the host and the spool as they were. Then the ten red cases of P1 to P10
+checks each leaves the host and the spool as they were. Then the red cases of P1 to P10 and P14
 run against copies of the program, and a seed copy with `force: true` shows the floor seed's
 guard. The read-the-result command above is run for the first apply and the second pass and
 its output is compared with the documented text.
@@ -910,6 +924,7 @@ the installed program must still give the refusal, which is the green side.
 | P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git           | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
 | P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                     | the push scenario's seed check                                                     |
 | P12 the receiver needs no network                    | none: the container has no network when it runs    | the push scenario's control connect, which must fail                               |
+| P14 the commit is behind the bundle's tip of main    | removing the ancestry call                         | `test_a_signed_commit_that_is_not_behind...`, scenario `no-main-ancestry`          |
 | P13 a floor seed is refused on a host that pulls     | the host check replaced by `true` in the seed copy | the push scenario's pull-host seed check                                           |
 
 The playbook-link, checkout and lock controls are those of the pull route and are shown

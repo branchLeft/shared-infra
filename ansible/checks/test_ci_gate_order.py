@@ -75,10 +75,16 @@ LINT_LEG_STEPS = {
         "Check the harness, checks and tools formatting",
         "Check each role's own program in files/",
         "Check each role's own library modules",
+        "Type-check the typed_module pattern",
+        "Lint the typed_module pattern",
+        "Check the typed_module pattern's formatting",
     ),
     "checks": ("Test the harness", "Test the checks", "Test the tools"),
     "slow": ("Test the slow checks",),
-    "units": ("Run every role's unit tests",),
+    "units": (
+        "Run every role's unit tests",
+        "Run the typed_module pattern's unit tests",
+    ),
 }
 
 # One row per outcome the gate must settle, as (what it shows, the values that differ from a run
@@ -379,12 +385,12 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
                 self.assertEqual(list(expected), named[leg])
 
     def test_the_full_lint_keeps_a_timeout_with_headroom_over_a_leg_under_ten_minutes(self) -> None:
-        # The legs are meant to finish in under ten minutes. A limit of 15 leaves half as much
-        # again; raising it again would hide a leg that creeps back up (the owner's ruling,
-        # rerun-si771: make the step faster, do not accept longer runs).
+        # The owner's ruling (rerun-si771: make the step faster, do not accept longer runs)
+        # sets two bounds. The legs are meant to finish in under ten minutes, so the limit must
+        # leave headroom above ten. A limit above 15 would hide a leg that creeps back up.
         limit = int(str(get(self.job("lint"), "timeout-minutes")))
-        self.assertGreaterEqual(limit, 14)
-        self.assertLessEqual(limit, 15)
+        self.assertGreater(limit, 10, "the ruling rerun-si771 needs headroom over a ten-minute leg")
+        self.assertLessEqual(limit, 15, "the ruling rerun-si771 forbids raising the limit above 15")
 
     def test_each_shard_job_runs_only_when_discover_chose_some_of_its_kind(self) -> None:
         for name, output in (("shard", "blocking"), ("shard-advisory", "advisory")):

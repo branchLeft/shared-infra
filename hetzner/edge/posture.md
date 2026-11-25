@@ -140,6 +140,17 @@ Five events per 60 seconds covers two members at two attempts each with a
 full request of headroom, while sitting under 3% of the page-serving
 threshold above -- "far below", the same standard that threshold was set to.
 
+The per-minute zone does not bound a client that spreads its sends over
+minutes: 5 a minute is 300 an hour from one address. A second zone on the
+same matcher caps it at 10 per hour (`MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_*`
+in `posture.ts`), counted only for requests the per-minute zone let through.
+It is part of the same `membersMagicLinkRateLimit` setting, so `off` removes
+both. A client over either cap gets Caddy's bodyless 429, the same refusal as
+the per-minute zone. The hourly zone is global across hostnames for the same
+reason the per-minute one is. Like the per-minute zone it is in memory and
+resets on each edge deploy. It stops the lazy sender that repeats one address
+or sprays from one client; it does not stop a sender with many addresses.
+
 The zone this is enforced in (`hetzner/edge/render.ts`) is global across
 every hostname this edge serves, unlike the per-site zone above. That is
 deliberate and is the one thing this control adds that Ghost's own

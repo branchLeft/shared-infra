@@ -1,0 +1,49 @@
+---
+# The second account's inputs are judged by the module before any file of either account is
+# written (main.yml runs this ahead of both writes), inputs first and then the host. The same
+# shape as _guards.yml: no assertion loops, the module task hides its result, and a refusal is a
+# code and an entry number read out by the assertion after it, so the cause of a stop shows in the
+# log with no value in it.
+# The first account's name is passed as an owned account for this call, so the module refuses a
+# second account that is the first (E-USER-FORBIDDEN) before either account is written.
+- name: Stop if the spool flag is on but the account's name was never seeded
+  ansible.builtin.assert:
+    that:
+      - ci_jump_spool_user is defined
+    fail_msg: >-
+      ci_jump[spool-user-missing]: ci_jump_spool_manage_keys is true but the host's private inputs
+      file holds no ci_jump_spool_user. The owner seeds it once with seed_host_inputs.py --set
+      ci_jump_spool_user (README, "The second account: spool"), before the flag is turned on.
+    quiet: true
+
+- name: Judge the spool account's inputs and the host, and compare the live files with the wanted ones
+  ci_jump_authorized_keys:
+    action: plan
+    profile: spool
+    port: '{{ ci_jump_spool_port }}'
+    user: '{{ ci_jump_spool_user }}'
+    own_address: '{{ ci_jump_own_address }}'
+    destinations: '{{ ci_jump_spool_destinations }}'
+    keys: '{{ ci_jump_spool_keys }}'
+    owned_accounts: "{{ ci_jump_owned_accounts | combine({'ci_jump': ci_jump_user} if ci_jump_user is defined else {}) }}"
+  register: ci_jump_spool_plan
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the module refused the spool account
+  ansible.builtin.assert:
+    that:
+      - ci_jump_spool_plan.msg is not defined
+    fail_msg: "{{ ci_jump_spool_plan.msg | default('the module returned no result') }}"
+    quiet: true
+  no_log: true
+
+# The lines of the plan (each spool destination live against wanted) are not printed here: a task
+# that names this result must hide its output (check_secret_no_log R1), and the shrink-only baseline
+# takes no new entry. The destinations are in owner_vars, which the owner reads; the report
+# (_report.yml) describes the live files of both accounts by index.
+- name: Note that the spool account's inputs were judged
+  ansible.builtin.debug:
+    msg: The spool account's inputs and host were accepted by the module.

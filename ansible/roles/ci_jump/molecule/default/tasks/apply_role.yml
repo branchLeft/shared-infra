@@ -2,7 +2,8 @@
 # Applies the role the way a playbook would with the owner's values: the public keys are read
 # from the container, the account, the jump host's own address and the destinations are the
 # scenario's. Inputs, all optional: apply_destinations (default: the listed address and the jump
-# host's own), apply_manage (default true). It is idempotent and runs in check mode, so the
+# host's own), apply_manage (default true), apply_second_destinations (default: not set, so the
+# second key takes the shared list; set, the second key has that list of its own). It is idempotent and runs in check mode, so the
 # harness's check steps can use it.
 - name: Read the public keys of the keys the role is told about
   ansible.builtin.slurp:
@@ -24,4 +25,6 @@
     ci_jump_destinations: '{{ apply_destinations | default([scenario_listed, scenario_own]) }}'
     ci_jump_keys:
       - key: '{{ ci_jump_scenario_pubs.results[0].content | b64decode | trim }}'
-      - key: '{{ ci_jump_scenario_pubs.results[1].content | b64decode | trim }}'
+      - >-
+        {{ {'key': ci_jump_scenario_pubs.results[1].content | b64decode | trim}
+        | combine({'destinations': apply_second_destinations} if apply_second_destinations is defined else {}) }}

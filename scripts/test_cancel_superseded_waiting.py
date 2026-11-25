@@ -5,24 +5,19 @@ The job shapes are the ones the cancel step reads from the jobs listing of an
 older push run of ci.yml. Each test names the rule it proves."""
 
 import contextlib
-import importlib.util
 import io
 import pathlib
 import sys
 import unittest
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "cancel-superseded-waiting.py"
-    spec = importlib.util.spec_from_file_location("cancel_superseded_waiting", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-superseded = _load_module()
+superseded = load_script(
+    pathlib.Path(__file__).resolve().parent / "cancel-superseded-waiting.py",
+    "cancel_superseded_waiting",
+)
 
 MAIL = "Apply (mail, pulumi up)"
 NETWORK = "Apply (hetzner network, pulumi up)"

@@ -12,7 +12,6 @@ No network. No subprocess.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import os
 import pathlib
@@ -27,17 +26,15 @@ BUILT = T0 + 10 * SECOND_NS  # dist written after the checkout
 PULLED = T0 + 20 * SECOND_NS  # a source file rewritten by a later pull
 
 
-def _load_module() -> ModuleType:
-    path = pathlib.Path(__file__).resolve().parent / "check-hetzner-host-dist.py"
-    spec = importlib.util.spec_from_file_location("check_hetzner_host_dist", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+# The shared loader lives in scripts/, which is not on this directory's import path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from script_loader import load_script  # noqa: E402
 
 
-checker: ModuleType = _load_module()
+checker: ModuleType = load_script(
+    pathlib.Path(__file__).resolve().parent / "check-hetzner-host-dist.py",
+    "check_hetzner_host_dist",
+)
 
 
 def _write(path: pathlib.Path, mtime_ns: int) -> None:

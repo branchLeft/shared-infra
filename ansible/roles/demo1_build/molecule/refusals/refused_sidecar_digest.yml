@@ -1,0 +1,63 @@
+---
+# One case of the sidecar digest check, imported by converge.yml. The role writes the digest
+# into the one line the slot wrapper and the colour units read, so a value that is not a bare
+# sha256 digest (a tag, a name, a registry host, capitals, a short or long digest, a trailing
+# line break) must be refused by the input check, which names the rule and not the value, and
+# nothing may be written at the pin file's path. The play runs the input check alone.
+#
+# converge_case.digest is the value the role is asked to pin. converge_case.accepted is the
+# control: the digest the role ships is accepted by the same check, so a check that refused
+# everything would not pass the refusals. Otherwise converge_case.expect is the phrase of the
+# refusal that must fire.
+- name: Refuse or accept a sidecar digest
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_pin: /etc/branchleft/demo-sidecar.image.env
+  tasks:
+    - name: Run the input check with the digest the case says and prove nothing is written
+      when: not ansible_check_mode
+      block:
+        - name: Look at the pin file's path before the run
+          ansible.builtin.stat:
+            path: '{{ converge_pin }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_pin_before
+
+        - name: Run the role's input check with the digest the case says
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _inputs.yml
+          vars:
+            demo1_build_sidecar_digest: '{{ converge_case.digest }}'
+
+        - name: Fail if a digest the case refuses was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a sidecar digest that is not a bare sha256 digest.
+          when: not (converge_case.accepted | default(false))
+      rescue:
+        - name: Assert the refusal was the one this case is for, and not the control
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The role failed on the sidecar digest case {{ converge_case.name }} for a reason other than
+              {{ converge_case.expect | default('accepting it') }}: {{ ansible_failed_result.msg | default('') }}
+      always:
+        - name: Look at the pin file's path after the run
+          ansible.builtin.stat:
+            path: '{{ converge_pin }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_pin_after
+
+        - name: Assert the input check wrote nothing at the pin file's path
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_pin_after.stat.exists == demo1_build_converge_pin_before.stat.exists
+            quiet: true
+            fail_msg: The input check of the sidecar digest wrote the pin file.

@@ -63,6 +63,11 @@ JOINED = re.compile(r'"(' + OUTSIDE + r')"((?:\s*/\s*"[^"]+")+)')
 PART = re.compile(r'"([^"]+)"')
 # A role or pattern directory, with a file or directory inside it.
 UNIT = re.compile(r"^(ansible/(?:roles|patterns)/[^/]+)/")
+# A host's owner values, ansible/owner_vars/HOST.yml. The HOST playbook loads it through its
+# vars_files, so only the roles that host runs can read it. The host's list is
+# ansible/checks/host_roles/HOST.yml: a document, then comments, then one "- role" line each.
+OWNER_VALUES = re.compile(r"^ansible/owner_vars/([a-z][a-z0-9]*)\.yml$")
+HOST_ROLE_LINE = re.compile(r"^- ([a-z][a-z0-9_]*)$")
 
 # The entry that stands in for "no shard" in the matrix: GitHub refuses an empty one, and
 # the shard job refuses to run for it.
@@ -694,6 +699,30 @@ def references(root: Path) -> dict[str, set[str]]:
     return joined
 
 
+def host_role_units(root: Path, host: str) -> set[str] | None:
+    """Return the role directories a host runs, from its host_roles list, or None.
+
+    None when the list is missing, holds a line this reader does not know, names a role
+    that is not a directory, or names none: the caller then runs every shard.
+    """
+    listing = root / "ansible" / "checks" / "host_roles" / f"{host}.yml"
+    if not listing.is_file():
+        return None
+    found: set[str] = set()
+    for raw in listing.read_text(encoding="utf-8").splitlines():
+        line = raw.rstrip()
+        if not line or line.startswith("#") or line == "---":
+            continue
+        match = HOST_ROLE_LINE.match(line)
+        if match is None:
+            return None
+        unit = f"ansible/roles/{match.group(1)}"
+        if not (root / unit).is_dir():
+            return None
+        found.add(unit)
+    return found or None
+
+
 def needed_units(changed: Sequence[str], root: Path) -> set[str] | None:
     """Return the roles and patterns (and the skeleton) the changed files call for.
 
@@ -706,8 +735,14 @@ def needed_units(changed: Sequence[str], root: Path) -> set[str] | None:
         if inside(path, EVERY_SHARD):
             return None
         match = UNIT.match(path)
+        owner = OWNER_VALUES.match(path)
         if match is not None:
             wanted.add(match.group(1))
+        elif owner is not None:
+            host_units = host_role_units(root, owner.group(1))
+            if host_units is None:
+                return None
+            wanted |= host_units
         elif path.startswith("ansible/role_skeleton/"):
             wanted.add(SKELETON)
         elif path.startswith("ansible/"):
