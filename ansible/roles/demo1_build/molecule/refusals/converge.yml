@@ -846,6 +846,13 @@
       plant: [home_ansible]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
+- name: Case refused_secret_bulk, refuse forty files with a message that stays short
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [bulk]
+      expect: '40 unlisted path(s)'
+
 - name: Case refused_secret_forms, refuse each content shape the holder list does not name
   ansible.builtin.import_playbook: refused_secret.yml
   vars:
