@@ -17,26 +17,21 @@ No network. No subprocess.
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
 import sys
 import tempfile
 import unittest
 
 
-def _load_module():
-    path = pathlib.Path(__file__).resolve().parent / "check-address-plan-drift.py"
-    spec = importlib.util.spec_from_file_location("check_address_plan_drift", path)
-    module = importlib.util.module_from_spec(spec)
-    # dataclasses resolves its owning module through sys.modules at class
-    # creation time, so the module has to be registered there before exec --
-    # a module built by spec_from_file_location alone never is.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+# The shared loader lives in scripts/, which is not on this directory's import path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from script_loader import load_script  # noqa: E402
 
 
-capd = _load_module()
+capd = load_script(
+    pathlib.Path(__file__).resolve().parent / "check-address-plan-drift.py",
+    "check_address_plan_drift",
+)
 
 SUBNET_CIDR = "10.20.1.0/24"
 EDGE1 = "10.20.1.10"

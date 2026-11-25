@@ -7,9 +7,9 @@ Narrative, usage notes and rationale: see `test_check_hetzner_projects.md` next 
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import pathlib
+import sys
 import tempfile
 import unittest
 
@@ -17,15 +17,15 @@ BACKEND = "s3://example-state?endpoint=example.invalid&s3ForcePathStyle=true&reg
 OTHER_BACKEND = "gs://example-other-state"
 
 
-def _load_module():
-    path = pathlib.Path(__file__).resolve().parent / "check-hetzner-projects.py"
-    spec = importlib.util.spec_from_file_location("check_hetzner_projects", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# The shared loader lives in scripts/, which is not on this directory's import path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from script_loader import load_script  # noqa: E402
 
 
-chp = _load_module()
+chp = load_script(
+    pathlib.Path(__file__).resolve().parent / "check-hetzner-projects.py",
+    "check_hetzner_projects",
+)
 
 
 def project(

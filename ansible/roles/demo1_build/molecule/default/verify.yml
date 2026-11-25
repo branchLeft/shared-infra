@@ -378,21 +378,34 @@
         quiet: true
         fail_msg: The compose template unit on the host is not the checkout's hetzner/provision file, root:root mode 0644.
 
-    # systemd has read the files: a reload ran, and the units load. Nothing is
-    # started or enabled.
-    - name: Ask systemd about a router instance
+    # Each slot's health router unit loads from the installed template, is enabled, and has had
+    # a start requested: it is activating, active or failed, never left inactive. A container
+    # cannot run the router (the unit's own sandbox needs a host with the capability it drops),
+    # so the active state and the listening port are checked on the host after the gated apply.
+    - name: Ask systemd about each slot's health router, changing nothing
       ansible.builtin.systemd_service:
-        name: branchleft-health-router@0.service
+        name: 'branchleft-health-router@{{ item }}.service'
+      loop: '{{ verify_slots }}'
+      loop_control:
+        label: '{{ item }}'
       register: demo1_build_verify_router_systemd
+      check_mode: false
+      changed_when: false
 
-    - name: Assert the router instance is loaded, not enabled and not running
+    - name: Assert every slot's health router is loaded, enabled, and has had a start requested
       ansible.builtin.assert:
         that:
-          - demo1_build_verify_router_systemd.status.LoadState == 'loaded'
-          - demo1_build_verify_router_systemd.status.ActiveState == 'inactive'
-          - demo1_build_verify_router_systemd.status.UnitFileState in ['disabled', '']
+          - item.status.LoadState == 'loaded'
+          - item.status.UnitFileState == 'enabled'
+          - item.status.ActiveState in ['activating', 'active', 'failed']
         quiet: true
-        fail_msg: The router instance is not loaded, or it was started or enabled.
+        fail_msg: >-
+          The health router {{ item.item }} is not loaded from its template, not enabled, or was never started
+          (LoadState {{ item.status.LoadState | default('unknown') }}, UnitFileState
+          {{ item.status.UnitFileState | default('unknown') }}, ActiveState {{ item.status.ActiveState | default('unknown') }}).
+      loop: '{{ demo1_build_verify_router_systemd.results }}'
+      loop_control:
+        label: '{{ item.item }}'
 
     # The candidate edge fragment, and no live edge.
     - name: Look at the candidate directory and file

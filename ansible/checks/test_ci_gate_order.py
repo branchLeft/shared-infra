@@ -75,10 +75,16 @@ LINT_LEG_STEPS = {
         "Check the harness, checks and tools formatting",
         "Check each role's own program in files/",
         "Check each role's own library modules",
+        "Type-check the typed_module pattern",
+        "Lint the typed_module pattern",
+        "Check the typed_module pattern's formatting",
     ),
     "checks": ("Test the harness", "Test the checks", "Test the tools"),
     "slow": ("Test the slow checks",),
-    "units": ("Run every role's unit tests",),
+    "units": (
+        "Run every role's unit tests",
+        "Run the typed_module pattern's unit tests",
+    ),
 }
 
 # One row per outcome the gate must settle, as (what it shows, the values that differ from a run

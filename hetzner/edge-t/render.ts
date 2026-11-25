@@ -12,10 +12,10 @@ import {
   metricsBlock,
   probeBlock,
   protectionChain,
-  renderAdminProbingScenario,
   renderAppsecAcquisition,
   renderBlock,
   renderCaddyLogAcquisition,
+  renderAdminProbingScenario,
   renderGhostAdminAppsecConfig,
   renderGhostBruteForceScenario,
   renderHubAdminProbingPostoverflow,
@@ -23,6 +23,12 @@ import {
   renderSimulation,
   type Block,
 } from '../edge/render';
+import {
+  MEDIA_SHARDS,
+  mediaGlobalOptions,
+  renderMediaCaddyfileSections,
+  type MediaShard,
+} from './media';
 
 // Why: the tenant edge's profile of the estate renderer. Pure strings, committed to
 // stack/. It takes no hostname and no registry: every name it serves is a tenant's and
@@ -73,7 +79,10 @@ function tenantBanner(text: string): string {
  * request that is refused. Tenant site blocks are data the edge reconciles
  * from the tenant hostname descriptors and are not rendered here.
  */
-export function renderTenantCaddyfile(posture: EdgePosture = TENANT_POSTURE): string {
+export function renderTenantCaddyfile(
+  posture: EdgePosture = TENANT_POSTURE,
+  shards: readonly MediaShard[] = MEDIA_SHARDS
+): string {
   const catchAll: Block = {
     addresses: [':80'],
     body: [
@@ -95,10 +104,17 @@ export function renderTenantCaddyfile(posture: EdgePosture = TENANT_POSTURE): st
     probeBlock(posture, `:${PROBE_PORT}`, 'probe_per_ip', PROBE_MARKER_BARE),
     metricsBlock(),
   ];
-  const lines = [...TENANT_BANNER.split('\n'), ...globalOptions()];
+  const options = globalOptions();
+  const lines = [
+    ...TENANT_BANNER.split('\n'),
+    ...options.slice(0, -1),
+    ...mediaGlobalOptions(),
+    ...options.slice(-1),
+  ];
   for (const block of blocks) {
     lines.push('', ...renderBlock(block));
   }
+  lines.push('', ...renderMediaCaddyfileSections(shards, posture));
   return `${lines.join('\n')}\n`;
 }
 
@@ -172,6 +188,7 @@ export function renderTenantStack(
     ],
     ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/scenarios/ghost-admin-login-bruteforce.yaml', renderTenantGhostBruteForceScenario()],
+    ['crowdsec/scenarios/http-admin-interface-probing.yaml', renderTenantAdminProbingScenario()],
     ['crowdsec/remediation/profiles.yaml', renderTenantProfiles()],
     ['crowdsec/remediation/simulation.yaml', renderTenantSimulation()],
   ]);

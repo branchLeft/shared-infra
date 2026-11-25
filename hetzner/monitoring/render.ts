@@ -10,6 +10,7 @@ import {
   renderOwnedEdgeBanRoute,
   renderPageReceiverBlock,
   renderPageRoute,
+  renderPageTimingLines,
   type PageRegisterEntry,
 } from './pageRegister';
 import {
@@ -409,8 +410,11 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
 
 export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
   const targets = blackboxTargets(sites);
+  // demo1's job is not emitted until its pin exists on edge1: its tls_config names a file that is
+  // missing there, and Prometheus stops at config load on a missing file (render.md#demo1s-node-target).
+  const nodeHosts = MONITORED_NODE_HOSTS.filter((host) => host.publicTls !== true);
   const nodeTargets = [
-    ...hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(nodeTarget),
+    ...hostsScrapedDirectly(nodeHosts, TENANT_TUNNEL_TARGETS).map(nodeTarget),
     ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
   ].join('\n');
 
@@ -460,7 +464,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     `        labels: ${APP1_SERVICE_LABELS}`,
     '',
     '  - job_name: node',
-    ...nodeTlsConfig(MONITORED_NODE_HOSTS),
+    ...nodeTlsConfig(nodeHosts),
     '    static_configs:',
     nodeTargets,
     '    relabel_configs:',
@@ -1943,6 +1947,12 @@ export function renderAlertmanagerTemplate(
     '    - matchers:',
     '        - severity = "critical"',
     `      receiver: ${PAGE_RECEIVER_NAME}`,
+    // The page timings, not the root's email ones: this node sends to the
+    // phone with the page node and the owned-ban node, so a recovery notice
+    // and a re-page are not held for an hour or a day. The owned-ban node
+    // keeps its own, shorter-than-root timings and inherits the 24-hour
+    // repeat. The email routes below are siblings and keep the slow ones.
+    ...renderPageTimingLines(6),
     '      continue: true',
     '    - matchers:',
     '        - severity = "critical"',

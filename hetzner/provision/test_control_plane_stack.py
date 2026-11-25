@@ -348,6 +348,31 @@ class ControlPlaneStackTests(unittest.TestCase):
             with self.subTest(service=name):
                 self.assertNotIn("TRUSTED_PROXIES", "\n".join(service_blocks(compose_text())[name]))
 
+    def test_the_portal_support_mail_goes_to_sales_through_mx1_as_its_own_login(self):
+        """The rendered portal environment names the Professional enquiry recipient and the mx1 login.
+
+        The support mailer (ghost-platform supportConfig.ts) turns itself off when the sender and the
+        login differ, so both are pinned to the one sales@ account. The password is a file in a
+        directory the portal mounts; the environment never names a secret.
+        """
+        services = yaml.safe_load(compose_text())["services"]
+        environment = {key: str(value) for key, value in services["portal"]["environment"].items()}
+        self.assertEqual(environment["PORTAL_SUPPORT_RECIPIENT"], "sales@branchleft.co.uk")
+        self.assertEqual(environment["PORTAL_SUPPORT_SENDER"], "sales@branchleft.co.uk")
+        self.assertEqual(environment["PORTAL_SUPPORT_SMTP_USER"], "sales@branchleft.co.uk")
+        self.assertEqual(environment["PORTAL_SUPPORT_SMTP_HOST"], "mx1.branchleft.co.uk")
+        self.assertEqual(environment["PORTAL_SUPPORT_SMTP_PORT"], "587")
+        mounts = [str(volume).split(":") for volume in services["portal"]["volumes"]]
+        self.assertIn(["/etc/branchleft/control-plane/portal-support", "/run/portal-support", "ro"], mounts)
+        self.assertTrue(environment["PORTAL_SUPPORT_SMTP_PASSWORD_FILE"].startswith("/run/portal-support/"))
+        secret_values = [
+            name for name in environment if "PASSWORD" in name and name != "PORTAL_SUPPORT_SMTP_PASSWORD_FILE"
+        ]
+        self.assertEqual(secret_values, [], "a support password must be a file, never an environment value")
+        for name in ("db", "zitadel", "console"):
+            with self.subTest(service=name):
+                self.assertNotIn("PORTAL_SUPPORT", "\n".join(service_blocks(compose_text())[name]))
+
     def test_the_edge_address_is_written_once_in_the_compose(self):
         """One literal, shared by both applications through an anchor, never typed twice."""
         edge = EDGE_PRIVATE_IP_PATTERN.search(ADDRESS_PLAN.read_text(encoding="utf-8"))

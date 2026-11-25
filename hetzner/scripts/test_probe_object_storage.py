@@ -29,24 +29,22 @@ import contextlib
 import datetime
 import hashlib
 import hmac
-import importlib.util
 import io
 import os
 import pathlib
+import sys
 import unittest
 
 
-def _load_module():
-    """Import by path: the filename has hyphens, so it is not a legal module
-    name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "probe-object-storage.py"
-    spec = importlib.util.spec_from_file_location("probe_object_storage", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+# The shared loader lives in scripts/, which is not on this directory's import path.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
+from script_loader import load_script  # noqa: E402
 
 
-probe = _load_module()
+probe = load_script(
+    pathlib.Path(__file__).resolve().parent / "probe-object-storage.py",
+    "probe_object_storage",
+)
 
 FIXED_NOW = datetime.datetime(2026, 8, 16, 12, 0, 0, tzinfo=datetime.timezone.utc)
 ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"

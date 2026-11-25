@@ -1290,6 +1290,16 @@ critical alerts only, over self-hosted ntfy). A critical alert goes to
 alerts keep their dead-man route as well, and an on-host critical alert pages
 the phone but never leaves mx1 by email. Warnings never page.
 
+The critical node and the page node have their own pace: a ten-second group
+wait, a one-minute group interval (so a resolved notice and a new alert arrive
+within about a minute) and a 30-minute repeat while an alert is still firing.
+They do not inherit the root route's one-hour and 24-hour email intervals. The
+owned-ban node (`EdgeBanIssued`) keeps main's timings instead, a 30-second group
+wait and a five-minute group interval, and inherits the root's 24-hour repeat;
+the 30-minute repeat does not apply to it. The values and the reasons are in
+`monitoring/pageRegister.md`; `pageRegister.test.ts` reads them from the
+rendered route tree, since `amtool` cannot.
+
 The pager's own death is caught by the external probe every public hostname
 gets: `BlackboxProbeFailed` for `https://ntfy.branchleft.co.uk` is critical,
 so it tries the pager (which is the thing that is down) and also emails the
@@ -1478,7 +1488,8 @@ The routing step in `.github/workflows/ci.yml` tests four of the seven
 **Every `severity: warning` alert also routes to `email-on-host`.** The
 off-host mailbox receives critical alerts, and the warnings that carry
 `owner_action`, with no resolved notices,
-`group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
+`group_interval: 1h` and `repeat_interval: 24h` (the phone routes are the
+exception: see above), because repeated unread
 machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
 mute an alert whose cause is already firing (`ServiceFlapping` under
 `HostOrServiceDown`, `MySQLConnectionsHigh` under `MySQLUnreachable`, the

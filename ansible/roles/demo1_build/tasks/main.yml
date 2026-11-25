@@ -58,6 +58,11 @@
 - name: Write the colour drop-ins and the router unit
   ansible.builtin.include_tasks: _units.yml
 
+# The health routers, one per slot, enabled and started on every apply. They come after the
+# units are loaded and the directories exist, so each router finds its socket tree.
+- name: Enable and start each slot's health router
+  ansible.builtin.include_tasks: _routers.yml
+
 # The sidecar's pin file: before any colour can start and before the signed sidecar push.
 - name: Write the drain sidecar's pinned image reference
   ansible.builtin.include_tasks: _sidecar_pin.yml

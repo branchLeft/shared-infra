@@ -72,10 +72,12 @@ run under check mode against a fresh and a configured container. CI runs the
 harness over every role and every pattern (the workflow step "Run the harness
 over every role and pattern"), so this scenario runs in CI.
 
-The module's own checks are not part of the harness. CI runs only the type check
-over `ansible/patterns` (the test `ansible/checks/test_patterns_typecheck.py`,
-in the step "Test the checks"); the lint and the unit tests run by hand (see the
-named limits). Run them yourself before every push, from the repository root:
+The module's own checks are not part of the harness. CI runs the type check over
+`ansible/patterns` (the test `ansible/checks/test_patterns_typecheck.py`, in the
+step "Test the checks"), and the strict type check, the lint, the format check
+and the unit tests of this pattern in the steps named "... the typed_module
+pattern" in `.github/workflows/ansible.yml`. The same commands run by hand, from
+the repository root, before every push:
 
 ```text
 .venv/bin/mypy --config-file ansible/patterns/typed_module/pyproject.toml ansible/patterns
@@ -269,14 +271,15 @@ Each is proven by sabotage; the commands and results are in the pull request.
 
 ## Named limits
 
-- **CI runs the type check over `ansible/patterns`, not the lint or the unit
-  tests.** The test `ansible/checks/test_patterns_typecheck.py` runs mypy over
-  the whole directory with this pattern's `pyproject.toml` and fails on any
-  error, and on a seeded duplicate module name. The workflow's lint and
-  unit-test steps still cover `ansible/harness` only, and `ansible/pyproject.toml`
-  has no `ansible.*` override. The ruff and unit-test commands above are run by
-  hand. The Molecule scenario does run in CI. ANS-2 asks for mypy and ruff over
-  `ansible/` in CI; widening the workflow further is separate work, not decided here.
+- **CI checks this pattern's module and tests, but not the rest of
+  `ansible/patterns` through its lint.** The test `ansible/checks/test_patterns_typecheck.py`
+  runs mypy over the whole directory with this pattern's `pyproject.toml` and
+  fails on any error, and on a seeded duplicate module name. The steps named
+  "... the typed_module pattern" run strict mypy, ruff check, ruff format and the
+  unit tests on this pattern alone. The other patterns' modules are not linted
+  in CI, and `ansible/pyproject.toml` has no `ansible.*` override. The Molecule
+  scenario does run in CI. ANS-2 asks for mypy and ruff over `ansible/` in CI;
+  widening the workflow further is separate work, not decided here.
 - **Types stop at the Ansible boundary.** `ansible` is untyped, so mypy sees
   `AnsibleModule` as `Any`: calls to `module.params`, `exit_json` and
   `fail_json` are not type-checked. The unit tests use a stand-in for
