@@ -66,7 +66,7 @@ jobs:
   # more and never less. The plan starts beside the lint and the shards, and the apply waits for
   # all three.
   delivery:
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.3.1
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.3.2
     with:
       environment: ansible-hosts
       push-playbook: ansible/playbooks/demo1.yml
