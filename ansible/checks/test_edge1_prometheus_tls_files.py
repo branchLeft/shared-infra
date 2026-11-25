@@ -14,6 +14,14 @@ there is `host_tls_identity`, whose profile for edge1 names its key, certificate
 (`ca.crt`) is written only once the owner has set `host_tls_identity_peer_cert` in
 `owner_vars/edge1.yml`, so a config that names the pin also fails while that value is empty.
 
+The stack holds two renderings of the config. `prometheus.yml` is what edge1 loads by default and
+is held to the rule above as it stands. `prometheus.demo1.yml` scrapes demo1 and names the three
+files, the pin included; `monitoring_stack` delivers it as `prometheus.yml` only while the same
+value is set, so its references count as written when the pin is: it is checked as if the owner had
+set the value, and the test then holds the delivery to that same value. A reference that is
+conditional on the flag the writer is conditional on is a reference the writer meets; one that is
+conditional on anything else, or on nothing, is refused.
+
 What it does not prove: that a file is on the host (that is the gated apply's second run), that a
 certificate is valid or unexpired (the role's own checks), or that Prometheus accepts the files.
 """
@@ -30,11 +38,15 @@ ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 STACK = ROOT / "hetzner" / "monitoring" / "stack"
 PROMETHEUS_CONFIG = STACK / "prometheus" / "prometheus.yml"
+DEMO1_CONFIG = STACK / "prometheus" / "prometheus.demo1.yml"
 COMPOSE = STACK / "compose.yml"
 HOST = "edge1"
 SERVICE = "prometheus"
 ROLE = "host_tls_identity"
+DELIVERY_ROLE = "monitoring_stack"
+DELIVERY_TASK = "Deliver the stack's files whose diff is not shown"
 PIN_KEY = "host_tls_identity_peer_cert"
+PIN_TEST = f"{PIN_KEY} | trim != ''"
 TLS_FILE_KEYS = frozenset(("ca_file", "cert_file", "key_file"))
 
 
@@ -112,11 +124,14 @@ def host_path(container_path: str, pairs: list[tuple[str, str]]) -> tuple[str | 
     return source.rstrip("/") + container_path[len(target.rstrip("/")) :], None
 
 
-def provided(listed: list[str], role_vars: object, owner: object) -> dict[str, str]:
+def provided(
+    listed: list[str], role_vars: object, owner: object, *, pin_set: bool | None = None
+) -> dict[str, str]:
     """The host paths the roles on a host write, each with a note on when it is written.
 
     Only host_tls_identity writes TLS files for this host. Its pin is written only when the
-    owner's value is set, so an empty one leaves it out.
+    owner's value is set, so an empty one leaves it out. `pin_set` answers that question in place
+    of the owner's file: a config delivered only while the value is set is read as if it were.
 
     Raises:
         TypeError: the role's vars or the owner's file have a shape this test does not read.
@@ -133,17 +148,25 @@ def provided(listed: list[str], role_vars: object, owner: object) -> dict[str, s
         f"{directory}/{profile['cert_name']}": "certificate",
     }
     peer = _mapping(owner, f"owner_vars/{HOST}.yml").get(PIN_KEY, "")
-    if isinstance(peer, str) and peer.strip():
+    if pin_set is None:
+        pin_set = isinstance(peer, str) and bool(peer.strip())
+    if pin_set:
         files[f"{directory}/{profile['pin_name']}"] = "pin"
     return files
 
 
 def problems(
-    config: object, compose: object, listed: list[str], role_vars: object, owner: object
+    config: object,
+    compose: object,
+    listed: list[str],
+    role_vars: object,
+    owner: object,
+    *,
+    pin_set: bool | None = None,
 ) -> list[str]:
     """One line per TLS file the config names that no role on edge1 puts on the host."""
     pairs = mounts(compose, SERVICE)
-    available = provided(listed, role_vars, owner)
+    available = provided(listed, role_vars, owner, pin_set=pin_set)
     found: list[str] = []
     for container_path in sorted(set(referenced_files(config))):
         path, problem = host_path(container_path, pairs)
@@ -158,6 +181,77 @@ def problems(
     return found
 
 
+def _squash(text: object) -> str:
+    return " ".join(str(text).split())
+
+
+def _task_named(tasks: object, name: str) -> dict[str, object]:
+    """The task with that name in a role's tasks file, or an empty mapping."""
+    for task in tasks if isinstance(tasks, list) else []:
+        if isinstance(task, dict) and task.get("name") == name:
+            return cast("dict[str, object]", task)
+    return {}
+
+
+def gate_problems(
+    listed: list[str],
+    compose_text: str,
+    pin_tasks: object,
+    delivery_vars: object,
+    delivery_tasks: object,
+) -> list[str]:
+    """One line per way the demo1 config could reach the host without the pin being written.
+
+    The config that names the pin counts as written only if three things hold, each read from the
+    roles' own files: host_tls_identity writes the pin under `host_tls_identity_peer_cert | trim !=
+    ''`; monitoring_stack's flag is that same test of that same variable; and its delivery takes the
+    demo1 config only under that flag, delivering it as `prometheus.yml` and not under a name of its
+    own that the container could mount.
+
+    Raises:
+        TypeError: the delivery role's vars are not a mapping.
+    """
+    found: list[str] = []
+    if DELIVERY_ROLE not in listed:
+        found.append(f"{DELIVERY_ROLE} is not on {HOST}'s list, so no config reaches the host")
+    pin_list = pin_tasks if isinstance(pin_tasks, list) else []
+    pin_task: dict[str, object] = next(
+        (
+            cast("dict[str, object]", task)
+            for task in pin_list
+            if isinstance(task, dict) and task.get("ansible.builtin.include_tasks") == "_pin.yml"
+        ),
+        {},
+    )
+    when = pin_task.get("when", [])
+    when = when if isinstance(when, list) else [when]
+    if PIN_TEST not in [_squash(item) for item in when]:
+        found.append(f"{ROLE} no longer writes the pin under `{PIN_TEST}`")
+    owner_vars = _mapping(delivery_vars, f"{DELIVERY_ROLE} vars")
+    flag = _squash(owner_vars.get("monitoring_stack_demo1_scrape", ""))
+    if PIN_KEY not in flag or "| trim" not in flag or "!= ''" not in flag:
+        found.append(
+            f"{DELIVERY_ROLE}_demo1_scrape is `{flag}`, not the test of {PIN_KEY} that {ROLE} makes"
+        )
+    task = _task_named(delivery_tasks, DELIVERY_TASK)
+    copy = task.get("ansible.builtin.copy")
+    src = _squash(cast("dict[str, object]", copy).get("src", "")) if isinstance(copy, dict) else ""
+    if "monitoring_stack_prometheus_demo1_variant" not in src or (
+        "monitoring_stack_demo1_scrape" not in src
+    ):
+        found.append(f"the delivery's source `{src}` does not take the demo1 config under the flag")
+    dest = (
+        _squash(cast("dict[str, object]", copy).get("dest", "")) if isinstance(copy, dict) else ""
+    )
+    if "{{ item }}" not in dest:
+        found.append(
+            f"the delivery's destination `{dest}` is not the item, so the config is renamed"
+        )
+    if DEMO1_CONFIG.name in compose_text:
+        found.append(f"compose.yml mounts {DEMO1_CONFIG.name} itself, not as prometheus.yml")
+    return found
+
+
 def real_problems() -> list[str]:
     """The problems of the files as they stand in this tree.
 
@@ -168,13 +262,24 @@ def real_problems() -> list[str]:
     if not isinstance(listed, list):
         message = f"host_roles/{HOST}.yml is not a list"
         raise TypeError(message)
-    return problems(
-        _load(PROMETHEUS_CONFIG),
-        _load(COMPOSE),
-        [str(name) for name in listed],
-        _load(ANSIBLE / "roles" / ROLE / "vars" / "main.yml"),
-        _load(ANSIBLE / "owner_vars" / f"{HOST}.yml"),
+    names = [str(name) for name in listed]
+    role_vars = _load(ANSIBLE / "roles" / ROLE / "vars" / "main.yml")
+    owner = _load(ANSIBLE / "owner_vars" / f"{HOST}.yml")
+    compose = _load(COMPOSE)
+    found = problems(_load(PROMETHEUS_CONFIG), compose, names, role_vars, owner)
+    # Delivered only while the pin is set, so read as if it were, and held to that delivery.
+    found += [
+        f"{DEMO1_CONFIG.name}: {line}"
+        for line in problems(_load(DEMO1_CONFIG), compose, names, role_vars, owner, pin_set=True)
+    ]
+    found += gate_problems(
+        names,
+        COMPOSE.read_text(encoding="utf-8"),
+        _load(ANSIBLE / "roles" / ROLE / "tasks" / "main.yml"),
+        _load(ANSIBLE / "roles" / DELIVERY_ROLE / "vars" / "main.yml"),
+        _load(ANSIBLE / "roles" / DELIVERY_ROLE / "tasks" / "main.yml"),
     )
+    return found
 
 
 # A fixture of the shape the stack takes once it scrapes demo1: three files, one mounted directory.
@@ -208,7 +313,10 @@ UNPINNED = "host_tls_identity_peer_cert: ''\n"
 
 
 def _case(
-    config: str = CONFIG, listed: tuple[str, ...] = (ROLE,), owner: str = PINNED
+    config: str = CONFIG,
+    listed: tuple[str, ...] = (ROLE,),
+    owner: str = PINNED,
+    pin_set: bool | None = None,
 ) -> list[str]:
     return problems(
         yaml.safe_load(config),
@@ -216,6 +324,47 @@ def _case(
         list(listed),
         yaml.safe_load(ROLE_VARS),
         yaml.safe_load(owner),
+        pin_set=pin_set,
+    )
+
+
+# The three files the gate reads, cut to the lines it reads: the pin role's task that includes the
+# pin, the delivery role's flag, and the task that chooses the source.
+GATE_PIN_TASKS = """
+- name: Pin the peer's certificate
+  ansible.builtin.include_tasks: _pin.yml
+  when:
+    - host_tls_identity_peer_cert | trim != ''
+    - host_tls_identity_can_run | bool
+"""
+GATE_VARS = """
+monitoring_stack_demo1_scrape: >-
+  {{ (host_tls_identity_peer_cert | default('') | string | trim) != '' }}
+"""
+GATE_TASKS = """
+- name: Deliver the stack's files whose diff is not shown
+  ansible.builtin.copy:
+    src: >-
+      stack/{{ monitoring_stack_prometheus_demo1_variant
+      if (item == p and monitoring_stack_demo1_scrape)
+      else item }}
+    dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
+"""
+
+
+def _gate(
+    listed: tuple[str, ...] = (DELIVERY_ROLE, ROLE),
+    compose_text: str = "- ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
+    pin_tasks: str = GATE_PIN_TASKS,
+    vars_: str = GATE_VARS,
+    tasks: str = GATE_TASKS,
+) -> list[str]:
+    return gate_problems(
+        list(listed),
+        compose_text,
+        yaml.safe_load(pin_tasks),
+        yaml.safe_load(vars_),
+        yaml.safe_load(tasks),
     )
 
 
@@ -256,6 +405,53 @@ class Edge1PrometheusTlsFiles(unittest.TestCase):
             "/etc/prometheus/demo1-metrics-tls/ca.crt", "/etc/prometheus/prometheus.yml"
         )
         self.assertEqual([], _case(config=shipped, listed=(ROLE,)))
+
+    # The demo1 config is delivered only while the pin is set, so it is read as if it were set.
+    def test_the_demo1_config_passes_as_if_the_pin_were_set_and_fails_without_the_role(
+        self,
+    ) -> None:
+        self.assertEqual([], _case(owner=UNPINNED, pin_set=True))
+        found = _case(owner=UNPINNED, listed=("monitoring_stack",), pin_set=True)
+        self.assertEqual(3, len(found), found)
+
+    def test_a_gate_that_is_the_pin_flag_passes(self) -> None:
+        self.assertEqual([], _gate())
+
+    def test_a_delivery_that_always_takes_the_demo1_config_is_refused(self) -> None:
+        found = _gate(
+            tasks=GATE_TASKS.replace(
+                "if (item == p and monitoring_stack_demo1_scrape)", "if (item == p)"
+            )
+        )
+        self.assertEqual(1, len(found), found)
+        self.assertIn("does not take the demo1 config under the flag", found[0])
+
+    def test_a_flag_that_is_not_the_pin_test_is_refused(self) -> None:
+        found = _gate(vars_=GATE_VARS.replace(" | trim", ""))
+        self.assertEqual(1, len(found), found)
+        self.assertIn("not the test of host_tls_identity_peer_cert", found[0])
+
+    def test_a_flag_on_another_variable_is_refused(self) -> None:
+        found = _gate(vars_=GATE_VARS.replace(PIN_KEY, "some_other_value"))
+        self.assertEqual(1, len(found), found)
+
+    def test_a_pin_the_role_writes_unconditionally_is_refused(self) -> None:
+        found = _gate(pin_tasks=GATE_PIN_TASKS.replace(f"{PIN_KEY} | trim != ''", "true"))
+        self.assertEqual(1, len(found), found)
+        self.assertIn("no longer writes the pin under", found[0])
+
+    def test_a_delivery_that_renames_the_config_is_refused(self) -> None:
+        found = _gate(tasks=GATE_TASKS.replace("{{ item }}", "{{ variant }}"))
+        self.assertEqual(1, len(found), found)
+        self.assertIn("is not the item", found[0])
+
+    def test_a_compose_that_mounts_the_demo1_config_itself_is_refused(self) -> None:
+        found = _gate(compose_text="- ./prometheus/prometheus.demo1.yml:/etc/prometheus/p.yml")
+        self.assertEqual(1, len(found), found)
+
+    def test_a_delivery_role_off_the_host_list_is_refused(self) -> None:
+        found = _gate(listed=(ROLE,))
+        self.assertEqual(1, len(found), found)
 
     def test_the_reader_finds_a_file_at_any_depth(self) -> None:
         nested = {"a": [{"b": {"tls_config": {"ca_file": "/x"}}}], "key_file": "/y"}

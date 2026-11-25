@@ -102,8 +102,11 @@ missing file. The owner's merge adds it to each host's list and the pin to each 
 `owner_vars` file (`ansible/checks/` and `ansible/owner_vars/` are the owner's).
 
 `ansible/checks/test_edge1_prometheus_tls_files.py` holds edge1's Prometheus config to this role:
-every TLS file the config names must be one the role writes on edge1, and the config may name the
-pin only once `host_tls_identity_peer_cert` is set in `owner_vars/edge1.yml`.
+every TLS file the config names must be one the role writes on edge1. The pin is named only by
+`prometheus.demo1.yml`, which `monitoring_stack` delivers as `prometheus.yml` while
+`host_tls_identity_peer_cert` is set in `owner_vars/edge1.yml` and not before, so edge1 loads a
+config that names no file until the owner has set the value (`roles/monitoring_stack/README.md`,
+"Which Prometheus config").
 
 ## How to change it safely
 

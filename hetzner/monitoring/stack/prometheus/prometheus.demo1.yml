@@ -1,0 +1,184 @@
+# Generated from sites.ts and hetzner/monitoring/render.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+# This variant scrapes demo1. monitoring_stack delivers it as prometheus.yml only when
+# host_tls_identity_peer_cert is set; without that value the pin it names does not exist.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# The demo wildcard TLS probe: rendered on the host from monitoring.env, see
+# stack/render_alertmanager_config.py. An empty list until its base is set.
+scrape_config_files:
+  - /etc/prometheus/demo_tls_probe.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels: {host: edge1, expected_up: 'true'}
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels: {host: edge1, expected_up: 'true'}
+
+  - job_name: caddy
+    static_configs:
+      - targets: ['10.20.1.10:9091']
+        labels: {host: edge1, expected_up: 'true'}
+
+  - job_name: crowdsec
+    static_configs:
+      - targets: ['10.20.1.10:6060']
+        labels: {host: edge1, expected_up: 'true'}
+
+  - job_name: website
+    static_configs:
+      - targets: ['10.20.1.100:9092']
+        labels: {host: app1, expected_up: 'true'}
+
+  - job_name: node
+    tls_config:
+      ca_file: /etc/prometheus/demo1-metrics-tls/ca.crt
+      cert_file: /etc/prometheus/demo1-metrics-tls/client.crt
+      key_file: /etc/prometheus/demo1-metrics-tls/client.key
+      server_name: demo1
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels: {host: edge1, expected_up: 'true'}
+      - targets: ['10.20.1.100:9100']
+        labels: {host: app1, expected_up: 'true'}
+      - targets: ['10.20.1.20:9100']
+        labels: {host: db1, expected_up: 'true'}
+      - targets: ['10.20.1.50:9100']
+        labels: {host: ops1, expected_up: 'true'}
+      - targets: ['2.28.114.186:9100']
+        labels: {host: demo1, expected_up: 'false', __scheme__: https}
+      - targets: ['10.20.1.10:19100']
+        labels: {host: db-t1, expected_up: 'false'}
+      - targets: ['10.20.1.10:19101']
+        labels: {host: app-t1, expected_up: 'false'}
+      - targets: ['10.20.1.10:19102']
+        labels: {host: edge-t, expected_up: 'false'}
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19100'
+        target_label: instance
+        replacement: '10.20.1.200:9100'
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19101'
+        target_label: instance
+        replacement: '10.20.1.201:9100'
+      - source_labels: [__address__]
+        regex: '10\.20\.1\.10:19102'
+        target_label: instance
+        replacement: '10.20.1.210:9100'
+
+  - job_name: mysqld
+    static_configs:
+      - targets: ['10.20.1.20:9104']
+        labels: {host: db1, expected_up: 'true'}
+
+  - job_name: db_t1_replica
+    static_configs:
+      - targets: ['10.20.1.20:9105']
+        labels: {host: db-t1, expected_up: 'false'}
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels: {host: edge1, expected_up: 'true'}
+
+  - job_name: blackbox_http
+    metrics_path: /probe
+    params:
+      module: ['http_2xx']
+    static_configs:
+      - targets:
+          - https://branchleft.co.uk
+          - https://www.branchleft.co.uk
+          - https://blog.branchleft.co.uk
+          - https://cloud.branchleft.co.uk
+          - https://book.branchleft.co.uk
+          - https://portal.publicpress.co.uk
+          - https://console.branchleft.co.uk
+          - https://id.publicpress.co.uk/.well-known/openid-configuration
+          - https://ntfy.branchleft.co.uk
+          - https://publicpress.co.uk
+          - https://status.branchleft.co.uk
+        labels: {host: edge1, expected_up: 'true'}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'
+
+  - job_name: blackbox_mail
+    scrape_interval: 60s
+    metrics_path: /probe
+    static_configs:
+      - targets:
+          - mx1.branchleft.co.uk:25
+          - mx1.branchleft.co.uk:587
+        labels: {host: mx1, expected_up: 'true', __param_module: smtp_banner}
+      - targets:
+          - mx1.branchleft.co.uk:465
+          - mx1.branchleft.co.uk:993
+          - mx1.branchleft.co.uk:8443
+        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'
+
+  - job_name: blackbox_object_storage
+    metrics_path: /probe
+    params:
+      module: ['http_object_storage']
+    static_configs:
+      - targets:
+          - https://hel1.your-objectstorage.com
+        labels: {host: edge1, expected_up: 'true'}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'blackbox-exporter:9115'
+
+  - job_name: stalwart
+    scheme: https
+    metrics_path: /metrics/prometheus
+    basic_auth:
+      username: prometheus
+      password_file: /etc/prometheus/mx1-metrics-password
+    tls_config:
+      server_name: mx1.branchleft.co.uk
+    static_configs:
+      - targets: ['167.233.252.240:443']
+        labels: {host: mx1, expected_up: 'true'}
+    relabel_configs:
+      - target_label: instance
+        replacement: 'mx1.branchleft.co.uk:443'
+
+  - job_name: release_watcher
+    scrape_interval: 2m
+    scheme: https
+    metrics_path: /branchLeft/ghost-platform/state/release-watcher/release-watcher.prom
+    static_configs:
+      - targets: ['raw.githubusercontent.com:443']
+        labels: {host: github}

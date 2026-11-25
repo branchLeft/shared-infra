@@ -1233,6 +1233,9 @@ describe('the committed stack directory', () => {
     await expect(renderPrometheusConfig(sites)).toMatchFileSnapshot(
       './stack/prometheus/prometheus.yml'
     );
+    await expect(renderPrometheusConfig(sites, { demo1Scrape: true })).toMatchFileSnapshot(
+      './stack/prometheus/prometheus.demo1.yml'
+    );
     await expect(renderAlertRules()).toMatchFileSnapshot('./stack/prometheus/alerts.yml');
     await expect(renderAlertmanagerEmailTemplate()).toMatchFileSnapshot(
       './stack/alertmanager/email.gotmpl'
@@ -1355,7 +1358,9 @@ describe('the tenant hosts', () => {
 
 describe('demo1, scraped over its public address with a verified client certificate', () => {
   const demo1 = MONITORED_NODE_HOSTS.find((host) => host.name === 'demo1');
-  const promConfig = renderPrometheusConfig(sites);
+  // The rendering that names demo1's files. The default one names none (see the
+  // describe below), so every assertion about the scrape reads this one.
+  const promConfig = renderPrometheusConfig(sites, { demo1Scrape: true });
   const rules = renderAlertRules();
   const compose = readFileSync(join(__dirname, 'stack', 'compose.yml'), 'utf8');
   const promtoolCases = ['alert_rules_test.yml', 'alert_rules_memory_test.yml']
@@ -1440,5 +1445,50 @@ describe('demo1, scraped over its public address with a verified client certific
         alert
       ).toBe(true);
     }
+  });
+});
+
+describe("the config Prometheus loads before the owner has supplied demo1's certificate", () => {
+  // edge1 reads every file a tls_config names when Prometheus loads its configuration, and the pin
+  // (ca.crt) exists only once host_tls_identity_peer_cert is set. The default rendering must
+  // therefore name none of demo1's files; the demo1 rendering is a second file the host takes
+  // only when that value is set (ansible/roles/monitoring_stack).
+  const withoutDemo1 = renderPrometheusConfig(sites);
+  const withDemo1 = renderPrometheusConfig(sites, { demo1Scrape: true });
+
+  it('names no TLS file, no https target and not demo1', () => {
+    // mx1's own scrape keeps its `server_name`; no job names a file Prometheus must read.
+    expect(withoutDemo1).not.toMatch(/ca_file|cert_file|key_file/);
+    expect(withoutDemo1).not.toContain(`server_name: ${DEMO1_METRICS_SERVER_NAME}`);
+    expect(withoutDemo1).not.toContain(DEMO1_METRICS_TLS_DIR);
+    expect(withoutDemo1).not.toContain(DEMO1_PUBLIC_IPV4);
+    expect(withoutDemo1).not.toContain('__scheme__');
+    expect(withoutDemo1).not.toContain('host: demo1');
+  });
+
+  it('is the demo1 rendering with the demo1 target, its job-level TLS settings and its banner taken out, and nothing else', () => {
+    const stripped = withDemo1
+      .replace(/ {6}- targets: \['[^']+'\]\n {8}labels: \{[^}]*__scheme__: https\}\n/, '')
+      .replace(/ {4}tls_config:\n {6}ca_file:.*\n(?: {6}\S.*\n)+/, '')
+      .replace(/^# This variant scrapes demo1\..*\n# host_tls_identity_peer_cert.*\n/m, '');
+    expect(stripped).toBe(withoutDemo1);
+  });
+
+  it('keeps every other node target, the tenant tunnel rows included', () => {
+    for (const name of ['edge1', 'app1', 'db1', 'ops1', 'db-t1', 'app-t1', 'edge-t']) {
+      expect(withoutDemo1, name).toContain(`host: ${name},`);
+    }
+  });
+
+  it('is the one the container mounts as prometheus.yml, and the demo1 rendering is not mounted under its own name', () => {
+    const compose = readFileSync(join(__dirname, 'stack', 'compose.yml'), 'utf8');
+    expect(compose).toContain('./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro');
+    expect(compose).not.toContain('prometheus.demo1.yml');
+  });
+
+  it('is the committed prometheus.yml, and the demo1 rendering is the committed prometheus.demo1.yml', () => {
+    const dir = join(__dirname, 'stack', 'prometheus');
+    expect(readFileSync(join(dir, 'prometheus.yml'), 'utf8')).toBe(withoutDemo1);
+    expect(readFileSync(join(dir, 'prometheus.demo1.yml'), 'utf8')).toBe(withDemo1);
   });
 });

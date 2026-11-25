@@ -166,9 +166,16 @@
 # placeholder names, paths and environment variables named like passwords or tokens, which
 # the plan's secret scan would withhold the whole plan of the host over. None holds a secret.
 # The other files go by the next task, which shows its diff.
+# prometheus/prometheus.yml is one of them, and its source is chosen here: the rendering that names
+# demo1's TLS files goes in only while host_tls_identity_peer_cert is set, the one the role that writes
+# the pin writes it under (vars/main.yml, monitoring_stack_demo1_scrape). Otherwise Prometheus would
+# be handed a config naming a file that does not exist and would not start.
 - name: Deliver the stack's files whose diff is not shown
   ansible.builtin.copy:
-    src: 'stack/{{ item }}'
+    src: >-
+      stack/{{ monitoring_stack_prometheus_demo1_variant
+      if (item == monitoring_stack_prometheus_config and monitoring_stack_demo1_scrape | bool)
+      else item }}
     dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
     owner: root
     group: root

@@ -32,6 +32,12 @@ const GENERATED_BANNER = [
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
+/** Added to the rendering that scrapes demo1, so a reader of the file knows which of the two it is. */
+const DEMO1_VARIANT_BANNER = [
+  '# This variant scrapes demo1. monitoring_stack delivers it as prometheus.yml only when',
+  '# host_tls_identity_peer_cert is set; without that value the pin it names does not exist.',
+];
+
 /**
  * The estate hosts this stack watches, and whether each node_exporter target
  * is expected to answer today -- the first four are, so those node targets
@@ -408,15 +414,34 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
   );
 }
 
-export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
+/**
+ * Whether the config scrapes demo1's exporter. Off for the config Prometheus
+ * loads by default: a `tls_config` names three files, Prometheus reads each at
+ * load, and the pin among them (`ca.crt`) exists on edge1 only once the owner
+ * has set `host_tls_identity_peer_cert`. Without it the whole stack stops, so the
+ * config that names the files is a second rendering, delivered in place of the
+ * first only when that value is set (render.md#demo1s-node-target).
+ */
+export interface PrometheusConfigOptions {
+  demo1Scrape?: boolean;
+}
+
+export function renderPrometheusConfig(
+  sites: readonly EdgeSite[],
+  options: PrometheusConfigOptions = {}
+): string {
   const targets = blackboxTargets(sites);
+  const nodeHosts = MONITORED_NODE_HOSTS.filter(
+    (host) => host.publicTls !== true || options.demo1Scrape === true
+  );
   const nodeTargets = [
-    ...hostsScrapedDirectly(MONITORED_NODE_HOSTS, TENANT_TUNNEL_TARGETS).map(nodeTarget),
+    ...hostsScrapedDirectly(nodeHosts, TENANT_TUNNEL_TARGETS).map(nodeTarget),
     ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
   ].join('\n');
 
   return `${[
     ...GENERATED_BANNER,
+    ...(options.demo1Scrape === true ? DEMO1_VARIANT_BANNER : []),
     'global:',
     '  scrape_interval: 30s',
     '  evaluation_interval: 30s',
@@ -461,7 +486,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     `        labels: ${APP1_SERVICE_LABELS}`,
     '',
     '  - job_name: node',
-    ...nodeTlsConfig(MONITORED_NODE_HOSTS),
+    ...nodeTlsConfig(nodeHosts),
     '    static_configs:',
     nodeTargets,
     '    relabel_configs:',

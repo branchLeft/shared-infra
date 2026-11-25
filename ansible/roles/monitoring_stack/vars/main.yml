@@ -61,6 +61,22 @@ monitoring_stack_files_hidden:
   - ntfy/server.yml.tmpl
   - prometheus/prometheus.yml
 
+# Prometheus reads every file a tls_config names when it loads its configuration, and a missing one
+# stops it and with it every alert on the host. The config that scrapes demo1 names three files in
+# /etc/branchleft/demo1-metrics-tls: the key and certificate host_tls_identity makes on edge1, and
+# the pin (ca.crt), which that role writes only once host_tls_identity_peer_cert is set. So the stack
+# holds two renderings of the one config (hetzner/monitoring/render.ts), and this role delivers the
+# one that names demo1 as prometheus/prometheus.yml only while that value is non-empty, read as the
+# role reads it (trimmed, so whitespace alone does not count). Both are generated files in the stack
+# directory, and only prometheus.yml is a delivered name: the variant is a source, not a file on the
+# host, so the fingerprint, the single-home test and the container's mount see one file either way.
+# A play variable can move the choice, as it moves the owner's value itself; the check that holds
+# the files to the writer is ansible/checks/test_edge1_prometheus_tls_files.py.
+monitoring_stack_prometheus_config: prometheus/prometheus.yml
+monitoring_stack_prometheus_demo1_variant: prometheus/prometheus.demo1.yml
+monitoring_stack_demo1_scrape: >-
+  {{ (host_tls_identity_peer_cert | default('') | string | trim) != '' }}
+
 # The shared Compose unit template names a stack's drop-in directory after the
 # instance, and the instance of this stack is "monitoring".
 monitoring_stack_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d
