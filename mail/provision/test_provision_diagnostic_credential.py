@@ -189,6 +189,35 @@ class VerifyScopeTests(unittest.TestCase):
         problems = pd.verify_scope(lambda t, m, a: "forbidden", "t")
         self.assertEqual(len(pd.READ_OBJECTS), len(problems))
 
+    def test_log_query_refused_only_for_want_of_a_file_tracer_still_proves_the_permission(self):
+        # mx1 runs the Stdout tracer, so Log/query answers invalidArguments after
+        # the permission gate has passed. That is a key that holds sysLogQuery.
+        def probe(token, method, a):
+            if method == "x:Log/query":
+                return "other: method error 'invalidArguments'"
+            return good_probe(token, method, a)
+
+        self.assertEqual([], pd.verify_scope(probe, "t"))
+
+    def test_invalid_arguments_is_accepted_for_no_object_but_log(self):
+        def probe(token, method, a):
+            if method == "x:QueuedMessage/query":
+                return "other: method error 'invalidArguments'"
+            return good_probe(token, method, a)
+
+        problems = pd.verify_scope(probe, "t")
+        self.assertEqual(1, len(problems))
+        self.assertIn("x:QueuedMessage/query", problems[0])
+
+    def test_a_forbidden_log_query_is_still_a_problem(self):
+        def probe(token, method, a):
+            if method == "x:Log/query":
+                return "forbidden"
+            return good_probe(token, method, a)
+
+        problems = pd.verify_scope(probe, "t")
+        self.assertEqual(["x:Log/query should be allowed: forbidden"], problems)
+
     def test_every_denied_probe_that_is_allowed_is_reported(self):
         for method, args in pd.DENIED_PROBES:
             def probe(token, called, a, method=method):

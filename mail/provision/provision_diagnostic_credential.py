@@ -170,13 +170,26 @@ def classify(status: int, body: Any) -> str:
 Probe = Callable[[str, str, dict[str, Any]], str]
 
 
+# Objects whose query can answer invalidArguments on a server that holds the
+# permission. Stalwart checks sysLogQuery before the handler runs (a missing
+# permission is `forbidden`), and Log/query then answers invalidArguments
+# ("No log tracers configured") when no file Log tracer is enabled, which is
+# the Stdout tracer configure_stalwart.py sets on mx1. Only that answer counts
+# as proof of the permission; a forbidden or any other answer is still a problem.
+PERMISSION_ONLY_OBJECTS: tuple[str, ...] = ("Log",)
+PERMISSION_PROVEN_VERDICT = "other: method error 'invalidArguments'"
+
+
 def verify_scope(probe: Probe, token: str) -> list[str]:
     """Every way the key's real behaviour differs from the intended scope;
     empty when it reads what it should and is refused everything else."""
     problems: list[str] = []
     for obj in READ_OBJECTS:
         verdict = probe(token, f"x:{obj}/query", {"limit": 1})
-        if verdict != "allowed":
+        accepted = {"allowed"}
+        if obj in PERMISSION_ONLY_OBJECTS:
+            accepted.add(PERMISSION_PROVEN_VERDICT)
+        if verdict not in accepted:
             problems.append(f"x:{obj}/query should be allowed: {verdict}")
     for method, args in DENIED_PROBES:
         verdict = probe(token, method, args)
