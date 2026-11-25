@@ -26,6 +26,7 @@ from check_enrolment import (
     OPTIONAL_OWNER_KEYS,
     OWNER_VARS_KEYS,
     PULL_ROLES,
+    PROVISIONING_CONTROLLER_TEXT_KEYS,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
     SEED_TOOL_DEST,
@@ -1651,6 +1652,7 @@ class Sabotage(unittest.TestCase):
                     "control_plane_db_apps_image",
                     "pull_trigger_steps",
                     *RING_CONTROLLER_TEXT_KEYS,
+                    *PROVISIONING_CONTROLLER_TEXT_KEYS,
                 ]
             ),
             sorted(self._ops1_keys()),
