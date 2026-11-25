@@ -3,7 +3,7 @@
 # private key). Ansible prints the path, line and column of a failed task (`Origin: <file>:256:3`),
 # and a name with such a word reads to the scan as an assignment, which withholds demo1's whole plan.
 # tests/unit/test_plan_output_scan.py holds every task file's name to that.
-#
+
 # The host scan. demo1 holds only the secrets its holder list names (vars/main.yml,
 # demo1_build_secret_holders). The scan finds every secret-bearing file it can see under the
 # scanned roots and in the holder directories, and refuses a file the list does not name. It names
@@ -23,7 +23,7 @@
 # directory named docker anywhere else, such as /etc/docker, is scanned. grep cannot prune by path,
 # so /var/lib is read as its children, with the two image stores left out.
 # /root is read as a file list, so its own prune is exact.
-#
+
 # Read-only, so it runs in a plan too (check mode): every command task is check_mode: false, and
 # changed_when: false, because none of them changes anything.
 #
