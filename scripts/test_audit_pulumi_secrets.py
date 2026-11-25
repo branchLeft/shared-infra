@@ -10,7 +10,6 @@ status that is quietly treated as a pass.
 """
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -20,17 +19,13 @@ import unittest
 import unittest.mock
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "audit-pulumi-secrets.py"
-    spec = importlib.util.spec_from_file_location("audit_pulumi_secrets", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-audit = _load_module()
+audit = load_script(
+    pathlib.Path(__file__).resolve().parent / "audit-pulumi-secrets.py",
+    "audit_pulumi_secrets",
+)
 
 
 GCPKMS_URL = (

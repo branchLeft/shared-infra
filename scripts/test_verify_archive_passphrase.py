@@ -23,7 +23,6 @@ in the runbook section this script belongs to.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -33,17 +32,13 @@ import tempfile
 import unittest
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "verify-archive-passphrase.py"
-    spec = importlib.util.spec_from_file_location("verify_archive_passphrase", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-verify = _load_module()
+verify = load_script(
+    pathlib.Path(__file__).resolve().parent / "verify-archive-passphrase.py",
+    "verify_archive_passphrase",
+)
 
 
 # Obviously fake throughout. Nothing here is, or resembles, a real salt,

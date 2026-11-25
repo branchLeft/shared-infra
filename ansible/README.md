@@ -263,7 +263,8 @@ the checks), `slow` (the checks' slowest test modules, named in
 `checks/run_check_tests.py`) and `units` (every role's unit tests). Run one
 after the other these took 15 to 20 minutes and a slow runner reached the job's
 limit; run at once the job takes as long as the longest leg, and the job's limit
-is 15 minutes. A step names its leg in `if: matrix.part == '<leg>'`,
+is 15 minutes. The two test legs run their tests over two worker processes
+(`checks/run_check_tests.py`, `CHECK_TESTS_JOBS` sets the number). A step names its leg in `if: matrix.part == '<leg>'`,
 and `test_ci_gate_order.py` holds each condition to a leg of the matrix so a
 typo cannot skip a step everywhere. The job's result is success only when every
 leg succeeded, so the gate reads it as before.

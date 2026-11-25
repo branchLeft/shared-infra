@@ -13,7 +13,6 @@ directly, plus a handful of subprocess-level tests that prove the CLI wiring
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import pathlib
 import subprocess
@@ -21,17 +20,13 @@ import sys
 import unittest
 
 
-def _load_module():
-    """Import the script by path: its filename has hyphens, so it is not a
-    legal module name for a plain import."""
-    path = pathlib.Path(__file__).resolve().parent / "assert-min-python-version.py"
-    spec = importlib.util.spec_from_file_location("assert_min_python_version", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from script_loader import load_script
 
 
-guard = _load_module()
+guard = load_script(
+    pathlib.Path(__file__).resolve().parent / "assert-min-python-version.py",
+    "assert_min_python_version",
+)
 
 SCRIPT_PATH = pathlib.Path(__file__).resolve().parent / "assert-min-python-version.py"
 
