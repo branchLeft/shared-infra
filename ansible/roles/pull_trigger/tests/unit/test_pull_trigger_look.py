@@ -963,5 +963,109 @@ class DemoRouterPortTests(unittest.TestCase):
         self.assertNotIn(9100, trigger.LOOK_HTTP_PORTS["demo1-slot0-port"])
 
 
+SSH_FACT = {
+    "issue": 4169,
+    "name": "provisioning-controller-pubkey",
+    "playbook": PLAY,
+    "kind": "ssh_public_key",
+    "path": "/etc/branchleft/provisioning-controller/ssh.pub",
+}
+KEY_BLOB = "AAAAC3NzaC1lZDI1NTE5AAAAIPubKeyBytesHereForTestOnly0123456789"
+
+
+class SshPublicKeyTests(unittest.TestCase):
+    """The one public key a look fact may read: one exact path, and only its key line printed."""
+
+    def setUp(self) -> None:
+        """Make a directory for the key files, and the stand-in programs, as LookerTests does."""
+        self.root = Path(tempfile.mkdtemp(prefix="look-key")).resolve()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.roots = (f"{self.root}/",)
+
+    def looker(self) -> trigger.Looker:
+        """Return a looker with the stand-in systemctl; no unit is asked in these tests."""
+        tools = trigger.Tools(systemctl=fake_systemctl(self.bin, "active"))
+        return trigger.Looker(tools, threading.Event(), self.roots, 60.0)
+
+    def test_only_the_exact_path_is_accepted(self) -> None:
+        self.assertEqual([], refusals_of(declaration(SSH_FACT)))
+        hostile = [
+            "/etc/branchleft/provisioning-controller/other.pub",
+            "/etc/branchleft/provisioning-controller/*",
+            "/etc/branchleft/provisioning-controller/ssh.pub.bak",
+            "/etc/branchleft/provisioning-controller/",
+            "/etc/branchleft/provisioning-controller",
+            "/etc/branchleft/provisioning-controller/ssh.pub\n",
+            "/etc/branchleft/host-inputs.json",
+            "/etc/branchleft/provisioning-controller/../ssh.pub",
+            "",
+            7,
+        ]
+        for path in hostile:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    ["path-not-allowed"], refusals_of(declaration(with_fact(SSH_FACT, path=path)))
+                )
+
+    def test_the_key_line_is_printed_without_its_comment(self) -> None:
+        key = self.root / "ssh.pub"
+        key.write_text(f"ssh-ed25519 {KEY_BLOB} ci-comment-private-note\n", encoding="utf-8")
+        with mock.patch.object(trigger, "LOOK_SSH_PUBLIC_KEY_PATH", str(key)):
+            parsed = trigger.parse_look(declaration(with_fact(SSH_FACT, path=str(key))), self.roots)
+            lines = self.looker().lines(parsed, PLAY)
+        self.assertEqual(
+            [
+                f"look issue=4169 name=provisioning-controller-pubkey kind=ssh_public_key "
+                f"result=ssh-ed25519 {KEY_BLOB}",
+                "look-summary declared=1 here=1 refused=0 file=ok",
+            ],
+            lines,
+        )
+        self.assertNotIn("comment", "".join(lines))
+        self.assertIsNone(SCAN_ASSIGNMENT.search(lines[0]))
+
+    def test_a_file_that_is_not_an_ssh_public_key_prints_a_word_only(self) -> None:
+        cases = {
+            "pem": "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRET-BODY\n",
+            "dsa": f"ssh-dss {KEY_BLOB}\n",
+            "no-blob": "ssh-ed25519\n",
+            "bad-blob": "ssh-ed25519 not*base64!\n",
+            "binary": "\xff\xfe\x00",
+            "empty": "",
+        }
+        for label, content in cases.items():
+            with self.subTest(case=label):
+                key = self.root / f"ssh-{label}.pub"
+                key.write_bytes(content.encode("latin-1"))
+                fact = with_fact(SSH_FACT, path=str(key))
+                with mock.patch.object(trigger, "LOOK_SSH_PUBLIC_KEY_PATH", str(key)):
+                    parsed = trigger.parse_look(declaration(fact), self.roots)
+                    lines = self.looker().lines(parsed, PLAY)
+                self.assertEqual(
+                    "look issue=4169 name=provisioning-controller-pubkey kind=ssh_public_key "
+                    "result=not-ssh-key",
+                    lines[0],
+                )
+                self.assertNotIn("SECRET-BODY", "".join(lines))
+
+    def test_a_missing_or_linked_key_file_gives_a_word(self) -> None:
+        target = self.root / "real.pub"
+        target.write_text(f"ssh-ed25519 {KEY_BLOB}\n", encoding="utf-8")
+        link = self.root / "link.pub"
+        link.symlink_to(target)
+        for label, path, word in (
+            ("absent", self.root / "gone.pub", "absent"),
+            ("link", link, "unreadable"),
+        ):
+            with self.subTest(case=label):
+                with mock.patch.object(trigger, "LOOK_SSH_PUBLIC_KEY_PATH", str(path)):
+                    fact = with_fact(SSH_FACT, path=str(path))
+                    parsed = trigger.parse_look(declaration(fact), self.roots)
+                    lines = self.looker().lines(parsed, PLAY)
+                self.assertIn(f"result={word}", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

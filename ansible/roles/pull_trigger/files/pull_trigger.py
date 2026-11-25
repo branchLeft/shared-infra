@@ -220,11 +220,28 @@ LOOK_MAX_ISSUE: Final = 99_999_999
 LOOK_UNIT_STATES: Final = frozenset(
     {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance"}
 )
+# The one public key file an ssh_public_key fact may read: exactly this path, no glob and no
+# directory. It is the provisioning controller's public key, which shared-infra delivers (mode 0444)
+# and which is public by design, not a secret. Adding a path is a change to this program, reviewed
+# by the owner. Only the key type and the key of its first line are printed; the comment is dropped.
+LOOK_SSH_PUBLIC_KEY_PATH: Final = "/etc/branchleft/provisioning-controller/ssh.pub"
+LOOK_SSH_KEY_TYPES: Final = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+)
+LOOK_SSH_KEY_BLOB: Final = r"[A-Za-z0-9+/]{16,1024}={0,2}"
+LOOK_MAX_KEY_BYTES: Final = 8192
+LOOK_SSH_KEY_TYPE_PATTERN: Final = "|".join(re.escape(name) for name in LOOK_SSH_KEY_TYPES)
+LOOK_SSH_KEY_TYPE_RE: Final = re.compile(LOOK_SSH_KEY_TYPE_PATTERN)
 # The only shape a fact line may have. A line that does not match is never printed.
 LOOK_LINE: Final = re.compile(
     r"look issue=[0-9]{1,8} name=[a-z][a-z0-9-]{0,47} "
-    r"kind=(?:file_sha256|unit_active|http_status) "
-    r"result=(?:[0-9a-f]{64}|[0-9]{3}|[a-z]+(?:-[a-z]+)*)"
+    r"kind=(?:file_sha256|unit_active|http_status|ssh_public_key) "
+    rf"result=(?:[0-9a-f]{{64}}|[0-9]{{3}}|[a-z]+(?:-[a-z]+)*|(?:{LOOK_SSH_KEY_TYPE_PATTERN}) "
+    rf"{LOOK_SSH_KEY_BLOB})"
 )
 
 Clock = Callable[[], datetime]
@@ -366,6 +383,7 @@ class LookKind(enum.Enum):
     FILE_SHA256 = "file_sha256"
     UNIT_ACTIVE = "unit_active"
     HTTP_STATUS = "http_status"
+    SSH_PUBLIC_KEY = "ssh_public_key"
 
 
 class LookWhy(enum.Enum):
@@ -406,11 +424,13 @@ LOOK_KIND_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
     LookKind.FILE_SHA256: frozenset({"path"}),
     LookKind.UNIT_ACTIVE: frozenset({"unit"}),
     LookKind.HTTP_STATUS: frozenset({"port", "url_path"}),
+    LookKind.SSH_PUBLIC_KEY: frozenset({"path"}),
 }
 LOOK_OPTIONAL_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
     LookKind.FILE_SHA256: frozenset(),
     LookKind.UNIT_ACTIVE: frozenset(),
     LookKind.HTTP_STATUS: frozenset({"host"}),
+    LookKind.SSH_PUBLIC_KEY: frozenset(),
 }
 
 
@@ -526,6 +546,8 @@ def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
 ) -> LookWhy | None:
     """Return the reason a kind's own fields are refused, or None."""
     if kind is LookKind.FILE_SHA256 and not look_path_allowed(entry["path"], roots):
+        return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.SSH_PUBLIC_KEY and entry["path"] != LOOK_SSH_PUBLIC_KEY_PATH:
         return LookWhy.PATH_NOT_ALLOWED
     if kind is LookKind.UNIT_ACTIVE and not _text_matching(entry["unit"], LOOK_UNIT_PATTERN, 128):
         return LookWhy.BAD_UNIT
@@ -2426,7 +2448,45 @@ class Looker:
             return self._file_digest(fact.path)
         if fact.kind is LookKind.UNIT_ACTIVE:
             return self._unit_state(fact.unit)
+        if fact.kind is LookKind.SSH_PUBLIC_KEY:
+            return self._ssh_public_key(fact.path)
         return self._http_status(fact)
+
+    @staticmethod
+    def _ssh_public_key(path: str) -> str:
+        """Return the key type and key of the first line of the public key file, or a word why not.
+
+        The file is opened without following a link, and only its first line is read. The comment
+        after the key is free text and is never printed.
+        """
+        if path != LOOK_SSH_PUBLIC_KEY_PATH:
+            return LookWhy.PATH_NOT_ALLOWED.value
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_KEY_BYTES:
+                return "too-large"
+            raw = os.read(descriptor, LOOK_MAX_KEY_BYTES)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        try:
+            fields = raw.decode("ascii").split("\n", 1)[0].split()
+        except UnicodeDecodeError:
+            return "not-ssh-key"
+        if len(fields) < 2 or LOOK_SSH_KEY_TYPE_RE.fullmatch(fields[0]) is None:
+            return "not-ssh-key"
+        if re.fullmatch(LOOK_SSH_KEY_BLOB, fields[1]) is None:
+            return "not-ssh-key"
+        return f"{fields[0]} {fields[1]}"
 
     def _file_digest(self, path: str) -> str:
         """Return the SHA-256 of a regular file inside a root, or a word saying why not."""
