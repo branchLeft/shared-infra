@@ -161,8 +161,10 @@ The one seed command per host that this change adds, run as root on that host:
     python3 -I seed_host_inputs.py --host dbt1
 
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
-holds it has been applied on the host; before that the file is copied there by hand from the
-branch.
+holds it has been applied on the host. On `appt1` and `dbt1` the owner's bootstrap
+(`playbooks/bootstrap/HOST.yml`, `checks/check_enrolment.md` R12) also installs it, root-only (`0700`),
+at `/usr/local/sbin/seed_host_inputs.py`, because a plan runs in check mode and never replaces `current`:
+the host is seeded from that path before it joins the gated list, and no hand copy is made.
 
 ## The three guards of the demo1 root bootstrap
 

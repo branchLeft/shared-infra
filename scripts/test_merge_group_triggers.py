@@ -199,6 +199,22 @@ class MergeGroupTriggerTests(unittest.TestCase):
         self.assertIn('echo "ansible=false" >> "$GITHUB_OUTPUT"', push)
         self.assertIn("exit 0", push)
 
+    def test_the_queue_proof_gate_needs_the_proof_and_skips_on_push_only(self):
+        # docs-lint and standards each run their gate job after queue-proof. The gate is
+        # skipped on push only when the proof is true, and a skipped proof must not skip
+        # the gate on a pull request or a queue entry: `!cancelled()`, not `always()`, is
+        # what lets a skipped `needs` result through without starting a cancelled run.
+        for name, gate in (("docs-lint.yml", "docs-lint"), ("standards.yml", "standards")):
+            with self.subTest(workflow=name):
+                block = job_block(read(name), gate)
+                # docs-lint's gate also needs the decision and the lint run, so it lists them.
+                self.assertRegex(block, r"(?m)^    needs: (?:queue-proof|\[[^\]]*\bqueue-proof\b[^\]]*\])$")
+                condition = job_if(block) or ""
+                self.assertIn("!cancelled()", condition)
+                self.assertNotIn("always()", condition)
+                self.assertIn("github.event_name != 'push'", condition)
+                self.assertIn("needs.queue-proof.outputs.tested != 'true'", condition)
+
     def test_the_role_unit_step_is_in_the_lint_job_and_has_no_condition_of_its_own(self):
         # The lint job runs on a merge-queue check only through the discover output, which
         # the Decide step sets to true on merge_group. The role unit step must ride that

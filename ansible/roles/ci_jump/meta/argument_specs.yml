@@ -6,9 +6,9 @@ argument_specs:
       Always describes, read only and without naming an account, which accounts on the host
       carry forwarding options in their key files. Only when ci_jump_manage_keys is true does it
       make the jump account's root-owned key file exactly one line per declared key, each with
-      the options restrict, port-forwarding, one permitopen per declared destination on port 22
-      and a forced nologin command, and write the sshd drop-in whose Match block for the account
-      allows local forwarding to the same destinations and nothing else. It then reads both
+      the options restrict, port-forwarding, one permitopen per destination of that key on port
+      22 and a forced nologin command, and write the sshd drop-in whose Match block for the
+      account allows local forwarding to the union of those destinations and nothing else. It then reads both
       back, and sshd's own answer for the account, and refuses unless remote forwarding is off.
       Only after that read-back does it remove the files of the earlier hand-made layout, and it
       puts everything back if anything fails. It never creates or edits an account.
@@ -52,9 +52,10 @@ argument_specs:
         description: >-
           The hosts the jump key may reach, each a host name or an IPv4 address with no port, the
           exact text the client sends to the jump host. The role adds port 22 itself, and writes
-          this one list to every key line's permitopen and to the Match block's PermitOpen. An
-          empty list is refused and never read as allow-all; a wildcard, a port, a quote, a comma,
-          a space, an IPv6 form and a repeat are each refused. The list must hold
+          this list to the permitopen of every key line that names no list of its own. The
+          Match block's PermitOpen is the union of every key's list (this one, or the key's own).
+          An empty list is refused and never read as allow-all; a wildcard, a port, a quote, a
+          comma, a space, an IPv6 form and a repeat are each refused. The list must hold
           ci_jump_own_address. Read only when ci_jump_manage_keys is true.
       ci_jump_keys:
         type: list
@@ -64,6 +65,9 @@ argument_specs:
           The public keys that use the jump account, and no others. An empty list is refused and
           never read as remove-all. Public keys, but treated as sensitive: no task prints them and
           the plan shows fingerprints only. Read only when ci_jump_manage_keys is true.
+          An entry may carry a list of destinations of its own: the key's line then names that
+          list and no other, so the key reaches those hosts and nothing else the shared list
+          holds.
         options:
           key:
             type: str
@@ -73,6 +77,16 @@ argument_specs:
               One public key on one line as ssh-keygen writes it, with no options in front. The
               role decodes it, refuses an unknown type or a blob that is not that type, and writes
               the type and the body without the comment.
+          destinations:
+            type: list
+            elements: str
+            required: false
+            description: >-
+              The hosts this key alone may reach, in the same form as ci_jump_destinations (no
+              port, no wildcard, no repeat). It replaces the shared list for this key, so a
+              host the shared list holds is not reachable by this key unless it is named here.
+              It need not hold ci_jump_own_address. Left out, the key takes the shared list. An
+              empty or null value is refused and never read as the shared list or as allow-all.
       ci_jump_spool_manage_keys:
         type: bool
         default: false
@@ -127,3 +141,13 @@ argument_specs:
             description: >-
               One public key on one line as ssh-keygen writes it, with no options in front, as for
               ci_jump_keys.
+          destinations:
+            type: list
+            elements: str
+            required: false
+            description: >-
+              The spool hosts this key alone may reach, in the same form as
+              ci_jump_spool_destinations (no port, no wildcard, no repeat). It must be a subset of
+              ci_jump_spool_destinations: a list naming any other host is refused (E-SPOOL-KEY-WIDER).
+              Left out, the key takes the spool list. An empty or null value is refused and never
+              read as the spool list or as allow-all.

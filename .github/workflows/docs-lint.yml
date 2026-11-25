@@ -29,11 +29,11 @@ jobs:
     outputs:
       scan: ${{ steps.changes.outputs.scan }}
     steps:
-      # Full history, so the base commit of the diff below exists on the runner.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Full history, so the base commit of the diff below exists on the runner.
           fetch-depth: 0
 
       # The table checks every case the decision must get right. It runs here, on
@@ -73,11 +73,44 @@ jobs:
           echo "scan=${scan}" >> "$GITHUB_OUTPUT"
           echo "docs-lint has input to scan: ${scan}"
 
+  # On a push to main, docs-lint is skipped when the merge queue already ran it green on
+  # this exact commit (scripts/queue_proof.py). Pull requests and the queue always run it.
+  queue-proof:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tested: ${{ steps.judge.outputs.tested }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the merge queue runs of this workflow for the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: gh api "repos/$REPO/actions/workflows/docs-lint.yml/runs?head_sha=$SHA&per_page=100" > "$RUNNER_TEMP/runs.json" || echo '{}' > "$RUNNER_TEMP/runs.json"
+
+      - name: Judge the proof
+        id: judge
+        env:
+          SHA: ${{ github.sha }}
+        run: python3 scripts/queue_proof.py --runs "$RUNNER_TEMP/runs.json" --sha "$SHA" --workflow .github/workflows/docs-lint.yml >> "$GITHUB_OUTPUT"
+
   # The reusable lint. Its check reports as "docs-lint-run / docs-lint", so it
-  # does not clash with the required context the gate below reports.
+  # does not clash with the required context the gate below reports. It runs only
+  # when the decision found input, and not on a push the queue has already proved.
+  # !cancelled() so a skipped queue-proof (every pull request and queue event)
+  # does not skip it.
   docs-lint-run:
-    needs: changes
-    if: needs.changes.outputs.scan == 'true'
+    needs: [changes, queue-proof]
+    if: ${{ !cancelled() && needs.changes.outputs.scan == 'true' && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
     permissions:
       contents: read
     uses: branchLeft/github-workflows/.github/workflows/docs-lint.yml@v1.2.2
@@ -88,8 +121,10 @@ jobs:
   # succeeded whenever the decision above found input to scan.
   docs-lint:
     name: docs-lint / docs-lint
-    needs: [changes, docs-lint-run]
-    if: always()
+    needs: [changes, queue-proof, docs-lint-run]
+    # Fail open: a skipped or unreadable proof leaves tested unset, so the gate runs in full.
+    # !cancelled(), not always(): a cancelled run does not start the gate job.
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -423,6 +423,106 @@ class HttpEndpointPolicyShapeTests(unittest.TestCase):
         self.assertIs(HTTP_USE_X_FORWARDED, False)
 
 
+class DiagnosticRouteTests(unittest.TestCase):
+    """The /jmap allowance on the public listener is the widest thing this
+    reconciler can open, so its shape is asserted directly: closed unless an
+    address is named, one rule per address, pinned to the path and the source,
+    ahead of the blanket 421, and never fed by a range or a header."""
+
+    SOURCE = "203.0.113.7"
+
+    def test_with_no_source_the_policy_is_the_committed_one_and_jmap_is_not_reachable(self):
+        policy = cs.build_http_endpoint_policy(())
+        self.assertEqual(HTTP_ENDPOINT_POLICY, policy)
+        self.assertFalse(any(cs.DIAGNOSTIC_PATH in rule["if"] for rule in policy["match"].values()))
+
+    def test_each_source_gets_one_rule_pinned_to_path_listener_and_address(self):
+        policy = cs.build_http_endpoint_policy((self.SOURCE, "198.51.100.9"))
+        rules = [policy["match"][key] for key in sorted(policy["match"], key=int)]
+        diag = [r for r in rules if f"path == '{cs.DIAGNOSTIC_PATH}'" in r["if"]]
+        self.assertEqual(2, len(diag))
+        for rule, source in zip(diag, (self.SOURCE, "198.51.100.9")):
+            self.assertEqual(
+                f"listener == 'https' && path == '{cs.DIAGNOSTIC_PATH}' && remote_ip == '{source}'", rule["if"]
+            )
+            self.assertEqual("200", rule["then"])
+            self.assertNotIn("||", rule["if"])
+
+    def test_the_blanket_deny_stays_last_and_the_rule_count_stays_below_ten(self):
+        policy = cs.build_http_endpoint_policy((self.SOURCE, "198.51.100.9"))
+        keys = sorted(policy["match"], key=int)
+        self.assertEqual({"if": "listener == 'https'", "then": "421"}, policy["match"][keys[-1]])
+        for key in keys[:-1]:
+            self.assertEqual("200", policy["match"][key]["then"])
+        self.assertLess(len(keys), 10)
+        self.assertEqual("200", policy["else"])
+
+    def test_only_the_jmap_path_and_the_metrics_path_are_ever_allowed(self):
+        policy = cs.build_http_endpoint_policy((self.SOURCE,))
+        for rule in policy["match"].values():
+            if rule["then"] == "200":
+                self.assertTrue(
+                    f"path == '{cs.DIAGNOSTIC_PATH}'" in rule["if"] or f"path == '{METRICS_PATH}'" in rule["if"]
+                )
+        self.assertEqual("/jmap", cs.DIAGNOSTIC_PATH)
+
+    def test_sources_parse_from_a_comma_list(self):
+        self.assertEqual((), cs.parse_diagnostic_sources(""))
+        self.assertEqual((), cs.parse_diagnostic_sources(" , "))
+        self.assertEqual((self.SOURCE,), cs.parse_diagnostic_sources(self.SOURCE))
+        self.assertEqual((self.SOURCE, "198.51.100.9"), cs.parse_diagnostic_sources(f" {self.SOURCE} , 198.51.100.9"))
+
+    def test_a_range_ipv6_loopback_unspecified_or_malformed_source_is_refused(self):
+        for bad in (
+            "203.0.113.0/24", "0.0.0.0", "0.0.0.0/0", "127.0.0.1", "255.255.255.255", "2001:db8::1",
+            "203.0.113.256", "203.0.113", "203.0.113.7.1", "any", "*", "203.0.113.7 && true",
+            "203.0.113.07", "'", "203.0.113.7,203.0.113.7", "1.1.1.1,2.2.2.2,3.3.3.3",
+        ):
+            with self.assertRaises(ValueError, msg=bad):
+                cs.parse_diagnostic_sources(bad)
+
+    def test_a_source_is_applied_through_plan_http_change(self):
+        current = [{"id": "singleton", "allowedEndpoints": HTTP_ENDPOINT_POLICY, "useXForwarded": False}]
+        plan = plan_http_change(current, (self.SOURCE,))
+        self.assertIn(self.SOURCE, str(plan["update"]["singleton"]["allowedEndpoints"]))
+        self.assertEqual({}, plan_http_change(
+            [{"id": "singleton", "allowedEndpoints": cs.build_http_endpoint_policy((self.SOURCE,)),
+              "useXForwarded": False}], (self.SOURCE,)))
+
+    def test_running_again_without_the_variable_closes_the_route(self):
+        opened = cs.build_http_endpoint_policy((self.SOURCE,))
+        plan = plan_http_change([{"id": "singleton", "allowedEndpoints": opened, "useXForwarded": False}])
+        self.assertEqual(HTTP_ENDPOINT_POLICY, plan["update"]["singleton"]["allowedEndpoints"])
+
+    def test_the_reconciler_reads_the_sources_from_the_environment(self):
+        sent = []
+
+        def fake(auth, method, args):
+            sent.append((method, args))
+            return {"list": []}
+
+        for env, expected in ((self.SOURCE, True), ("", False)):
+            sent.clear()
+            with mock.patch.dict(os.environ, {cs.DIAGNOSTIC_SOURCES_ENV: env}), \
+                    mock.patch.object(cs, "_jmap_call", fake):
+                cs._reconcile_http_access(("a", "b"))
+            policy = sent[-1][1]["create"]["singleton"]["allowedEndpoints"]
+            self.assertEqual(expected, self.SOURCE in str(policy))
+
+    def test_main_refuses_a_bad_value_before_any_call(self):
+        with mock.patch.dict(os.environ, {cs.DIAGNOSTIC_SOURCES_ENV: "10.0.0.0/8"}), \
+                mock.patch.object(cs, "_jmap_call") as call, \
+                mock.patch.object(cs, "_load_credentials") as load:
+            with self.assertRaises(ValueError):
+                cs.main()
+        call.assert_not_called()
+        load.assert_not_called()
+
+    def test_forwarded_headers_stay_untrusted_when_the_route_is_open(self):
+        plan = plan_http_change([], (self.SOURCE,))
+        self.assertIs(plan["create"]["singleton"]["useXForwarded"], False)
+
+
 class PlanMetricsChangeTests(unittest.TestCase):
     def test_unmaterialized_singleton_is_created_with_the_exporter_enabled(self):
         plan = plan_metrics_change([])

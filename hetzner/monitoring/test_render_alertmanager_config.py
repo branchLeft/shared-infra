@@ -960,12 +960,14 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
         self.assertNotIn("decision_id", second.group_by)
         self.assertLessEqual(second.group_interval_seconds, OWNED_BAN_SECONDS_BOUND)
 
-    def test_tenant_scoped_pages_keep_tenant_grouping_and_the_root_interval(self) -> None:
+    def test_keeps_tenant_scoped_pages_grouped_on_tenant_paced_at_the_page_route_interval(self) -> None:
+        # Changed from the root's 1h (#971) to the page node's 1m by the page-route
+        # timings: every node that sends to the phone is paced at one minute or less.
         labels = {"alertname": "TierTwoSafetyMatch", "severity": "page", "tenant": "acme"}
         (step,) = _walk_routes(self.template, labels)
         self.assertEqual(step.receiver, "ntfy-page")
         self.assertEqual(step.group_by, ("tenant",))
-        self.assertEqual(step.group_interval_seconds, _duration_seconds("1h"))
+        self.assertEqual(step.group_interval_seconds, _duration_seconds("1m"))
 
     def test_walker_is_not_vacuous_a_page_for_an_unknown_alert_reaches_email_only(self) -> None:
         labels = {"alertname": "SomeUnregisteredPagingAlert", "severity": "page"}

@@ -6,11 +6,12 @@
 #   (a) Guardrails: a path whose silent weakening would stop an agent guardrail or a required check
 #       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
 #       codeowners_match.py), CLAUDE.md, .claude/, the workflows, actions and dependabot settings
-#       (/.github/, by the standards lines), the gate scripts and tests those checks run
-#       (ansible/checks/, ansible/harness/, scripts/ and the named hetzner/scripts checks), the
-#       apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer include), the
-#       guard tests and guards that stop a destructive apply, the floors and lint settings, the
-#       image verifier, and the exemption files.
+#       (/.github/, by the standards lines), the gate scripts those checks run (the checks in
+#       ansible/checks/, ansible/harness/, all of scripts/ and the named hetzner/scripts
+#       checks), the apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer
+#       include), the guards that stop a destructive apply, the floors and lint settings, the image
+#       verifier, and the exemption files. The tests of a gate in ansible/checks/ and hetzner/ are
+#       not listed: they are released.
 #   (b) Human-facing documents: README, the licences, and the launch page copy.
 # When in doubt: if this file were silently weakened, would a guardrail or a required check stop
 # protecting us? Yes, owner. No, released.
@@ -31,8 +32,6 @@
 /ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
 /ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py @branchLeft/branchleft-admin
 /ansible/trust/                                              @branchLeft/branchleft-admin
-/hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
-/hetzner/projectGuard.test.ts                                @branchLeft/branchleft-admin
 /hetzner/projectGuard.ts                                     @branchLeft/branchleft-admin
 /hetzner/provision/stack_keys_check.py                       @branchLeft/branchleft-admin
 /hetzner/provision/test_counts/                              @branchLeft/branchleft-admin
@@ -45,16 +44,17 @@
 /hetzner/scripts/test_check_crowdsec_hub_pin.py              @branchLeft/branchleft-admin
 /hetzner/scripts/test_check_hetzner_*                        @branchLeft/branchleft-admin
 /hetzner/scripts/test_proof_harness.py                       @branchLeft/branchleft-admin
-/ovh/copy2/configGuard*                                      @branchLeft/branchleft-admin
-/ovh/copy2/projectGuard*                                     @branchLeft/branchleft-admin
+/ovh/copy2/configGuard.ts                                    @branchLeft/branchleft-admin
+/ovh/copy2/projectGuard.ts                                   @branchLeft/branchleft-admin
 /scripts/                                                    @branchLeft/branchleft-admin
 /tools/floors.tsv                                            @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
-test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 
-# Released, with no owner: documents, and the checks that guard no gate: the agreement tests and
-# probes in ansible/checks/ run in the required lint's checks and slow legs, but they hold a host
-# role or a stack to its siblings and do not judge a merge or a deploy.
+# Released, with no owner: documents, every test in ansible/checks/ but the proof of this file (a test
+# of a gate does not judge a merge or a deploy; the gate it reads stays owned; test_plan_diff_scan.py
+# and test_step_allowlist.py are owned again below because each is itself a check), and the helpers
+# and probes there that guard no gate. Under scripts/ only four files, released before this change, are released: a script
+# there is imported first by the scripts that run with credentials, so a new file is owned too.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
@@ -62,33 +62,22 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/checks/offline_render.py
 /ansible/checks/pip-requirements.txt
 /ansible/checks/sabotage_offline_render.py
-/ansible/checks/test_broker_paths_agree.py
-/ansible/checks/test_ci_jump_hosts.py
-/ansible/checks/test_db1_stack_verify_parts.py
-/ansible/checks/test_demo1_egress_spool_agree.py
-/ansible/checks/test_demo1_no_github_fetch.py
-/ansible/checks/test_deploy_tooling_edge1_class.py
-/ansible/checks/test_deploy_tooling_internal_class.py
-/ansible/checks/test_deploy_tooling_links.py
-/ansible/checks/test_deploy_tooling_probe_name.py
-/ansible/checks/test_deploy_tooling_single_owner.py
-/ansible/checks/test_edge_single_home.py
-/ansible/checks/test_egress_nat_single_gateway.py
-/ansible/checks/test_host_baseline_matches_scripts.py
-/ansible/checks/test_monitoring_single_home.py
-/ansible/checks/test_mx1_stack_agree.py
-/ansible/checks/test_offline_render.py
-/ansible/checks/test_patterns_typecheck.py
+/ansible/checks/test_*.py
 /scripts/assert-min-python-version.py
 /scripts/nvmrc-node-exec.*
 /scripts/test_assert_min_python_version.py
 /scripts/test_nvmrc_node_exec.py
 
-# Owned again after the releases: the instructions, the hook directory, the licences, the README and the launch page.
+# Owned again after the releases: the instructions, the hook directory, the proof of this file and of two checks, the licences, the README and the launch page.
 /.claude/                                                    @branchLeft/branchleft-admin
 /LICENSE                                                     @branchLeft/branchleft-admin
 /README.md                                                   @branchLeft/branchleft-admin
+/ansible/checks/test_codeowners.py                           @branchLeft/branchleft-admin
+/ansible/checks/test_plan_diff_scan.py                       @branchLeft/branchleft-admin
+/ansible/checks/test_step_allowlist.py                       @branchLeft/branchleft-admin
 /hetzner-host/LICENSE                                        @branchLeft/branchleft-admin
+/hetzner/edge-t/media.test.ts                                @branchLeft/branchleft-admin
+/hetzner/edge-t/media.ts                                     @branchLeft/branchleft-admin
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin
 

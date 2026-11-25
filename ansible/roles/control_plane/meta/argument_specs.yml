@@ -51,6 +51,16 @@ argument_specs:
           or empty. A different key orphans the sign-in service's encrypted data. Needed
           only when the file is absent or empty: then the run stops before any write if it
           was not given.
+      control_plane_portal_support_smtp_password:
+        type: str
+        required: false
+        no_log: true
+        description: >-
+          The portal's support mail password (the sales@ submission credential on mx1), a
+          secret supplied at run time from the host's inputs. Written to
+          /etc/branchleft/control-plane/portal-support/smtp-password on every run when given,
+          so a rotated value is written; the portal reads it at its start. Not given: nothing is
+          written and the portal's support mail stays off.
       control_plane_bring_up:
         type: bool
         default: true
