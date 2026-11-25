@@ -948,5 +948,20 @@ class LookEndToEndTests(unittest.TestCase):
         self.assertEqual(11, code, out.getvalue() + errors.getvalue())
 
 
+class DemoRouterPortTests(unittest.TestCase):
+    """The allow-list's demo1 router ports are the slot ports the router binds: base plus slot."""
+
+    def test_each_demo1_router_port_is_its_slot_port_from_10100(self) -> None:
+        for slot in range(7):
+            with self.subTest(slot=slot):
+                self.assertEqual(
+                    frozenset({10100 + slot}), trigger.LOOK_HTTP_PORTS[f"demo1-router-{slot}"]
+                )
+
+    def test_the_slot_zero_port_is_10100_and_not_the_exporter_port(self) -> None:
+        self.assertEqual(frozenset({10100}), trigger.LOOK_HTTP_PORTS["demo1-slot0-port"])
+        self.assertNotIn(9100, trigger.LOOK_HTTP_PORTS["demo1-slot0-port"])
+
+
 if __name__ == "__main__":
     unittest.main()
