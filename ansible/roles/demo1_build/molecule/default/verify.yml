@@ -378,21 +378,38 @@
         quiet: true
         fail_msg: The compose template unit on the host is not the checkout's hetzner/provision file, root:root mode 0644.
 
-    # systemd has read the files: a reload ran, and the units load. Nothing is
-    # started or enabled.
-    - name: Ask systemd about a router instance
+    # Each slot's health router is enabled and running after the role has applied, and
+    # answers on its loopback port (10100 plus the slot). A router that is loaded but
+    # not started, or started but not on that port, fails here.
+    - name: Ask systemd about each slot's health router
       ansible.builtin.systemd_service:
-        name: branchleft-health-router@0.service
+        name: 'branchleft-health-router@{{ item }}.service'
+      loop: '{{ verify_slots }}'
+      loop_control:
+        label: '{{ item }}'
       register: demo1_build_verify_router_systemd
 
-    - name: Assert the router instance is loaded, not enabled and not running
+    - name: Assert every slot's health router is loaded, enabled and active
       ansible.builtin.assert:
         that:
-          - demo1_build_verify_router_systemd.status.LoadState == 'loaded'
-          - demo1_build_verify_router_systemd.status.ActiveState == 'inactive'
-          - demo1_build_verify_router_systemd.status.UnitFileState in ['disabled', '']
+          - item.status.LoadState == 'loaded'
+          - item.status.ActiveState == 'active'
+          - item.status.UnitFileState == 'enabled'
         quiet: true
-        fail_msg: The router instance is not loaded, or it was started or enabled.
+        fail_msg: >-
+          The health router {{ item.item }} is not loaded, enabled and active.
+      loop: '{{ demo1_build_verify_router_systemd.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Wait for each slot's health router to listen on its loopback port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ 10100 + (item | int) }}'
+        timeout: 30
+      loop: '{{ verify_slots }}'
+      loop_control:
+        label: '{{ 10100 + (item | int) }}'
 
     # The candidate edge fragment, and no live edge.
     - name: Look at the candidate directory and file
