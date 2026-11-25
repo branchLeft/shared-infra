@@ -165,22 +165,41 @@
 # The diff is not shown (ANS-16): the files hold
 # placeholder names, paths and environment variables named like passwords or tokens, which
 # the plan's secret scan would withhold the whole plan of the host over. None holds a secret.
-# The other files go by the next task, which shows its diff.
-# prometheus/prometheus.yml is one of them, and its source is chosen here: the rendering that names
-# demo1's TLS files goes in only while host_tls_identity_peer_cert is set, the one the role that writes
-# the pin writes it under (vars/main.yml, monitoring_stack_demo1_scrape). Otherwise Prometheus would
-# be handed a config naming a file that does not exist and would not start.
+# The other files go by the task after the Prometheus config's, which shows its diff.
 - name: Deliver the stack's files whose diff is not shown
   ansible.builtin.copy:
-    src: >-
-      stack/{{ monitoring_stack_prometheus_demo1_variant
-      if (item == monitoring_stack_prometheus_config and monitoring_stack_demo1_scrape | bool)
-      else item }}
+    src: 'stack/{{ item }}'
     dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ monitoring_stack_files | intersect(monitoring_stack_files_hidden) }}'
+  loop: '{{ monitoring_stack_files_hidden_plain }}'
+  diff: false
+
+# The Prometheus config is the one hidden file with two sources, and each has its own task so the
+# plan's scan reads a literal source. The rendering that names demo1's TLS files goes in only while
+# host_tls_identity_peer_cert is set, the same value the role that writes the pin writes it under
+# (vars/main.yml, monitoring_stack_demo1_scrape). Otherwise Prometheus would be handed a config
+# naming a file that does not exist and would not start. Both land on prometheus/prometheus.yml, so
+# the container's mount, the fingerprint and the restart see one file.
+- name: Deliver the Prometheus config that names no TLS file
+  ansible.builtin.copy:
+    src: stack/prometheus/prometheus.yml
+    dest: '{{ monitoring_stack_project_dir }}/{{ monitoring_stack_prometheus_config }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not (monitoring_stack_demo1_scrape | bool)
+  diff: false
+
+- name: Deliver the Prometheus config that scrapes demo1
+  ansible.builtin.copy:
+    src: stack/prometheus/prometheus.demo1.yml
+    dest: '{{ monitoring_stack_project_dir }}/{{ monitoring_stack_prometheus_config }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: monitoring_stack_demo1_scrape | bool
   diff: false
 
 - name: Deliver the stack's other files

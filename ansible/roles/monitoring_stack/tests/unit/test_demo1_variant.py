@@ -70,8 +70,12 @@ def _render(template: str, variables: dict[str, object]) -> str:
     return str(templar.template(trust_as_template(template)))
 
 
-def _source(owner: object, item: str = PLAIN) -> str:
-    """The `src` the delivery task resolves for one item, with the owner's value as given.
+PLAIN_TASK = "Deliver the Prometheus config that names no TLS file"
+VARIANT_TASK = "Deliver the Prometheus config that scrapes demo1"
+
+
+def _delivered(owner: object) -> list[tuple[str, str]]:
+    """The (src, dest) of each Prometheus config task whose `when` holds for the owner's value.
 
     `owner` is left out of the variables when it is None, which is how a host that has no
     owner_vars row for the value looks to the role.
@@ -79,28 +83,37 @@ def _source(owner: object, item: str = PLAIN) -> str:
     variables = dict(_mapping(ROLE / "vars" / "main.yml"))
     if owner is not None:
         variables[FLAG] = owner
-    variables["item"] = item
-    task = _task("Deliver the stack's files whose diff is not shown")
-    copy = cast("dict[str, object]", task["ansible.builtin.copy"])
-    return _render(str(copy["src"]), variables)
+    found: list[tuple[str, str]] = []
+    for name in (PLAIN_TASK, VARIANT_TASK):
+        task = _task(name)
+        if _render("{{ " + str(task["when"]) + " }}", variables) != "True":
+            continue
+        copy = cast("dict[str, object]", task["ansible.builtin.copy"])
+        found.append((str(copy["src"]), _render(str(copy["dest"]), variables)))
+    return found
 
 
 class Demo1VariantTest(unittest.TestCase):
-    def test_a_set_value_delivers_the_variant_as_prometheus_yml(self) -> None:
-        self.assertEqual(f"stack/{VARIANT}", _source(CERT))
+    def test_a_set_value_delivers_only_the_variant_as_prometheus_yml(self) -> None:
+        dest = f"/opt/branchleft/monitoring/{PLAIN}"
+        self.assertEqual([(f"stack/{VARIANT}", dest)], _delivered(CERT))
 
-    def test_an_empty_blank_or_absent_value_delivers_the_plain_file(self) -> None:
+    def test_an_empty_blank_or_absent_value_delivers_only_the_plain_file(self) -> None:
+        dest = f"/opt/branchleft/monitoring/{PLAIN}"
         for owner in ("", "   ", "\n", None):
             with self.subTest(owner=owner):
-                self.assertEqual(f"stack/{PLAIN}", _source(owner))
+                self.assertEqual([(f"stack/{PLAIN}", dest)], _delivered(owner))
 
-    def test_no_other_file_is_ever_swapped_for_the_variant(self) -> None:
-        files = _mapping(ROLE / "vars" / "main.yml")["monitoring_stack_files"]
-        for item in cast("list[str]", files):
-            if item == PLAIN:
-                continue
-            with self.subTest(item=item):
-                self.assertEqual(f"stack/{item}", _source(CERT, item))
+    def test_the_generic_hidden_task_carries_no_config_and_the_lists_agree(self) -> None:
+        role_vars = _mapping(ROLE / "vars" / "main.yml")
+        hidden = cast("list[str]", role_vars["monitoring_stack_files_hidden"])
+        plain = cast("list[str]", role_vars["monitoring_stack_files_hidden_plain"])
+        self.assertEqual([name for name in hidden if name != PLAIN], plain)
+        task = _task("Deliver the stack's files whose diff is not shown")
+        self.assertEqual("{{ monitoring_stack_files_hidden_plain }}", task["loop"])
+        # Neither of the two config tasks may show its diff: the config holds a password_file line.
+        for name in (PLAIN_TASK, VARIANT_TASK):
+            self.assertIs(False, _task(name)["diff"])
 
     def test_the_choice_reads_the_value_the_pin_role_reads_and_tests_it_the_same_way(self) -> None:
         # host_tls_identity writes the pin when the value, trimmed, is not empty. This role's flag
@@ -113,32 +126,16 @@ class Demo1VariantTest(unittest.TestCase):
         self.assertIn("trim", flag)
         self.assertIn("!= ''", flag)
 
-    def test_the_plain_file_is_delivered_by_the_task_that_chooses_and_the_variant_is_not_a_name(
-        self,
-    ) -> None:
+    def test_the_config_is_listed_once_and_the_variant_is_not_a_delivered_name(self) -> None:
         role_vars = _mapping(ROLE / "vars" / "main.yml")
         files = cast("list[str]", role_vars["monitoring_stack_files"])
-        hidden = cast("list[str]", role_vars["monitoring_stack_files_hidden"])
         self.assertIn(PLAIN, files)
-        self.assertIn(PLAIN, hidden)
         self.assertNotIn(VARIANT, files)
         self.assertEqual(PLAIN, role_vars["monitoring_stack_prometheus_config"])
         self.assertEqual(VARIANT, role_vars["monitoring_stack_prometheus_demo1_variant"])
-        task = _task("Deliver the stack's files whose diff is not shown")
-        self.assertEqual(
-            "{{ monitoring_stack_files | intersect(monitoring_stack_files_hidden) }}",
-            task["loop"],
-        )
-        # The destination is the item, never the variant: one file on the host either way.
-        copy = cast("dict[str, object]", task["ansible.builtin.copy"])
-        self.assertEqual("{{ monitoring_stack_project_dir }}/{{ item }}", copy["dest"])
-
-    def test_the_other_delivery_task_does_not_carry_the_config(self) -> None:
-        # The task that shows its diff is the one the plain choice does not pass through.
-        role_vars = _mapping(ROLE / "vars" / "main.yml")
-        files = cast("list[str]", role_vars["monitoring_stack_files"])
+        # The other-files task is the one that shows its diff and must not carry the config.
         hidden = cast("list[str]", role_vars["monitoring_stack_files_hidden"])
-        self.assertNotIn(PLAIN, [name for name in files if name not in hidden])
+        self.assertIn(PLAIN, hidden)
 
     def test_the_plain_rendering_names_no_file_and_the_variant_names_the_three(self) -> None:
         plain = (STACK / PLAIN).read_text(encoding="utf-8")

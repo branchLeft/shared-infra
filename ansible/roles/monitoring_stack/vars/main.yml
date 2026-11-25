@@ -73,6 +73,12 @@ monitoring_stack_files_hidden:
 # A play variable can move the choice, as it moves the owner's value itself; the check that holds
 # the files to the writer is ansible/checks/test_edge1_prometheus_tls_files.py.
 monitoring_stack_prometheus_config: prometheus/prometheus.yml
+# The hidden files other than the config, which has two tasks of its own because the plan's scan
+# reads each copy's `src` as a literal. A test holds this list equal to the hidden list less the config.
+monitoring_stack_files_hidden_plain:
+  - compose.yml
+  - alertmanager/alertmanager.yml.tmpl
+  - ntfy/server.yml.tmpl
 monitoring_stack_prometheus_demo1_variant: prometheus/prometheus.demo1.yml
 monitoring_stack_demo1_scrape: >-
   {{ (host_tls_identity_peer_cert | default('') | string | trim) != '' }}

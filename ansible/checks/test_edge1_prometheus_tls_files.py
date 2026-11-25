@@ -37,7 +37,10 @@ HOST = "edge1"
 SERVICE = "prometheus"
 ROLE = "host_tls_identity"
 DELIVERY_ROLE = "monitoring_stack"
-DELIVERY_TASK = "Deliver the stack's files whose diff is not shown"
+PLAIN_TASK = "Deliver the Prometheus config that names no TLS file"
+DEMO1_TASK = "Deliver the Prometheus config that scrapes demo1"
+DEST = "{{ monitoring_stack_project_dir }}/{{ monitoring_stack_prometheus_config }}"
+FLAG_REF = "monitoring_stack_demo1_scrape | bool"
 PIN_KEY = "host_tls_identity_peer_cert"
 PIN_TEST = f"{PIN_KEY} | trim != ''"
 TLS_FILE_KEYS = frozenset(("ca_file", "cert_file", "key_file"))
@@ -226,20 +229,19 @@ def gate_problems(
         found.append(
             f"{DELIVERY_ROLE}_demo1_scrape is `{flag}`, not the test of {PIN_KEY} that {ROLE} makes"
         )
-    task = _task_named(delivery_tasks, DELIVERY_TASK)
-    copy = task.get("ansible.builtin.copy")
-    src = _squash(cast("dict[str, object]", copy).get("src", "")) if isinstance(copy, dict) else ""
-    if "monitoring_stack_prometheus_demo1_variant" not in src or (
-        "monitoring_stack_demo1_scrape" not in src
+    for task_name, source, condition in (
+        (PLAIN_TASK, "stack/prometheus/prometheus.yml", f"not ({FLAG_REF})"),
+        (DEMO1_TASK, f"stack/prometheus/{DEMO1_CONFIG.name}", FLAG_REF),
     ):
-        found.append(f"the delivery's source `{src}` does not take the demo1 config under the flag")
-    dest = (
-        _squash(cast("dict[str, object]", copy).get("dest", "")) if isinstance(copy, dict) else ""
-    )
-    if "{{ item }}" not in dest:
-        found.append(
-            f"the delivery's destination `{dest}` is not the item, so the config is renamed"
-        )
+        task = _task_named(delivery_tasks, task_name)
+        copy = task.get("ansible.builtin.copy")
+        args = cast("dict[str, object]", copy) if isinstance(copy, dict) else {}
+        if _squash(args.get("src", "")) != source:
+            found.append(f"`{task_name}` takes `{args.get('src')}`, not `{source}`")
+        if _squash(task.get("when", "")) != condition:
+            found.append(f"`{task_name}` runs when `{task.get('when')}`, not `{condition}`")
+        if _squash(args.get("dest", "")) != DEST:
+            found.append(f"`{task_name}` writes `{args.get('dest')}`, not the one prometheus.yml")
     if DEMO1_CONFIG.name in compose_text:
         found.append(f"compose.yml mounts {DEMO1_CONFIG.name} itself, not as prometheus.yml")
     return found
@@ -335,13 +337,16 @@ monitoring_stack_demo1_scrape: >-
   {{ (host_tls_identity_peer_cert | default('') | string | trim) != '' }}
 """
 GATE_TASKS = """
-- name: Deliver the stack's files whose diff is not shown
+- name: Deliver the Prometheus config that names no TLS file
   ansible.builtin.copy:
-    src: >-
-      stack/{{ monitoring_stack_prometheus_demo1_variant
-      if (item == p and monitoring_stack_demo1_scrape)
-      else item }}
-    dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
+    src: stack/prometheus/prometheus.yml
+    dest: '{{ monitoring_stack_project_dir }}/{{ monitoring_stack_prometheus_config }}'
+  when: not (monitoring_stack_demo1_scrape | bool)
+- name: Deliver the Prometheus config that scrapes demo1
+  ansible.builtin.copy:
+    src: stack/prometheus/prometheus.demo1.yml
+    dest: '{{ monitoring_stack_project_dir }}/{{ monitoring_stack_prometheus_config }}'
+  when: monitoring_stack_demo1_scrape | bool
 """
 
 
@@ -411,13 +416,18 @@ class Edge1PrometheusTlsFiles(unittest.TestCase):
         self.assertEqual([], _gate())
 
     def test_a_delivery_that_always_takes_the_demo1_config_is_refused(self) -> None:
-        found = _gate(
-            tasks=GATE_TASKS.replace(
-                "if (item == p and monitoring_stack_demo1_scrape)", "if (item == p)"
-            )
-        )
+        found = _gate(tasks=GATE_TASKS.replace("when: monitoring_stack_demo1_scrape | bool\n", ""))
         self.assertEqual(1, len(found), found)
-        self.assertIn("does not take the demo1 config under the flag", found[0])
+        self.assertIn("runs when", found[0])
+
+    def test_a_plain_task_that_also_runs_with_the_flag_is_refused(self) -> None:
+        found = _gate(tasks=GATE_TASKS.replace("not (monitoring_stack_demo1_scrape", "(x"))
+        self.assertEqual(1, len(found), found)
+
+    def test_a_delivery_that_takes_the_wrong_source_is_refused(self) -> None:
+        found = _gate(tasks=GATE_TASKS.replace("prometheus.demo1.yml", "prometheus.yml"))
+        self.assertEqual(1, len(found), found)
+        self.assertIn("takes", found[0])
 
     def test_a_flag_that_is_not_the_pin_test_is_refused(self) -> None:
         found = _gate(vars_=GATE_VARS.replace(" | trim", ""))
@@ -434,9 +444,9 @@ class Edge1PrometheusTlsFiles(unittest.TestCase):
         self.assertIn("no longer writes the pin under", found[0])
 
     def test_a_delivery_that_renames_the_config_is_refused(self) -> None:
-        found = _gate(tasks=GATE_TASKS.replace("{{ item }}", "{{ variant }}"))
-        self.assertEqual(1, len(found), found)
-        self.assertIn("is not the item", found[0])
+        found = _gate(tasks=GATE_TASKS.replace("monitoring_stack_prometheus_config", "elsewhere"))
+        self.assertEqual(2, len(found), found)
+        self.assertIn("not the one prometheus.yml", found[0])
 
     def test_a_compose_that_mounts_the_demo1_config_itself_is_refused(self) -> None:
         found = _gate(compose_text="- ./prometheus/prometheus.demo1.yml:/etc/prometheus/p.yml")
