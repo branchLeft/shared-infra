@@ -150,8 +150,8 @@ is not loaded there.
   allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
-  list of `{key}` entries with nothing else (a destination list per key is refused: the role
-  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose
+  list of `{key}` entries, each of which may also hold `destinations`, a non-empty list of text
+  (the hosts that key alone reaches); any other field, and an empty or null list, is refused. `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose
   `checks/host_roles/HOST.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
@@ -197,6 +197,22 @@ is not loaded there.
   apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
   literal keys of its input task, `host_roles/`, the playbook and the role argument specs
   in agreement, and the structure of the loader's tasks.
+
+- **R12** `playbooks/bootstrap/HOST.yml` is the owner's one hand step for a host that has none of
+  its inputs yet: it installs the pull and nothing else, so the first apply of every other role
+  goes through the gated `ansible-hosts` approval. It exists only for an enrolled host (`HOST.yml`
+  beside it), has one play with no key but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`,
+  `pre_tasks` and `roles`, on `hosts: all`, `vars` exactly `enrolled_host: HOST` (the
+  host's other play variables belong to roles it does not apply), `vars_files` exactly the shared
+  include, `../../trust/HOST.yml` and `../../owner_vars/HOST.yml` if and only if that file exists,
+  `pre_tasks` the two refusals, `roles` exactly the runtime entry and the bare trigger, at
+  one level deeper than a host playbook, and `tasks` exactly one `copy` of `tools/seed_host_inputs.py`
+  to `/usr/local/sbin/seed_host_inputs.py` (root, `0700`): a plan runs in check mode, which never
+  replaces the pull's `current` link, so the tool cannot wait for a first apply. Any other role is a finding, `host_inputs` by name: a
+  fresh host has no inputs file and its seed tool arrives with the first gated apply, which then
+  stops at the loader. No tag, `when` or `vars` can sit on a role entry, so no tag widens the
+  run. The file is never pulled (R3 derives `playbooks/HOST.yml`), and R6 reads it as an
+  enrolled playbook. Run it with `-i "HOST," -e ansible_host=ADDRESS`, as for a host playbook.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.

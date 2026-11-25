@@ -403,6 +403,7 @@ class RealTree(unittest.TestCase):
                 "tenant_onboarding",
                 "export_bundler",
                 "node_exporter",
+                "slot_image_textfile",
             ],
         )
 

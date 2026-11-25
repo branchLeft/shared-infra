@@ -44,7 +44,37 @@ export interface MonitoredHost {
   name: string;
   address: string;
   expectedUp: boolean;
+  /** Set only for a host on no network this stack shares: its exporter is
+   * scraped over its public address, over TLS, with a client certificate the
+   * exporter verifies (`DEMO1_METRICS_TLS_DIR`). */
+  publicTls?: true;
 }
+
+/**
+ * demo1, the demo host, is in the separate `demos` Hetzner project: a private
+ * network does not span projects, so its exporter is scraped over its public
+ * address. The address is a literal, as `MX1_PUBLIC_IPV4` is: this renderer is
+ * pure string building, committed and compared, so it has no stack reference
+ * to read an output through (the Pulumi programs read `edge1PublicIpv4` that
+ * way). It is the `demo1PublicIpv4` output of `ghost-platform/infra/demo-host`,
+ * a primary IP declared with `autoDelete: false` and delete protection so it
+ * outlives a rebuild of the server, and `render.test.ts` holds it equal to the
+ * address demo1 already has in `ansible/owner_vars/edge1.yml`
+ * (`ci_jump_destinations`). Prometheus runs on edge1, so the scrape leaves from
+ * edge1's public address, the one source demo1's firewall admits on 9100. The
+ * control is the exporter's client-certificate check, not the address: see
+ * render.md#demo1s-node-target.
+ */
+export const DEMO1_PUBLIC_IPV4 = '2.28.114.186';
+
+/** The directory on edge1, mounted read-only into the Prometheus container,
+ * that holds `ca.crt`, `client.crt` and `client.key`. The repository ships none
+ * of them. */
+export const DEMO1_METRICS_TLS_DIR = '/etc/prometheus/demo1-metrics-tls';
+
+/** The name the exporter's server certificate carries, checked in place of the
+ * address (an address would not be in it). */
+export const DEMO1_METRICS_SERVER_NAME = 'demo1';
 
 export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'edge1', address: HOST_IPS.edge1, expectedUp: true },
@@ -58,6 +88,9 @@ export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'db-t1', address: TENANTS_HOST_IPS.dbT1, expectedUp: false },
   { name: 'app-t1', address: TENANTS_HOST_IPS.appT1, expectedUp: false },
   { name: 'edge-t', address: TENANTS_HOST_IPS.edgeT, expectedUp: false },
+  // Quiet until its exporter has been delivered and read back answering over
+  // TLS; the flip to true is its own reviewed change (render.md).
+  { name: 'demo1', address: DEMO1_PUBLIC_IPV4, expectedUp: false, publicTls: true },
 ];
 
 /**
@@ -318,7 +351,28 @@ function nodeTarget(host: MonitoredHost): string {
     host.name === 'edge1'
       ? `node-exporter:${NODE_EXPORTER_PORT}`
       : `${host.address}:${NODE_EXPORTER_PORT}`;
-  return `      - targets: ['${address}']\n        labels: ${targetLabels(host)}`;
+  // A target label of `__scheme__` overrides the job's scheme for this target
+  // alone, so every private-network target stays plain http.
+  const labels =
+    host.publicTls === true
+      ? `{host: ${host.name}, expected_up: '${String(host.expectedUp)}', __scheme__: https}`
+      : targetLabels(host);
+  return `      - targets: ['${address}']\n        labels: ${labels}`;
+}
+
+/** The job-level TLS settings the https node targets use; http targets ignore
+ * them. Paths only: the files are placed on edge1 by the owner. */
+function nodeTlsConfig(hosts: readonly MonitoredHost[]): string[] {
+  if (!hosts.some((host) => host.publicTls === true)) {
+    return [];
+  }
+  return [
+    '    tls_config:',
+    `      ca_file: ${DEMO1_METRICS_TLS_DIR}/ca.crt`,
+    `      cert_file: ${DEMO1_METRICS_TLS_DIR}/client.crt`,
+    `      key_file: ${DEMO1_METRICS_TLS_DIR}/client.key`,
+    `      server_name: ${DEMO1_METRICS_SERVER_NAME}`,
+  ];
 }
 
 /** One tunnel's target on edge1's private address: its local port, labelled as the direct row would be. */
@@ -406,6 +460,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     `        labels: ${APP1_SERVICE_LABELS}`,
     '',
     '  - job_name: node',
+    ...nodeTlsConfig(MONITORED_NODE_HOSTS),
     '    static_configs:',
     nodeTargets,
     '    relabel_configs:',

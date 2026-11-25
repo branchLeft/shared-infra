@@ -128,20 +128,25 @@ def _source(root: Path, name: str) -> str:
 
 
 def _render(
-    root: Path, name: str, destinations: list[str], user: str = SAMPLE_NAME, port: int = 22
+    root: Path,
+    name: str,
+    destinations: list[str],
+    user: str = SAMPLE_NAME,
+    keys: list[dict[str, object]] | None = None,
+    port: int = 22,
 ) -> str:
     """Render one of the role's templates the way Ansible does, with its role variables. The same
     values are given to both accounts' variables, so each template reads only its own."""
     mine = _variables(root / ROLE / "vars" / "main.yml")
-    keys = [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}]
+    entries = keys if keys is not None else [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}]
     return (
         _environment()
         .from_string(_source(root, name))
         .render(
-            ci_jump_keys=keys,
+            ci_jump_keys=entries,
             ci_jump_user=user,
             ci_jump_destinations=destinations,
-            ci_jump_spool_keys=keys,
+            ci_jump_spool_keys=entries,
             ci_jump_spool_user=user,
             ci_jump_spool_destinations=destinations,
             ci_jump_spool_port=port,
@@ -150,9 +155,11 @@ def _render(
     )
 
 
-def _template_lines(root: Path, destinations: list[str]) -> list[str]:
+def _template_lines(
+    root: Path, destinations: list[str], keys: list[dict[str, object]] | None = None
+) -> list[str]:
     """The key template's lines."""
-    text = _render(root, "authorized_keys.j2", destinations)
+    text = _render(root, "authorized_keys.j2", destinations, keys=keys)
     return [line for line in text.splitlines() if line.strip()]
 
 
@@ -339,19 +346,34 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
     made from the one destination list."""
     found: list[str] = []
     destinations = ["db-t1", "10.0.0.5", "app-t1"]
-    wanted = module.wanted_lines(destinations, [(KEY_TYPE, SAMPLE_BODY)])
+    # Three keys: one that takes the shared list, one with a list of its own that shares a host
+    # with it (in another letter case) and adds one, and one with a list of its own and nothing in
+    # common. The Match block must then hold the union, each host once.
+    other_body = SAMPLE_BODY.replace("AQEB", "AgIC", 1)
+    third_body = SAMPLE_BODY.replace("AQEB", "AwMD", 1)
+    own_one = ["APP-T1", "10.0.0.9"]
+    own_two = ["10.0.0.11"]
+    keys: list[dict[str, object]] = [
+        {"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"},
+        {"key": f"{KEY_TYPE} {other_body} b comment", "destinations": own_one},
+        {"key": f"{KEY_TYPE} {third_body} c comment", "destinations": own_two},
+    ]
+    parsed = [(KEY_TYPE, SAMPLE_BODY), (KEY_TYPE, other_body), (KEY_TYPE, third_body)]
+    own_lists = [None, own_one, own_two]
+    wanted = module.wanted_lines(destinations, parsed, own_lists)
+    permitted = module.permitted_destinations(destinations, own_lists, len(parsed))
     try:
-        written = _template_lines(root, destinations)
-        dropin = _render(root, "sshd-drop-in.conf.j2", destinations)
+        written = _template_lines(root, destinations, keys)
+        dropin = _render(root, "sshd-drop-in.conf.j2", destinations, keys=keys)
     except jinja2.TemplateError:
         written, dropin = [], ""
     if [line.strip() for line in written] != wanted:
         found.append("templates/authorized_keys.j2 writes other lines than the module expects")
-    if dropin != module.wanted_dropin(SAMPLE_NAME, destinations):
+    if dropin != module.wanted_dropin(SAMPLE_NAME, permitted):
         found.append("templates/sshd-drop-in.conf.j2 writes other text than the module expects")
 
-    # One list: the destinations of the key lines and of the Match block come from the one
-    # variable, so the two cannot be edited apart.
+    # One source: the destinations of the key lines and of the Match block come from the shared
+    # list and the keys' own lists, and no other variable, so the two cannot be edited apart.
     try:
         key_vars = _template_variables(root, "authorized_keys.j2")
         dropin_vars = _template_variables(root, "sshd-drop-in.conf.j2")
@@ -365,6 +387,7 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
             )
     if dropin_vars - {
         "ci_jump_user",
+        "ci_jump_keys",
         "ci_jump_destinations",
         "ci_jump_port",
         "ci_jump_key_file",
@@ -380,7 +403,7 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
     }:
         found.append("templates/authorized_keys.j2 reads a variable the pins do not know")
     try:
-        in_keys = re.findall(r'permitopen="([^"]+)"', written[0] if written else "")
+        in_keys = [re.findall(r'permitopen="([^"]+)"', line) for line in written]
         permit = next(
             (
                 line.split()[1:]
@@ -391,8 +414,13 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
         )
     except IndexError:
         in_keys, permit = [], []
-    if in_keys != permit or in_keys != [f"{item}:22" for item in destinations]:
-        found.append("the key lines and the Match block do not carry the same destinations")
+    each = [destinations, own_one, own_two]
+    if in_keys != [[f"{item}:22" for item in listed] for listed in each]:
+        found.append("a key line does not carry its own destinations, or the shared list")
+    if permit != [f"{item}:22" for item in permitted] or sorted(
+        {item.lower() for line in in_keys for item in line}
+    ) != sorted(item.lower() for item in permit):
+        found.append("the Match block does not carry the union of the key lines' destinations")
     found.extend(_spool_template_findings(root, module))
     return found
 
@@ -404,7 +432,7 @@ def _spool_template_findings(root: Path, module: types.ModuleType) -> list[str]:
     destinations = ["10.20.1.201", "10.20.1.202"]
     for port in (22, 2200):
         profile = module.make_profile("spool", port)
-        wanted = module.wanted_lines(destinations, [(KEY_TYPE, SAMPLE_BODY)], profile)
+        wanted = module.wanted_lines(destinations, [(KEY_TYPE, SAMPLE_BODY)], profile=profile)
         try:
             written = [
                 line.strip()
@@ -444,6 +472,7 @@ def _spool_template_findings(root: Path, module: types.ModuleType) -> list[str]:
             found.append(f"templates/{label} must read its port from ci_jump_spool_port")
     if dropin_vars - {
         "ci_jump_spool_user",
+        "ci_jump_spool_keys",
         "ci_jump_spool_destinations",
         "ci_jump_spool_port",
         "ci_jump_spool_key_file",
@@ -463,6 +492,14 @@ def _spool_template_findings(root: Path, module: types.ModuleType) -> list[str]:
     if "ci_jump_key_file" in text or "ci_jump_user" in text:
         found.append("templates/sshd-drop-in-spool.conf.j2 names the first account's file or name")
     return found
+
+
+def _key_entry_ok(entry: dict[str, object]) -> bool:
+    """A key entry is the key, and may hold the non-empty list that key alone has."""
+    if set(entry) not in ({"key"}, {"key", "destinations"}):
+        return False
+    listed = entry.get("destinations", ["x"])
+    return isinstance(listed, list) and bool(listed) and all(isinstance(i, str) for i in listed)
 
 
 def _enabled_findings(host: str, values: dict[str, object]) -> list[str]:
@@ -489,7 +526,7 @@ def _enabled_findings(host: str, values: dict[str, object]) -> list[str]:
     if (
         not isinstance(keys, list)
         or not keys
-        or not all(isinstance(item, dict) and set(item) == {"key"} for item in keys)
+        or not all(isinstance(item, dict) and _key_entry_ok(item) for item in keys)
     ):
         found.append(f"owner_vars/{host}.yml enables ci_jump without a list of ci_jump_keys")
     return found
@@ -1278,10 +1315,52 @@ class Sabotage(_SabotageBase):
     def test_a_second_destination_list_in_the_drop_in_is_red(self) -> None:
         self._red_then_green(
             f"{ROLE}/templates/sshd-drop-in.conf.j2",
-            "for destination in ci_jump_destinations",
-            "for destination in ci_jump_other_destinations",
+            "else ci_jump_destinations) %}",
+            "else ci_jump_other_destinations) %}",
             "must read its destinations from ci_jump_destinations only",
         )
+
+    def test_a_key_template_that_ignores_a_keys_own_list_is_red(self) -> None:
+        """The key line of a key that has its own list must carry that list and not the shared
+        one: the controller's key reaches what it names and nothing the shared list holds."""
+        self._red_then_green(
+            f"{ROLE}/templates/authorized_keys.j2",
+            "{% set listed = entry.destinations if entry.destinations is defined else"
+            " ci_jump_destinations %}",
+            "{% set listed = ci_jump_destinations %}",
+            "writes other lines than the module expects",
+        )
+
+    def test_a_drop_in_that_leaves_out_a_keys_own_list_is_red(self) -> None:
+        """The Match block is the union of the key lines' lists: a key line naming a host the
+        block does not permit would be refused by sshd, and a block permitting more would widen."""
+        self._red_then_green(
+            f"{ROLE}/templates/sshd-drop-in.conf.j2",
+            "(entry.destinations if entry.destinations is defined else ci_jump_destinations)",
+            "ci_jump_destinations",
+            "sshd-drop-in.conf.j2 writes other text",
+        )
+
+    def test_a_module_that_widens_a_key_to_the_shared_list_is_red(self) -> None:
+        self._red_then_green(
+            MODULE,
+            "return [list(item) if item is not None else list(destinations) for item in own]",
+            "return [list(destinations) for item in own]",
+            "writes other lines than the module expects",
+        )
+
+    def test_a_key_entry_with_its_own_destinations_is_accepted_and_an_empty_one_is_red(
+        self,
+    ) -> None:
+        own = {"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment", "destinations": ["db-t1"]}
+        self.assertEqual(
+            self._findings_with_owner_file("edget", self._enabled() | {"ci_jump_keys": [own]}), []
+        )
+        for bad in ([], None, "db-t1", ["db-t1", 5]):
+            with self.subTest(destinations=bad):
+                values = self._enabled() | {"ci_jump_keys": [own | {"destinations": bad}]}
+                red = self._findings_with_owner_file("edget", values)
+                self.assertTrue(any("without a list of ci_jump_keys" in f for f in red), red)
 
     def test_a_module_that_stops_requiring_local_forwarding_is_red(self) -> None:
         self._red_then_green(

@@ -37,17 +37,16 @@ STANDARDS_TEMPLATE = [
     ("/.standards.mode", [OWNER]),
     ("/.docs-lint*", [OWNER]),
     ("/.standards-db-tooling", [OWNER]),
-    ("/.github/CODEOWNERS", [OWNER]),
-    ("/.github/workflows/standards.yml", [OWNER]),
-    ("/.github/workflows/docs-lint.yml", [OWNER]),
+    ("/.github/", [OWNER]),
 ]
 
 # The kinds of path CODEOWNERS may release by a pattern. Everything else it releases is one file,
 # named in full, so a new gate test is the owner's until a line names it.
 RELEASE_KINDS: frozenset[str] = frozenset(
     {
-        "*.md",  # every document; README, CLAUDE.md and .claude/ are owned again
+        "*.md",  # every document; README, CLAUDE.md, .claude/ and /.github/ are owned again
         "/ansible/checks/offline/",  # the offline render fixtures
+        "/ansible/checks/test_*.py",  # the tests of the checks; test_codeowners.py is owned again
         "/scripts/nvmrc-node-exec.*",
     }
 )
@@ -56,35 +55,25 @@ RELEASE_KINDS: frozenset[str] = frozenset(
 GUARDRAIL_PATHS = [
     ".github/CODEOWNERS",
     ".github/workflows/ci.yml",
-    ".github/workflows/ci-config-validate.yml",
-    ".github/workflows/ansible.yml",
-    ".github/workflows/ansible-delivery.yml",
-    ".github/workflows/ansible-environment-probe.yml",
-    ".github/workflows/ovh-copy2-probe.yml",
-    ".github/workflows/publish-edge-caddy.yml",
-    ".github/workflows/publish-hetzner-host.yml",
-    ".github/workflows/tenants-state-rewrap.yml",
-    ".github/workflows/verify-package-attestations.yml",
-    ".github/workflows/ansible-drift-check.yml",
-    ".github/workflows/crowdsec-hub-pin-check.yml",
-    ".github/workflows/secret-alert-pager.yml",
-    ".github/scripts/secret_alert_pager.py",
-    ".github/scripts/test_secret_alert_pager.py",
-    ".github/workflows/docs-lint.yml",
     ".github/actions/ci-skip/action.yml",
-    ".github/actions/ansible-venv/action.yml",
+    ".github/dependabot.yml",
     "CLAUDE.md",
     ".claude/.gitignore",
     "ansible/checks/test_codeowners.py",
+    "ansible/checks/test_plan_diff_scan.py",
+    "ansible/checks/test_step_allowlist.py",
+    "scripts/test_ci_skip.py",
+    "scripts/trace_reads.py",
+    "scripts/a_new_ci_script.py",
+    "scripts/json.py",
     "ansible/checks/codeowners_match.py",
     "ansible/checks/check_pins.py",
     "ansible/checks/check_delivery.py",
+    "ansible/checks/check_secret_no_log.py",
+    "ansible/checks/ci_select.py",
+    "ansible/checks/blocking_shards.json",
     "ansible/checks/check_enrolment.py",
     "ansible/checks/host_roles/edge1.yml",
-    "ansible/checks/test_check_delivery.py",
-    "ansible/checks/test_step_allowlist.py",
-    "ansible/checks/test_ci_gate_order.py",
-    "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/checks/a_new_gate_script.py",
     "ansible/harness/run_harness.py",
     "ansible/pyproject.toml",
@@ -92,25 +81,21 @@ GUARDRAIL_PATHS = [
     "ansible/playbooks/includes/require_signers.yml",
     "ansible/roles/deploy_verifier/files/trusted_root.jsonl",
     "ansible/roles/deploy_verifier/files/branchleft-verify-image.py",
-    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
     "scripts/assert-no-hetzner-deletes.py",
     "scripts/choose-apply-environment.py",
-    "scripts/a_new_ci_script.py",
+    "scripts/assert-no-committed-pulumi-secrets.py",
+    "scripts/audit-pulumi-secrets.py",
+    "scripts/ci_skip.py",
+    "scripts/pulumi-stack-inventory.json",
     "hetzner/scripts/check-crowdsec-hub-pin.py",
     "hetzner/scripts/test_check_crowdsec_hub_pin.py",
     "hetzner/scripts/lib/docker_pull.py",
     "hetzner/scripts/lib/proof_harness.py",
     "hetzner/provision/test_suite_size.py",
     "hetzner/provision/test_counts/test_suite_size.txt",
-    "hetzner/estate.guard.test.ts",
-    "hetzner/dns.guard.test.ts",
-    "hetzner/tenants.guard.test.ts",
     "hetzner/projectGuard.ts",
-    "hetzner/projectGuard.test.ts",
     "ovh/copy2/projectGuard.ts",
-    "ovh/copy2/projectGuard.test.ts",
     "ovh/copy2/configGuard.ts",
-    "ovh/copy2/configGuard.test.ts",
     "ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py",
     ".pre-commit-config.yaml",
     ".prettierignore",
@@ -124,6 +109,7 @@ GUARDRAIL_PATHS = [
     ".docs-lintignore",
     ".standards-db-tooling",
     ".github/workflows/standards.yml",
+    ".github/workflows/ci.md",
 ]
 
 # Human-facing documents and the owner's words.
@@ -137,10 +123,6 @@ DOCUMENT_PATHS = [
 # Paths released to agents: the owner has extended trust here, and the gated apply still stands
 # between a merge and a host. Each is a file in the repository.
 RELEASED_PATHS = [
-    ".github/dependabot.yml",
-    ".github/workflows/ci.md",
-    ".github/workflows/ansible-offline.yml",
-    ".github/workflows/ghost-pin-lag.yml",
     "sites.ts",
     "hetzner/edge/render.ts",
     "hetzner/edge/render.test.ts",
@@ -175,6 +157,16 @@ RELEASED_PATHS = [
     "hetzner/scripts/probe-object-storage.py",
     "hetzner/scripts/check-address-plan-drift.py",
     "ansible/checks/test_edge_single_home.py",
+    "ansible/checks/test_check_delivery.py",
+    "ansible/checks/test_ci_gate_order.py",
+    "ansible/checks/test_deploy_verifier_coverage.py",
+    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
+    "hetzner/estate.guard.test.ts",
+    "hetzner/dns.guard.test.ts",
+    "hetzner/tenants.guard.test.ts",
+    "hetzner/projectGuard.test.ts",
+    "ovh/copy2/projectGuard.test.ts",
+    "ovh/copy2/configGuard.test.ts",
     "ansible/requirements.txt",
     "pnpm-lock.yaml",
     "hetzner/pnpm-lock.yaml",
@@ -186,6 +178,7 @@ RELEASED_PATHS = [
 STANDS_FOR_MORE = {
     "ansible/checks/a_new_gate_script.py",
     "scripts/a_new_ci_script.py",
+    "scripts/json.py",
     # Named by the standards template; a repository that has no floors or ignore file yet has none.
     "tools/floors.tsv",
     ".standardsignore",
@@ -211,38 +204,6 @@ def blocks_of(text: str) -> list[list[str]]:
         elif not line.startswith("#"):
             blocks[-1].append(line)
     return [b for b in blocks if b]
-
-
-def hold_reasons(text: str, is_action: bool) -> list[str]:
-    """Why a workflow or action file stays owned, read from its own text.
-
-    A file stays owned when it names a secret other than GITHUB_TOKEN, carries an environment,
-    grants any write permission, has no explicit permissions block, or declares secrets on
-    workflow_call.
-    """
-    out: list[str] = []
-    if (
-        re.search(r"(?<![\w-])secrets\.(?!GITHUB_TOKEN\b)[A-Za-z_]", text)
-        or re.search(r"(?<![\w-])secrets\[", text)
-        or re.search(r"secrets:\s*inherit", text)
-    ):
-        out.append("secrets")
-    if re.search(r"^\s+environment:", text, re.M):
-        out.append("environment")
-    if re.search(r"^\s+[a-z-]+:\s*write\s*(#.*)?$", text, re.M) or re.search(
-        r"permissions:\s*write-all", text
-    ):
-        out.append("write permission")
-    if re.search(r"workflow_call:", text) and re.search(r"^\s{4}secrets:\s*$", text, re.M):
-        out.append("workflow_call secrets")
-    if not is_action and not re.search(r"^permissions:", text, re.M):
-        start = re.search(r"^jobs:\s*$", text, re.M)
-        body = text[start.end() :] if start else ""
-        pattern = r"^  (?=[A-Za-z0-9_.-]+:\s*(?:#.*)?$)"
-        jobs = re.split(pattern, body, flags=re.M)[1:]
-        if not jobs or any(not re.search(r"^    permissions:", job, re.M) for job in jobs):
-            out.append("no permissions block")
-    return out
 
 
 class CodeownersTests(unittest.TestCase):
@@ -290,104 +251,58 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(RELEASED_PATHS)
 
     def test_a_new_file_in_a_gate_directory_is_the_owners_before_it_is_listed(self) -> None:
-        # A new check or gate test, or a new CI script, fails closed.
+        # A new check, host allowlist, trust file or script fails closed; and so does a workflow.
         self.assert_owned(
             [
                 "ansible/checks/check_a_new_gate.py",
-                "ansible/checks/test_a_new_gate_agree.py",
                 "ansible/checks/host_roles/a_new_host.yml",
                 "ansible/trust/newhost.yml",
                 "scripts/a_new_ci_script.py",
-                "hetzner/aNewGuard.guard.test.ts",
-            ]
-        )
-
-    def test_a_new_file_outside_the_guardrails_is_not_the_owners(self) -> None:
-        self.assert_unowned(
-            [
-                "hetzner/aNewProgram.ts",
-                "hetzner-host/aNewFirewall.ts",
-                "ansible/roles/a_new_role/tasks/main.yml",
-                "ansible/roles/a_new_role/library/a_new_module.py",
-                "mail/a_new_program.py",
+                "scripts/json.py",
                 ".github/workflows/a_new_workflow.yml",
             ]
         )
 
-    def test_the_hold_rule_reads_what_it_names(self) -> None:
-        cases = {
-            "a secret": ("env:\n  T: ${{ secrets.TOKEN }}\n", "secrets"),
-            "an environment": ("jobs:\n  a:\n    environment: prod\n", "environment"),
-            "a write": ("permissions:\n  contents: write\n", "write permission"),
-            "no block": ("on: push\njobs:\n  a:\n    runs-on: x\n", "no permissions block"),
-        }
-        for name, (text, reason) in cases.items():
-            with self.subTest(case=name):
-                self.assertIn(reason, hold_reasons(text, False))
-        plain = "env:\n  T: ${{ secrets.GITHUB_TOKEN }}\npermissions: {}\n"
-        self.assertEqual([], hold_reasons(plain, False))
-
-    def test_a_workflow_or_action_that_matches_the_hold_rule_is_owned(self) -> None:
-        # The rule is read from each file's own text, so a new workflow that holds a secret or
-        # grants a write cannot be released by a name no line matches. The scripts a workflow
-        # runs from .github/scripts/ stay owned with it.
-        files = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
-        files += sorted((ROOT / ".github" / "actions").glob("*/action.y*ml"))
-        self.assertGreaterEqual(len(files), 10)
-        for file in files:
-            path = file.relative_to(ROOT).as_posix()
-            reasons = hold_reasons(file.read_text(encoding="utf-8"), "/actions/" in path)
-            if reasons:
-                with self.subTest(path=path, reasons=reasons):
-                    self.assertEqual([OWNER], owners_of(path, self.rules))
-        pager_dir = ROOT / ".github" / "scripts"
-        scripts = sorted(p.relative_to(ROOT).as_posix() for p in pager_dir.iterdir())
-        self.assertTrue(scripts)
-        self.assert_owned(scripts)
-
-    def test_a_workflow_that_gates_a_deploy_or_emits_a_required_check_is_owned(self) -> None:
-        # A workflow nothing names is released, so one that adds an approval environment, or a
-        # job a required check is named after, would slip out of the owner's review. This reads
-        # every workflow: any that waits on an environment, or emits a required job, must be owned.
-        required_jobs = (
-            "Type check",
-            "Type check (mail)",
-            "Lint + test (mail/provision)",
-            "Type check (hetzner)",
-            "Type check + test (hetzner-host)",
-            "Lint + test (hetzner/provision)",
-            "Validate (edge Caddy config)",
-            "Test (scripts)",
-            "Audit (Pulumi secrets + state backends)",
-            "Validate (monitoring stack config)",
-            "Lint and test the Ansible roles",
+    def test_a_test_of_a_gate_is_not_the_owners_but_the_proof_of_this_file_is(self) -> None:
+        # The owner's second pass: the tests of a gate are the agents', the gate
+        # they read is not. Only the proof of this file stays owned among the tests.
+        self.assert_unowned(
+            [
+                "ansible/checks/test_a_new_gate_agree.py",
+                "hetzner/aNewGuard.guard.test.ts",
+                "ovh/copy2/aNewGuard.test.ts",
+            ]
         )
-        workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-        self.assertGreaterEqual(len(workflows), 10)
-        emitted: set[str] = set()
-        for workflow in workflows:
-            text = workflow.read_text(encoding="utf-8")
-            found = re.findall(r"^    name: (.+?)\s*$", text, re.MULTILINE)
-            names = {m.strip("'\"") for m in found}
-            emitted |= names
-            gates = bool(re.search(r"^    +environment:", text, re.MULTILINE)) or bool(
-                names & set(required_jobs)
-            )
-            if gates:
-                with self.subTest(workflow=workflow.name):
-                    path = f".github/workflows/{workflow.name}"
-                    self.assertEqual([OWNER], owners_of(path, self.rules))
-        self.assertEqual(set(required_jobs) - emitted, set(), "a required job no workflow emits")
+        self.assert_owned(["ansible/checks/test_codeowners.py"])
+
+    def test_every_script_is_the_owners_but_the_four_released_before(self) -> None:
+        # The scripts that run with credentials import from scripts/ first, so a new file there
+        # (scripts/json.py shadows the standard library's) runs with those credentials. The whole
+        # directory is owned; only four files released before the second pass are not.
+        released = {
+            "scripts/assert-min-python-version.py",
+            "scripts/nvmrc-node-exec.py",
+            "scripts/test_assert_min_python_version.py",
+            "scripts/test_nvmrc_node_exec.py",
+        }
+        scripts = [
+            f
+            for f in repository_files()
+            if f.startswith("scripts/") and "/" not in f[8:] and not f.endswith(".md")
+        ]
+        self.assertTrue(released <= set(scripts))
+        self.assert_owned(sorted(set(scripts) - released))
+        self.assert_unowned(sorted(released))
 
     def test_documents_are_not_the_owners_but_the_instructions_and_readme_are(self) -> None:
         # Every tracked markdown file, derived from the checkout so a new document needs no line
-        # here. The owned ones are the top README, CLAUDE.md, and what sits in .claude/.
+        # here. The owned ones are the top README, CLAUDE.md, and what sits in .claude/ or .github/.
         documents = [
             f
             for f in repository_files()
             if f.endswith(".md")
             and f not in {"README.md", "CLAUDE.md"}
-            and not f.startswith(".claude/")
+            and not f.startswith((".github/", ".claude/"))
         ]
         self.assertGreaterEqual(len(documents), 100)
         self.assert_unowned(documents)

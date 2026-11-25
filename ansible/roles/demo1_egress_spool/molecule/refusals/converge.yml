@@ -610,7 +610,7 @@
       files:
         - path: /etc/branchleft/mail-spool.env
           content: "SHIM_DRAIN_TOKEN=\n"
-      expect: 'holds no SHIM_DRAIN_TOKEN= line with a value'
+      expect: 'holds no line that sets SHIM_DRAIN_TOKEN to a value'
 
 - name: Refuse a drain token file with no token line
   ansible.builtin.import_playbook: refused_case.yml
@@ -621,7 +621,7 @@
       files:
         - path: /etc/branchleft/mail-spool.env
           content: "OTHER_VARIABLE=1\n"
-      expect: 'holds no SHIM_DRAIN_TOKEN= line with a value'
+      expect: 'holds no line that sets SHIM_DRAIN_TOKEN to a value'
 
 - name: Refuse a missing drain token file
   ansible.builtin.import_playbook: refused_case.yml

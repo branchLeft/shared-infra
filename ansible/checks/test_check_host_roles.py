@@ -149,6 +149,7 @@ APPLIED_ON_MAIN = {
         "tenant_onboarding",
         "export_bundler",
         "node_exporter",
+        "slot_image_textfile",
     ],
     "db1": [
         "host_inputs",
@@ -591,6 +592,7 @@ class HostRoleLists(unittest.TestCase):
                 "tenant_onboarding",
                 "export_bundler",
                 "node_exporter",
+                "slot_image_textfile",
             ],
         )
         self.assertEqual(

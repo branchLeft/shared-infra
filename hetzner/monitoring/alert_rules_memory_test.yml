@@ -42,3 +42,21 @@ tests:
             value: 1
           - labels: 'ALERTS{alertname="HostMemoryPressure", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false"}'
             value: 1
+
+  # demo1, scraped over its public address: the same rule, the same 24h `for`,
+  # with expected_up="false" as it is today.
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false"}'
+        values: '20x1500'
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false"}'
+        values: '100x1500'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostMemoryPressure", alertstate="firing"}
+        eval_time: 23h
+        exp_samples: []
+      - expr: ALERTS{alertname="HostMemoryPressure", alertstate="firing"}
+        eval_time: 24h5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostMemoryPressure", alertstate="firing", severity="warning", owner_action="true", job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false"}'
+            value: 1

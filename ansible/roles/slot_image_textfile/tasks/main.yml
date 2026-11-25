@@ -1,0 +1,43 @@
+---
+# The output directory is node_exporter's. It is made here too, with the same owner and mode,
+# so the writer never fails on a missing directory whichever role runs first.
+- name: Create the textfile directory the exporter reads
+  ansible.builtin.file:
+    path: '{{ slot_image_textfile_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The program reads each pin file as root, so it runs as root and is owned by root.
+- name: Install the program that writes the slot image digest gauge
+  ansible.builtin.copy:
+    src: branchleft_slot_image_textfile.py
+    dest: '{{ slot_image_textfile_program }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the service and timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '/etc/systemd/system/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - branchleft-slot-image-textfile.service
+    - branchleft-slot-image-textfile.timer
+  notify: Reload systemd manager
+
+- name: Load the units before the timer is started
+  ansible.builtin.meta: flush_handlers
+
+# Check mode does not write the unit, so it cannot enable one: the enable is skipped there with
+# this stated reason (ANS-10). A real run always enables and starts the timer.
+- name: Enable and start the timer
+  ansible.builtin.systemd_service:
+    name: branchleft-slot-image-textfile.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode

@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 import run_check_tests as rct
+from test_ci_durations import prints_durations
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
@@ -126,7 +127,7 @@ class WorkflowRunsBothParts(unittest.TestCase):
 
     def test_the_runner_prints_the_slowest_tests(self) -> None:
         source = Path(rct.__file__).read_text(encoding="utf-8")
-        self.assertRegex(source, r"durations=[1-9][0-9]*")
+        self.assertTrue(prints_durations(source))
 
 
 if __name__ == "__main__":

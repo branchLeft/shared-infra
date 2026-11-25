@@ -197,9 +197,15 @@ jobs:
         run: |
           chmod a+r hetzner/monitoring/stack/prometheus/prometheus.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
+          # The three /dev/null mounts stand in for demo1's CA, client certificate and
+          # key, which the owner places on edge1 and the repository never ships:
+          # promtool checks that each file named in tls_config exists, nothing more.
           docker run --rm \
             -v "$PWD/hetzner/monitoring/stack/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
             -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro" \
+            -v /dev/null:/etc/prometheus/demo1-metrics-tls/ca.crt:ro \
+            -v /dev/null:/etc/prometheus/demo1-metrics-tls/client.crt:ro \
+            -v /dev/null:/etc/prometheus/demo1-metrics-tls/client.key:ro \
             --entrypoint /bin/promtool \
             docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
             check config /etc/prometheus/prometheus.yml
