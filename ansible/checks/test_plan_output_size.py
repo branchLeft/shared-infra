@@ -158,8 +158,13 @@ class PlanOutputSizeCase(unittest.TestCase):
         self.assertIn(refusal, messages)
         for name, message in messages.items():
             for listed in JOIN_OF.findall(message):
-                self.assertIn(listed, SHOWN_LISTS, f"{name}: joins {listed}, which grows with the host")
-        self.assertNotIn("demo1_build_secret_unlisted |", messages[refusal].replace("demo1_build_secret_unlisted | length", ""))
+                self.assertIn(
+                    listed, SHOWN_LISTS, f"{name}: joins {listed}, which grows with the host"
+                )
+        self.assertNotIn(
+            "demo1_build_secret_unlisted |",
+            messages[refusal].replace("demo1_build_secret_unlisted | length", ""),
+        )
         document, _problem = load_yaml(DEMO1_VARS)
         if not isinstance(document, dict):
             self.fail("vars/main.yml is not a mapping")
@@ -169,7 +174,10 @@ class PlanOutputSizeCase(unittest.TestCase):
         self.assertTrue(isinstance(directories, int) and 1 <= directories <= MOST_DIRECTORIES_NAMED)
 
     def test_a_message_joining_every_unlisted_path_is_found(self) -> None:
-        self.assertEqual(["demo1_build_secret_unlisted"], JOIN_OF.findall("{{ demo1_build_secret_unlisted | join(', ') }}"))
+        self.assertEqual(
+            ["demo1_build_secret_unlisted"],
+            JOIN_OF.findall("{{ demo1_build_secret_unlisted | join(', ') }}"),
+        )
         self.assertEqual(["x_shown"], JOIN_OF.findall("{{ x_shown | join(', ') }}"))
 
     def test_the_shown_diff_of_the_copied_files_is_inside_the_budget(self) -> None:
