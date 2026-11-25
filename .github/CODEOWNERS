@@ -111,11 +111,14 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners at the tag the Standards job is pinned to (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, this file, and the standards and docs-lint callers, which are the required Standards gates and docs-lint checks. The floors file, /tools/floors.tsv, is listed above.
+# Owned .github files. The shared set below covers all of .github/, including the standards and docs-lint callers, the required Standards gates and docs-lint checks.
+/.github/CODEOWNERS      @branchLeft/branchleft-admin
+/.github/workflows/standards.yml  @branchLeft/branchleft-admin
+/.github/workflows/docs-lint.yml  @branchLeft/branchleft-admin
+
+# The shared set from branchLeft/standards templates/codeowners at v0.8.8 (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, and /.github/. The floors file, /tools/floors.tsv, is listed above.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin
 /.standards-db-tooling   @branchLeft/branchleft-admin
-/.github/CODEOWNERS      @branchLeft/branchleft-admin
-/.github/workflows/standards.yml  @branchLeft/branchleft-admin
-/.github/workflows/docs-lint.yml  @branchLeft/branchleft-admin
+/.github/                @branchLeft/branchleft-admin
