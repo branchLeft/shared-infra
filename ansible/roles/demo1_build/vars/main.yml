@@ -393,7 +393,7 @@ demo1_build_secret_holders:
   # (server.crt), not this key, and the key authenticates nothing outward.
   - name: Node exporter TLS server key
     path_regex: '/etc/branchleft/node-exporter-tls/server\.key'
-    reaches: "the node exporter's TLS identity on this host; edge1 pins the certificate, not this key, and the key authenticates nothing outward"
+    reaches: "proves demo1's node exporter to edge1's Prometheus over TLS (edge1 pins server.crt, and the handshake needs this key); root and the exporter's group, prometheus, can read it"
     owner: root
     mode: '0640'
 
