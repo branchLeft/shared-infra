@@ -114,6 +114,10 @@ What the role does, in the order of `tasks/main.yml`:
    8a. **Writes the drain sidecar's pin file** (`_sidecar_pin.yml`): `/etc/branchleft/demo-sidecar.image.env`,
    `root:root` `0644`, one line, `DEMO_SIDECAR_IMAGE=branchleft/drain-sidecar@<digest>`, from
    `demo1_build_sidecar_digest` (the attested sidecar digest). See "The sidecar's pin file".
+   8b. **Enables and starts the seven health routers** (`_routers.yml`): `branchleft-health-router@0`
+   to `@6`, one per slot, on loopback ports 10100 to 10106. Idempotent: an enabled, running router is
+   not touched, and a router already running keeps the code it started with. The role does not check
+   that a router is active or listening; that is proved on the host (see "Health routers").
 9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
    `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
    directory, for the owner to diff against the live edge before going live.
@@ -192,7 +196,7 @@ and by the live run.
 | A-5 wrapper, then the sudoers boundary                    | wrapper INSTALL; the boundary is `broker_deploy`'s and is compared, never written                                                                                        | `_programs.yml`, `_sudoers_check.yml` |
 | A-6 read the boundary back                                | the assertions of the sudoers check                                                                                                                                      | `_sudoers_check.yml`                  |
 | A-7 compose template and drop-ins                         | the template unit is copied from `hetzner/provision/` (read, not copied into the role); the fourteen drop-ins are written and the fourteen instances are checked to load | `_units.yml`, `_units_loaded.yml`     |
-| A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                                                                                       | `_units.yml`                          |
+| A-8 health routers                                        | the template unit is written and systemd reloaded; each slot's router is enabled and started (active and listening are checked on the host, not here)                    | `_units.yml`, `_routers.yml`          |
 | A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                                                                                   | `_dirs.yml`                           |
 | A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                                                                                | none                                  |
 | A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                                                                                          | none                                  |
@@ -231,7 +235,7 @@ file reaches the release.
   inputs, and `demo1_build` refuses a host where it has not been.
 - It does not write the live Caddyfile, run `demo_go_live.py`, or run
   `branchleft-slot reset`. Opening the demo is the owner's decision.
-- It does not enable or start a health router or a colour unit.
+- It enables and starts the health routers (`_routers.yml`), and it does not enable or start a colour unit.
 - It does not fetch secrets. Anything secret on the host is a root-only file the
   owner puts there.
 - It does not read the DNS token. The token is the owner's, placed once as a root-only
@@ -851,8 +855,8 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 ### What does not run for real
 
 - The wrapper is installed and never run (it needs Docker and a slot). The sidecar
-  and the health router are installed and never started.
-- No colour unit and no router is enabled or started.
+  is installed and never started.
+- No colour unit is enabled or started. The health routers are enabled and started by the role.
 - Docker, Caddy and the tenant images are absent.
 
 ### What `plan/converge.yml` proves
@@ -1003,7 +1007,7 @@ bytecode, `current`), the three installed programs, the register and its eight
 claims, the router's account, the socket tree, the state and flag directories and
 the thirteen flags that remain, the sidecar's pin file (root:root `0644`, the one
 attested line, written out in full), the fourteen drop-ins and the router unit, systemd
-loading the router unit without enabling it, the candidate directory and its
+each slot's health router loaded from the template, enabled, and started (the container cannot run it), the candidate directory and its
 fragment, and the absences: no `Caddyfile` anywhere but the staged candidate, no slot
 directory a `reset` would make, no wrapper lock directory.
 
@@ -1168,8 +1172,9 @@ other unit tests of `ansible/harness`.
   pin file (step 8a) but never loads, pulls or checks the image: demo1 reaches no registry.
   The pin file names a digest that resolves only after the signed sidecar push, and a
   colour whose sidecar does not resolve is refused by its unit.
-- **No router is enabled or started.** The template unit is installed and systemd is
-  reloaded; starting is the owner's step.
+- **The health routers are enabled and started by the role (8b).** They answer for both
+  colours and no colour is started by this role. A container cannot run them, so their active
+  state and listening port are proved on the host (see "Health routers").
 - **The compose template unit is written from `hetzner/provision/` (A-7, the owner's
   ruling B of 4 Nov, ws#2364 comment 6630331961).** The drop-ins extend
   `branchleft-compose@`, and `deploy_tooling` owns that file on the other hosts. The
@@ -1379,3 +1384,13 @@ comment is the source of truth.
   read it, so a scan that finds no canary means something.
 - The play is tagged for the idempotence step to skip, because the valid case stages a
   candidate. It is a control, not a state.
+
+## Health routers
+
+The role enables and starts `branchleft-health-router@0` to `@6` (8b). Two things are proved on the
+host, not in the Molecule container, because the container is unprivileged and cannot run the unit
+(systemd exits it with status 217/USER, "Failed to keep CAP_SYS_ADMIN"):
+
+- **Finish line, after the gated apply on demo1:** each router is `active` and listening on
+  127.0.0.1 at 10100 to 10106 (`systemctl is-active`, `ss -ltn`).
+- **Idempotence, on demo1:** a second apply reports zero changes for the router tasks.
