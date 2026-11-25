@@ -1,29 +1,22 @@
 """Every TLS file edge1's Prometheus names is one a role on edge1 puts there.
 
 Prometheus reads each file named in a `tls_config` when it loads its configuration, and a missing
-file stops it from starting, and with it every alert on edge1. The monitoring stack names those
-files by container path in `hetzner/monitoring/stack/prometheus/prometheus.yml` and mounts a host
-directory over them in `hetzner/monitoring/stack/compose.yml`; the files reach the host only
-through a role on edge1's list (`checks/host_roles/edge1.yml`). Nothing joined the three, so a
-pull request that named a file could be delivered to a host that had none.
+file stops it, and with it every alert on edge1. The stack names the files by container path in
+`hetzner/monitoring/stack/prometheus/` and mounts a host directory over them in `compose.yml`; the
+files reach the host only through a role on edge1's list (`checks/host_roles/edge1.yml`).
 
-This test joins them. It reads the container path of every `ca_file`, `cert_file` and `key_file`
-in the config, follows it through the Prometheus service's mounts to a path on the host, and
-fails when that path is not one the roles on edge1 write. The only role that writes TLS files
-there is `host_tls_identity`, whose profile for edge1 names its key, certificate and pin. The pin
-(`ca.crt`) is written only once the owner has set `host_tls_identity_peer_cert` in
-`owner_vars/edge1.yml`, so a config that names the pin also fails while that value is empty.
+This test joins them: it follows every `ca_file`, `cert_file` and `key_file` through the Prometheus
+service's mounts to a host path and fails unless `host_tls_identity` writes it on edge1. Its pin
+(`ca.crt`) is written only once `host_tls_identity_peer_cert` is set in `owner_vars/edge1.yml`.
 
-The stack holds two renderings of the config. `prometheus.yml` is what edge1 loads by default and
-is held to the rule above as it stands. `prometheus.demo1.yml` scrapes demo1 and names the three
-files, the pin included; `monitoring_stack` delivers it as `prometheus.yml` only while the same
-value is set, so its references count as written when the pin is: it is checked as if the owner had
-set the value, and the test then holds the delivery to that same value. A reference that is
-conditional on the flag the writer is conditional on is a reference the writer meets; one that is
-conditional on anything else, or on nothing, is refused.
+Two renderings of the config exist. `prometheus.yml` names no file and is held to the rule as it
+stands. `prometheus.demo1.yml` names all three and is delivered as `prometheus.yml` by
+`monitoring_stack` only while that same value is set, so it is checked as if the value were set and
+`gate_problems` then holds the delivery to that flag. A reference conditional on the flag the writer
+is conditional on is met; one conditional on anything else, or nothing, is refused.
 
-What it does not prove: that a file is on the host (that is the gated apply's second run), that a
-certificate is valid or unexpired (the role's own checks), or that Prometheus accepts the files.
+Not proven: that a file is on the host (the gated apply's second run), that a certificate is valid,
+or that Prometheus accepts the files.
 """
 
 from __future__ import annotations
