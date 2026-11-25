@@ -138,8 +138,9 @@ OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {
     "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS,
     **{host: SPOOL_JUMP_VARS for host in SPOOL_JUMP_HOSTS},
 }
-# The eight inputs of the provisioning_controller_host role. Each is public text that is empty until
-# the owner sets it; the role holds the shapes (its vars/main.yml patterns), so only the type is read here.
+# The eight inputs of the provisioning_controller_host role. Each is public text that is empty
+# until the owner sets it; the role holds the shapes (its vars/main.yml patterns), so only the type
+# is read here.
 PROVISIONING_CONTROLLER_TEXT_KEYS = frozenset(
     (
         "provisioning_controller_host_bundle_sha256",
