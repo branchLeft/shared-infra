@@ -555,7 +555,7 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           workflow: .github/workflows/ci.yml
           pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply hetzner-tenants-plan:hetzner-tenants-apply
@@ -1205,7 +1205,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1411,7 +1411,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1623,7 +1623,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -1815,7 +1815,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           preview-json: preview.json
           working-directory: hetzner/estate

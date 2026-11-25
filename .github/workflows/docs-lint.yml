@@ -113,7 +113,7 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.scan == 'true' && (github.event_name != 'push' || needs.queue-proof.outputs.tested != 'true') }}
     permissions:
       contents: read
-    uses: branchLeft/github-workflows/.github/workflows/docs-lint.yml@v1.2.2
+    uses: branchLeft/github-workflows/.github/workflows/docs-lint.yml@v1.2.6
 
   # The check the ruleset requires, and the one the merge queue reports:
   # "docs-lint / docs-lint". The job's name is set to that context, and it always

@@ -158,7 +158,7 @@ jobs:
       # A composite action's steps start in the workspace root, not in this
       # job's default working directory, so the tarball path carries it.
       - name: Attest the tarball
-        uses: branchLeft/github-workflows/.github/actions/attest-npm-tarball@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
+        uses: branchLeft/github-workflows/.github/actions/attest-npm-tarball@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           tarball: hetzner-host/hetzner-host.tgz
           repo: branchLeft/shared-infra
