@@ -138,11 +138,27 @@ OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {
     "ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,)) | MAIL_COLLECTOR_KEYS,
     **{host: SPOOL_JUMP_VARS for host in SPOOL_JUMP_HOSTS},
 }
+# The eight inputs of the provisioning_controller_host role. Each is public text that is empty
+# until the owner sets it; the role holds the shapes (its vars/main.yml patterns), so only the type
+# is read here.
+PROVISIONING_CONTROLLER_TEXT_KEYS = frozenset(
+    (
+        "provisioning_controller_host_bundle_sha256",
+        "provisioning_controller_host_bundle_url",
+        "provisioning_controller_host_edge1_jump_user",
+        "provisioning_controller_host_edget_jump_user",
+        "provisioning_controller_host_edge1_host_key",
+        "provisioning_controller_host_edget_host_key",
+        "provisioning_controller_host_app_t1_host_key",
+        "provisioning_controller_host_db_t1_host_key",
+    )
+)
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
     "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY, CONTROL_PLANE_IMAGE_KEY))
     | STEP_LOGIN_VARS
     | RING_CONTROLLER_TEXT_KEYS
+    | PROVISIONING_CONTROLLER_TEXT_KEYS
     | MAIL_COLLECTOR_KEYS,
 }
 OWNER_VARS_KEYS = {
@@ -1041,7 +1057,7 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         problems.append(f"{CONTROL_PLANE_IMAGE_KEY} must be text")
     problems.extend(
         f"{key} must be text"
-        for key in sorted(RING_CONTROLLER_TEXT_KEYS)
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS | PROVISIONING_CONTROLLER_TEXT_KEYS)
         if key in doc and not isinstance(doc[key], str)
     )
     # A bool is an int in Python, so it is refused by name: true would read as port 1.

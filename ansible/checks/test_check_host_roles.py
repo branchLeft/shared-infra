@@ -136,6 +136,7 @@ APPLIED_ON_MAIN = {
         "mail_collector",
         "spool_paths",
         "ring_controller_host",
+        "provisioning_controller_host",
         "broker_tunnel_client",
     ],
     "app1": [
@@ -550,6 +551,7 @@ class HostRoleLists(unittest.TestCase):
                 "mail_collector",
                 "spool_paths",
                 "ring_controller_host",
+                "provisioning_controller_host",
                 "broker_tunnel_client",
             ],
         )

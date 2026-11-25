@@ -1,8 +1,8 @@
 ---
-# The owner's values for the roles ops1 applies. check_enrolment.py (R10) requires these six keys
+# The owner's values for the roles ops1 applies. check_enrolment.py (R10) requires these keys
 # and allows one more, control_plane_app_image, and no others: the step allow-list, the applications
-# image, the step account's key and source addresses, and two ring controller inputs, then the
-# optional control plane pin.
+# image, the step account's key and source addresses, two ring controller inputs, the
+# provisioning controller's eight inputs (the last group), then the optional control plane pin.
 #
 # pull_trigger_steps is the gated pull's step allow-list: the routine control_plane_db steps
 # ops1 may be asked to run. The program holds the closed list of ids and fixes each tag to
@@ -64,3 +64,17 @@ ci_step_login_from:
 # into the role.
 ring_controller_host_bundle_sha256: ''
 ring_controller_host_bundle_url: ''
+#
+# The eight provisioning_controller_host_ keys are the public inputs of that role. All are empty text
+# until the owner sets them. An empty bundle digest keeps the controller's trigger held off, and the
+# role installs its units and makes its ssh key but starts nothing (the role's README, "The units are
+# inert until the bundle digest input is set"). The digest and URL are set when a bundle exists; the
+# six route inputs are set all together or not at all. Jump account names are the owner's to set.
+provisioning_controller_host_bundle_sha256: ''
+provisioning_controller_host_bundle_url: ''
+provisioning_controller_host_edge1_jump_user: ''
+provisioning_controller_host_edget_jump_user: ''
+provisioning_controller_host_edge1_host_key: ''
+provisioning_controller_host_edget_host_key: ''
+provisioning_controller_host_app_t1_host_key: ''
+provisioning_controller_host_db_t1_host_key: ''
