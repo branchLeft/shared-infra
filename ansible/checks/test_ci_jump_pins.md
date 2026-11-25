@@ -7,8 +7,8 @@ own, because a role may not call another or load its variables (ANS-12, R6). The
 constant differs, when the account names differ from `ci_login_user` in
 `roles/ci_login/vars/main.yml` and `tunnel_account_user` in `roles/tunnel_account/vars/main.yml`
 (read by variable name), when either template writes other text than the module expects, when the
-key template and the drop-in template do not read their destinations from the one variable
-`ci_jump_destinations`, when the module stops requiring `AllowTcpForwarding local` for the jump
+key template and the drop-in template do not read their destinations from `ci_jump_destinations`
+and the keys' own `destinations` alone (a key's line carries its own list, the drop-in the union), when the module stops requiring `AllowTcpForwarding local` for the jump
 account (a key line with `port-forwarding` also lets its holder open a port on the jump host with
 `ssh -R` under any other value), when the argument spec and the defaults name different variables,
 when the role's own defaults are not inert (the flag false, and no address, destination or key), when

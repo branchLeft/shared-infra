@@ -58,6 +58,7 @@ ALWAYS_RUN: frozenset[str] = frozenset(
         "hetzner-typecheck",
         "hetzner-host-typecheck",
         "hetzner-provision-checks",
+        "edge-widget-pins",
     }
 )
 

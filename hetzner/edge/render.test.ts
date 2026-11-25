@@ -6,6 +6,8 @@ import { hostRedirects, sites, staticSites } from '../../sites';
 import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
 import {
   BAN_LADDER_MINUTES,
+  MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS,
+  MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
   NEXTCLOUD_RATE_LIMIT_EVENTS,
@@ -594,7 +596,9 @@ describe('the rendered Caddyfile', () => {
       .split('\n')
       .filter((line) => /^\t\t(rate_limit|crowdsec|appsec|reverse_proxy)\b/.test(line))
       .map((line) => line.trim().split(' ')[0]);
-    expect(chain.slice(0, 5)).toEqual([
+    // Three throttles: general, then the per-minute and the hourly magic-link zones.
+    expect(chain.slice(0, 6)).toEqual([
+      'rate_limit',
       'rate_limit',
       'rate_limit',
       'crowdsec',
@@ -769,7 +773,25 @@ describe('the rendered Caddyfile', () => {
       const directives = (rendered.match(/rate_limit @members_magic_link \{/g) ?? []).length;
       const matchers = (rendered.match(/@members_magic_link \{\n\t{1,2}method POST/g) ?? []).length;
       expect(directives).toBeGreaterThan(0);
-      expect(matchers).toBe(directives);
+      // Two directives per route, the per-minute and the hourly zone, both on the
+      // one matcher: the matcher count is half the directive count.
+      expect(directives).toBe(matchers * 2);
+    });
+
+    it('caps one client address at the hourly budget on the same path, in its own zone', () => {
+      const rendered = render(ENFORCING);
+      expect(rendered).toContain('zone members_magic_link_hourly_per_ip {');
+      expect(rendered).toContain(`window ${MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS}s`);
+      expect(rendered).toContain(`events ${MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS}`);
+      expect(MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS).toBe(3600);
+      expect(MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS).toBeGreaterThan(
+        MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS
+      );
+    });
+
+    it('omits the hourly cap with the magic-link throttle off', () => {
+      const rendered = render(GENERAL_ONLY);
+      expect(rendered).not.toContain('members_magic_link_hourly_per_ip');
     });
 
     it('renders the general throttle with the magic-link one off, and no matcher for the path', () => {
@@ -1753,6 +1775,13 @@ const BLOG_BLOCK = `
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		vars edge_trusted 0

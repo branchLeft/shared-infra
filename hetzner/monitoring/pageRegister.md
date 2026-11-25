@@ -17,6 +17,48 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+## How fast a page goes, and how often it repeats
+
+The critical node and the page node carry their own `group_wait: 10s`,
+`group_interval: 1m` and `repeat_interval: 30m`, from `renderPageTimingLines`
+in `pageRegister.ts`. The owned-ban node (`EdgeBanIssued`, see below) keeps
+its own timings and inherits the root's repeat.
+The root route's `group_interval: 1h` and `repeat_interval: 24h` are for
+email, where repeats spend the mail host's sending reputation, and the email
+routes are separate sibling nodes that keep them. Left to inherit, a page
+behaved as email does:
+
+- a recovery notice (`send_resolved: true`) waited up to an hour, so a cleared
+  probe read as an open outage;
+- a ban that started after the first ban of the hour waited up to an hour, and
+  a ban that ended sooner never paged;
+- a page nobody saw was sent again a day later.
+
+Now a new or resolved alert in a group that has already notified is sent within
+about a minute on the critical and page nodes, and a page on either node that is
+still firing is sent again every half hour until it clears or is silenced.
+
+`amtool config routes test` proves where an alert goes and not how fast, so
+`pageRegister.test.ts` reads the intervals from the rendered tree, resolving
+what a node inherits from the root, and fails any page node slower than those
+bounds or an email node that has been made faster.
+
+Owned bans are paced by the owned-ban node, not the page node. For an owned
+ban, `EdgeBanIssued` sums by `(reason, decision_id)`, so each owned ban is its
+own alert, and it pages within the owned node's 5-minute group interval (30
+seconds for a new scenario). That node keeps main's `group_wait: 30s` and
+`group_interval: 5m`, and inherits the root's `repeat_interval: 24h`: the
+30-minute repeat holds for the critical and page nodes only. While the
+classifier is stale or absent, the fallback raises the same `EdgeBanIssued`
+alertname, summed by `reason`, which the owned node also matches, so it is
+paced on the owned node's timings too.
+
+Each page also carries a tap target and one button, both the public status
+page (`NTFY_PAGE_CLICK_URL`), and no secret. There is no acknowledge or silence
+button: Alertmanager has no address a phone can reach, and the call would need
+a credential. CI publishes a firing and a resolved test notice to the pinned
+ntfy with the rendered URL, so a value ntfy refuses fails there.
+
 ## Entries delivered by a workflow
 
 The `github-workflow` delivery path is for a page that a scheduled workflow

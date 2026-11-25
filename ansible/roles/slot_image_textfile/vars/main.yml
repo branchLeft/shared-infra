@@ -1,0 +1,8 @@
+---
+# Internal to the role, not part of its interface: role variables outrank every value a caller
+# passes. The output directory is the one node_exporter reads and makes (its unit names it), and
+# the unit file in files/ names the same paths. tests/unit holds all three equal, because a role
+# imports no role (ANS-12).
+slot_image_textfile_config_dir: /etc/branchleft
+slot_image_textfile_dir: /var/lib/branchleft/backup-worker-exporter
+slot_image_textfile_program: /usr/local/sbin/branchleft-slot-image-textfile

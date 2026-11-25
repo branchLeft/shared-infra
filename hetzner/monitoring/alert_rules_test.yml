@@ -3049,6 +3049,55 @@ tests:
         eval_time: 12m
         exp_samples: []
 
+  # demo1, the demo host, scraped over its public address (render.ts,
+  # DEMO1_PUBLIC_IPV4). The disk and memory rules select on neither host nor
+  # expected_up, so they evaluate for it as for every host; the three cases
+  # below hold that, and the host-down case is the control: stop its exporter
+  # and the alert fires after the stated 5m window, not before. render.test.ts
+  # holds that demo1's address appears in each case.
+  #
+  # Filesystem: 80% used, held past the 15m `for`, while expected_up is still
+  # "false".
+  - interval: 30s
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '20x40'
+      - series: 'node_filesystem_size_bytes{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '100x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostDiskSpaceLow", alertstate="firing"}
+        eval_time: 10m
+        exp_samples: []
+      - expr: ALERTS{alertname="HostDiskSpaceLow", alertstate="firing"}
+        eval_time: 17m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostDiskSpaceLow", alertstate="firing", severity="warning", owner_action="true", job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+            value: 1
+
+  # Host down, the control case: demo1's exporter stops once it is expected up
+  # (expected_up="true", as the flip will set it). Quiet at 6m, firing at 8m.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="true"}'
+        values: '1 1 1 1 0x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 6m
+        exp_samples: []
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="2.28.114.186:9100", host="demo1", expected_up="true"}'
+            value: 1
+
+  # And while it is still expected_up="false", a down exporter pages nobody.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="2.28.114.186:9100", host="demo1", expected_up="false"}'
+        values: '0x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 12m
   # BinlogPullGap, the control: one log is skipped, so the pull publishes a gap of
   # one, and the alert fires once it has held for 30m (two pull periods). It is silent at 29m,
   # pinning the `for:` from below, and fires at 35m with the labels the summary is routed on.

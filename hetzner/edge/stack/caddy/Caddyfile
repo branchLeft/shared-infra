@@ -76,6 +76,13 @@ branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -222,6 +229,13 @@ blog.branchleft.co.uk {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		vars edge_trusted 0
@@ -435,6 +449,13 @@ cloud.branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -577,6 +598,13 @@ portal.publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -664,6 +692,13 @@ console.branchleft.co.uk {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec
@@ -761,6 +796,13 @@ id.publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		respond @public_dot_segments 400
 		respond @not_public 404
@@ -845,6 +887,13 @@ ntfy.branchleft.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -927,6 +976,13 @@ publicpress.co.uk {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -1007,6 +1063,13 @@ status.branchleft.co.uk {
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec
@@ -1161,6 +1224,13 @@ http://edge-probe.invalid:8080 {
 				events 5
 			}
 		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
+			}
+		}
 		crowdsec
 		appsec
 		respond @ghost_setup 403
@@ -1235,6 +1305,13 @@ EDGE_BLOCKED_PAGE_EOF 403
 				key {http.request.remote.host}
 				window 60s
 				events 5
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_hourly_per_ip {
+				key {http.request.remote.host}
+				window 3600s
+				events 10
 			}
 		}
 		crowdsec

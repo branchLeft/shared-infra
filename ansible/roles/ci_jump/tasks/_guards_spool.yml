@@ -24,7 +24,7 @@
     user: '{{ ci_jump_spool_user }}'
     own_address: '{{ ci_jump_own_address }}'
     destinations: '{{ ci_jump_spool_destinations }}'
-    keys: "{{ ci_jump_spool_keys | map(attribute='key') | list }}"
+    keys: '{{ ci_jump_spool_keys }}'
     owned_accounts: "{{ ci_jump_owned_accounts | combine({'ci_jump': ci_jump_user} if ci_jump_user is defined else {}) }}"
   register: ci_jump_spool_plan
   failed_when: false
