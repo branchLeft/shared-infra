@@ -411,6 +411,12 @@ demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(
 # (see tasks/_secret_holders.yml), not grep, so its own .ansible can be pruned and no other .ansible is.
 demo1_build_secret_scan_roots: [/etc, /root, /home, /opt, /srv, /var/backups, /var/lib]
 
+# How much of a refusal is printed (tasks/_secret_holders.yml): the first paths, in order, and the
+# directories with the most unlisted paths. The refusal is read by a person and by the plan scan, and
+# must not grow with the host. A path is named in full only inside the first demo1_build_secret_refusal_paths_shown.
+demo1_build_secret_refusal_paths_shown: 20
+demo1_build_secret_refusal_directories_shown: 10
+
 # Directories the scan never enters, matched by full path and never by base name, so /etc/docker
 # (the client certificates in certs.d) is scanned. /var/lib/docker and /var/lib/containerd are the
 # container runtime's image stores, pinned by digest and not host secrets. /root/.ansible/tmp is

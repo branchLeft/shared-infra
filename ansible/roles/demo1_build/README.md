@@ -49,7 +49,12 @@ What the role does, in the order of `tasks/main.yml`:
    is. Ansible's module payload directory, `/root/.ansible/tmp`, is not read; the rest of
    `/root/.ansible` and every other `.ansible` is. A symbolic link
    under the roots is followed for its target; a link whose name or target is a secret path
-   refuses. A found path that no row names refuses the run, naming the path and never a value.
+   refuses. A found path that no row names refuses the run, naming paths and never a value. The
+   refusal is bounded: the count of unlisted paths, the ten directories (three levels deep) holding
+   the most of them, and the first twenty paths in order, with `:` and `=` in a path shown as `?`
+   so a path never reads as an assignment to the plan scan. A host once held thousands (a refusal of
+   486,151 bytes, printed twice, over the plan's 300,000-byte cap), so the message never grows with
+   the host (`ansible/checks/test_plan_output_size.py`, the `bulk` case of `molecule/refusals`).
    The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
    runbook Part 3) is listed. A host the list covers is
    accepted and says how many files it found. A plan runs the step too.
