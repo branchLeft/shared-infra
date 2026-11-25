@@ -113,9 +113,12 @@ key material: the owner makes the CA and both certificates, and the key must be 
 container's user (`nobody`, uid 65534).
 
 **Order matters.** Prometheus reads the three files when it loads its config, so a missing file
-stops it from starting, and with it every alert on edge1. The files are placed on edge1 first,
-then this config is delivered. `ci-config-validate.yml` stands `/dev/null` in for them, because
-`promtool check config` checks only that each named file exists.
+stops it from starting, and with it every alert on edge1. The pin (`ca.crt`) exists on edge1 only
+once the owner has set `host_tls_identity_peer_cert`, so until the files are placed the renderer
+does not emit this job: `renderPrometheusConfig` leaves demo1's target and the job's `tls_config`
+out, and `render.test.ts` holds that the config names no certificate file. The job comes back, by
+removing the filter, in the change that delivers the files. `ci-config-validate.yml` stands
+`/dev/null` in for them, because `promtool check config` checks only that each named file exists.
 
 `expectedUp` is `false`, as for the tenant hosts, until the exporter is delivered to demo1 and a
 query for `up{host="demo1"}` returns `1`; the flip to `true` is its own reviewed change. The disk
