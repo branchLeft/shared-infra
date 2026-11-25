@@ -10,16 +10,26 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from typing import cast
 
-import yaml
+from check_pins import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 HOSTS = ("dbt1", "appt1")
 ROLE = "ci_login"
 
 
+def _read(path: Path) -> object:
+    document, finding = load_yaml(path)
+    if finding is not None:
+        raise AssertionError(finding)
+    return document
+
+
 def _playbook_roles(host: str) -> list[str]:
-    plays = yaml.safe_load((ROOT / "ansible" / "playbooks" / f"{host}.yml").read_text())
+    plays = cast(
+        list[dict[str, list[dict[str, str]]]], _read(ROOT / "ansible" / "playbooks" / f"{host}.yml")
+    )
     return [Path(entry["role"]).name for entry in plays[0]["roles"]]
 
 
