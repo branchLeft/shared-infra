@@ -938,11 +938,15 @@ def pinned_image_is_up(stack: str, image: str, *, run=subprocess.run) -> bool | 
 
 
 # See branchleft_deploy.md, "Restart diagnosis".
-DIAGNOSIS_JOURNAL_LINES = 50
+DIAGNOSIS_JOURNAL_LINES = 120
 DIAGNOSIS_STATUS_LINES = 30
+DIAGNOSIS_CONFIG_LINES = 40
 DIAGNOSIS_LINE_CHARS = 400
 DIAGNOSIS_TOTAL_BYTES = 8192
 DIAGNOSIS_TIMEOUT = 20
+# Shorter values are not matched as text: a one-character value would blank most of the log.
+# Those are still caught when their line names the key, by the assignment rule below.
+DIAGNOSIS_MIN_SECRET_VALUE = 8
 REDACTED = "<redacted>"
 
 _NAME_WORDS = r"(?:pass(?:word|wd|phrase)?|secret|token|api[-_]?key|key|credential|auth\w*|cookie|session)"
@@ -1019,29 +1023,98 @@ def redact_diagnostic_line(line: str) -> str:
     return line
 
 
-def bound_diagnosis(text: str, *, max_lines: int) -> list[str]:
-    """The last `max_lines` redacted lines of `text`; the end is where a failure is."""
-    lines = [redact_diagnostic_line(raw) for raw in text.splitlines()]
+def bound_diagnosis(
+    text: str, *, max_lines: int, env_values: frozenset[str] = frozenset()
+) -> list[str]:
+    """The last `max_lines` redacted lines of `text`; the end is where a failure is.
+
+    A line carrying any value from the stack's env file is replaced whole, because the
+    pattern rules above cannot know a bare value that no name introduces.
+    """
+    lines = []
+    for raw in text.splitlines():
+        if any(value in raw for value in env_values):
+            lines.append(f"{REDACTED} (line carries a value from the stack's env file)")
+        else:
+            lines.append(redact_diagnostic_line(raw))
     return [line for line in lines if line.strip()][-max_lines:]
 
 
-def restart_diagnosis(stack: str, *, run=subprocess.run) -> str:
-    """The unit's status and recent journal, redacted and bounded; "" if neither could be read.
+def read_env_file(path: str) -> dict[str, str]:
+    """KEY=VALUE pairs of a systemd EnvironmentFile; {} if it does not exist.
 
+    Only `OSError` other than a missing file escapes: an unreadable file must stop the
+    diagnosis, because its values could not be kept out of the log.
+    """
+    pairs: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return pairs
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key.strip()):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        pairs[key.strip()] = value
+    return pairs
+
+
+def restart_diagnosis(
+    stack: str,
+    *,
+    run=subprocess.run,
+    config_dir: str = CONFIG_DIR,
+    stack_dir: str = STACK_DIR,
+) -> str:
+    """The unit's status, recent journal and Compose validation, redacted and bounded.
+
+    "" if nothing could be read, or if the stack's env file could not be read to redact it.
     Reading must never change what the deploy does next, so every failure here is swallowed.
     """
     unit = f"branchleft-compose@{stack}"
+    compose_file = compose_file_path(stack, stack_dir)
+    try:
+        stack_env = read_env_file(os.path.join(config_dir, f"{stack}.env"))
+        pins = read_env_file(image_env_path(stack, config_dir))
+    except OSError:
+        return ""
+    env_values = frozenset(
+        value for value in stack_env.values() if len(value) >= DIAGNOSIS_MIN_SECRET_VALUE
+    )
+    # The unit's own environment, as systemd would give it: the pin, then the stack's secrets.
+    # Compose interpolates from it, so validation needs it. Its output is never printed bare.
+    unit_env = {**os.environ, **pins, **stack_env}
     sections = []
-    for title, argv, limit in (
+    for title, argv, limit, extra, report_status in (
         (
             "systemctl status",
             ["systemctl", "status", "--no-pager", "--full", "--lines=0", unit],
             DIAGNOSIS_STATUS_LINES,
+            {},
+            False,
         ),
         (
             f"journalctl, last {DIAGNOSIS_JOURNAL_LINES} lines",
             ["journalctl", "-u", unit, "-n", str(DIAGNOSIS_JOURNAL_LINES), "--no-pager", "-o", "short-iso"],
             DIAGNOSIS_JOURNAL_LINES,
+            {},
+            False,
+        ),
+        (
+            "docker compose config --quiet",
+            # --quiet validates and prints nothing on success. Without it, `config` prints the
+            # resolved file, environment values included, and this log is public.
+            ["docker", "compose", "-f", compose_file, "config", "--quiet"],
+            DIAGNOSIS_CONFIG_LINES,
+            {"cwd": os.path.dirname(compose_file), "env": unit_env},
+            True,
         ),
     ):
         try:
@@ -1053,10 +1126,17 @@ def restart_diagnosis(stack: str, *, run=subprocess.run) -> str:
                 errors="replace",
                 stdin=subprocess.DEVNULL,
                 timeout=DIAGNOSIS_TIMEOUT,
+                **extra,
             )
         except (OSError, subprocess.SubprocessError):
             continue
-        body = bound_diagnosis(f"{result.stdout or ''}\n{result.stderr or ''}", max_lines=limit)
+        body = bound_diagnosis(
+            f"{result.stdout or ''}\n{result.stderr or ''}",
+            max_lines=limit,
+            env_values=env_values,
+        )
+        if report_status:
+            body = [f"exit status {result.returncode}", *body]
         if body:
             sections.append(f"--- {title} ---\n" + "\n".join(body))
     if not sections:
@@ -1171,7 +1251,9 @@ def deploy(
         # Before the rollback restarts the unit and the status moves on.
         # Any failure here, a closed stderr (BrokenPipeError) included, must not stop the rollback.
         try:
-            diagnosis = restart_diagnosis(stack, run=run)
+            diagnosis = restart_diagnosis(
+                stack, run=run, config_dir=config_dir, stack_dir=stack_dir
+            )
             if diagnosis:
                 print(diagnosis, end="", file=sys.stderr)
                 sys.stderr.flush()

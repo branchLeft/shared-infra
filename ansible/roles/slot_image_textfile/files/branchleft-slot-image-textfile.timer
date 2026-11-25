@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the slot image digest writer shortly after it is enabled, then every five minutes
+
+[Timer]
+OnActiveSec=30s
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

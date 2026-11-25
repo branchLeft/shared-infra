@@ -221,7 +221,7 @@ class SpoolProfile(unittest.TestCase):
     def test_the_lines_and_the_drop_in_are_spelled_out_and_carry_the_spool_list_only(self) -> None:
         profile = spool_profile()
         self.assertEqual(
-            jump.wanted_lines([SPOOL_HOST], [("ssh-ed25519", "AAAA")], profile),
+            jump.wanted_lines([SPOOL_HOST], [("ssh-ed25519", "AAAA")], profile=profile),
             [spool_line([SPOOL_HOST], "ssh-ed25519 AAAA")],
         )
         self.assertEqual(
@@ -297,9 +297,7 @@ class SpoolProfile(unittest.TestCase):
     def test_the_whole_input_check_applies_the_spool_rules_in_order(self) -> None:
         profile = spool_profile()
 
-        def check(
-            own: str, destinations: list[str]
-        ) -> Callable[[], tuple[str, str, list[str], list[tuple[str, str]]]]:
+        def check(own: str, destinations: list[str]) -> Callable[[], tuple[object, ...]]:
             return partial(
                 jump._checked_inputs,  # noqa: SLF001
                 SPOOL_USER,
@@ -332,7 +330,9 @@ class SpoolProfile(unittest.TestCase):
             "E-USER-FORBIDDEN",
         )
         self.assertEqual(
-            jump._checked_inputs(SPOOL_USER, OWN, [SPOOL_HOST], [KEY_A], owned, profile)[0],  # noqa: SLF001
+            jump._checked_inputs(  # noqa: SLF001
+                SPOOL_USER, OWN, [SPOOL_HOST], [KEY_A], owned, profile
+            )[0],
             SPOOL_USER,
         )
 
@@ -382,7 +382,7 @@ class SpoolPlanAndReadBack(unittest.TestCase):
         self.assertEqual(
             refusal_code(
                 lambda: jump.check_files(
-                    host, CI_USER, ci, [("ssh-ed25519", body(KEY_A))], spool_profile()
+                    host, CI_USER, ci, [("ssh-ed25519", body(KEY_A))], profile=spool_profile()
                 )
             ),
             "E-READBACK-MISMATCH",
@@ -434,7 +434,11 @@ class SpoolPlanAndReadBack(unittest.TestCase):
         self.assertEqual(
             refusal_code(
                 lambda: jump.check_files(
-                    host, SPOOL_USER, [SPOOL_HOST], [("ssh-ed25519", body(KEY_A))], spool_profile()
+                    host,
+                    SPOOL_USER,
+                    [SPOOL_HOST],
+                    [("ssh-ed25519", body(KEY_A))],
+                    profile=spool_profile(),
                 )
             ),
             "E-READBACK-MISMATCH",
@@ -444,7 +448,11 @@ class SpoolPlanAndReadBack(unittest.TestCase):
         self.assertEqual(
             refusal_code(
                 lambda: jump.check_files(
-                    host, SPOOL_USER, [SPOOL_HOST], [("ssh-ed25519", body(KEY_A))], spool_profile()
+                    host,
+                    SPOOL_USER,
+                    [SPOOL_HOST],
+                    [("ssh-ed25519", body(KEY_A))],
+                    profile=spool_profile(),
                 )
             ),
             "E-READBACK-MISMATCH",
@@ -506,6 +514,45 @@ class SpoolLinesNameNoOne(unittest.TestCase):
             self.fail("a host name was accepted")
         # The spool profile's wanted line is the wanted text for no one but its own list.
         self.assertEqual(wanted_line([SPOOL_HOST], KEY_A).count("permitopen"), 1)
+
+
+class SpoolKeyOwnList(unittest.TestCase):
+    """A spool key may carry a list of its own, which must be a subset of the spool list."""
+
+    SPOOL_LIST = ["10.20.1.201", "10.20.1.202"]
+
+    def test_a_spool_key_with_a_narrower_list_is_accepted(self) -> None:
+        keys = [{"key": KEY_A, "destinations": ["10.20.1.201"]}]
+        self.assertEqual(
+            refusal_code(
+                lambda: jump._checked_inputs(  # noqa: SLF001
+                    SPOOL_USER, OWN, self.SPOOL_LIST, keys, OWNED, spool_profile()
+                )
+            ),
+            "accepted",
+        )
+        parsed = jump._checked_inputs(  # noqa: SLF001
+            SPOOL_USER, OWN, self.SPOOL_LIST, keys, OWNED, spool_profile()
+        )
+        self.assertEqual(parsed[4], [["10.20.1.201"]])
+
+    def test_a_spool_key_with_a_wider_list_is_refused(self) -> None:
+        keys = [{"key": KEY_A, "destinations": ["10.20.1.201", "10.20.1.203"]}]
+        self.assertEqual(
+            refusal_code(
+                lambda: jump._checked_inputs(  # noqa: SLF001
+                    SPOOL_USER, OWN, self.SPOOL_LIST, keys, OWNED, spool_profile()
+                )
+            ),
+            "E-SPOOL-KEY-WIDER",
+        )
+
+    def test_a_spool_key_with_no_list_keeps_the_spool_list(self) -> None:
+        keys = [KEY_A]
+        parsed = jump._checked_inputs(  # noqa: SLF001
+            SPOOL_USER, OWN, self.SPOOL_LIST, keys, OWNED, spool_profile()
+        )
+        self.assertEqual(parsed[4], [None])
 
 
 if __name__ == "__main__":

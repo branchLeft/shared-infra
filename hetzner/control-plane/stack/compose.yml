@@ -176,9 +176,22 @@ services:
       # screen and no request screens. The tenant credentials are the one directory below.
       PORTAL_PROVISIONING_URL: ${PORTAL_PROVISIONING_URL:-}
       PORTAL_PROVISIONING_CREDENTIALS_FILE: ${PORTAL_PROVISIONING_CREDENTIALS_FILE:-}
+      # The Professional enquiry mail (ghost-platform portal/apps, supportConfig.ts). The addresses
+      # and the host are written here, so the plan shows them. The password is a file the owner
+      # places in the directory mounted below, and never an environment value. Any one of these
+      # missing or wrong turns support off and the portal still starts, so an empty directory is
+      # safe. The sender and the login are the same account on mx1, which is the mail server's rule.
+      PORTAL_SUPPORT_SMTP_HOST: mx1.branchleft.co.uk
+      PORTAL_SUPPORT_SMTP_PORT: '587'
+      PORTAL_SUPPORT_SMTP_SECURITY: STARTTLS
+      PORTAL_SUPPORT_SMTP_USER: sales@branchleft.co.uk
+      PORTAL_SUPPORT_SMTP_PASSWORD_FILE: /run/portal-support/smtp-password
+      PORTAL_SUPPORT_SENDER: sales@branchleft.co.uk
+      PORTAL_SUPPORT_RECIPIENT: sales@branchleft.co.uk
       NODE_OPTIONS: --max-old-space-size=192
     volumes:
       - /etc/branchleft/control-plane/provisioning/tenant:/run/provisioning/tenant:ro
+      - /etc/branchleft/control-plane/portal-support:/run/portal-support:ro
     secrets:
       - identity-outputs
       - portal-database-url

@@ -93,6 +93,41 @@ The `db_t1_replica` job reads db-t1's MySQL exporter, which listens on `127.0.0.
 db1's replica tunnel; it has its own host label and is unchanged. The `node` job's `db-t1` row is the
 host's own node_exporter and is a different series.
 
+## demo1's node target
+
+`demo1`, the demo host, is the last entry of `MONITORED_NODE_HOSTS` and the only one with
+`publicTls: true`. It is in the separate `demos` project, which shares no network with edge1, so
+its exporter is scraped over its public address (`DEMO1_PUBLIC_IPV4`, the `demo1PublicIpv4` output
+of `ghost-platform/infra/demo-host`; its primary IP is kept past a server rebuild). The scrape
+leaves from edge1, so demo1's firewall admits port 9100 from edge1's public IPv4 `/32` and nothing
+else. That narrows who can try; the control is the exporter, which serves TLS and accepts only a
+client certificate signed by the CA in `ca.crt`. Prometheus verifies the exporter's certificate
+against the same CA and the name `demo1` (`DEMO1_METRICS_SERVER_NAME`), not the address, and
+`insecure_skip_verify` is never set.
+
+The target carries `__scheme__: https`, which overrides the `node` job's scheme for it alone, and
+the job's `tls_config` names three files by path. Every private-network target stays plain http and
+ignores them. The files are `ca.crt`, `client.crt` and `client.key` in `/etc/branchleft/demo1-metrics-tls/`
+on edge1, mounted read-only at `DEMO1_METRICS_TLS_DIR`. The repository ships none of them and no
+key material: the owner makes the CA and both certificates, and the key must be readable by the
+container's user (`nobody`, uid 65534).
+
+**Order matters.** Prometheus reads the three files when it loads its config, so a missing file
+stops it from starting, and with it every alert on edge1. The files are placed on edge1 first,
+then this config is delivered. `ci-config-validate.yml` stands `/dev/null` in for them, because
+`promtool check config` checks only that each named file exists.
+
+`expectedUp` is `false`, as for the tenant hosts, until the exporter is delivered to demo1 and a
+query for `up{host="demo1"}` returns `1`; the flip to `true` is its own reviewed change. The disk
+and memory rules select on neither `host` nor `expected_up`, so they evaluate for demo1 the moment
+its series arrive. `render.test.ts` holds that, and that its address appears in a promtool case for
+each of the disk, memory and host-down alerts. The host-down case is the control: with the exporter
+stopped and `expected_up="true"`, `HostOrServiceDown` is quiet at 6 minutes and fires by 8.
+
+Not here: an outside probe of the demo edge. The demo edge answers a name that matches no leased
+slot by closing the connection (`abort`), so the registry's `http_2xx` probe would read it as down
+whenever no slot is leased; a probe of it needs a TLS-handshake module of its own.
+
 ## mx1's two watch paths
 
 `mx1` is watched two ways, and the pair is deliberate.

@@ -429,6 +429,7 @@ wrong source. To add a secret option, add its row here.
 | `ci_jump`                      | `ci_jump_user`                                 | host_inputs: edge1, edget |
 | `control_plane`                | `control_plane_env_content`                    | none                      |
 | `control_plane`                | `control_plane_masterkey`                      | none                      |
+| `control_plane`                | `control_plane_portal_support_smtp_password`   | host_inputs: ops1         |
 | `db1_stack`                    | `db1_stack_exporter_password`                  | host_inputs: db1          |
 | `db_t1_tenant_entry`           | `db_t1_tenant_entry_controller_key`            | host_inputs: dbt1         |
 | `monitoring_stack`             | `monitoring_stack_alert_recipient_email`       | host_inputs: edge1        |

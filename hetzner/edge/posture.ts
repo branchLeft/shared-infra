@@ -38,6 +38,15 @@ export const WATCH_ONLY_SCENARIOS = ['crowdsecurity/crowdsec-appsec-outofband'] 
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
 
+// A longer window on the same path, for the client that spreads its sends over
+// minutes: 5 a minute is 300 an hour, and a sign-up form that mails each sign-up
+// link to a made-up or a victim's address turns that into mail volume at mx1.
+// Counted only for requests the per-minute zone let through, since the chain
+// stops at the first refusal. Narrative in hetzner/edge/posture.md, "Members
+// magic-link send path".
+export const MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_EVENTS = 10;
+export const MEMBERS_MAGIC_LINK_HOURLY_RATE_LIMIT_WINDOW_SECONDS = 3600;
+
 // Narrative moved to hetzner/edge/posture.md, "Inbound webhook path".
 export const WEBHOOK_RATE_LIMIT_EVENTS = 10;
 export const WEBHOOK_RATE_LIMIT_WINDOW_SECONDS = 60;

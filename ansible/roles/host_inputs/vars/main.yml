@@ -73,6 +73,7 @@ host_inputs_required_by_host:
     - backup_restore_state_copy_tenant_access_key_id
     - broker_tunnel_client_demo1_address
     - broker_tunnel_client_demo1_host_key
+    - control_plane_portal_support_smtp_password
   db1:
     - db1_stack_exporter_password
     - db1_grants_tenants
@@ -108,6 +109,7 @@ host_inputs_optional_by_host:
   ops1:
     - broker_tunnel_client_demo1_address
     - broker_tunnel_client_demo1_host_key
+    - control_plane_portal_support_smtp_password
   demo1:
     - broker_deploy_owner_due_diligence_email
   edge1:

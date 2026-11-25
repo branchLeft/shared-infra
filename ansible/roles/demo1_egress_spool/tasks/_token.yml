@@ -50,5 +50,5 @@
       - demo1_egress_spool_token_line.rc == 0
     quiet: true
     fail_msg: >-
-      {{ demo1_egress_spool_token_path }} holds no SHIM_DRAIN_TOKEN= line with a value.
+      {{ demo1_egress_spool_token_path }} holds no line that sets SHIM_DRAIN_TOKEN to a value.
       The owner places the token there once; the role never writes it.
