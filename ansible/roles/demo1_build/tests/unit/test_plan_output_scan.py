@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROLE = Path(__file__).resolve().parent.parent.parent
+ROLES = ROLE.parent
+DEMO1_PLAY = ROLES.parent / "playbooks" / "demo1.yml"
 TASKS = ROLE / "tasks"
 HANDLERS = ROLE / "handlers"
 ORIGIN_DIR = "/opt/branchleft/checkout/ansible/roles/demo1_build/tasks"
@@ -257,6 +259,23 @@ class TaskFileNames(unittest.TestCase):
         names = sorted(path.name for folder in (TASKS, HANDLERS) for path in folder.glob("*.yml"))
         self.assertIn("main.yml", names)
         found = [name for name in names if matching_lines(f"Origin: {ORIGIN_DIR}/{name}:256:3")]
+        self.assertEqual(
+            [], found, "a failure in these files prints a line the plan scan withholds the plan for"
+        )
+
+    def test_no_task_file_of_any_role_the_demo1_play_runs_is_named_with_a_word_of_the_scan(
+        self,
+    ) -> None:
+        roles = sorted(set(re.findall(r"role: \.\./roles/(\w+)", DEMO1_PLAY.read_text("utf-8"))))
+        self.assertIn("demo1_egress_spool", roles)
+        self.assertGreaterEqual(len(roles), 5)
+        found = [
+            f"{role}/{folder.name}/{path.name}"
+            for role in roles
+            for folder in (ROLES / role / "tasks", ROLES / role / "handlers")
+            for path in sorted(folder.glob("*.yml"))
+            if matching_lines(f"Origin: {ORIGIN_DIR}/{path.name}:256:3")
+        ]
         self.assertEqual(
             [], found, "a failure in these files prints a line the plan scan withholds the plan for"
         )
