@@ -92,7 +92,7 @@ services:
   # is one source. Caddy decides what may be read and which bucket holds it; this service
   # only remembers the answers (render.md, "The media address").
   media-cache:
-    image: docker.io/nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
+    image: docker.io/nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
     restart: unless-stopped
     # Not `read_only`: Compose writes an inline config into the container's own layer.
     cap_drop:
