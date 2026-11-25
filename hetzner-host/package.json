@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@pulumi/pulumi": "^3.276.0"
+    "@pulumi/pulumi": "^3.277.0"
   },
   "peerDependencies": {
     "@pulumi/hcloud": "1.43.4"
@@ -35,8 +35,8 @@
     "@branchleft/vitest-config": "^0.8.8",
     "@pulumi/hcloud": "1.43.4",
     "@types/node": "^26",
-    "@vitest/coverage-v8": "^5.1.0",
+    "@vitest/coverage-v8": "^5.1.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
