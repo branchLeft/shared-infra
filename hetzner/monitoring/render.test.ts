@@ -1366,9 +1366,14 @@ describe('demo1, scraped over its public address with a verified client certific
     expect(MONITORED_NODE_HOSTS.at(-1)?.name).toBe('demo1');
     expect(demo1?.address).toBe(DEMO1_PUBLIC_IPV4);
     expect(demo1?.expectedUp).toBe(false);
-    expect(promConfig).toContain(
-      `targets: ['${DEMO1_PUBLIC_IPV4}:${NODE_EXPORTER_PORT}']\n        labels: {host: demo1, expected_up: 'false', __scheme__: https}`
-    );
+  });
+
+  // edge1 has no pin (ca.crt) until the owner sets host_tls_identity_peer_cert, and Prometheus stops
+  // at config load on a tls_config file that is missing, so the job is not emitted.
+  it('is not in the rendered config, so no demo1 file or address is named', () => {
+    expect(promConfig).not.toContain(DEMO1_PUBLIC_IPV4);
+    expect(promConfig).not.toContain('host: demo1');
+    expect(promConfig).not.toContain(DEMO1_METRICS_TLS_DIR);
   });
 
   it("holds demo1's address equal to the one the jump destinations already carry, so two homes cannot drift apart unseen", () => {
@@ -1379,25 +1384,18 @@ describe('demo1, scraped over its public address with a verified client certific
     expect(ownerVars).toContain(`  - '${DEMO1_PUBLIC_IPV4}'\n`);
   });
 
-  it('is the only node target scraped over https; every private-network target stays plain', () => {
+  it('is the only node target marked for https, and none is rendered; every private-network target stays plain', () => {
     const nodeJob = promConfig.slice(promConfig.indexOf('  - job_name: node\n'));
     const nodeSection = nodeJob.slice(0, nodeJob.indexOf('  - job_name: mysqld'));
-    expect(nodeSection.match(/__scheme__/g)).toHaveLength(1);
+    expect(nodeSection).not.toContain('__scheme__');
     expect(
       MONITORED_NODE_HOSTS.filter((host) => host.publicTls === true).map((h) => h.name)
     ).toEqual(['demo1']);
   });
 
-  it('verifies the exporter against the monitoring CA and presents a client certificate, all by file path', () => {
-    expect(promConfig).toContain(
-      [
-        '    tls_config:',
-        `      ca_file: ${DEMO1_METRICS_TLS_DIR}/ca.crt`,
-        `      cert_file: ${DEMO1_METRICS_TLS_DIR}/client.crt`,
-        `      key_file: ${DEMO1_METRICS_TLS_DIR}/client.key`,
-        `      server_name: ${DEMO1_METRICS_SERVER_NAME}`,
-      ].join('\n')
-    );
+  it('names no certificate file while the demo1 job is not emitted', () => {
+    expect(promConfig).not.toMatch(/ca_file|cert_file|key_file/);
+    expect(promConfig).not.toContain(`server_name: ${DEMO1_METRICS_SERVER_NAME}`);
     // Verification must never be switched off for the public scrape.
     expect(promConfig).not.toMatch(/insecure_skip_verify:\s*true/);
   });
