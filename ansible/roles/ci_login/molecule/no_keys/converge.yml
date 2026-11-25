@@ -1,0 +1,15 @@
+---
+# The generic form of the role as dbt1 and appt1 run it: a host with no pipeline account, the key
+# half off, and the scenario's keys declared. The role must make the account and the sudoers file
+# and must leave the key file alone, because the owner has not set the flag. The keys are declared
+# so that a role that ignored the flag would write them, and verify would see it.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the key half switched off on a host with no account
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: false
+        ci_login_keys: '{{ scenario_keys }}'

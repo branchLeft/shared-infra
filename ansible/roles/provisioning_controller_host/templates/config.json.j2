@@ -1,0 +1,33 @@
+{
+  "stateFile": {{ provisioning_controller_host_run_state_file | to_json }},
+  "approvalsFile": {{ provisioning_controller_host_approvals_file | to_json }},
+  "registerFile": {{ provisioning_controller_host_register_file | to_json }},
+  "hosts": {
+    "controller": {
+      "argv": [
+        {{ provisioning_controller_host_steps_program | to_json }},
+        "--register", {{ provisioning_controller_host_register_file | to_json }},
+        "--escrow-dir", {{ provisioning_controller_host_escrow_dir | to_json }}
+      ],
+      "timeoutMs": {{ provisioning_controller_host_steps_timeout_ms }}
+    }
+  },
+  "sshEntry": {
+    "keyFile": {{ provisioning_controller_host_ssh_key_runtime_path | to_json }},
+    "knownHostsFile": {{ provisioning_controller_host_known_hosts_file | to_json }},
+    "sshConfigFile": {{ provisioning_controller_host_ssh_config_file | to_json }},
+    "jumpHops": [
+      {"user": {{ provisioning_controller_host_edge1_jump_user | to_json }}, "host": {{ provisioning_controller_host_edge1_address | to_json }}},
+      {"user": {{ provisioning_controller_host_edget_jump_user | to_json }}, "host": {{ provisioning_controller_host_edget_address | to_json }}}
+    ],
+    "target": {"user": {{ provisioning_controller_host_app_entry_user | to_json }}, "host": {{ provisioning_controller_host_app_t1_address | to_json }}},
+    "inputs": {
+      "secretsFile": {{ provisioning_controller_host_secrets_file | to_json }},
+      "stackFile": {{ provisioning_controller_host_stack_file | to_json }}
+    }
+  },
+  "dbEntry": {
+    "target": {"user": {{ provisioning_controller_host_db_entry_user | to_json }}, "host": {{ provisioning_controller_host_db_t1_address | to_json }}},
+    "handOverDir": {{ provisioning_controller_host_handover_dir | to_json }}
+  }
+}

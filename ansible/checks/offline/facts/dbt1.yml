@@ -7,3 +7,5 @@ packages: {}
 all_ipv4_addresses:
   - 192.0.2.10
 mounts: []
+getent_passwd: {}
+getent_shadow: {}

@@ -1,0 +1,402 @@
+---
+# Every task that handles the private key's text has no_log and diff: false: the scan at the end
+# reads the log of this play too. The key is read only from the throwaway container of this run.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    # --- The files the role made, with the owner and mode each must have.
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_config_dir }}'
+        - '{{ scenario_key_dir }}'
+        - '{{ scenario_key }}'
+        - '{{ scenario_public }}'
+        - '{{ scenario_register }}'
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_inputs_dir }}'
+        - '{{ scenario_escrow_dir }}'
+        - '{{ scenario_pass_program }}'
+        - '{{ scenario_steps_program }}'
+        - '{{ scenario_service }}'
+        - '{{ scenario_path_unit }}'
+        - '{{ scenario_timer }}'
+      register: provisioning_controller_host_v_stats
+
+    - name: Name each file's facts by its path
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_by_path: >-
+          {{ dict(provisioning_controller_host_v_stats.results | map(attribute='item')
+          | zip(provisioning_controller_host_v_stats.results | map(attribute='stat'))) }}
+
+    # The private key is root's with mode 0400, alone in a 0700 root directory, with one link. The
+    # public half is root's and world-readable. Nothing about the key belongs to the service account.
+    - name: Require the key and the directories to have the owner and mode the role means
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_by_path[scenario_key_dir].isdir
+          - provisioning_controller_host_v_by_path[scenario_key_dir].mode == '0700'
+          - provisioning_controller_host_v_by_path[scenario_key_dir].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_key].isreg
+          - provisioning_controller_host_v_by_path[scenario_key].mode == '0400'
+          - provisioning_controller_host_v_by_path[scenario_key].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_key].gr_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_key].nlink == 1
+          - provisioning_controller_host_v_by_path[scenario_public].isreg
+          - provisioning_controller_host_v_by_path[scenario_public].mode == '0444'
+          - provisioning_controller_host_v_by_path[scenario_public].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_state_dir].isdir
+          - provisioning_controller_host_v_by_path[scenario_state_dir].mode == '0700'
+          - provisioning_controller_host_v_by_path[scenario_state_dir].pw_name == scenario_account
+          - provisioning_controller_host_v_by_path[scenario_inputs_dir].isdir
+          - provisioning_controller_host_v_by_path[scenario_inputs_dir].mode == '0700'
+          - provisioning_controller_host_v_by_path[scenario_inputs_dir].pw_name == scenario_account
+          - provisioning_controller_host_v_by_path[scenario_escrow_dir].isdir
+          - provisioning_controller_host_v_by_path[scenario_escrow_dir].mode == '0700'
+          - provisioning_controller_host_v_by_path[scenario_escrow_dir].pw_name == scenario_account
+          - provisioning_controller_host_v_by_path[scenario_steps_program].mode == '0755'
+          - provisioning_controller_host_v_by_path[scenario_steps_program].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_config_dir].mode == '0755'
+          - provisioning_controller_host_v_by_path[scenario_config_dir].pw_name == 'root'
+          # The controller refuses a register another user owns, so the account owns it.
+          - provisioning_controller_host_v_by_path[scenario_register].mode == '0644'
+          - provisioning_controller_host_v_by_path[scenario_register].pw_name == scenario_account
+          - provisioning_controller_host_v_by_path[scenario_pass_program].mode == '0755'
+          - provisioning_controller_host_v_by_path[scenario_pass_program].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_service].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_path_unit].pw_name == 'root'
+          - provisioning_controller_host_v_by_path[scenario_timer].pw_name == 'root'
+        quiet: true
+
+    - name: List the key directory, to require that nothing else is in it
+      ansible.builtin.find:
+        paths: '{{ scenario_key_dir }}'
+        hidden: true
+        file_type: any
+      register: provisioning_controller_host_v_listing
+
+    - name: Require exactly the key and no temporary file
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_listing.files | map(attribute='path') | list == [scenario_key]
+        quiet: true
+
+    # The service account cannot read the key on disk. The control comes with it: root can, so a
+    # probe that fails for the account is a probe that looked at a file that is there.
+    - name: Try to read the key as the service account
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_account }}', --, test, -r, '{{ scenario_key }}']
+      register: provisioning_controller_host_v_account_reads
+      changed_when: false
+      failed_when: false
+
+    - name: Try to read the key as root, as the control
+      ansible.builtin.command:
+        argv: [test, -r, '{{ scenario_key }}']
+      register: provisioning_controller_host_v_root_reads
+      changed_when: false
+      failed_when: false
+
+    - name: Require the account to be unable to read the key and root to be able to
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_account_reads.rc != 0
+          - provisioning_controller_host_v_root_reads.rc == 0
+        quiet: true
+        fail_msg: The service account can read the ssh key on disk, or the probe cannot tell.
+
+    # --- The route inputs are unset, so the configuration and the pinned host keys are not
+    # written, and the role said so.
+    - name: Look for the files only a configured route writes
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - '{{ scenario_config_file }}'
+        - '{{ scenario_config_dir }}/known_hosts'
+        - '{{ scenario_config_dir }}/ssh_config'
+      register: provisioning_controller_host_v_route_files
+
+    - name: Require none of them to exist while the route inputs are unset
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_route_files.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+        quiet: true
+
+    # --- Inert: no digest means no link, no release, and units held off.
+    - name: Look for the current link and any release
+      ansible.builtin.find:
+        paths: '{{ scenario_base_dir }}'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: provisioning_controller_host_v_opt
+
+    - name: Require no bundle, no release and no link while no digest is set
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_opt.files | map(attribute='path') | select('search', 'current|bundle|bin/|releases/') | list | length == 0
+        quiet: true
+
+    - name: Ask systemd for the three units
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - provisioning-controller.path
+        - provisioning-controller.timer
+        - provisioning-controller.service
+      register: provisioning_controller_host_v_systemd
+
+    - name: Require the path unit and the timer to be installed, disabled and not running, and the service idle
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_systemd.results[0].status.LoadState == 'loaded'
+          - provisioning_controller_host_v_systemd.results[0].status.UnitFileState == 'disabled'
+          - provisioning_controller_host_v_systemd.results[0].status.ActiveState == 'inactive'
+          - provisioning_controller_host_v_systemd.results[1].status.LoadState == 'loaded'
+          - provisioning_controller_host_v_systemd.results[1].status.UnitFileState == 'disabled'
+          - provisioning_controller_host_v_systemd.results[1].status.ActiveState == 'inactive'
+          - provisioning_controller_host_v_systemd.results[2].status.LoadState == 'loaded'
+          - provisioning_controller_host_v_systemd.results[2].status.ActiveState == 'inactive'
+        quiet: true
+        fail_msg: The triggers are not installed and held off, or the service is running with no digest set.
+
+    - name: Read the service unit, which is public
+      ansible.builtin.slurp:
+        src: '{{ scenario_service }}'
+      register: provisioning_controller_host_v_unit
+
+    - name: Hold the unit's text
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_unit_text: '{{ provisioning_controller_host_v_unit.content | b64decode }}'
+
+    - name: Require the unit to hold its condition, to run as the account and to hand it the key by name
+      ansible.builtin.assert:
+        that:
+          - "'ConditionPathExists=' ~ scenario_current ~ '/bin/provisioning-controller' in provisioning_controller_host_v_unit_text"
+          - "'User=' ~ scenario_account in provisioning_controller_host_v_unit_text"
+          - "('LoadCredential=ssh-key:' ~ scenario_key) in provisioning_controller_host_v_unit_text"
+          - "('ExecStart=' ~ scenario_pass_program ~ ' ') in provisioning_controller_host_v_unit_text"
+        quiet: true
+
+    # --- The public half is the one the apply printed, as one authorized_keys line.
+    - name: Read the public file
+      ansible.builtin.slurp:
+        src: '{{ scenario_public }}'
+      register: provisioning_controller_host_v_pub
+
+    - name: Read the log of the runs so far
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+      diff: false
+
+    - name: Hold the public lines
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_pub_lines: '{{ (provisioning_controller_host_v_pub.content | b64decode).splitlines() }}'
+
+    # The 19 fixed bytes at the start of an Ed25519 key blob come out as the same 24 characters at
+    # the start of every such key, then 44 more for the 32 key bytes.
+    - name: Require the printed half to be the file's, and the file to be one ssh key line
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_pub_lines | length == 1
+          - provisioning_controller_host_v_pub_lines[0] is match('^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA[A-Za-z0-9+/]{44} provisioning-controller$')
+          - "'Provisioning controller ssh public half (authorized_keys line)' in provisioning_controller_host_v_log"
+          - provisioning_controller_host_v_pub_lines[0] in provisioning_controller_host_v_log
+        quiet: true
+
+    # --- A further apply changes nothing and prints the same half. The inode and the mtime of the
+    # private key are the same afterwards, so the file was not rewritten.
+    - name: Look at the private key before a rerun
+      ansible.builtin.stat:
+        path: '{{ scenario_key }}'
+        get_checksum: false
+      register: provisioning_controller_host_v_before
+
+    - name: Apply the role again, as a rerun does
+      ansible.builtin.include_role:
+        name: branchleft.provisioning_controller_host
+
+    - name: Look at the private key after the rerun
+      ansible.builtin.stat:
+        path: '{{ scenario_key }}'
+        get_checksum: false
+      register: provisioning_controller_host_v_after
+
+    - name: Require the rerun to have changed nothing, made no key and left the file alone
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_ssh_key_result is not changed
+          - not provisioning_controller_host_ssh_key_result.created
+          - not provisioning_controller_host_ssh_key_result.adopted
+          - provisioning_controller_host_ssh_key_result.temp_cleaned == 0
+          - provisioning_controller_host_ssh_key_result.public_key + '\n' == (provisioning_controller_host_v_pub.content | b64decode)
+          - provisioning_controller_host_v_after.stat.inode == provisioning_controller_host_v_before.stat.inode
+          - provisioning_controller_host_v_after.stat.mtime == provisioning_controller_host_v_before.stat.mtime
+          - provisioning_controller_host_v_after.stat.mode == '0400'
+        quiet: true
+      no_log: true
+
+    # --- The key never leaves the host. It is on one path of the instance and nowhere else on it,
+    # and no part of it is in the log or in any file the run left on the controller. The tokens
+    # live in hidden facts and are used only by hidden tasks.
+    - name: Read the private key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: provisioning_controller_host_v_key_read
+      no_log: true
+
+    - name: Hold the key's first body line
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_key_body: >-
+          {{ (provisioning_controller_host_v_key_read.content | b64decode).splitlines()[1] }}
+      no_log: true
+      diff: false
+
+    # The text is base64 in six lines, and slurp prints the file as base64 of that text, so those
+    # two are the forms a leak would take. Each is long enough to be specific.
+    - name: Hold the tokens as one list
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_tokens: >-
+          {{ [provisioning_controller_host_v_key_body, provisioning_controller_host_v_key_read.content] }}
+      no_log: true
+      diff: false
+
+    - name: Require the tokens to be long enough to be specific to the key
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_tokens | length == 2
+          - provisioning_controller_host_v_tokens | map('length') | min >= 60
+        quiet: true
+      no_log: true
+
+    # The search runs over the whole instance except the kernel's own trees and Ansible's task
+    # directory, which holds the arguments of the task that is running.
+    - name: Search the whole instance for the key's text
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rlIF
+          - --exclude-dir=proc
+          - --exclude-dir=sys
+          - --exclude-dir=dev
+          - --exclude-dir=.ansible
+          - --
+          - '{{ provisioning_controller_host_v_key_body }}'
+          - /
+      register: provisioning_controller_host_v_scan
+      changed_when: false
+      failed_when: provisioning_controller_host_v_scan.rc not in [0, 1]
+      no_log: true
+
+    # The control for that search: a copy of the text planted where a careless task might leave
+    # one must be found, or an empty result proves nothing. It is taken away again.
+    - name: Plant a copy of the text, as the scan's control
+      ansible.builtin.copy:
+        content: '{{ provisioning_controller_host_v_key_body }}{{ "\n" }}'
+        dest: /root/scan-control-copy
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Search the whole instance again, with the copy in place
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rlIF
+          - --exclude-dir=proc
+          - --exclude-dir=sys
+          - --exclude-dir=dev
+          - --exclude-dir=.ansible
+          - --
+          - '{{ provisioning_controller_host_v_key_body }}'
+          - /
+      register: provisioning_controller_host_v_scan_planted
+      changed_when: false
+      failed_when: provisioning_controller_host_v_scan_planted.rc not in [0, 1]
+      no_log: true
+
+    - name: Take the copy away again
+      ansible.builtin.file:
+        path: /root/scan-control-copy
+        state: absent
+
+    - name: Require the text to be on one path only, and the control to have been found
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_scan.stdout_lines == [scenario_key]
+          - provisioning_controller_host_v_scan_planted.stdout_lines | sort == ['/root/scan-control-copy', scenario_key] | sort
+        fail_msg: The private key's text is on a path other than its own, or the search cannot find a copy.
+        quiet: true
+      no_log: true
+
+    - name: Print the scan's control, a key-shaped text that is meant to be in the log
+      ansible.builtin.debug:
+        msg: 'SCENARIO_SCAN_CONTROL {{ scenario_scan_control }}'
+
+    - name: Read the log again, now that the control is in it
+      ansible.builtin.set_fact:
+        provisioning_controller_host_v_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+      diff: false
+
+    - name: Require the log to hold the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in provisioning_controller_host_v_log"
+          - "'Make the ssh key if it is absent' in provisioning_controller_host_v_log"
+          - "('SCENARIO_SCAN_CONTROL ' ~ scenario_scan_control) in provisioning_controller_host_v_log"
+        fail_msg: The log lacks the canary, a role task name or the scan control, so an empty scan would prove nothing.
+        quiet: true
+
+    - name: Require the log to hold no token of the key
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_tokens | select('in', provisioning_controller_host_v_log) | list | length == 0
+        fail_msg: The private key, or its slurp form, is in the Ansible log.
+        quiet: true
+      no_log: true
+
+    - name: Look in every file this run left on the controller for each token
+      delegate_to: localhost
+      ansible.builtin.find:
+        paths: '{{ scenario_ephemeral_dir }}'
+        recurse: true
+        hidden: true
+        # Without this the pattern is matched at the start of each line only, and a token in the
+        # middle of a line would not be found.
+        read_whole_file: true
+        contains: '{{ item | regex_escape }}'
+      loop: '{{ provisioning_controller_host_v_tokens }}'
+      register: provisioning_controller_host_v_tree_tokens
+      no_log: true
+
+    # The control is not a secret, so this task is not hidden: a scan that finds nothing is shown
+    # with the directory it looked in.
+    - name: Look in the same files for the control
+      delegate_to: localhost
+      ansible.builtin.find:
+        paths: '{{ scenario_ephemeral_dir }}'
+        recurse: true
+        hidden: true
+        read_whole_file: true
+        contains: '{{ scenario_scan_control | regex_escape }}'
+      register: provisioning_controller_host_v_tree_control
+
+    - name: Require no token in any file on the controller, and the control in some
+      ansible.builtin.assert:
+        that:
+          - provisioning_controller_host_v_tree_tokens.results | map(attribute='files') | map('length') | sum == 0
+          - provisioning_controller_host_v_tree_control.files | length > 0
+        fail_msg: The private key is in a file on the controller, or the control scan found nothing.
+        quiet: true
+      no_log: true

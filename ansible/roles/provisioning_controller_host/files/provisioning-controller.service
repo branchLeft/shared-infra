@@ -1,0 +1,39 @@
+# One pass of the provisioning controller: the executor is run once for each owner approval the
+# provisioning API has recorded and the controller has not completed, then the unit exits. Nobody
+# types an approval id. Installed by the provisioning_controller_host role as a static file, never
+# templated, and never started by the role: the path unit and the timer start it, and both are
+# held off until the role is given a bundle digest.
+#
+# A plain unit with no instance name, so systemd runs at most one copy of it, and the controller's
+# state file, which assumes one writer, is only ever appended to by one pass.
+#
+# The ssh key stays root's, mode 0400, in a root-only directory. The load line below makes
+# systemd, which is root, read it and hand the account a private copy in a directory that exists
+# for this run only and is gone after. The account never reads the file on disk and the key is
+# on no other path, so no helper, sudoers entry or second daemon is added.
+[Unit]
+Description=Provisioning controller, one pass over the recorded approvals
+After=network-online.target
+Wants=network-online.target
+# A start with no bundle installed does nothing.
+ConditionPathExists=/opt/branchleft/provisioning-controller/current/bin/provisioning-controller
+
+[Service]
+Type=oneshot
+User=provisioning-controller
+Group=provisioning-controller
+LoadCredential=ssh-key:/etc/branchleft/provisioning-controller/ssh/id_ed25519
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/branchleft/provisioning-controller/provisioning-controller-pass --program /opt/branchleft/provisioning-controller/current/bin/provisioning-controller --config /etc/branchleft/provisioning-controller/config.json --approvals /var/lib/branchleft/provisioning-controller/approvals.json --state /var/lib/branchleft/provisioning-controller/run-state.jsonl
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/branchleft/provisioning-controller

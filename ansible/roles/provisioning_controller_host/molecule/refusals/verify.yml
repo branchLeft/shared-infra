@@ -1,0 +1,179 @@
+---
+# The refusal cases of the role, one for each guard. Each is one bad state or bad input on the
+# host the role has already delivered, and the role must stop with its own message, leave what it
+# found as it found it, and never print a key. A case has: name; expect, the exact message the
+# role must stop with (absent for a control that must be accepted); commands, argv lists that make
+# the bad state; files, to put in place after the commands (path, content, mode); restore, argv
+# lists that put the host back; changes, true for the one accepted case that may change a path;
+# vars, the role variables the case sets (none for a case that sets none); forbidden, texts the
+# message must not hold; absent, paths that must not exist afterwards; modes, paths and the mode
+# each must still have.
+#
+# The first case is a control: the same role on the host as delivered must accept. Without it, a
+# role that refused everything would pass every case.
+- name: Run every case
+  hosts: all
+  gather_facts: false
+  vars:
+    provisioning_controller_host_refusals_wrong_hex: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    provisioning_controller_host_refusals_cases:
+      - name: control, the host as delivered
+
+      # --- The key: states the role must refuse to make good by itself.
+      - name: a key that has gone while its public half is still there
+        commands:
+          - [mv, '{{ scenario_key }}', /root/lost-key]
+        restore:
+          - [mv, /root/lost-key, '{{ scenario_key }}']
+        expect: 'E-KEY-LOST: {{ scenario_public }}'
+        absent:
+          - '{{ scenario_key }}'
+      - name: a key readable by its group
+        commands:
+          - [chmod, '0440', '{{ scenario_key }}']
+        restore:
+          - [chmod, '0400', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
+        modes:
+          - path: '{{ scenario_key }}'
+            mode: '0440'
+      - name: a key readable by others
+        commands:
+          - [chmod, '0404', '{{ scenario_key }}']
+        restore:
+          - [chmod, '0400', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
+        modes:
+          - path: '{{ scenario_key }}'
+            mode: '0404'
+      - name: a key that the service account owns
+        commands:
+          - [chown, 'provisioning-controller', '{{ scenario_key }}']
+        restore:
+          - [chown, 'root', '{{ scenario_key }}']
+        expect: 'E-KEY-OWNER: {{ scenario_key }}'
+      - name: a link in the key's place
+        commands:
+          - [mv, '{{ scenario_key }}', /root/real-key]
+          - [ln, -s, /root/real-key, '{{ scenario_key }}']
+        restore:
+          - [rm, -f, '{{ scenario_key }}']
+          - [mv, /root/real-key, '{{ scenario_key }}']
+        expect: 'E-KEY-OPEN: {{ scenario_key }}'
+      - name: a key with a second hard link
+        commands:
+          - [ln, '{{ scenario_key }}', /root/key-link]
+        restore:
+          - [rm, -f, /root/key-link]
+        expect: 'E-KEY-LINKED: {{ scenario_key }}'
+      - name: a key file that is not a key
+        commands:
+          - [mv, '{{ scenario_key }}', /root/real-key]
+        files:
+          - path: '{{ scenario_key }}'
+            content: "not a key\n"
+            mode: '0400'
+        restore:
+          - [rm, -f, '{{ scenario_key }}']
+          - [mv, /root/real-key, '{{ scenario_key }}']
+        expect: 'E-KEY-FORM: {{ scenario_key }}'
+      - name: a file of someone else's in the key directory
+        commands:
+          - [touch, '{{ scenario_key_dir }}/notes.txt']
+        restore:
+          - [rm, -f, '{{ scenario_key_dir }}/notes.txt']
+        expect: 'E-DIR-FOREIGN: {{ scenario_key_dir }}/notes.txt'
+
+      # --- What the role stands on.
+      - name: a parent directory that others can write
+        commands:
+          - [chmod, '0777', /etc/branchleft]
+        restore:
+          - [chmod, '0755', /etc/branchleft]
+        expect: "A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it."
+
+      # --- The inputs, each refused before anything is changed, with no value in the message.
+      - name: a digest in capitals
+        vars:
+          provisioning_controller_host_bundle_sha256: '{{ provisioning_controller_host_refusals_wrong_hex }}'
+          provisioning_controller_host_bundle_url: '{{ scenario_bundle_url }}'
+        expect: provisioning_controller_host_bundle_sha256 must be empty or 64 lowercase hex digits.
+        forbidden:
+          - '{{ provisioning_controller_host_refusals_wrong_hex }}'
+      - name: a bundle URL with plain http
+        vars:
+          provisioning_controller_host_bundle_sha256: '{{ scenario_digest }}'
+          provisioning_controller_host_bundle_url: http://bundle.example.test/provisioning-controller.tar.gz
+        expect: provisioning_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
+        forbidden:
+          - http://bundle.example.test
+        absent:
+          - /opt/branchleft/provisioning-controller/releases/{{ scenario_digest }}
+      - name: a bundle URL that carries a credential
+        vars:
+          provisioning_controller_host_bundle_sha256: '{{ scenario_digest }}'
+          provisioning_controller_host_bundle_url: https://u:p@bundle.example.test/provisioning-controller.tar.gz
+        expect: provisioning_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
+        forbidden:
+          - u:p@
+      - name: a digest with no bundle URL
+        vars:
+          provisioning_controller_host_bundle_sha256: '{{ scenario_digest }}'
+        expect: provisioning_controller_host_bundle_url is empty while provisioning_controller_host_bundle_sha256 is set.
+        absent:
+          - /opt/branchleft/provisioning-controller/releases/{{ scenario_digest }}
+      - name: an edge1 jump account name with a capital and a space
+        vars:
+          provisioning_controller_host_edge1_jump_user: 'Jump User'
+        expect: provisioning_controller_host_edge1_jump_user must be empty or a lowercase account name. It is not shown here.
+        forbidden:
+          - Jump User
+      - name: an edge-t jump account name that starts with a digit
+        vars:
+          provisioning_controller_host_edget_jump_user: '1jump'
+        expect: provisioning_controller_host_edget_jump_user must be empty or a lowercase account name. It is not shown here.
+        forbidden:
+          - 1jump
+      - name: an edge1 host key with a comment on it
+        vars:
+          provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }} root@edge1'
+        expect: provisioning_controller_host_edge1_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+      - name: an app-t1 host key of another type
+        vars:
+          provisioning_controller_host_app_t1_host_key: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC
+        expect: provisioning_controller_host_app_t1_host_key must be empty or 'ssh-ed25519 <base64>', one line, no comment.
+      - name: some of the route inputs without the others
+        vars:
+          provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }}'
+        expect: >-
+          The two jump account names and the four host keys are set together or not at all, and some
+          but not all are set. The inputs are named in meta/argument_specs.yml.
+        absent:
+          - /etc/branchleft/provisioning-controller/config.json
+          - /etc/branchleft/provisioning-controller/known_hosts
+      - name: a digest while the route inputs are unset
+        vars:
+          provisioning_controller_host_bundle_sha256: '{{ scenario_digest }}'
+          provisioning_controller_host_bundle_url: '{{ scenario_bundle_url }}'
+        expect: provisioning_controller_host_bundle_sha256 is set while the jump account names and host keys are not. Seed them first.
+        absent:
+          - /opt/branchleft/provisioning-controller/releases/{{ scenario_digest }}
+
+      # The last control: well-formed inputs and no digest are accepted, and this one writes the
+      # configuration and the pinned host keys, so it is the one case that may change a path.
+      - name: control, every route input set and no digest
+        vars:
+          provisioning_controller_host_edge1_jump_user: jumpone
+          provisioning_controller_host_edget_jump_user: jumptwo
+          provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }}'
+          provisioning_controller_host_edget_host_key: '{{ scenario_host_key }}'
+          provisioning_controller_host_app_t1_host_key: '{{ scenario_host_key }}'
+          provisioning_controller_host_db_t1_host_key: '{{ scenario_host_key }}'
+        changes: true
+  tasks:
+    - name: Run each case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ provisioning_controller_host_refusals_cases }}'
+      loop_control:
+        loop_var: provisioning_controller_host_refusals_case
+        label: '{{ provisioning_controller_host_refusals_case.name }}'

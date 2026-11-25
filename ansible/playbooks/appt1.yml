@@ -1,11 +1,12 @@
 ---
 # appt1: the logical name of the tenant app host app-t1 (HOST_NAME allows [a-z][a-z0-9]*; the
-# server and its hostname keep the hyphen). Under the gated pull. Eleven roles, in order: the
+# server and its hostname keep the hyphen). Under the gated pull. Twelve roles, in order: the
 # Ansible toolchain the host runs this playbook with, the trigger that runs it, the loader of the
 # host's private inputs (host_inputs: the controller's key and source addresses for the tenant
 # entry point), the host baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the
 # host egress reconciler (egress_nat, with the gateway switch left at its default, off: this host
-# is no NAT gateway), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
+# is no NAT gateway), the pipeline account and its sudoers rule (ci_login: its key lines stay
+# off until the owner sets them in an owner_vars file), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
 # (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), the deploy slot keys
 # (deploy_slot_keys) and the tenant volume program (tenant_onboarding), which tenant_entry calls,
 # the tenant entry point itself (tenant_entry), and the host's metrics exporter (node_exporter,
@@ -45,6 +46,7 @@
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
+    - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]

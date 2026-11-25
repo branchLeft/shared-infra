@@ -416,38 +416,40 @@ own README says. `ansible/checks/check_secret_no_log.py` derives this table from
 argument specs and the rows, and fails (R3) when a row is missing, extra, or has the
 wrong source. To add a secret option, add its row here.
 
-| Role                       | Option                                       | Source on a pulled host   |
-| -------------------------- | -------------------------------------------- | ------------------------- |
-| `backup_worker`            | `backup_worker_db_password`                  | host_inputs: ops1         |
-| `backup_worker`            | `backup_worker_s3_access_key_id`             | host_inputs: ops1         |
-| `backup_worker`            | `backup_worker_s3_secret_access_key`         | host_inputs: ops1         |
-| `binlog_pull`              | `binlog_pull_db_ca_pem`                      | none                      |
-| `binlog_pull`              | `binlog_pull_db_password`                    | none                      |
-| `broker_deploy`            | `broker_deploy_owner_due_diligence_email`    | host_inputs: demo1        |
-| `broker_tunnel_client`     | `broker_tunnel_client_demo1_address`         | host_inputs: ops1         |
-| `ci_jump`                  | `ci_jump_spool_user`                         | host_inputs: edget        |
-| `ci_jump`                  | `ci_jump_user`                               | host_inputs: edge1, edget |
-| `control_plane`            | `control_plane_env_content`                  | none                      |
-| `control_plane`            | `control_plane_masterkey`                    | none                      |
-| `control_plane`            | `control_plane_portal_support_smtp_password` | host_inputs: ops1         |
-| `db1_stack`                | `db1_stack_exporter_password`                | host_inputs: db1          |
-| `db_t1_tenant_entry`       | `db_t1_tenant_entry_controller_key`          | host_inputs: dbt1         |
-| `monitoring_stack`         | `monitoring_stack_alert_recipient_email`     | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_grafana_admin_password`    | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_healthchecks_ping_url`     | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_mailhost_ping_url`         | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_smtp_password`             | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_smtp_username`             | host_inputs: edge1        |
-| `monitoring_stack`         | `monitoring_stack_snds_data_url`             | host_inputs: edge1        |
-| `mx1_abuse_page`           | `mx1_abuse_page_token`                       | host_inputs: mx1          |
-| `ntfy_pager`               | `ntfy_pager_machine_password_hash`           | host_inputs: edge1        |
-| `ntfy_pager`               | `ntfy_pager_mx1_token`                       | host_inputs: edge1        |
-| `ntfy_pager`               | `ntfy_pager_owner_password_hash`             | host_inputs: edge1        |
-| `ntfy_pager`               | `ntfy_pager_pager_token`                     | host_inputs: edge1        |
-| `ntfy_pager`               | `ntfy_pager_watcher_token`                   | host_inputs: edge1        |
-| `publicpress_website_app1` | `publicpress_website_app1_smtp_password`     | none                      |
-| `typed_module`             | `typed_module_token`                         | none                      |
-| `website_app1`             | `website_app1_smtp_password`                 | host_inputs: app1         |
+| Role                           | Option                                         | Source on a pulled host   |
+| ------------------------------ | ---------------------------------------------- | ------------------------- |
+| `backup_worker`                | `backup_worker_db_password`                    | host_inputs: ops1         |
+| `backup_worker`                | `backup_worker_s3_access_key_id`               | host_inputs: ops1         |
+| `backup_worker`                | `backup_worker_s3_secret_access_key`           | host_inputs: ops1         |
+| `binlog_pull`                  | `binlog_pull_db_ca_pem`                        | none                      |
+| `binlog_pull`                  | `binlog_pull_db_password`                      | none                      |
+| `broker_deploy`                | `broker_deploy_owner_due_diligence_email`      | host_inputs: demo1        |
+| `broker_tunnel_client`         | `broker_tunnel_client_demo1_address`           | host_inputs: ops1         |
+| `ci_jump`                      | `ci_jump_spool_user`                           | host_inputs: edget        |
+| `ci_jump`                      | `ci_jump_user`                                 | host_inputs: edge1, edget |
+| `control_plane`                | `control_plane_env_content`                    | none                      |
+| `control_plane`                | `control_plane_masterkey`                      | none                      |
+| `control_plane`                | `control_plane_portal_support_smtp_password`   | host_inputs: ops1         |
+| `db1_stack`                    | `db1_stack_exporter_password`                  | host_inputs: db1          |
+| `db_t1_tenant_entry`           | `db_t1_tenant_entry_controller_key`            | host_inputs: dbt1         |
+| `monitoring_stack`             | `monitoring_stack_alert_recipient_email`       | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_grafana_admin_password`      | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_healthchecks_ping_url`       | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_mailhost_ping_url`           | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_smtp_password`               | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_smtp_username`               | host_inputs: edge1        |
+| `monitoring_stack`             | `monitoring_stack_snds_data_url`               | host_inputs: edge1        |
+| `mx1_abuse_page`               | `mx1_abuse_page_token`                         | host_inputs: mx1          |
+| `ntfy_pager`                   | `ntfy_pager_machine_password_hash`             | host_inputs: edge1        |
+| `ntfy_pager`                   | `ntfy_pager_mx1_token`                         | host_inputs: edge1        |
+| `ntfy_pager`                   | `ntfy_pager_owner_password_hash`               | host_inputs: edge1        |
+| `ntfy_pager`                   | `ntfy_pager_pager_token`                       | host_inputs: edge1        |
+| `ntfy_pager`                   | `ntfy_pager_watcher_token`                     | host_inputs: edge1        |
+| `provisioning_controller_host` | `provisioning_controller_host_edge1_jump_user` | none                      |
+| `provisioning_controller_host` | `provisioning_controller_host_edget_jump_user` | none                      |
+| `publicpress_website_app1`     | `publicpress_website_app1_smtp_password`       | none                      |
+| `typed_module`                 | `typed_module_token`                           | none                      |
+| `website_app1`                 | `website_app1_smtp_password`                   | host_inputs: app1         |
 
 ## The secret names the services will need
 
