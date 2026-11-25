@@ -1,0 +1,13 @@
+# Starts a pass when the provisioning API changes its ledger of recorded approvals. Installed by
+# the provisioning_controller_host role, enabled only when the role is given a bundle digest, and
+# stopped and disabled again when the digest is cleared. Until the API serves and records an
+# approval nothing changes the file and nothing starts.
+[Unit]
+Description=Provisioning controller, a new approval is recorded
+
+[Path]
+PathChanged=/var/lib/branchleft/provisioning-controller/approvals.json
+Unit=provisioning-controller.service
+
+[Install]
+WantedBy=multi-user.target

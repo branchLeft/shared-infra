@@ -1,0 +1,16 @@
+---
+# Every input defaults to empty, and empty means inert: the units are installed and the path unit
+# and the timer are held disabled and stopped, and nothing is fetched. The bundle digest and URL
+# are public text the owner sets in ansible/owner_vars/ops1.yml, so a routine change of the bundle
+# touches that one file and never the role. The jump accounts' names and the four pinned host
+# keys come from the host's private inputs file through the loader, once per estate; they are set
+# together or not at all (the README, "Inputs"). The shapes are in meta/argument_specs.yml and in
+# the patterns of vars/main.yml.
+provisioning_controller_host_bundle_sha256: ''
+provisioning_controller_host_bundle_url: ''
+provisioning_controller_host_edge1_jump_user: ''
+provisioning_controller_host_edget_jump_user: ''
+provisioning_controller_host_edge1_host_key: ''
+provisioning_controller_host_edget_host_key: ''
+provisioning_controller_host_app_t1_host_key: ''
+provisioning_controller_host_db_t1_host_key: ''

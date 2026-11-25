@@ -13,9 +13,12 @@
 # edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
 # tooling. After it come the three monitoring roles, so a failure in them cannot hold the edge
 # delivery back: the node exporter (node_exporter) and the SNDS collector (exporters_and_collectors), the pager
-# (ntfy_pager), and the monitoring stack, last (monitoring_stack): the stack hashes the pager's
-# secrets file and renderer and decides the one restart of its unit, and the SNDS textfile
-# directory the collectors create should be in place before that restart. The edge ban owner
+# (ntfy_pager), the TLS identity (host_tls_identity) and the monitoring stack, last (monitoring_stack):
+# the stack hashes the pager's secrets file and renderer and decides the one restart of its unit, and
+# the SNDS textfile directory the collectors create should be in place before that restart. The
+# identity is edge1's own client key and certificate and the pin for demo1's certificate, the three
+# files the stack's Prometheus reads at config load to scrape demo1's exporter; a missing one stops
+# Prometheus, so the role goes before the stack and a failure in it restarts nothing. The edge ban owner
 # (edge_ban_owner) runs after exporters_and_collectors because the textfile directory exists
 # by then. The Sweego receiver
 # (sweego_receiver) is last of all, for the same reason: it waits until the owner has placed
@@ -69,5 +72,6 @@
     - role: ../roles/exporters_and_collectors # noqa: role-name[path]
     - role: ../roles/edge_ban_owner # noqa: role-name[path]
     - role: ../roles/ntfy_pager # noqa: role-name[path]
+    - role: ../roles/host_tls_identity # noqa: role-name[path]
     - role: ../roles/monitoring_stack # noqa: role-name[path]
     - role: ../roles/sweego_receiver # noqa: role-name[path]
