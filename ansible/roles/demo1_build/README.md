@@ -116,8 +116,8 @@ What the role does, in the order of `tasks/main.yml`:
    `demo1_build_sidecar_digest` (the attested sidecar digest). See "The sidecar's pin file".
    8b. **Enables and starts the seven health routers** (`_routers.yml`): `branchleft-health-router@0`
    to `@6`, one per slot, on loopback ports 10100 to 10106. Idempotent: an enabled, running router is
-   not touched, and a router already running keeps the code it started with. Then reads each back
-   (loaded, enabled, active) and waits for its port. Refuses the run if one is not.
+   not touched, and a router already running keeps the code it started with. Then waits for each
+   port, and reads each back (loaded, enabled, active). Refuses the run if one is not.
 9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
    `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
    directory, for the owner to diff against the live edge before going live.

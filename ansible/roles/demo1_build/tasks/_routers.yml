@@ -37,6 +37,19 @@
     label: '{{ item }}'
   when: not ansible_check_mode or demo1_build_router_unit_stat.stat.exists
 
+# The port each router answers on, on loopback only (10100 plus the slot). Waited for before
+# the read back: a router starts asynchronously, and a read taken while it is still activating
+# would refuse a router that is starting correctly.
+- name: Wait for each slot's health router to listen on its loopback port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: '{{ demo1_build_health_port_base | int + (item | int) }}'
+    timeout: 30
+  loop: '{{ demo1_build_slots }}'
+  loop_control:
+    label: '{{ demo1_build_health_port_base | int + (item | int) }}'
+  when: not ansible_check_mode
+
 # Read back what systemd now holds for each router, changing nothing (ANS-10). A router
 # that is loaded but not enabled or not active stops the run here, and names the unit.
 - name: Ask systemd about each slot's health router, changing nothing
@@ -66,14 +79,3 @@
   loop_control:
     label: 'branchleft-health-router@{{ item.item }}.service'
   when: not ansible_check_mode or demo1_build_router_unit_stat.stat.exists
-
-# The port each router answers on, on loopback only (10100 plus the slot).
-- name: Wait for each slot's health router to listen on its loopback port
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: '{{ demo1_build_health_port_base | int + (item | int) }}'
-    timeout: 30
-  loop: '{{ demo1_build_slots }}'
-  loop_control:
-    label: '{{ demo1_build_health_port_base | int + (item | int) }}'
-  when: not ansible_check_mode

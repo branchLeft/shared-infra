@@ -381,6 +381,15 @@
     # Each slot's health router is enabled and running after the role has applied, and
     # answers on its loopback port (10100 plus the slot). A router that is loaded but
     # not started, or started but not on that port, fails here.
+    - name: Wait for each slot's health router to listen on its loopback port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ 10100 + (item | int) }}'
+        timeout: 30
+      loop: '{{ verify_slots }}'
+      loop_control:
+        label: '{{ 10100 + (item | int) }}'
+
     - name: Ask systemd about each slot's health router
       ansible.builtin.systemd_service:
         name: 'branchleft-health-router@{{ item }}.service'
@@ -401,15 +410,6 @@
       loop: '{{ demo1_build_verify_router_systemd.results }}'
       loop_control:
         label: '{{ item.item }}'
-
-    - name: Wait for each slot's health router to listen on its loopback port
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: '{{ 10100 + (item | int) }}'
-        timeout: 30
-      loop: '{{ verify_slots }}'
-      loop_control:
-        label: '{{ 10100 + (item | int) }}'
 
     # The candidate edge fragment, and no live edge.
     - name: Look at the candidate directory and file
