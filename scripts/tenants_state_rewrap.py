@@ -324,13 +324,54 @@ def reproducible_entry(found: Ciphertext) -> Reproducible | None:
     return None
 
 
+# The Terraform bridge keeps a record next to a resource's outputs under this key (the
+# pulumi-terraform-bridge `reservedkeys.RawStateDelta`): how to turn the Pulumi property map
+# back into the provider's raw state. It is derived from the other outputs, never holds a
+# value the provider does not also hold in them, and the bridge itself says what to do when
+# it is wrong: "try removing the key and run Pulumi again". Without it the bridge decodes
+# the state the way it did before the key existed. Some of its entries come out wrapped as
+# secrets (null-valued properties, a datacenter name, an IP network), which this route cannot
+# carry past a lost passphrase. A ciphertext anywhere under the key drops the whole key from
+# that resource's `outputs`: a delta with one entry missing would read as "no change needed"
+# for that property, which is not the same record.
+RAW_STATE_DELTA_KEY = "__pulumi_raw_state_delta"
+RAW_STATE_DELTA_WHY = (
+    "the Terraform bridge's raw-state record, rebuilt from the outputs; the whole key goes"
+)
+
+
+def drop_target(found: Ciphertext) -> tuple[PathKey, ...] | None:
+    """The key to remove from the document so that `found` is gone, or None when none may be.
+
+    An allowlisted value goes by its own key. A value anywhere below a resource's
+    `outputs.__pulumi_raw_state_delta` takes that whole key with it, whatever the resource type.
+    """
+    if reproducible_entry(found) is not None:
+        return found.location
+    if (
+        found.side == "outputs"
+        and found.key_path[:1] == (RAW_STATE_DELTA_KEY,)
+        and found.location[:2] == ("deployment", "resources")
+    ):
+        return found.location[:5]
+    return None
+
+
+def drop_reason(found: Ciphertext) -> str | None:
+    entry = reproducible_entry(found)
+    if entry is not None:
+        return entry.why
+    return RAW_STATE_DELTA_WHY if drop_target(found) is not None else None
+
+
 @dataclasses.dataclass(frozen=True)
 class DropPlan:
     """The document to re-key, what was taken out of it, and what encrypted value is left."""
 
     doc: JsonObject
-    dropped: tuple[Ciphertext, ...]
+    dropped: tuple[Ciphertext, ...]  # every encrypted value that is gone
     remaining: tuple[Ciphertext, ...]
+    removed: tuple[tuple[PathKey, ...], ...] = ()  # the keys taken out; one key can hold many
 
 
 def removed_paths(old: object, new: object) -> list[tuple[PathKey, ...]]:
@@ -367,7 +408,10 @@ def require_only_dropped(old: JsonObject, new: JsonObject, dropped: Sequence[Cip
         RefusalError: when anything else differs, or a dropped key is still there.
     """
     gone = removed_paths(without_secrets_providers(old), without_secrets_providers(new))
-    want = sorted((c.location for c in dropped), key=path_order)
+    targets = [drop_target(c) for c in dropped]
+    if any(t is None for t in targets):
+        raise RefusalError("an encrypted value was dropped that no rule allows")
+    want = sorted({t for t in targets if t is not None}, key=path_order)
     if gone != want:
         raise RefusalError("the document lost keys other than the ones dropped")
 
@@ -383,25 +427,28 @@ def plan_drop(doc: JsonObject, *, enabled: bool) -> DropPlan:
     found = find_ciphertexts(doc)
     if not enabled:
         return DropPlan(doc, (), tuple(found))
-    dropped = tuple(c for c in found if reproducible_entry(c) is not None)
+    dropped = tuple(c for c in found if drop_target(c) is not None)
+    removed = tuple(
+        sorted({t for c in dropped if (t := drop_target(c)) is not None}, key=path_order)
+    )
     result = copy.deepcopy(doc)
-    for c in dropped:
+    for target in removed:
         parent: object = result
-        for key in c.location[:-1]:
+        for key in target[:-1]:
             parent = parent[key]  # type: ignore[index]
-        del parent[c.location[-1]]  # type: ignore[attr-defined]
+        del parent[target[-1]]  # type: ignore[attr-defined]
     require_only_dropped(doc, result, dropped)
-    return DropPlan(result, dropped, tuple(find_ciphertexts(result)))
+    return DropPlan(result, dropped, tuple(find_ciphertexts(result)), removed)
 
 
 def describe_ciphertexts(report: Report, before: Sequence[Ciphertext], plan: DropPlan) -> None:
     """Each encrypted value by resource type, URN name, side and key path. Never a value."""
     dropping = set(plan.dropped)
     for c in before:
-        entry = reproducible_entry(c)
-        if entry is not None and c in dropping:
-            verdict = f"DROP ({entry.why})"
-        elif entry is not None:
+        why = drop_reason(c)
+        if why is not None and c in dropping:
+            verdict = f"DROP ({why})"
+        elif why is not None:
             verdict = "re-derivable, kept (--drop-reproducible is not set)"
         else:
             verdict = "KEPT, not on the allowlist"
@@ -1066,7 +1113,7 @@ def mutate_and_verify(ctx: Context, plan: DropPlan, exported: JsonObject) -> Non
     ctx.pulumi.require("stack", "import", "--stack", ctx.stack, "--file", str(new_file))
     if plan.dropped:
         ctx.report.line(
-            f"imported: only `deployment.secrets_providers` and the {len(plan.dropped)} dropped "
+            f"imported: only `deployment.secrets_providers` and the {len(plan.removed)} dropped "
             "key(s) differ from the old checkpoint"
         )
     else:

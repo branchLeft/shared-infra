@@ -36,6 +36,22 @@ Whether a state imported without the token still previews with no change is read
 real preview: a change there is a failure, and it restores. A new entry is added only for a
 value CI supplies at run time, with a test.
 
+The same flag also drops the Terraform bridge's raw-state record, `__pulumi_raw_state_delta`
+in a resource's `outputs`, of any resource type, when an encrypted value sits anywhere below
+it (the tenants state has them on `PrimaryIp` and `ServerNetwork`: a datacenter name, an IP
+network, a subnet id, wrapped as secrets). The whole key goes, never only the ciphertext
+inside it, because a record with one entry missing reads as "no change needed" for that
+property. The record only says how to turn the Pulumi outputs back into the provider's raw
+state (`pkg/tfbridge/rawstate.go` in pulumi-terraform-bridge). The bridge decodes state the
+older way when the key is absent or does not apply (`makeTerraformStateViaUpgrade` and the
+plugin-framework `parseAndUpgradeResourceState` both fall back), and its own error message
+says "try removing the key and run Pulumi again". A later refresh writes it back. The
+listing says `DROP (the Terraform bridge's raw-state record ...)`. The same equality proof,
+the preview that may hold only `same` steps (so no replace, update or delete), the delete
+guard and the refresh preview all still run after the import, and any failure restores the
+aside copy. An encrypted value anywhere else in a resource, including a sibling of the
+record, still refuses.
+
 `rewrap` (needs the new passphrase in `PULUMI_CONFIG_PASSPHRASE`):
 
 1. Refuse unless the stack config carries no `encryptionsalt`, a passphrase is set, and
@@ -95,7 +111,13 @@ copy holds the checkpoint only, which is what a restore needs.
 on a throwaway `file://` backend where one is on PATH: a plaintext-only state is re-keyed
 and then plans clean under the new passphrase and is refused under the old; a state with
 one encrypted value is refused and left byte-identical; an injected failure, an interrupt
-and drift each put the original bytes back. The workflow sets `REWRAP_REQUIRE_PULUMI=1`,
+and drift each put the original bytes back. A second class applies the bridged `random`
+provider (`RealBridgeTests`), whose resources carry the same encrypted entries inside the
+raw-state record: with `--drop-reproducible` the record goes, the preview and the refresh
+preview show no change, and a real `up` and `refresh` under the new passphrase replace
+nothing and write the record back identically; a real secret beside the record still
+refuses. It copies the plugin from the default Pulumi home, or installs it (network), and
+skips if neither works. The workflow sets `REWRAP_REQUIRE_PULUMI=1`,
 which turns a skipped real-pulumi test into a failure. `test_tenants_state_rewrap_workflow.py`
 pins the workflow's shape.
 
