@@ -68,6 +68,9 @@ demo1_build_sidecar_path: /usr/local/lib/branchleft/demo_sidecar.py
 demo1_build_router_script_path: /usr/local/lib/branchleft/health_router.py
 demo1_build_unit_dir: /etc/systemd/system
 demo1_build_router_unit: branchleft-health-router@.service
+# The loopback port of each slot's router is this base plus the slot number. health_router.py
+# hard-codes the same base (HEALTH_PORT_BASE); the role names it so the verify can check the port.
+demo1_build_health_port_base: 10100
 demo1_build_dropin_name: colour.conf
 
 # The shared compose template unit that the colour drop-ins extend. Its one home is
