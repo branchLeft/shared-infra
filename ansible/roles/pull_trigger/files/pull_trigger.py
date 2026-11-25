@@ -198,7 +198,7 @@ LOOK_LOOPBACK: Final = "127.0.0.1"
 # that fact may GET. A name not here, or a port not in its set, is refused before any request.
 # Adding a service or a port is a change to this program, reviewed by the owner, as a new kind is.
 LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {
-    # demo1's health routers: one loopback port per slot from 10100 (health_router.py HEALTH_PORT_BASE).
+    # demo1's health routers: one loopback port per slot, from 10100 (health_router.py's base).
     **{f"demo1-router-{slot}": frozenset({10100 + slot}) for slot in range(7)},
     "demo1-slot0-port": frozenset({10100}),
 }
