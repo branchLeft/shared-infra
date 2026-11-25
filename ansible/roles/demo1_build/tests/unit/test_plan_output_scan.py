@@ -1,27 +1,16 @@
 """What the host scan's refusal prints must not match the plan's secret scan.
 
-demo1's plan is withheld whole when any line of its check-mode output matches the credential
-assignment pattern of the scan in branchLeft/github-workflows (ssh-check-hosts,
-host_output_scan.py).
-Withheld, nobody can read which files the holder list does not name, which is the refusal's one job.
+demo1's plan is withheld whole when any line of its check-mode output matches the scan's
+credential-assignment pattern (github-workflows, ssh-check-hosts, host_output_scan.py v1.3.1).
+The refusal's message was bounded and was not the match: Ansible prints an `Origin:` line under a
+failed task that ends in the task file's path, line and column, and `_secret_holders.yml:256:3`
+reads as a credential assignment. So a task file named with a word of the pattern withholds the
+plan whenever any task in it fails.
 
-The message of the refusal was bounded and had ':' and '=' turned into '?', and the plan was still
-withheld. The message was not the match. Ansible prints, under a failed task, an `Origin:` line that
-ends in the task file's path, its line and its column, and `_secret_holders.yml:256:3` reads to
-the pattern as the word `secret`, the rest of a name, a colon and a value of four or more
-characters.
-So a task file whose name holds one of the pattern's words prints a matching line the moment
-any task in it fails, whatever the task says.
-
-These tests run the refusal for real (ansible-playbook, in check mode as the plan does, and in apply
-mode), with paths that are hostile to the pattern, and read every line of what it printed through
-the pattern. They also hold the names of this role's task files to the pattern, because the line
-that matched is made from one.
-
-The copy of the pattern and of the shapes the scan takes out first is from host_output_scan.py at
-tag v1.3.1 of github-workflows, the tag shared-infra pins. Drift of the copy from the original is
-not checked here (ansible/checks/test_plan_diff_scan.py holds its own copy of the pattern, checked
-against grep).
+The tests run the refusal for real (ansible-playbook, in check mode as the plan does, and as an
+apply) over hostile paths and read every printed line through a copy of the pattern, and hold the
+task file names of every role of the demo1 play to it. Drift of the copy from the original is not
+checked here (ansible/checks/test_plan_diff_scan.py holds its own copy, checked against grep).
 """
 
 from __future__ import annotations
