@@ -59,4 +59,4 @@ config:
   # at 21:58Z: case B (no IPv4, a public IPv6 address only, on no network).
   branchleft-hetzner-tenants:appt1Adopt:
     serverId: 174988938
-    stage: import
+    stage: converge
