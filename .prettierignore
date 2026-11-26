@@ -55,6 +55,10 @@ hetzner/edge-t/stack/crowdsec/scenarios/http-admin-interface-probing.yaml
 # rewrote one would break its pin.
 ansible/roles/*/files/ghost-platform/
 
+# The carried broker release bundle (broker_deploy's files/releases/VERSION/): a pinned,
+# attested artifact. Its sha256 pins in defaults/main.yml break if a formatter rewrites a byte.
+ansible/roles/broker_deploy/files/releases/
+
 # Written by `hetzner/dns/zonecheck.py capture`, not by hand. A recapture must
 # produce a diff of only the records that changed, which it cannot if a
 # formatter re-wraps the arrays it writes.

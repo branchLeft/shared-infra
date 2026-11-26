@@ -26,6 +26,8 @@ repos:
       # and this threshold is meant to be the same number in every repo.
       - id: check-added-large-files
         args: ['--maxkb=500']
+        # The carried broker release bundle is a pinned, attested artifact; see .prettierignore.
+        exclude: ^ansible/roles/broker_deploy/files/releases/
       - id: check-merge-conflict
 
   - repo: local
