@@ -186,14 +186,31 @@ LOOK_UNIT_SECONDS: Final = 10.0
 LOOK_HTTP_SECONDS: Final = 5.0
 LOOK_MAX_FILE_BYTES: Final = 64 * 1024 * 1024
 LOOK_READ_CHUNK: Final = 1024 * 1024
-# Where a file fact may read: the places the roles put programs and unit files. Never a place that
-# holds a secret, because a digest of a short secret can be guessed.
+# Where a file fact may read: the places the roles put programs and unit files, and the monitoring
+# stack's directory (below, narrowed to its public copies). Never a place that holds a secret,
+# because a digest of a short secret can be guessed.
 LOOK_FILE_ROOTS: Final = (
     "/etc/systemd/system/",
     "/usr/local/bin/",
     "/usr/local/lib/",
     "/usr/local/sbin/",
+    "/opt/branchleft/monitoring/",
 )
+# A root that holds secrets beside public files reads only the exact files named here: the
+# repository's own files, copied to the host byte for byte. The monitoring stack's directory also
+# holds what its renderer writes from the secrets file (alertmanager/alertmanager.yml,
+# ntfy/server.yml, prometheus/mx1-metrics-password, prometheus/demo_tls_probe.yml), so a file not
+# named here is not readable, a file the renderer adds later included. Adding a name is a change to
+# this program.
+LOOK_PUBLIC_FILES: Final = {
+    "/opt/branchleft/monitoring/": frozenset(
+        {
+            "/opt/branchleft/monitoring/alertmanager/alertmanager.yml.tmpl",
+            "/opt/branchleft/monitoring/prometheus/alerts.yml",
+            "/opt/branchleft/monitoring/prometheus/prometheus.yml",
+        }
+    ),
+}
 LOOK_LOOPBACK: Final = "127.0.0.1"
 # The declared services an http fact may name: the fact's ``name`` maps to the only loopback ports
 # that fact may GET. A name not here, or a port not in its set, is refused before any request.
@@ -543,9 +560,14 @@ def look_path_allowed(path: object, roots: Sequence[str]) -> bool:
         return False
     if not all(LOOK_FILE_PART.fullmatch(part) for part in pure.parts[1:]):
         return False
-    return any(
+    return look_public_file(path) and any(
         path.startswith(root) and len(pure.parts) > len(PurePosixPath(root).parts) for root in roots
     )
+
+
+def look_public_file(path: str) -> bool:
+    """Say whether a path is readable: below a narrowed root, only if the file is named for it."""
+    return all(path in names for root, names in LOOK_PUBLIC_FILES.items() if path.startswith(root))
 
 
 def _field_problem(entry: Mapping[str, object], kind: LookKind) -> LookWhy | None:
@@ -2582,7 +2604,7 @@ class Looker:
             real = os.path.realpath(path)
         except (OSError, ValueError):
             return "unreadable"
-        if not any(real.startswith(root) for root in self._roots):
+        if not any(real.startswith(root) for root in self._roots) or not look_public_file(real):
             return "outside-root"
         try:
             descriptor = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
