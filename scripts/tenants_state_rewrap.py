@@ -512,12 +512,61 @@ def step_type(urn: str) -> str:
     return parts[2].split("$")[-1]
 
 
-def plan_problems(text: str) -> tuple[dict[str, int], list[str]]:
+# A plan step may add a resource the program declares and the old checkpoint does not hold.
+ADDING_OPS = frozenset({"create", "import"})
+
+
+def old_urns_of(doc: JsonObject) -> frozenset[str]:
+    """Every resource URN in the checkpoint's `deployment.resources`."""
+    resources = deployment_of(doc).get("resources")
+    found: set[str] = set()
+    if isinstance(resources, list):
+        for item in resources:
+            urn = item.get("urn") if isinstance(item, dict) else None
+            if isinstance(urn, str):
+                found.add(urn)
+    return frozenset(found)
+
+
+def is_listed_as_same(urn: str) -> bool:
+    """Whether a preview that shows sames lists this old URN as one.
+
+    A provider is not listed, and the StackReference is a `read` step, so neither is.
+    """
+    kind = step_type(urn)
+    return not kind.startswith("pulumi:providers:") and kind != STACKREFERENCE_TYPE
+
+
+def plan_additions(text: str, old_urns: frozenset[str]) -> list[str]:
+    """The create and import steps of a plan, each for a URN the old checkpoint lacks."""
+    try:
+        steps = json.loads(text).get("steps")
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    found: list[str] = []
+    for step in steps if isinstance(steps, list) else []:
+        urn = step.get("urn") if isinstance(step, dict) else None
+        op = step.get("op") if isinstance(step, dict) else None
+        if isinstance(urn, str) and op in ADDING_OPS and urn not in old_urns:
+            found.append(f"{op} of a {step_type(urn)}")
+    return sorted(found)
+
+
+def plan_problems(
+    text: str, *, old_urns: frozenset[str] | None = None
+) -> tuple[dict[str, int], list[str]]:
     """`(count per op, problems)` for a `pulumi preview --json` or refresh-preview document.
 
     Only `same` steps are allowed, plus the `read` of a StackReference (the
     program always reads its estate reference). Any other step is named by its
     operation and resource type, never by id.
+
+    With `old_urns` (the URNs of the checkpoint before the rewrite) the plan may also
+    hold a `create` or an `import` of a URN absent from that checkpoint: that is the
+    program declaring a resource the state never held, which a rewrite cannot cause.
+    A step of any kind but `same` for a URN the checkpoint holds is a problem, and so is
+    an old resource the plan does not list as `same`. A plan lists sames only when it is
+    made with `--show-sames`; without it only the root stack shows.
     """
     try:
         doc = json.loads(text)
@@ -528,6 +577,7 @@ def plan_problems(text: str) -> tuple[dict[str, int], list[str]]:
         return {}, ["the plan has no `steps` list"]
     counts: dict[str, int] = {}
     problems: list[str] = []
+    same_urns: set[str] = set()
     for step in steps:
         if not isinstance(step, dict):
             problems.append("a step is not an object")
@@ -537,10 +587,30 @@ def plan_problems(text: str) -> tuple[dict[str, int], list[str]]:
         kind = step_type(urn) if isinstance(urn, str) else "(no urn)"
         op_name = op if isinstance(op, str) else "(no op)"
         counts[op_name] = counts.get(op_name, 0) + 1
-        if not (op_name == "same" or (op_name == "read" and kind == STACKREFERENCE_TYPE)):
+        added = (
+            old_urns is not None
+            and op_name in ADDING_OPS
+            and isinstance(urn, str)
+            and urn not in old_urns
+        )
+        if op_name == "same":
+            if isinstance(urn, str):
+                same_urns.add(urn)
+        elif added or (op_name == "read" and kind == STACKREFERENCE_TYPE):
+            continue
+        elif old_urns is not None and isinstance(urn, str) and urn in old_urns:
+            problems.append(f"{op_name} of a {kind} that the old checkpoint holds")
+        else:
             problems.append(f"{op_name} of a {kind}")
     if not counts.get("same"):
         problems.append("the plan holds no unchanged resource, which is not a plan of this stack")
+    if old_urns is not None:
+        missing: dict[str, int] = {}
+        for urn in sorted(old_urns - same_urns):
+            if is_listed_as_same(urn):
+                missing[step_type(urn)] = missing.get(step_type(urn), 0) + 1
+        for kind, n in sorted(missing.items()):
+            problems.append(f"{n} {kind} of the old checkpoint did not preview as `same`")
     return counts, problems
 
 
@@ -1044,8 +1114,12 @@ def plan_step(
         raise ToolError(f"{label} is not a result with no changes")
 
 
-def verify_after_import(ctx: Context) -> None:
-    """Nothing is applied: a plan with no change, then a refresh preview with no drift.
+def verify_after_import(ctx: Context, old_urns: frozenset[str]) -> None:
+    """Nothing is applied: a plan that changes no old resource, then a refresh preview with no drift.
+
+    The plan is made with `--show-sames`, so it lists every resource, and without
+    `--expect-no-changes`, which exits 7 for any step but `same` and so would refuse a
+    create or import the program declares by itself. `plan_problems` judges the steps.
 
     Raises:
         ToolError: when either shows a change, or the delete guard refuses the plan.
@@ -1053,10 +1127,12 @@ def verify_after_import(ctx: Context) -> None:
     plan_step(
         ctx,
         "preview after the rewrite",
-        ("preview", "--stack", ctx.stack, "--json", "--expect-no-changes"),
+        ("preview", "--stack", ctx.stack, "--json", "--show-sames"),
         "preview.json",
-        plan_problems,
+        lambda text: plan_problems(text, old_urns=old_urns),
     )
+    for addition in plan_additions((ctx.scratch / "preview.json").read_text("utf-8"), old_urns):
+        ctx.report.line(f"  new, not in the old checkpoint, allowed: {addition}")
     if ctx.delete_guard is not None:
         guard = subprocess.run(  # noqa: S603
             [sys.executable, str(ctx.delete_guard), str(ctx.scratch / "preview.json")],
@@ -1120,7 +1196,7 @@ def mutate_and_verify(ctx: Context, plan: DropPlan, exported: JsonObject) -> Non
         ctx.report.line(
             "imported: only `deployment.secrets_providers` differs from the old checkpoint"
         )
-    verify_after_import(ctx)
+    verify_after_import(ctx, old_urns_of(exported))
 
 
 def recover(ctx: Context, original: bytes, aside_key: str, why: str) -> int:

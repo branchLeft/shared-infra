@@ -283,6 +283,120 @@ class PlanTests(unittest.TestCase):
                 self.assertTrue(rw.plan_problems(text)[1])
 
 
+def urn_of(kind: str, name: str) -> str:
+    return step("same", kind, name)["urn"]
+
+
+SERVER = "hcloud:index/server:Server"
+FIREWALL = "hcloud:index/firewall:Firewall"
+HOST = "branchleft:hetzner:Host"
+STACK_TYPE = "pulumi:pulumi:Stack"
+
+
+class PlanAgainstTheOldCheckpointTests(unittest.TestCase):
+    """The program may add what the old checkpoint lacks; it may change nothing the checkpoint holds."""
+
+    def setUp(self) -> None:
+        self.old = frozenset(
+            {
+                urn_of(STACK_TYPE, "proj-production"),
+                urn_of(HOST, "edge-t"),
+                urn_of(SERVER, "edge-t"),
+                urn_of(FIREWALL, "edge-t-firewall"),
+                urn_of("pulumi:providers:hcloud", "default_1_41_0"),
+                urn_of("pulumi:pulumi:StackReference", "organization/estate/production"),
+            }
+        )
+
+    def sames(self, *, leave_out: str = "") -> list[dict[str, str]]:
+        return [
+            {"op": "same", "urn": urn}
+            for urn in sorted(self.old)
+            if rw.is_listed_as_same(urn) and not (leave_out and leave_out in urn)
+        ]
+
+    def judge(self, *extra: dict[str, str], sames: list[dict[str, str]] | None = None) -> list[str]:
+        steps = [*(self.sames() if sames is None else sames), *extra]
+        text = json.dumps({"steps": steps})
+        return rw.plan_problems(text, old_urns=self.old)[1]
+
+    def test_the_run_that_failed_creates_a_host_and_a_firewall_and_imports_a_server(self) -> None:
+        """A production run: the program declares app-t1, which the state never held."""
+        problems = self.judge(
+            step("create", HOST, "app-t1"),
+            step("create", FIREWALL, "app-t1-firewall"),
+            step("import", SERVER, "app-t1"),
+            step("read", "pulumi:pulumi:StackReference", "organization/estate/production"),
+        )
+        self.assertEqual(problems, [])
+
+    def test_the_additions_are_listed_by_op_and_type(self) -> None:
+        text = json.dumps(
+            {
+                "steps": [
+                    *self.sames(),
+                    step("create", HOST, "app-t1"),
+                    step("import", SERVER, "app-t1"),
+                    step("create", SERVER, "edge-t"),  # an old URN: not an addition
+                ]
+            }
+        )
+        self.assertEqual(
+            rw.plan_additions(text, self.old),
+            [f"create of a {HOST}", f"import of a {SERVER}"],
+        )
+        self.assertEqual(rw.plan_additions("not json", self.old), [])
+
+    def test_no_addition_passes_without_the_old_checkpoint(self) -> None:
+        text = json.dumps({"steps": [*self.sames(), step("create", HOST, "app-t1")]})
+        self.assertEqual(rw.plan_problems(text)[1], [f"create of a {HOST}"])
+
+    def test_a_create_of_a_resource_the_checkpoint_holds_is_the_lost_state_case(self) -> None:
+        for kind, name in ((HOST, "edge-t"), (SERVER, "edge-t"), (FIREWALL, "edge-t-firewall")):
+            with self.subTest(kind=kind):
+                problems = self.judge(
+                    step("create", kind, name),
+                    sames=self.sames(leave_out=f"{kind}::{name}"),
+                )
+                self.assertIn(f"create of a {kind} that the old checkpoint holds", problems)
+
+    def test_an_import_of_a_resource_the_checkpoint_holds_is_refused(self) -> None:
+        problems = self.judge(
+            step("import", SERVER, "edge-t"), sames=self.sames(leave_out=f"{SERVER}::edge-t")
+        )
+        self.assertIn(f"import of a {SERVER} that the old checkpoint holds", problems)
+
+    def test_every_op_but_same_on_an_old_urn_is_refused(self) -> None:
+        for op in ("update", "replace", "delete", "create-replacement", "delete-replaced", "read"):
+            with self.subTest(op=op):
+                problems = self.judge(
+                    step(op, SERVER, "edge-t"), sames=self.sames(leave_out=f"{SERVER}::edge-t")
+                )
+                self.assertIn(f"{op} of a {SERVER} that the old checkpoint holds", problems)
+
+    def test_only_create_and_import_may_add_a_resource(self) -> None:
+        for op in ("update", "replace", "delete", "create-replacement", "refresh", "discard"):
+            with self.subTest(op=op):
+                self.assertEqual(self.judge(step(op, SERVER, "app-t1")), [f"{op} of a {SERVER}"])
+
+    def test_an_old_resource_the_plan_does_not_list_is_refused_by_type(self) -> None:
+        problems = self.judge(sames=self.sames(leave_out=f"{SERVER}::edge-t"))
+        self.assertEqual(problems, [f"1 {SERVER} of the old checkpoint did not preview as `same`"])
+
+    def test_a_plan_made_without_show_sames_is_refused_not_trusted(self) -> None:
+        """Without `--show-sames` only the root stack is listed: 17 resources read as 1 step."""
+        problems = self.judge(sames=[{"op": "same", "urn": urn_of(STACK_TYPE, "proj-production")}])
+        self.assertEqual(len(problems), 3, problems)
+        self.assertTrue(all("did not preview as `same`" in p for p in problems))
+
+    def test_a_provider_and_the_stackreference_need_no_same_step(self) -> None:
+        self.assertEqual(self.judge(), [])
+
+    def test_a_plan_of_only_additions_is_not_a_plan_of_this_stack(self) -> None:
+        problems = self.judge(step("create", HOST, "app-t1"), sames=[])
+        self.assertTrue(any("no unchanged resource" in p for p in problems))
+
+
 class RefreshTests(unittest.TestCase):
     def refresh(self, summary: dict[str, int], diff: dict[str, object] | None = None) -> str:
         urn = "urn:pulumi:production::proj::pulumi:pulumi:Stack::proj-production"
@@ -882,6 +996,17 @@ class FakePulumi(rw.Pulumi):
         self.state = state
         self.calls: list[tuple[str, ...]] = []
         self.imported: dict[str, object] | None = None
+        # What a preview says besides a `same` for every old resource, and how it exits.
+        self.extra_steps: list[dict[str, str]] = []
+        self.preview_code = 0
+
+    def same_steps(self) -> list[dict[str, str]]:
+        """What `preview --show-sames` lists: the old resources, but no provider."""
+        return [
+            {"op": "same", "urn": urn}
+            for urn in sorted(rw.old_urns_of(self.state))
+            if rw.is_listed_as_same(urn)
+        ]
 
     def call(self, *args: str, stdout_to: pathlib.Path | None = None) -> rw.Completed:
         self.calls.append(args)
@@ -895,13 +1020,12 @@ class FakePulumi(rw.Pulumi):
             self.imported = json.loads(pathlib.Path(args[args.index("--file") + 1]).read_text())
             self.state = self.imported
         elif args[0] == "preview":
-            urn = "urn:pulumi:production::proj::hcloud:index/server:Server::edge"
-            out = json.dumps({"steps": [{"op": "same", "urn": urn}]})
+            out = json.dumps({"steps": [*self.same_steps(), *self.extra_steps]})
         elif args[0] == "refresh":
             out = json.dumps({"changeSummary": {"same": 2}, "steps": []})
         if stdout_to is not None:
             stdout_to.write_text(out, encoding="utf-8")
-        return rw.Completed(0, "other")
+        return rw.Completed(self.preview_code if args[0] == "preview" else 0, "other")
 
     def verbs(self) -> list[str]:
         return [" ".join(c[:2]) for c in self.calls]
@@ -1000,6 +1124,61 @@ class DropRouteTests(unittest.TestCase):
                     rw.canonical(rw.without_secrets_providers(fake.imported)),
                     rw.canonical(rw.without_secrets_providers(export_doc())),
                 )
+
+    def test_the_preview_lists_sames_and_does_not_expect_no_changes(self) -> None:
+        ctx, fake, _ = self.start(export_doc(), drop=False)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        (preview,) = [c for c in fake.calls if c[0] == "preview"]
+        self.assertIn("--show-sames", preview)
+        self.assertNotIn("--expect-no-changes", preview, "it exits 7 for any create or import")
+        self.assertNotIn("new, not in the old checkpoint", out)
+
+    def test_a_program_that_declares_new_resources_still_re_keys_and_says_what_is_new(self) -> None:
+        """A production run: app-t1 is in the program and not in the state."""
+        ctx, fake, _ = self.start(export_doc(), drop=False)
+        fake.extra_steps = [
+            step("create", HOST, "app-t1"),
+            step("create", FIREWALL, "app-t1-firewall"),
+            step("import", SERVER, "app-t1"),
+        ]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("preview after the rewrite: 2 create, 1 import, 2 same", out)
+        for added in (f"create of a {HOST}", f"create of a {FIREWALL}", f"import of a {SERVER}"):
+            self.assertIn(f"  new, not in the old checkpoint, allowed: {added}", out)
+        self.assertNotIn("not allowed", out)
+        self.assertEqual(deployment(fake.state)["secrets_providers"], new_block(), "kept")
+
+    def test_a_create_of_an_old_resource_means_the_rewrite_lost_it_and_restores(self) -> None:
+        ctx, fake, raw = self.start(export_doc(), drop=False)
+        fake.extra_steps = [step("create", SERVER, "edge"), step("create", HOST, "app-t1")]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_RESTORED, out)
+        self.assertIn(f"not allowed: create of a {SERVER} that the old checkpoint holds", out)
+        self.assertIn("RESTORED", out)
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_an_old_resource_missing_from_the_listed_sames_restores(self) -> None:
+        ctx, fake, raw = self.start(export_doc(), drop=False)
+        fake.same_steps = lambda: [  # type: ignore[method-assign]
+            {"op": "same", "urn": urn_of(STACK_TYPE, "proj-production")}
+        ]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_RESTORED, out)
+        self.assertIn(f"1 {SERVER} of the old checkpoint did not preview as `same`", out)
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_a_preview_that_exits_non_zero_restores_even_when_every_step_is_allowed(self) -> None:
+        for code_given in (1, 7):
+            with self.subTest(exit=code_given):
+                ctx, fake, raw = self.start(export_doc(), drop=False)
+                fake.extra_steps = [step("create", HOST, "app-t1")]
+                fake.preview_code = code_given
+                code, out = self.run_it(rw.run_rewrap, ctx)
+                self.assertEqual(code, rw.EXIT_RESTORED, out)
+                self.assertIn(f"not allowed: `pulumi preview` exited {code_given} (other)", out)
+                self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
 
     def test_inspect_lists_every_ciphertext_and_exits_refused_without_the_flag(
         self,
@@ -1531,6 +1710,23 @@ resources:
 outputs:
   note: plain-text-output
 """
+# The program moves on after the state was written: one resource more (what main did when it
+# declared app-t1), one changed, one gone.
+BRIDGE_PROGRAM_WITH_NEW_PET = BRIDGE_PROGRAM.replace(
+    "outputs:\n",
+    f"""  pet2:
+    type: random:index/randomPet:RandomPet
+    properties:
+      length: 2
+    options:
+      version: {RANDOM_VERSION}
+outputs:
+""",
+)
+BRIDGE_PROGRAM_WITH_CHANGED_PET = BRIDGE_PROGRAM.replace("length: 2", "length: 3")
+BRIDGE_PROGRAM_WITHOUT_ID = (
+    BRIDGE_PROGRAM[: BRIDGE_PROGRAM.index("  id1:")] + "outputs:\n  note: x\n"
+)
 BRIDGE_PROGRAM_WITH_SECRET = BRIDGE_PROGRAM.replace(
     "outputs:\n",
     f"""  pw:
@@ -1721,6 +1917,66 @@ class RealBridgeTests(RealPulumiBase):
         self.assertIn(f"{len(outside)} encrypted value(s) remain after dropping", out)
         self.assertEqual(self.state_object().read_bytes(), original)
         self.assertFalse((self.state / "aside").exists())
+
+    def change_program(self, program: str) -> None:
+        (self.proj / "Pulumi.yaml").write_text(program, encoding="utf-8")
+
+    def test_a_real_preview_lists_every_resource_only_with_show_sames_and_exits_7_on_a_new_one(
+        self,
+    ) -> None:
+        """What a production run saw: 5 steps for 17 resources, and `exited 7` for a create."""
+        self.build(BRIDGE_PROGRAM)
+        self.change_program(BRIDGE_PROGRAM_WITH_NEW_PET)
+        plain = self.pulumi(self.proj, OLD_PASSPHRASE, "preview", "--stack", "production", "--json")
+        self.assertEqual(plain.returncode, 0, plain.stderr[:300])
+        self.assertEqual(sorted(rw.plan_problems(plain.stdout)[0]), ["create", "same"])
+        self.assertEqual(rw.plan_problems(plain.stdout)[0]["same"], 1, "the root stack only")
+        listed = self.pulumi(
+            self.proj, OLD_PASSPHRASE, "preview", "--stack", "production", "--json", "--show-sames"
+        )
+        self.assertEqual(listed.returncode, 0, listed.stderr[:300])
+        self.assertEqual(rw.plan_problems(listed.stdout)[0], {"same": 3, "create": 1})
+        expecting = self.preview(OLD_PASSPHRASE)
+        self.assertEqual(expecting.returncode, 7, expecting.stderr[:300])
+        self.assertIn("no changes were expected", expecting.stderr)
+
+    def test_a_resource_the_program_declares_and_the_state_never_held_is_allowed(self) -> None:
+        original = self.build(BRIDGE_PROGRAM)
+        before = self.export()
+        self.change_program(BRIDGE_PROGRAM_WITH_NEW_PET)
+
+        code, out = self.run_tool(extra=["--drop-reproducible"])
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("preview after the rewrite: 1 create, 3 same", out)
+        self.assertIn(
+            "  new, not in the old checkpoint, allowed: create of a random:index/randomPet:RandomPet",
+            out,
+        )
+        self.assertNotIn("not allowed", out)
+        after = self.export()
+        self.assertEqual(rw.count_encrypted(after), 0)
+        self.assertEqual(
+            set(delta_keys(after)), set(delta_keys(before)), "nothing was applied: no new resource"
+        )
+        self.assertEqual(len(deployment(after)["resources"]), len(deployment(before)["resources"]))  # type: ignore[arg-type]
+        aside = list((self.state / "aside" / "tenantsfixture").glob("production.*.test-1.json"))
+        self.assertEqual([a.read_bytes() for a in aside], [original])
+
+    def test_a_changed_or_removed_old_resource_is_refused_and_the_state_put_back(self) -> None:
+        for label, program, why in (
+            ("replace", BRIDGE_PROGRAM_WITH_CHANGED_PET, "that the old checkpoint holds"),
+            ("delete", BRIDGE_PROGRAM_WITHOUT_ID, "delete of a random:index/randomId:RandomId"),
+        ):
+            with self.subTest(label):
+                self.setUp()
+                original = self.build(BRIDGE_PROGRAM)
+                self.change_program(program)
+                code, out = self.run_tool(extra=["--drop-reproducible"])
+                self.assertEqual(code, rw.EXIT_RESTORED, out)
+                self.assertIn("not allowed", out)
+                self.assertIn(why, out)
+                self.assertIn("RESTORED", out)
+                self.assertEqual(self.state_object().read_bytes(), original)
 
 
 if __name__ == "__main__":

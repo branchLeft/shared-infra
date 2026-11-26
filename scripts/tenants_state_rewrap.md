@@ -47,7 +47,7 @@ older way when the key is absent or does not apply (`makeTerraformStateViaUpgrad
 plugin-framework `parseAndUpgradeResourceState` both fall back), and its own error message
 says "try removing the key and run Pulumi again". A later refresh writes it back. The
 listing says `DROP (the Terraform bridge's raw-state record ...)`. The same equality proof,
-the preview that may hold only `same` steps (so no replace, update or delete), the delete
+the preview that may hold no change to an old resource (so no replace, update or delete), the delete
 guard and the refresh preview all still run after the import, and any failure restores the
 aside copy. An encrypted value anywhere else in a resource, including a sibling of the
 record, still refuses.
@@ -68,9 +68,15 @@ record, still refuses.
    `secrets_providers` block from that empty stack's own export, write it into the old
    checkpoint, and prove by canonical-JSON equality that it is the only difference.
    `stack import` the result.
-5. Prove, applying nothing: `preview --expect-no-changes` must hold only `same` steps and
-   the `read` of a StackReference; the delete guard must pass that plan; the refresh
-   preview must show no change against the live project.
+5. Prove, applying nothing: `preview --show-sames` (no `--expect-no-changes`) is judged step
+   by step. Every URN the old checkpoint holds must be a `same` step, apart from a provider
+   (never listed) and the StackReference (a `read`). A `create` or an `import` is allowed
+   only for a URN the old checkpoint does not hold: that is the program declaring something
+   the state never had (the report says `new, not in the old checkpoint, allowed: ...`),
+   which a rewrite cannot cause. A `create` or `import` of an old URN means the rewrite lost
+   the resource, and refuses. Every other op, and a preview that exits non-zero, refuses.
+   The delete guard must pass that plan; the refresh preview must show no change against
+   the live project.
 6. Any failure, any interrupt and any termination signal after step 4 writes the aside
    copy back over the state object and reads it back. Exit codes: 0 done, 1 refused
    (nothing changed), 2 usage, 3 failed before the removal (nothing changed), 4 failed
@@ -95,6 +101,17 @@ refresh preview). The state bucket takes one object read, one write of the aside
 through Pulumi, the removal and re-creation of one stack's objects. `AwsCliStore` has no
 delete method. `stack rm` also deletes the stack's history and backup objects; the aside
 copy holds the checkpoint only, which is what a restore needs.
+
+## What the preview shows
+
+`pulumi preview --json` lists `same` steps only for the root stack unless it is given
+`--show-sames`: without it, 17 resources read as one step (a production run showed 5 steps
+for 17 resources, 3 of them changes the program declares for `app-t1`). `--expect-no-changes`
+makes the preview exit 7 for any change at all, a create included, and exit 1 for a real
+error (a program that fails), so `exited 7` means "changes were proposed", never an error.
+The preview therefore runs with `--show-sames` and without `--expect-no-changes`, and
+`plan_problems` does the judging. A test pins both exit codes and the step lists on a real
+binary.
 
 ## What it cannot prove
 
