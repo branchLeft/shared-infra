@@ -47,12 +47,13 @@ on:
   push:
     branches: [main]
 
-# One delivery at a time across every run that takes the per-host lock. The drift check joins
-# this group (ansible-drift-check.yml), because its host plans take the same flock. A run
-# queues behind an earlier run and never cancels it: cancelling an apply mid-way leaves a host
-# half-changed. GitHub keeps one pending run per group, so a newer pending run replaces an older
+# One delivery at a time: a run queues behind an earlier run and never cancels it, because
+# cancelling an apply mid-way leaves a host half-changed. A newer pending run replaces an older
 # pending one, which is safe because the newer head supersedes it. A run waiting for the
-# environment approval holds the group until it is approved or rejected.
+# environment approval holds the group until it is approved or rejected. The nightly drift check
+# is deliberately NOT in this group (ansible-drift-check.yml): a drift run pending here could
+# silently evict a delivery that waits behind an approval. Its plan jobs stay in the reusable
+# workflow's ansible-plan group (branchLeft/workspace#3053).
 concurrency:
   group: ansible-delivery-hosts
   cancel-in-progress: false
