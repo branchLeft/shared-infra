@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The default scenario runs the plan steps and the check-mode runs over the role with no digest
+# set. Here a digest is set and a bundle is fetched, which check mode cannot do (a download is not
+# made in check mode), so those steps would prove nothing. The second apply that checks
+# idempotence stays.
+check-fresh
+check-configured
+molecule-check

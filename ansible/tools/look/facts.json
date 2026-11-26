@@ -55,6 +55,83 @@
       "playbook": "ansible/playbooks/ops1.yml",
       "kind": "file_sha256",
       "path": "/usr/local/sbin/pull-trigger"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-0",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@0.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-1",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@1.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-2",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@2.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-3",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@3.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-4",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@4.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-5",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@5.service"
+    },
+    {
+      "issue": 4385,
+      "name": "demo1-router-unit-6",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-health-router@6.service"
+    },
+    {
+      "issue": 3782,
+      "name": "db1-compose-stack",
+      "playbook": "ansible/playbooks/db1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-compose@db.service"
+    },
+    {
+      "issue": 3899,
+      "name": "db1-binlog-ship-timer",
+      "playbook": "ansible/playbooks/db1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-db-binlog-ship.timer"
+    },
+    {
+      "issue": 4169,
+      "name": "ops1-provisioning-controller-ssh-public",
+      "playbook": "ansible/playbooks/ops1.yml",
+      "kind": "ssh_public_key",
+      "path": "/etc/branchleft/provisioning-controller/ssh.pub"
+    },
+    {
+      "issue": 2103,
+      "name": "ops1-uptime-90d",
+      "playbook": "ansible/playbooks/ops1.yml",
+      "kind": "uptime_90d",
+      "path": "/var/lib/branchleft/status-uptime/report.json"
     }
   ]
 }

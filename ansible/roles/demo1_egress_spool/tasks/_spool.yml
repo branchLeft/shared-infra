@@ -7,7 +7,7 @@
 # the unit is enabled and started. The start is best effort: its outcome is read
 # from the running container by _readback_spool.yml, which is what decides.
 - name: Check the drain token the owner placed
-  ansible.builtin.include_tasks: _token.yml
+  ansible.builtin.include_tasks: _drain_file.yml
 
 - name: Place the pinned Compose file and hold it to its posture
   ansible.builtin.include_tasks: _compose.yml

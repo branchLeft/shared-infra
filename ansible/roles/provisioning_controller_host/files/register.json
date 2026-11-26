@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "tenantId": "demo-tenant",
+      "mediaFolder": "demo-tenant",
+      "stateFolder": "f3a9c1d27b4e86a05d19c7e2",
+      "mediaBucket": "branchleft-media-demo-tenant",
+      "appHostSlot": "demo-tenant",
+      "appHostPort": 8101,
+      "appHostUid": 30001,
+      "hostnames": [],
+      "mail": false,
+      "backups": false,
+      "mediaMode": "s3",
+      "imageDigest": "sha256:8c9f2dc488c03454609e6573674f10f27ca162a440ff3f5910eaab48bafd9f3d"
+    }
+  ]
+}

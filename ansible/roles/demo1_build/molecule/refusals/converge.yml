@@ -783,7 +783,7 @@
   vars:
     converge_case: {}
 
-# The host scan (_secret_holders.yml) refuses a secret-bearing file the holder list does not
+# The host scan (_holder_scan.yml) refuses a secret-bearing file the holder list does not
 # name, by its content, its name or where it sits, and names the path, never a value. The
 # control is the host as prepared, which holds only what the list names, and is accepted.
 - name: Accept the host as prepared, which holds only the files the holder list names
@@ -846,6 +846,13 @@
       plant: [home_ansible]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
+- name: Case refused_secret_bulk, refuse forty files with a message that stays short
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [bulk]
+      expect: '40 unlisted path(s)'
+
 - name: Case refused_secret_forms, refuse each content shape the holder list does not name
   ansible.builtin.import_playbook: refused_secret.yml
   vars:
@@ -870,6 +877,24 @@
       plant: [binkey]
       expect: 'holds a secret-bearing file that is not on its holder list'
 
+# Installed code is left out of the scan's count by three exact roots, and the mail spool's Compose file
+# has a row. The first case is accepted; the second plants the same files with a real secret-looking
+# file beside each root and must refuse the strays only, never naming an installed file.
+- name: Accept installed code under the three roots and the mail spool's Compose file
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [installed]
+      accepted: true
+
+- name: Case refused_secret_stray, refuse a secret beside each installed-code root and name no installed file
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [installed, stray]
+      absent: [installed]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
 # Root's authorized_keys is named by a holder row (an owner-approved row). Both key files are
 # accepted by their rows; the control above proves the host as prepared is accepted.
 - name: Accept root's authorised_keys and the ansible-ci account's authorised_keys, both listed
@@ -878,6 +903,22 @@
     converge_case:
       plant: [keys]
       accepted: true
+
+# The node exporter's TLS server key is named by its holder row and accepted; a different .key in the
+# same directory is refused, so the row names one file and not the directory.
+- name: Accept the node exporter TLS server key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tls]
+      accepted: true
+
+- name: Case refused_secret_tls_other, refuse a different .key beside the node exporter's key
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tls_other]
+      expect: 'holds a secret-bearing file that is not on its holder list'
 
 # The broker verify key is named by a holder row, and the row accepts the file (the binary key name
 # rule finds it, and the row lists it).

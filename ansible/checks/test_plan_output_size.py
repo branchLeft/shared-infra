@@ -9,6 +9,9 @@ is over 300,000 bytes (900,000 in all) or matches the secret scan. demo1's plan 
   many items as the host has links. A loop over a fixed list or a registered result of one is
   bounded by the role, and is not a finding. The one loop over a host list that remains is named in
   BOUNDED_HOST_LOOPS with the reason it is small.
+- the refusal of the host scan (roles/demo1_build/tasks/_holder_scan.yml) names a bounded part of
+  the unlisted paths. A host once held thousands, and a message naming every one was 486,151 bytes,
+  printed twice, in front of the credential scan.
 - the files the roles copy, with their diffs shown, add up to less than SHOWN_DIFF_BUDGET bytes.
   Ansible skips the diff of a source over 104,448 bytes, and a task that sets `diff: false` shows
   none, so only the rest is counted, once per loop item.
@@ -54,6 +57,26 @@ BOUNDED_HOST_LOOPS: dict[tuple[str, str], str] = {
 }
 HOST_LISTS = re.compile(r"\.(stdout_lines|stdout|files|content)\b")
 LOOP_KEYS = ("loop", "with_items", "with_list", "with_dict", "with_fileglob", "with_lines")
+
+
+SECRET_HOLDERS = ROOT / "ansible" / "roles" / "demo1_build" / "tasks" / "_holder_scan.yml"
+DEMO1_VARS = ROOT / "ansible" / "roles" / "demo1_build" / "vars" / "main.yml"
+# The most paths and directories a refusal may name, and what one full message may weigh.
+MOST_PATHS_NAMED = 50
+MOST_DIRECTORIES_NAMED = 20
+# A name of a list in a message that is bounded by what the role does to it before the message.
+SHOWN_LISTS = ("demo1_build_secret_unlisted_shown", "demo1_build_secret_unlisted_by_directory")
+JOIN_OF = re.compile(r"(\w+)\s*\|\s*join\b")
+
+
+def refusal_messages() -> Iterator[tuple[str, str]]:
+    """Yield (task name, message) of each fail and debug task of the host scan."""
+    document, _problem = load_yaml(SECRET_HOLDERS)
+    for task in document if isinstance(document, list) else []:
+        for module in ("ansible.builtin.fail", "ansible.builtin.debug"):
+            args = task.get(module)
+            if isinstance(args, dict) and isinstance(args.get("msg"), str):
+                yield str(task.get("name", "")), args["msg"]
 
 
 def demo1_role_names() -> list[str]:
@@ -128,6 +151,34 @@ class PlanOutputSizeCase(unittest.TestCase):
         self.assertTrue(HOST_LISTS.search("{{ found.stdout_lines | zip(other.stdout_lines) }}"))
         self.assertFalse(HOST_LISTS.search("{{ demo1_build_slots }}"))
         self.assertFalse(HOST_LISTS.search("{{ demo1_build_units_load.results }}"))
+
+    def test_the_refusal_of_the_host_scan_names_a_bounded_part_of_the_paths(self) -> None:
+        messages = dict(refusal_messages())
+        refusal = "Refuse a host that holds a secret-bearing file the holder list does not name"
+        self.assertIn(refusal, messages)
+        for name, message in messages.items():
+            for listed in JOIN_OF.findall(message):
+                self.assertIn(
+                    listed, SHOWN_LISTS, f"{name}: joins {listed}, which grows with the host"
+                )
+        self.assertNotIn(
+            "demo1_build_secret_unlisted |",
+            messages[refusal].replace("demo1_build_secret_unlisted | length", ""),
+        )
+        document, _problem = load_yaml(DEMO1_VARS)
+        if not isinstance(document, dict):
+            self.fail("vars/main.yml is not a mapping")
+        shown = document.get("demo1_build_secret_refusal_paths_shown")
+        directories = document.get("demo1_build_secret_refusal_directories_shown")
+        self.assertTrue(isinstance(shown, int) and 1 <= shown <= MOST_PATHS_NAMED)
+        self.assertTrue(isinstance(directories, int) and 1 <= directories <= MOST_DIRECTORIES_NAMED)
+
+    def test_a_message_joining_every_unlisted_path_is_found(self) -> None:
+        self.assertEqual(
+            ["demo1_build_secret_unlisted"],
+            JOIN_OF.findall("{{ demo1_build_secret_unlisted | join(', ') }}"),
+        )
+        self.assertEqual(["x_shown"], JOIN_OF.findall("{{ x_shown | join(', ') }}"))
 
     def test_the_shown_diff_of_the_copied_files_is_inside_the_budget(self) -> None:
         total, sized = shown_diff_bytes(ROOT, demo1_role_names())

@@ -135,6 +135,30 @@ db_t1_secret_file_mode: '0600'
 db_t1_root_user_id: 0
 db_t1_root_group_id: 0
 
+# ----- The registry read key (written from two optional host inputs, tasks/_registry_key.yml) -----
+
+# The one directory docker reads the host's registry login from. branchleft-compose@.service and the
+# deploy program set DOCKER_CONFIG to it, and deploy_verifier holds the directory and the file to the
+# owner and modes below (checks/test_registry_key_callers.py holds the path to its copies). This role
+# pulls through the deploy program and starts no image itself, so it keeps the path here and sets
+# DOCKER_CONFIG nowhere.
+db_t1_registry_parent_directory: /etc/branchleft/registry
+db_t1_registry_docker_directory: /etc/branchleft/registry/docker
+db_t1_registry_config_path: /etc/branchleft/registry/docker/config.json
+db_t1_registry_host: ghcr.io
+# The two optional inputs, read once. They have no default (a row input of the loader may not: the
+# loader leaves an absent one unset), so the role reads them through these names, and an absent
+# input and an empty one are the same thing: no key is written.
+db_t1_registry_login_value: "{{ db_t1_registry_login | default('') }}"
+db_t1_registry_token_value: "{{ db_t1_registry_token | default('') }}"
+db_t1_registry_file_mode: '0600'
+# A GitHub login: letters and digits with single hyphens inside, 39 characters at most. A colon would
+# split the login from the token in the auth value.
+db_t1_registry_login_pattern: '^[A-Za-z0-9]([A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}\Z'
+# A classic personal access token. The registry reads packages only through a classic token, so a
+# fine-grained one (github_pat_) is refused here rather than at the first pull.
+db_t1_registry_token_pattern: '^ghp_[A-Za-z0-9]{36,255}\Z'
+
 # ----- The metrics exporter -----
 
 # The MySQL exporter that runs beside the database, the same attested image db1 runs

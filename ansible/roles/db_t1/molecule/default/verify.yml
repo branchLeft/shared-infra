@@ -29,6 +29,9 @@
         - '{{ db_t1_verify_project }}/conf.d/branchleft.cnf'
         - /etc/branchleft/dbt1.image.env
         - /etc/branchleft/dbt1.env
+        - /etc/branchleft/registry
+        - /etc/branchleft/registry/docker
+        - /etc/branchleft/registry/docker/config.json
       register: db_t1_verify_paths
 
     - name: Assert the directories are root-owned 0755 and the socket directory belongs to the container user
@@ -67,6 +70,43 @@
           - db_t1_verify_paths.results[9].stat.uid == 0
         quiet: true
         fail_msg: The pin or the owner-placed root file is not a plain root 0600 file.
+
+    # The registry key the converge gave the role: the directory above is root 0755, the key
+    # directory root 0700 and the file root 0600, a plain file. The content is compared on the
+    # controller with the sentinel and never printed.
+    - name: Assert the registry key directory and file are root's and closed
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_paths.results[10].stat.isdir
+          - db_t1_verify_paths.results[10].stat.mode == '0755'
+          - db_t1_verify_paths.results[11].stat.isdir
+          - db_t1_verify_paths.results[11].stat.mode == '0700'
+          - db_t1_verify_paths.results[12].stat.isreg
+          - not db_t1_verify_paths.results[12].stat.islnk
+          - db_t1_verify_paths.results[12].stat.mode == '0600'
+          - db_t1_verify_paths.results[12].stat.pw_name == 'root'
+          - db_t1_verify_paths.results[12].stat.gr_name == 'root'
+          - db_t1_verify_paths.results[10:13] | map(attribute='stat.uid') | unique | list == [0]
+        quiet: true
+        fail_msg: The registry key directory or file is missing, not closed, or not root's.
+
+    - name: Read the registry key the role wrote
+      ansible.builtin.slurp:
+        src: /etc/branchleft/registry/docker/config.json
+      register: db_t1_verify_registry
+      no_log: true
+
+    - name: Assert the registry key holds one entry for ghcr.io made from the login and the sentinel
+      ansible.builtin.assert:
+        that:
+          - >-
+            db_t1_verify_registry_doc ==
+            {'auths': {'ghcr.io': {'auth': (('scenario-reader' ~ ':' ~ db_t1_verify_registry_token) | b64encode)}}}
+        quiet: true
+      vars:
+        db_t1_verify_registry_doc: '{{ db_t1_verify_registry.content | b64decode | from_json }}'
+        db_t1_verify_registry_token: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/registry_token') }}"
+      no_log: true
 
     - name: Read the delivered files
       ansible.builtin.slurp:
@@ -250,6 +290,7 @@
       ansible.builtin.set_fact:
         db_t1_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
         db_t1_verify_sentinel: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/root_value') }}"
+        db_t1_verify_registry_sentinel: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/registry_token') }}"
       no_log: true
 
     - name: Assert the log shows the control case and the role's tasks
@@ -257,6 +298,7 @@
         that:
           - "'SCENARIO_LOG_CANARY' in db_t1_verify_log"
           - "'Look for the one expected line in the root file' in db_t1_verify_log"
+          - "'Write the registry key as a Docker config with one entry' in db_t1_verify_log"
         quiet: true
         fail_msg: The log lacks the canary or a task of the role, so an empty scan would prove nothing.
 
@@ -267,4 +309,17 @@
           - db_t1_verify_sentinel | length == 40
         quiet: true
         fail_msg: The throwaway root value appears in the log, or the sentinel is not the expected one. The value is not printed.
+      no_log: true
+
+    # The token, and the base64 of the login and token the file holds, are in no log. The base64 is
+    # made here from the sentinel, so a leak of the encoded value is found as well as of the text.
+    - name: Assert the registry token is in no log, as text or as the encoded entry
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_registry_sentinel not in db_t1_verify_log
+          - db_t1_verify_registry_sentinel[4:] not in db_t1_verify_log
+          - (('scenario-reader' ~ ':' ~ db_t1_verify_registry_sentinel) | b64encode) not in db_t1_verify_log
+          - db_t1_verify_registry_sentinel | length == 40
+        quiet: true
+        fail_msg: The throwaway registry token appears in the log, or the sentinel is not the expected one. The value is not printed.
       no_log: true

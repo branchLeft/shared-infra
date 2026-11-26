@@ -1,0 +1,122 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the two bundles built in prepare
+      ansible.builtin.stat:
+        path: '{{ scenario_fixture_dir }}/bundle-{{ item }}.tar.gz'
+        checksum_algorithm: sha256
+      loop:
+        - good
+        - noexec
+      register: provisioning_controller_host_fixture_stats
+
+    - name: Hold each bundle's digest
+      ansible.builtin.set_fact:
+        provisioning_controller_host_good_digest: '{{ provisioning_controller_host_fixture_stats.results[0].stat.checksum }}'
+        provisioning_controller_host_noexec_digest: '{{ provisioning_controller_host_fixture_stats.results[1].stat.checksum }}'
+
+    # The two control cases below need a host the role has not delivered, so the second converge
+    # (the idempotence step) skips them: the link is there by then.
+    - name: Look for the link, which only a delivered host has
+      ansible.builtin.stat:
+        path: '{{ scenario_current }}'
+        follow: false
+        get_checksum: false
+      register: provisioning_controller_host_before
+
+    # The control case for the digest pin, run first on a host the role has not yet delivered. A
+    # well-formed digest the download does not have must stop the role at the download, before
+    # anything is unpacked, before the link is made and before any unit exists to be turned on,
+    # so no trigger is left installed, enabled or running. The assertion names the checksum, so a
+    # failure of any other kind does not pass for this one.
+    - name: Prove a wrong digest is refused, and leaves the controller off
+      when: not ansible_check_mode and not provisioning_controller_host_before.stat.exists
+      block:
+        - name: Apply the role with a digest the bundle does not have
+          ansible.builtin.include_role:
+            name: branchleft.provisioning_controller_host
+          vars:
+            provisioning_controller_host_edge1_jump_user: '{{ scenario_edge1_user }}'
+            provisioning_controller_host_edget_jump_user: '{{ scenario_edget_user }}'
+            provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_edget_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_app_t1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_db_t1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+            provisioning_controller_host_bundle_sha256: '{{ scenario_wrong_digest }}'
+            provisioning_controller_host_bundle_url: '{{ scenario_good_url }}'
+        - name: Fail if the wrong digest was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a bundle that does not have the pinned digest.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong digest for a reason other than the checksum.
+
+        - name: Look for the link and the three units the failed apply must not have left on
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            follow: false
+            get_checksum: false
+          loop:
+            - '{{ scenario_current }}'
+            - /etc/systemd/system/provisioning-controller.path
+            - /etc/systemd/system/provisioning-controller.timer
+            - /etc/systemd/system/multi-user.target.wants/provisioning-controller.path
+            - /etc/systemd/system/timers.target.wants/provisioning-controller.timer
+          register: provisioning_controller_host_after_wrong
+
+        - name: Require no link, no unit and no enablement after the refused digest
+          ansible.builtin.assert:
+            that:
+              - provisioning_controller_host_after_wrong.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+            quiet: true
+            fail_msg: A digest that does not match the bundle left the controller linked or its triggers installed.
+
+    # The control case for the program check. A bundle whose bin/provisioning-controller is not
+    # executable has the right digest and unpacks, and the role must still refuse to link it.
+    - name: Prove a bundle without an executable program is refused
+      when: not ansible_check_mode and not provisioning_controller_host_before.stat.exists
+      block:
+        - name: Apply the role with the bundle whose program is not executable
+          ansible.builtin.include_role:
+            name: branchleft.provisioning_controller_host
+          vars:
+            provisioning_controller_host_edge1_jump_user: '{{ scenario_edge1_user }}'
+            provisioning_controller_host_edget_jump_user: '{{ scenario_edget_user }}'
+            provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_edget_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_app_t1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_db_t1_host_key: '{{ scenario_host_key }}'
+            provisioning_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+            provisioning_controller_host_bundle_sha256: '{{ provisioning_controller_host_noexec_digest }}'
+            provisioning_controller_host_bundle_url: '{{ scenario_noexec_url }}'
+        - name: Fail if the bundle without an executable was accepted
+          ansible.builtin.fail:
+            msg: The role linked a bundle whose program is not executable.
+      rescue:
+        - name: Assert the failure was the program check
+          ansible.builtin.assert:
+            that:
+              - "'root-owned executable' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed on the bundle without an executable for a reason other than the program check.
+
+    - name: Apply the role with the good bundle's digest
+      ansible.builtin.include_role:
+        name: branchleft.provisioning_controller_host
+      vars:
+        provisioning_controller_host_edge1_jump_user: '{{ scenario_edge1_user }}'
+        provisioning_controller_host_edget_jump_user: '{{ scenario_edget_user }}'
+        provisioning_controller_host_edge1_host_key: '{{ scenario_host_key }}'
+        provisioning_controller_host_edget_host_key: '{{ scenario_host_key }}'
+        provisioning_controller_host_app_t1_host_key: '{{ scenario_host_key }}'
+        provisioning_controller_host_db_t1_host_key: '{{ scenario_host_key }}'
+        provisioning_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+        provisioning_controller_host_bundle_sha256: '{{ provisioning_controller_host_good_digest }}'
+        provisioning_controller_host_bundle_url: '{{ scenario_good_url }}'

@@ -25,6 +25,7 @@ from check_enrolment import (
     MAIL_COLLECTOR_KEYS,
     OPTIONAL_OWNER_KEYS,
     OWNER_VARS_KEYS,
+    PROVISIONING_CONTROLLER_TEXT_KEYS,
     PULL_ROLES,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
@@ -1238,6 +1239,7 @@ class Sabotage(unittest.TestCase):
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n  - key: {key} d\n    destinations: [db-t1]\n"
             "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
+            "host_tls_identity_peer_cert: ''\n"
         )
         self.assertEqual(check(self.root), [])
 
@@ -1650,6 +1652,7 @@ class Sabotage(unittest.TestCase):
                     "control_plane_db_apps_image",
                     "pull_trigger_steps",
                     *RING_CONTROLLER_TEXT_KEYS,
+                    *PROVISIONING_CONTROLLER_TEXT_KEYS,
                 ]
             ),
             sorted(self._ops1_keys()),

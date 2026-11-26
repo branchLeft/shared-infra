@@ -1233,6 +1233,9 @@ describe('the committed stack directory', () => {
     await expect(renderPrometheusConfig(sites)).toMatchFileSnapshot(
       './stack/prometheus/prometheus.yml'
     );
+    await expect(renderPrometheusConfig(sites, { demo1Scrape: true })).toMatchFileSnapshot(
+      './stack/prometheus/prometheus.demo1.yml'
+    );
     await expect(renderAlertRules()).toMatchFileSnapshot('./stack/prometheus/alerts.yml');
     await expect(renderAlertmanagerEmailTemplate()).toMatchFileSnapshot(
       './stack/alertmanager/email.gotmpl'
@@ -1355,7 +1358,9 @@ describe('the tenant hosts', () => {
 
 describe('demo1, scraped over its public address with a verified client certificate', () => {
   const demo1 = MONITORED_NODE_HOSTS.find((host) => host.name === 'demo1');
-  const promConfig = renderPrometheusConfig(sites);
+  // The rendering that names demo1's files. The default one names none (see the
+  // describe below), so every assertion about the scrape reads this one.
+  const promConfig = renderPrometheusConfig(sites, { demo1Scrape: true });
   const rules = renderAlertRules();
   const compose = readFileSync(join(__dirname, 'stack', 'compose.yml'), 'utf8');
   const promtoolCases = ['alert_rules_test.yml', 'alert_rules_memory_test.yml']
@@ -1366,14 +1371,9 @@ describe('demo1, scraped over its public address with a verified client certific
     expect(MONITORED_NODE_HOSTS.at(-1)?.name).toBe('demo1');
     expect(demo1?.address).toBe(DEMO1_PUBLIC_IPV4);
     expect(demo1?.expectedUp).toBe(false);
-  });
-
-  // edge1 has no pin (ca.crt) until the owner sets host_tls_identity_peer_cert, and Prometheus stops
-  // at config load on a tls_config file that is missing, so the job is not emitted.
-  it('is not in the rendered config, so no demo1 file or address is named', () => {
-    expect(promConfig).not.toContain(DEMO1_PUBLIC_IPV4);
-    expect(promConfig).not.toContain('host: demo1');
-    expect(promConfig).not.toContain(DEMO1_METRICS_TLS_DIR);
+    expect(promConfig).toContain(
+      `targets: ['${DEMO1_PUBLIC_IPV4}:${NODE_EXPORTER_PORT}']\n        labels: {host: demo1, expected_up: 'false', __scheme__: https}`
+    );
   });
 
   it("holds demo1's address equal to the one the jump destinations already carry, so two homes cannot drift apart unseen", () => {
@@ -1384,18 +1384,25 @@ describe('demo1, scraped over its public address with a verified client certific
     expect(ownerVars).toContain(`  - '${DEMO1_PUBLIC_IPV4}'\n`);
   });
 
-  it('is the only node target marked for https, and none is rendered; every private-network target stays plain', () => {
+  it('is the only node target scraped over https; every private-network target stays plain', () => {
     const nodeJob = promConfig.slice(promConfig.indexOf('  - job_name: node\n'));
     const nodeSection = nodeJob.slice(0, nodeJob.indexOf('  - job_name: mysqld'));
-    expect(nodeSection).not.toContain('__scheme__');
+    expect(nodeSection.match(/__scheme__/g)).toHaveLength(1);
     expect(
       MONITORED_NODE_HOSTS.filter((host) => host.publicTls === true).map((h) => h.name)
     ).toEqual(['demo1']);
   });
 
-  it('names no certificate file while the demo1 job is not emitted', () => {
-    expect(promConfig).not.toMatch(/ca_file|cert_file|key_file/);
-    expect(promConfig).not.toContain(`server_name: ${DEMO1_METRICS_SERVER_NAME}`);
+  it('verifies the exporter against the monitoring CA and presents a client certificate, all by file path', () => {
+    expect(promConfig).toContain(
+      [
+        '    tls_config:',
+        `      ca_file: ${DEMO1_METRICS_TLS_DIR}/ca.crt`,
+        `      cert_file: ${DEMO1_METRICS_TLS_DIR}/client.crt`,
+        `      key_file: ${DEMO1_METRICS_TLS_DIR}/client.key`,
+        `      server_name: ${DEMO1_METRICS_SERVER_NAME}`,
+      ].join('\n')
+    );
     // Verification must never be switched off for the public scrape.
     expect(promConfig).not.toMatch(/insecure_skip_verify:\s*true/);
   });
@@ -1438,5 +1445,50 @@ describe('demo1, scraped over its public address with a verified client certific
         alert
       ).toBe(true);
     }
+  });
+});
+
+describe("the config Prometheus loads before the owner has supplied demo1's certificate", () => {
+  // edge1 reads every file a tls_config names when Prometheus loads its configuration, and the pin
+  // (ca.crt) exists only once host_tls_identity_peer_cert is set. The default rendering must
+  // therefore name none of demo1's files; the demo1 rendering is a second file the host takes
+  // only when that value is set (ansible/roles/monitoring_stack).
+  const withoutDemo1 = renderPrometheusConfig(sites);
+  const withDemo1 = renderPrometheusConfig(sites, { demo1Scrape: true });
+
+  it('names no TLS file, no https target and not demo1', () => {
+    // mx1's own scrape keeps its `server_name`; no job names a file Prometheus must read.
+    expect(withoutDemo1).not.toMatch(/ca_file|cert_file|key_file/);
+    expect(withoutDemo1).not.toContain(`server_name: ${DEMO1_METRICS_SERVER_NAME}`);
+    expect(withoutDemo1).not.toContain(DEMO1_METRICS_TLS_DIR);
+    expect(withoutDemo1).not.toContain(DEMO1_PUBLIC_IPV4);
+    expect(withoutDemo1).not.toContain('__scheme__');
+    expect(withoutDemo1).not.toContain('host: demo1');
+  });
+
+  it('is the demo1 rendering with the demo1 target, its job-level TLS settings and its banner taken out, and nothing else', () => {
+    const stripped = withDemo1
+      .replace(/ {6}- targets: \['[^']+'\]\n {8}labels: \{[^}]*__scheme__: https\}\n/, '')
+      .replace(/ {4}tls_config:\n {6}ca_file:.*\n(?: {6}\S.*\n)+/, '')
+      .replace(/^# This variant scrapes demo1\..*\n# host_tls_identity_peer_cert.*\n/m, '');
+    expect(stripped).toBe(withoutDemo1);
+  });
+
+  it('keeps every other node target, the tenant tunnel rows included', () => {
+    for (const name of ['edge1', 'app1', 'db1', 'ops1', 'db-t1', 'app-t1', 'edge-t']) {
+      expect(withoutDemo1, name).toContain(`host: ${name},`);
+    }
+  });
+
+  it('is the one the container mounts as prometheus.yml, and the demo1 rendering is not mounted under its own name', () => {
+    const compose = readFileSync(join(__dirname, 'stack', 'compose.yml'), 'utf8');
+    expect(compose).toContain('./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro');
+    expect(compose).not.toContain('prometheus.demo1.yml');
+  });
+
+  it('is the committed prometheus.yml, and the demo1 rendering is the committed prometheus.demo1.yml', () => {
+    const dir = join(__dirname, 'stack', 'prometheus');
+    expect(readFileSync(join(dir, 'prometheus.yml'), 'utf8')).toBe(withoutDemo1);
+    expect(readFileSync(join(dir, 'prometheus.demo1.yml'), 'utf8')).toBe(withDemo1);
   });
 });

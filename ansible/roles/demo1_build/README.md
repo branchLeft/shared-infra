@@ -35,7 +35,7 @@ What the role does, in the order of `tasks/main.yml`:
    them); the broker's slots directory is `broker:broker` `0755`; and, when
    `broker.env` exists, it holds exactly one drain-flag line,
    `BROKER_DRAIN_FLAG_DIR=/var/lib/branchleft-broker/drain-flags`.
-   2a. **Refuses a secret the holder list does not name** (`_secret_holders.yml`), read-only
+   2a. **Refuses a secret the holder list does not name** (`_holder_scan.yml`), read-only
    and before anything is staged or written. demo1 holds only the secrets listed in
    `demo1_build_secret_holders` (`vars/main.yml`). The step finds secret-bearing files under
    `/etc`, `/root`, `/home`, `/opt`, `/srv`, `/var/backups` and `/var/lib` by name (an
@@ -49,7 +49,23 @@ What the role does, in the order of `tasks/main.yml`:
    is. Ansible's module payload directory, `/root/.ansible/tmp`, is not read; the rest of
    `/root/.ansible` and every other `.ansible` is. A symbolic link
    under the roots is followed for its target; a link whose name or target is a secret path
-   refuses. A found path that no row names refuses the run, naming the path and never a value.
+   refuses. A found path that no row names refuses the run, naming paths and never a value. The
+   refusal is bounded: the count of unlisted paths, the ten directories (three levels deep) holding
+   the most of them, and the first twenty paths in order, with `:` and `=` in a path shown as `?`
+   so a path never reads as an assignment to the plan scan. A host once held thousands (a refusal of
+   486,151 bytes, printed twice, over the plan's 300,000-byte cap), so the message never grows with
+   the host (`ansible/checks/test_plan_output_size.py`, the `bulk` case of `molecule/refusals`).
+   Installed code is not counted: a found path under one of three exact roots,
+   `/opt/ansible-runtime` (the Ansible toolchain's environments and hash-locked requirements),
+   `/var/lib/pull-trigger` (the pull program's cache and work trees) and `/opt/branchleft/broker/node`
+   (the Node runtime, unpacked from a sha256-pinned tarball), is dropped from the found list
+   (`demo1_build_secret_installed_roots`). Each root is the directory one role installs into,
+   pinned to that role's variable by `tests/unit/test_installed_roots.py`. The scan still reads
+   the trees (grep cannot prune by path) and counts a secret beside them: a sibling such as
+   `/opt/ansible-runtime-other`, the rest of `/opt/branchleft` and the broker's `releases` directory.
+   The mail spool's Compose file, which names the drain secret's variable and not its value, has a
+   holder row of its own (`/opt/branchleft/mail-spool/compose.yml`); another file in that directory
+   is still found.
    The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
    runbook Part 3) is listed. A host the list covers is
    accepted and says how many files it found. A plan runs the step too.
@@ -119,7 +135,7 @@ What the role does, in the order of `tasks/main.yml`:
    not touched, and a router already running keeps the code it started with. The role does not check
    that a router is active or listening; that is proved on the host (see "Health routers").
 9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
-   `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
+   `_dns_file.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
    directory, for the owner to diff against the live edge before going live.
    `edge-upstreams.caddy` is the edge's upstream snippets, rendered by the pinned edge
    renderer. `Caddyfile` is the one combined candidate: the pinned site renderer is
@@ -1071,6 +1087,7 @@ assertion fires in its place or a later one is the only one left:
 | The sidecar digest check of `_inputs.yml` removed, or its pattern loosened (a capital, a line break)      | refusals, `converge`                    | "The role accepted a sidecar digest that is not a bare sha256 digest.", for the capitals and the trailing-line-break cases    |
 | `_sidecar_pin.yml` removed from `main.yml`, or the file written with another owner, mode or line          | default, `verify`                       | "The sidecar's pin file is missing, is not a root:root mode 0644 regular file, or does not hold exactly the one line"         |
 | The image name given a registry host, the path or the variable renamed                                    | CI, `test_sidecar_pin.py`               | the name, path, variable or wrapper-reader test of the sidecar pin file                                                       |
+| A task file named with a plan-scan word (a failure prints it in `Origin:`)                                | CI, `test_plan_output_scan.py`          | "a failure in these files prints a line the plan scan withholds the plan for"                                                 |
 | `_vendored.yml` moved after another step of `main.yml`                                                    | CI, `test_demo1_no_github_fetch.py`     | "main.yml includes ... first, not _inputs.yml then _vendored.yml"                                                             |
 | `etc_hosts` removed from `molecule.yml`                                                                   | default and refusals, `verify`          | "resolves to an address outside the container, so the block on it is not in force"                                            |
 | The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                                 |
@@ -1088,7 +1105,7 @@ assertion fires in its place or a later one is the only one left:
 | The renderer's output not hidden (`no_log: false` on the render task)                                     | refusals, `verify`                      | "The scenario's log does not hold the scan control, or it holds the canary", for the leak case                                |
 | The staged Caddyfile written with mode 0644                                                               | default, `verify`                       | "The staged Caddyfile is not a regular file of root:root mode 0600."                                                          |
 | The NOT rendered notice made silent                                                                       | default, `converge`                     | "The site candidates are not the five slots with no edge input, a slot with no input was not named as NOT rendered"           |
-| The token link check removed (`_dns_token.yml`)                                                           | refusals, `converge`                    | "is a link.", for `refused_token_link`; the next check then refuses it with another message                                   |
+| The token link check removed (`_dns_file.yml`)                                                            | refusals, `converge`                    | "is a link.", for `refused_token_link`; the next check then refuses it with another message                                   |
 | The token regular-file check removed                                                                      | refusals, `converge`                    | "is not a regular file.", for `refused_token_directory`; the mode check then refuses it instead                               |
 | The token owner check removed                                                                             | refusals, `converge`                    | "is not root:root.", for `refused_token_not_root`                                                                             |
 | The token mode check removed                                                                              | refusals, `converge`                    | "is mode 0644.", for `refused_token_mode_0644`                                                                                |
