@@ -3,7 +3,9 @@
 # prepares the stack and deploys nothing. The value is the digest of the attested
 # Percona Server image that ghost-platform's Percona image workflow pushed, scanned
 # and signed, and its name is in the deploy program's register, so the host
-# verifies the signature before it pins. The register entry and this digest change
+# verifies the signature before it pins. The package is public (owner's ruling of
+# 26 Nov 2026, branchLeft/workspace#4401), so the host pulls it and reads the
+# signature with no login. The register entry and this digest change
 # in the same pull request, so a reviewer sees both together. The role deploys it
 # once, on an empty host; it never replaces a running database's image.
 db_t1_image: 'ghcr.io/branchleft/percona-server@sha256:20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696'

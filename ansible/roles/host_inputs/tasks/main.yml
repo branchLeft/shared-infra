@@ -250,8 +250,6 @@
     tenant_entry_bind_address: "{{ host_inputs_doc['tenant_entry_bind_address'] | default(omit) }}"
     db_t1_tenant_entry_controller_key: "{{ host_inputs_doc['db_t1_tenant_entry_controller_key'] | default(omit) }}"
     db_t1_tenant_entry_controller_address: "{{ host_inputs_doc['db_t1_tenant_entry_controller_address'] | default(omit) }}"
-    db_t1_registry_login: "{{ host_inputs_doc['db_t1_registry_login'] | default(omit) }}"
-    db_t1_registry_token: "{{ host_inputs_doc['db_t1_registry_token'] | default(omit) }}"
     mx1_abuse_page_token: "{{ host_inputs_doc['mx1_abuse_page_token'] | default(omit) }}"
     broker_deploy_owner_due_diligence_email: "{{ host_inputs_doc['broker_deploy_owner_due_diligence_email'] | default(omit) }}"
   no_log: true
