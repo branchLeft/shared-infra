@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import math
 import os
 import re
 import select
@@ -236,12 +237,24 @@ LOOK_SSH_KEY_BLOB: Final = r"[A-Za-z0-9+/]{16,1024}={0,2}"
 LOOK_MAX_KEY_BYTES: Final = 8192
 LOOK_SSH_KEY_TYPE_PATTERN: Final = "|".join(re.escape(name) for name in LOOK_SSH_KEY_TYPES)
 LOOK_SSH_KEY_TYPE_RE: Final = re.compile(LOOK_SSH_KEY_TYPE_PATTERN)
+# The one report an uptime_90d fact may read: the 90-day report the status page's collector
+# writes (ansible/roles/status_page). Exactly this path. Only one endpoint's uptime percentage and
+# the report's generated-at time are printed; every other field of the report is dropped.
+LOOK_UPTIME_REPORT_PATH: Final = "/var/lib/branchleft/status-uptime/report.json"
+LOOK_MAX_REPORT_BYTES: Final = 1_048_576
+LOOK_UPTIME_WINDOW_DAYS: Final = 90
+LOOK_REPORT_KEY: Final = r"[a-z0-9_-]{1,64}"
+LOOK_REPORT_KEY_RE: Final = re.compile(LOOK_REPORT_KEY)
+LOOK_UPTIME_FIGURE: Final = r"[0-9]{1,3}\.[0-9]{4}"
+LOOK_UPTIME_PAIR: Final = rf"{LOOK_REPORT_KEY}={LOOK_UPTIME_FIGURE}"
+LOOK_UTC_TIME: Final = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+LOOK_UTC_TIME_RE: Final = re.compile(LOOK_UTC_TIME)
 # The only shape a fact line may have. A line that does not match is never printed.
 LOOK_LINE: Final = re.compile(
     r"look issue=[0-9]{1,8} name=[a-z][a-z0-9-]{0,47} "
-    r"kind=(?:file_sha256|unit_active|http_status|ssh_public_key) "
+    r"kind=(?:file_sha256|unit_active|http_status|ssh_public_key|uptime_90d) "
     rf"result=(?:[0-9a-f]{{64}}|[0-9]{{3}}|[a-z]+(?:-[a-z]+)*|(?:{LOOK_SSH_KEY_TYPE_PATTERN}) "
-    rf"{LOOK_SSH_KEY_BLOB})"
+    rf"{LOOK_SSH_KEY_BLOB}|(?:{LOOK_UPTIME_PAIR} )*{LOOK_UTC_TIME})"
 )
 
 Clock = Callable[[], datetime]
@@ -384,6 +397,7 @@ class LookKind(enum.Enum):
     UNIT_ACTIVE = "unit_active"
     HTTP_STATUS = "http_status"
     SSH_PUBLIC_KEY = "ssh_public_key"
+    UPTIME_90D = "uptime_90d"
 
 
 class LookWhy(enum.Enum):
@@ -425,8 +439,10 @@ LOOK_KIND_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
     LookKind.UNIT_ACTIVE: frozenset({"unit"}),
     LookKind.HTTP_STATUS: frozenset({"port", "url_path"}),
     LookKind.SSH_PUBLIC_KEY: frozenset({"path"}),
+    LookKind.UPTIME_90D: frozenset({"path"}),
 }
 LOOK_OPTIONAL_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.UPTIME_90D: frozenset(),
     LookKind.FILE_SHA256: frozenset(),
     LookKind.UNIT_ACTIVE: frozenset(),
     LookKind.HTTP_STATUS: frozenset({"host"}),
@@ -549,6 +565,9 @@ def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
         return LookWhy.PATH_NOT_ALLOWED
     if kind is LookKind.SSH_PUBLIC_KEY and entry["path"] != LOOK_SSH_PUBLIC_KEY_PATH:
         return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.UPTIME_90D:
+        if entry["path"] != LOOK_UPTIME_REPORT_PATH:
+            return LookWhy.PATH_NOT_ALLOWED
     if kind is LookKind.UNIT_ACTIVE and not _text_matching(entry["unit"], LOOK_UNIT_PATTERN, 128):
         return LookWhy.BAD_UNIT
     if kind is LookKind.HTTP_STATUS:
@@ -2450,7 +2469,68 @@ class Looker:
             return self._unit_state(fact.unit)
         if fact.kind is LookKind.SSH_PUBLIC_KEY:
             return self._ssh_public_key(fact.path)
+        if fact.kind is LookKind.UPTIME_90D:
+            return self._uptime_90d(fact.path)
         return self._http_status(fact)
+
+    @staticmethod
+    def _uptime_90d(path: str) -> str:
+        """Return every endpoint's 90-day uptime as ``key=figure`` pairs and the report's time.
+
+        The report is opened without following a link and read whole, up to a size cap. Only each
+        endpoint's key and percentage and the generated-at time are printed; every other field is
+        dropped. A report that does not have the expected shape, or a key outside the strict shape,
+        gives the word not-report.
+        """
+        if path != LOOK_UPTIME_REPORT_PATH:
+            return LookWhy.PATH_NOT_ALLOWED.value
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_REPORT_BYTES:
+                return "too-large"
+            raw = os.read(descriptor, LOOK_MAX_REPORT_BYTES + 1)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        if len(raw) > LOOK_MAX_REPORT_BYTES:
+            return "too-large"
+        try:
+            report = json.loads(raw.decode("utf-8"), parse_constant=_refuse_constant)
+        except (ValueError, RecursionError):
+            return "not-report"
+        if not isinstance(report, dict) or report.get("window_days") != LOOK_UPTIME_WINDOW_DAYS:
+            return "not-report"
+        generated = report.get("generated_at")
+        endpoints = report.get("endpoints")
+        if not isinstance(generated, str) or LOOK_UTC_TIME_RE.fullmatch(generated) is None:
+            return "not-report"
+        if not isinstance(endpoints, list):
+            return "not-report"
+        pairs: dict[str, str] = {}
+        for item in endpoints:
+            if not isinstance(item, dict):
+                return "not-report"
+            key = item.get("endpoint_key")
+            if not isinstance(key, str) or LOOK_REPORT_KEY_RE.fullmatch(key) is None:
+                return "not-report"
+            if key in pairs:
+                return "not-report"
+            figure = item.get("uptime_percent")
+            if isinstance(figure, bool) or not isinstance(figure, (int, float)):
+                return "not-report"
+            if not math.isfinite(figure) or not 0 <= figure <= 100:
+                return "not-report"
+            pairs[key] = f"{key}={figure:.4f}"
+        return " ".join([*(pairs[key] for key in sorted(pairs)), generated])
 
     @staticmethod
     def _ssh_public_key(path: str) -> str:

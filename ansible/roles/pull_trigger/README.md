@@ -475,7 +475,7 @@ the nightly drift check), so a run can be cited in a `Live:` line.
 
 What it is not: a way to run anything. The caller still sends one commit and nothing else. The
 facts are declared in `ansible/tools/look/facts.json` of the commit being checked, which is
-signed, on `main`, and merges like code. A fact asks for one of four kinds, each with exactly
+signed, on `main`, and merges like code. A fact asks for one of five kinds, each with exactly
 its own fields, and the program (this file, the owner's) holds the list of kinds and the places a
 file fact may read. A new kind, or a new directory, is a change to this program.
 
@@ -497,12 +497,13 @@ Every entry has `issue` (a workspace issue number), `name` (a lowercase word of 
 and hyphen, unique in the file), `playbook` (the host's playbook; only that host looks) and
 `kind`, then the fields of its kind:
 
-| Kind             | Fields                                                                          | Result printed                                                                                                                                                                                                               |
-| ---------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file_sha256`    | `path`                                                                          | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                                                                                                             |
-| `unit_active`    | `unit`                                                                          | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown`                                                                                    |
-| `http_status`    | `port`, `url_path`, optional `host`                                             | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed                                                                                        |
-| `ssh_public_key` | `path`, which must be exactly `/etc/branchleft/provisioning-controller/ssh.pub` | the key type and base64 key of the file's first line (`ssh-ed25519`, `ssh-rsa`, `ecdsa-sha2-nistp256/384/521`), or `absent`, `not-regular`, `unreadable`, `too-large` or `not-ssh-key`; the comment after the key is dropped |
+| Kind             | Fields                                                                          | Result printed                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_sha256`    | `path`                                                                          | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                                                                                                                                                                                                                  |
+| `unit_active`    | `unit`                                                                          | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown`                                                                                                                                                                                         |
+| `http_status`    | `port`, `url_path`, optional `host`                                             | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed                                                                                                                                                                                             |
+| `ssh_public_key` | `path`, which must be exactly `/etc/branchleft/provisioning-controller/ssh.pub` | the key type and base64 key of the file's first line (`ssh-ed25519`, `ssh-rsa`, `ecdsa-sha2-nistp256/384/521`), or `absent`, `not-regular`, `unreadable`, `too-large` or `not-ssh-key`; the comment after the key is dropped                                                                                                      |
+| `uptime_90d`     | `path`, which must be exactly `/var/lib/branchleft/status-uptime/report.json`   | each endpoint's key and `uptime_percent` to four decimals as `key=figure` (sorted by key), then the report's `generated_at`; or `absent`, `not-regular`, `unreadable`, `too-large`, or `not-report` (not the collector's shape, or a key outside `[a-z0-9_-]{1,64}`, or a duplicate key); no other field of the report is printed |
 
 A file fact reads only below `/etc/systemd/system/`, `/usr/local/bin/`, `/usr/local/lib/` and
 `/usr/local/sbin/` (the places the roles put programs and unit files, and no place that holds a
@@ -529,7 +530,7 @@ Refusals, each a fixed word that repeats nothing from the file. Of the whole fil
 (not JSON, or a key repeated), `file-shape` (not exactly `{"facts": [...]}`), `file-too-large`
 (over 64 KiB), `file-too-many` (over 64 entries), `file-not-regular` (the path is a link or a
 directory in the commit) and `file-unreadable` (git could not give it). Of one entry, the others
-standing: `entry-shape`, `unknown-kind` (not one of the four), `unknown-field` (a field the kind
+standing: `entry-shape`, `unknown-kind` (not one of the five), `unknown-field` (a field the kind
 does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-issue`, `bad-name`
 (also a name holding a word the plan job's secret scan reads, which would fail the plan of every
 host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
@@ -545,7 +546,9 @@ Every value on a line is a number from the file's `issue`, a name that passed it
 digest, a three-digit status or a word from the lists above, and a final check admits only
 that shape, so nothing a host holds can reach the log. One exception, owner-reviewed: the
 `ssh_public_key` kind prints the key type and public key of one exact file, which is public by
-design (shared-infra delivers it mode 0444); no other file's content can reach a line. A unit's reply that is not a known word
+design (shared-infra delivers it mode 0444); no other file's content can reach a line. The
+`uptime_90d` kind prints each endpoint's key and percentage and the report's time from one exact report
+the status page writes, which is public by design. A unit's reply that is not a known word
 is `unknown`, and the text is dropped. The whole look has 120 seconds, a unit 10 and a `GET` 5,
 and a stop request ends it (`skipped-time`).
 
