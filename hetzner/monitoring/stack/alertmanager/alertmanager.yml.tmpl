@@ -66,14 +66,7 @@ route:
       receiver: discard
     - matchers:
         - severity = "page"
-        - alertname = "EdgeBanIssued"
-      receiver: ntfy-page
-      group_by: ['alertname', 'reason']
-      group_wait: 30s
-      group_interval: 5m
-    - matchers:
-        - severity = "page"
-        - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"
+        - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"
       receiver: ntfy-page
       group_by: ['tenant']
       group_wait: 10s

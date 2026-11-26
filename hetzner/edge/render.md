@@ -1137,9 +1137,10 @@ owned when it made a verified Ghost staff request through the edge in the last
 30 days (the access log's `edge_trusted` is `1`), or when it sits inside a
 banned range that contains such an address. "Owned" covers every tenant's
 Ghost staff addresses (admins and editors who signed in through the edge), not
-only the owner's. `EdgeBanIssued` in `hetzner/monitoring/render.ts` pages for
-owned bans, through ntfy (page register entry `edge-ban`). Any other ban raises
-`EdgeBanUnowned`, a warning that goes to email only and never to ntfy.
+only the owner's. `EdgeBanIssued` in `hetzner/monitoring/render.ts` is a warning and
+never a page (owner ruling 26 Nov; page register entry `edge-ban`, held dormant), so
+it reaches the on-host mailbox and never ntfy. Any other ban raises `EdgeBanUnowned`,
+a warning that goes to email only and never to ntfy.
 
 A systemd timer on edge1 (role `edge_ban_owner`) classifies every ban every 5
 minutes. It reads only the edge's own access log, through the Caddy container,

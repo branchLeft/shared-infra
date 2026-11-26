@@ -721,27 +721,27 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // An owned ban pages after the classifier's next run, up to ~5 minutes,
-    // and each owned ban is its own alert (decision_id), so a second ban of a
-    // scenario that is already paging is a new alert. Other bans go to email
-    // (EdgeBanUnowned). A stale classifier, or one missing for ten minutes,
-    // makes every ban page via the fallback branch; EdgeBanOwnerStale pages on
-    // its own. Text and labels never carry an address. Why, and the rest:
-    // hetzner/edge/render.md, "Being told about a ban".
+    // Owner ruling 26 Nov: a ban is never a page. This is a warning, so it
+    // reaches the on-host mailbox (the warning route) and no ntfy receiver;
+    // the page register holds the entry dormant. Each ban is still its own
+    // alert (decision_id), and the rule still names no address. The
+    // classifier's staleness alert, EdgeBanOwnerStale, still pages on its own.
+    // Why owned bans were once paged: hetzner/edge/render.md, "Being told
+    // about a ban".
     '      - alert: EdgeBanIssued',
     `        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE_HELD}))`,
     '        labels:',
-    '          severity: page',
+    '          severity: warning',
     '        annotations:',
     '          summary: "The edge is banning {{ $value }} address(es), by {{ $labels.reason }}."',
     '          description: >-',
     '            A banned address gets 403 from every site on edge1 until the ban',
     '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
-    '            This page means the address is one of yours: one that made a',
+    '            This alert means the address is one of yours: one that made a',
     '            verified Ghost staff request through the edge in the last 30',
     '            days, or a range holding one. A decision_id label, when there is',
     '            one, is the CrowdSec decision ID, so each owned ban is its own',
-    '            alert. It also pages for every ban while the classifier is more',
+    '            alert. It also fires for every ban while the classifier is more',
     '            than 15 minutes stale or has reported nothing for 10 minutes,',
     '            when nothing says whose they are.',
     '            From a network that is not banned, or over SSH to edge1,',
