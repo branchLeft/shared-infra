@@ -249,10 +249,10 @@ CONTROLLER_KEY_PREFIX = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrN
 def _controller_key_findings(root: Path) -> list[str]:
     """The ops1 provisioning controller's key holds one entry on edge1, whose own list is edge-t's
     public address and nothing else (ws#4170: the controller's first hop is edge-t)."""
-    edge1 = _owner_values(root, "edge1")
+    keys = _owner_values(root, "edge1").get("ci_jump_keys")
     entries = [
         _mapping(entry)
-        for entry in (edge1.get("ci_jump_keys") or [])
+        for entry in (keys if isinstance(keys, list) else [])
         if str(_mapping(entry).get("key", "")).startswith(CONTROLLER_KEY_PREFIX)
     ]
     if len(entries) != 1:
