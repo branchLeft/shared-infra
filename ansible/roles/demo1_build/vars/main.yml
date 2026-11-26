@@ -399,6 +399,20 @@ demo1_build_secret_holders:
     owner: root
     mode: '0640'
 
+  # The mail spool's Compose file, written by demo1_egress_spool from the pinned golden file. The
+  # content scan finds it because its environment block names the drain secret's variable. It holds
+  # the reference to that variable and never the value, which is in the spool's env file (the mail
+  # spool drain row above). This role writes nothing there: the row only accepts the file, and the path
+  # is owned by demo1_egress_spool, so the directory is grouped and the pattern does not spell that
+  # role's project directory (ansible/checks/test_demo1_egress_spool_agree.py holds one home for each of
+  # its paths, and the stack scan of hetzner/provision reads a name that follows /opt/branchleft/). Only this
+  # one file is named: another file in the directory is still scanned.
+  - name: Mail spool Compose file (holds the drain variable's name, not its value)
+    path_regex: '/opt/branchleft/(?:mail-spool)/compose\.yml'
+    reaches: 'nothing by itself: it names the variable the drain secret is read from, and the secret is in the mail spool env file above'
+    owner: root
+    mode: '0644'
+
   # The CI keys of demo1's ansible-ci account (enrol runbook Part 3; ansible-ci-jump-through-edge1
   # runbook step 8.8, owner ruling demo1-ci-login-r2). Each key runs one forced command only.
   - name: CI keys in the ansible-ci account's authorised keys
@@ -414,6 +428,31 @@ demo1_build_secret_holders:
     reaches: "root's SSH login on this host: the public keys that may log in as root"
     owner: root
     mode: '0600'
+
+# Installed code the scan does not count. Each root is the exact directory one role installs
+# third-party or signed code into, root-owned and written only by that role, and no row can name
+# thousands of files that change with a version. A found path equal to or under one of these is
+# left out of the found list (tasks/_holder_scan.yml), by full path and never by name. The scan
+# still reads these trees (grep cannot prune by path); it drops what it finds in them.
+#   /opt/ansible-runtime            ansible_runtime_root: the Ansible toolchain's virtual environments, the
+#                                   hash-locked requirements files and the install program. pip installs them
+#                                   with --require-hashes; they hold third-party packages whose docs and test
+#                                   fixtures name passwords (a filter's own doc, a package called pytokens).
+#   /var/lib/pull-trigger           pull_trigger_state_dir: the pull program's cache and work trees (a checkout
+#                                   of the signed repository, which holds its own tests and fixtures), its
+#                                   rollback floor and its lock. A run's scan reads the very tree it runs from.
+#   /opt/branchleft/broker/node     broker_deploy_node_dir: the Node runtime, unpacked from a tarball that
+#                                   get_url holds to a pinned sha256. Its bundled npm docs match the scan.
+# Not excluded, on purpose: /opt/branchleft and the rest of /opt/branchleft/broker (the releases directory,
+# the current link) and any sibling of a root, which stay scanned; the mail spool's Compose file has a
+# row instead. Each root is pinned to its role's own variable by tests/unit/test_installed_roots.py, and
+# the molecule refusals scenario proves a stray secret beside each root is still refused.
+demo1_build_secret_installed_roots:
+  - /opt/ansible-runtime
+  - /var/lib/pull-trigger
+  - /opt/branchleft/broker/node
+# The regex a path under one of those roots matches (the root itself is a directory, never a found file).
+demo1_build_secret_installed_regex: "{{ '^(?:' ~ (demo1_build_secret_installed_roots | map('regex_escape') | join('|')) ~ ')/' }}"
 
 # The regex the scan's unlisted check reads: a found path that matches none of the rows is refused.
 demo1_build_secret_holder_regex: "{{ '^(?:' ~ (demo1_build_secret_holders | map(attribute='path_regex') | join('|')) ~ ')\\Z' }}"

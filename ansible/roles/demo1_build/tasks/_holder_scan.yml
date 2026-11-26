@@ -18,6 +18,12 @@
 #               config-named file. Binary files are skipped by grep -I, so they are found by name only.
 #   by link     a link whose target is a holder directory's file or a secret-named file
 #
+# Installed code is left out of what the scan found, not out of what it reads
+# (demo1_build_secret_installed_roots in vars/main.yml): a found path equal to or under one of three
+# exact roots is dropped, by full path, in the three collecting tasks below. grep cannot prune by path,
+# so the scan still reads those trees; it does not count what it finds in them. A sibling of a root
+# (/opt/ansible-runtime-other, /var/lib/pull-trigger2) and the rest of /opt/branchleft are counted.
+#
 # The scan prunes by full path only (demo1_build_secret_prune_argv): /var/lib/docker and
 # /var/lib/containerd (the image stores), and /root/.ansible/tmp (Ansible's module payload). A
 # directory named docker anywhere else, such as /etc/docker, is scanned. grep cannot prune by path,
@@ -178,7 +184,8 @@
           + (demo1_build_secret_content_strict_roots.stdout_lines | default([]))
           + (demo1_build_secret_content_strict_root.stdout_lines | default([]))
           + (demo1_build_secret_content_config_roots.stdout_lines | default([]))
-          + (demo1_build_secret_content_config_root.stdout_lines | default([]))) | unique | sort }}
+          + (demo1_build_secret_content_config_root.stdout_lines | default([])))
+         | reject('regex', demo1_build_secret_installed_regex) | unique | sort }}
 
 # Where each link points. readlink -m prints one line per path given and never fails on a missing
 # target, so the two lists stay aligned. The links are pruned the same way the find above is.
@@ -213,9 +220,10 @@
       {%- set ns = namespace(out=[]) -%}
       {%- for pair in (demo1_build_secret_link_paths.stdout_lines | default([]))
           | zip(demo1_build_secret_link_targets.stdout_lines | default([])) -%}
-      {%- if pair[1] in demo1_build_secret_found_regular
-          or pair[1] is regex(demo1_build_secret_link_dir_regex)
-          or pair[1] is regex(demo1_build_secret_link_name_regex) -%}
+      {%- if pair[0] is not regex(demo1_build_secret_installed_regex)
+          and (pair[1] in demo1_build_secret_found_regular
+               or pair[1] is regex(demo1_build_secret_link_dir_regex)
+               or pair[1] is regex(demo1_build_secret_link_name_regex)) -%}
       {%- set ns.out = ns.out + [pair[0]] -%}
       {%- endif -%}
       {%- endfor -%}
@@ -227,7 +235,8 @@
     demo1_build_secret_found: >-
       {{ (demo1_build_secret_found_regular
           + (demo1_build_secret_link_refused | default([]))
-          + (demo1_build_secret_by_name_links.stdout_lines | default([]))) | unique | sort }}
+          + (demo1_build_secret_by_name_links.stdout_lines | default([])
+             | reject('regex', demo1_build_secret_installed_regex) | list)) | unique | sort }}
 
 - name: Collect the found paths the holder list does not name
   ansible.builtin.set_fact:
