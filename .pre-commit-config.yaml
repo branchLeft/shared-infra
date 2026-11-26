@@ -104,6 +104,16 @@ repos:
         files: ^hetzner/monitoring/.*\.py$
         pass_filenames: false
 
+      # The edge-t descriptor writer is the only writer of the directory the
+      # certificate check reads; its slug, size and shape refusals gate the
+      # commit rather than only the pull request.
+      - id: hetzner-edge-entry-tests
+        name: edge-t entry program unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/edge-t/entry -p 'test_*.py'"
+        language: system
+        files: ^hetzner/edge-t/entry/.*\.py$
+        pass_filenames: false
+
       # zone.json is an input too: its checked-in-zone tests pin the mail
       # records, so an edit dropping MX, SPF or DMARC fails at the commit.
       - id: hetzner-dns-tests
