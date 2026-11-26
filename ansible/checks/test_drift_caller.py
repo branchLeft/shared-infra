@@ -48,7 +48,9 @@ REUSABLE = re.compile(
     r"@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
-TOP_KEYS = frozenset({"name", "on", "permissions", "jobs"})
+TOP_KEYS = frozenset({"name", "on", "concurrency", "permissions", "jobs"})
+# The delivery group the drift check shares: its host plans take the same per-host lock.
+CONCURRENCY = {"group": "ansible-delivery-hosts", "cancel-in-progress": False}
 JOB_KEYS = frozenset({"uses", "with", "secrets"})
 
 
@@ -72,6 +74,11 @@ def caller_findings(workflow: object) -> list[str]:
     events = as_mapping(top.get("on"))
     if events is None or frozenset(events) != TRIGGERS:
         findings.append(f"on must name exactly {sorted(TRIGGERS)}, got {top.get('on')!r}")
+    if top.get("concurrency") != CONCURRENCY:
+        findings.append(
+            "concurrency must be exactly the ansible-delivery-hosts group, queued and never "
+            f"cancelled, got {top.get('concurrency')!r}"
+        )
     if top.get("permissions") != PERMISSIONS:
         findings.append(
             "permissions must be exactly actions: read, contents: read and issues: write "

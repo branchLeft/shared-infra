@@ -18,6 +18,12 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
 
+# The same group as ansible-delivery.yml: the host plans here take the per-host lock that an
+# apply holds, so a drift check and a delivery never run at once. Queued, never cancelled.
+concurrency:
+  group: ansible-delivery-hosts
+  cancel-in-progress: false
+
 permissions:
   actions: read
   contents: read
