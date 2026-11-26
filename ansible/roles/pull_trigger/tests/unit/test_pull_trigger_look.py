@@ -243,6 +243,46 @@ class ParseTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual([], refusals_of(declaration(with_fact(FILE_FACT, path=path))))
 
+    def test_the_monitoring_directory_reads_only_the_three_public_copies(self) -> None:
+        """The rendered files hold secrets, so only exact repository copies can be hashed."""
+        base = "/opt/branchleft/monitoring/"
+        for name in (
+            "alertmanager/alertmanager.yml.tmpl",
+            "prometheus/alerts.yml",
+            "prometheus/prometheus.yml",
+        ):
+            with self.subTest(accepted=name):
+                self.assertEqual(
+                    [], refusals_of(declaration(with_fact(FILE_FACT, path=base + name)))
+                )
+        for name in (
+            "alertmanager/alertmanager.yml",
+            "ntfy/server.yml",
+            "prometheus/mx1-metrics-password",
+            "prometheus/demo_tls_probe.yml",
+            "prometheus/prometheus.demo1.yml",
+            "alertmanager/alertmanager.yml.tmpl.bak",
+            "alertmanager/new-rendered-output.yml",
+            "../../../etc/shadow",
+            "",
+        ):
+            with self.subTest(refused=name):
+                self.assertEqual(
+                    ["path-not-allowed"],
+                    refusals_of(declaration(with_fact(FILE_FACT, path=base + name))),
+                )
+
+    def test_the_public_copies_are_repository_files_and_never_a_rendered_output(self) -> None:
+        repository = Path(__file__).resolve().parents[5]
+        stack = repository / "hetzner" / "monitoring" / "stack"
+        rendered = {"alertmanager.yml", "server.yml", "mx1-metrics-password", "demo_tls_probe.yml"}
+        for root, names in trigger.LOOK_PUBLIC_FILES.items():
+            for name in names:
+                with self.subTest(name=name):
+                    relative = name.removeprefix(root)
+                    self.assertTrue((stack / relative).is_file())
+                    self.assertNotIn(Path(relative).name, rendered)
+
     def test_a_port_or_path_or_host_that_is_not_loopback_http_is_refused(self) -> None:
         cases = [
             ("port", 0, "bad-port"),
@@ -483,6 +523,24 @@ class LookerTests(unittest.TestCase):
             lines,
         )
         self.assertNotIn("PRIVATE", "".join(lines))
+
+    def test_a_narrowed_root_hashes_the_named_file_and_never_a_sibling_or_link(self) -> None:
+        public = self.allowed / "alerts.yml"
+        public.write_text("public rules\n", encoding="utf-8")
+        rendered = self.allowed / "alertmanager.yml"
+        rendered.write_text("SECRET-FROM-THE-ENV-FILE\n", encoding="utf-8")
+        link = self.allowed / "alerts-link.yml"
+        link.symlink_to(rendered)
+        narrowed = {f"{self.allowed}/": frozenset({str(public), str(link)})}
+        with mock.patch.dict(trigger.LOOK_PUBLIC_FILES, narrowed, clear=True):
+            self.assertTrue(trigger.look_public_file(str(public)))
+            self.assertFalse(trigger.look_public_file(str(rendered)))
+            looker = self.looker()
+            self.assertEqual(
+                hashlib.sha256(public.read_bytes()).hexdigest(), looker._file_digest(str(public))
+            )
+            self.assertEqual("outside-root", looker._file_digest(str(rendered)))
+            self.assertEqual("outside-root", looker._file_digest(str(link)))
 
     def test_a_file_that_cannot_be_hashed_gives_a_word_and_never_the_error(self) -> None:
         directory = self.allowed / "adir"
