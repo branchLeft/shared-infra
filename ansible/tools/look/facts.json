@@ -132,6 +132,27 @@
       "playbook": "ansible/playbooks/ops1.yml",
       "kind": "uptime_90d",
       "path": "/var/lib/branchleft/status-uptime/report.json"
+    },
+    {
+      "issue": 3781,
+      "name": "edge1-alertmanager-template",
+      "playbook": "ansible/playbooks/edge1.yml",
+      "kind": "file_sha256",
+      "path": "/opt/branchleft/monitoring/alertmanager/alertmanager.yml.tmpl"
+    },
+    {
+      "issue": 3781,
+      "name": "edge1-prometheus-alerts",
+      "playbook": "ansible/playbooks/edge1.yml",
+      "kind": "file_sha256",
+      "path": "/opt/branchleft/monitoring/prometheus/alerts.yml"
+    },
+    {
+      "issue": 4387,
+      "name": "edge1-prometheus-config",
+      "playbook": "ansible/playbooks/edge1.yml",
+      "kind": "file_sha256",
+      "path": "/opt/branchleft/monitoring/prometheus/prometheus.yml"
     }
   ]
 }
