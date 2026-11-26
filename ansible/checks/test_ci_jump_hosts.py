@@ -243,7 +243,9 @@ def _data_findings(root: Path) -> list[str]:
     return found
 
 
-CONTROLLER_KEY_PREFIX = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrNI6ELNNRRBbUzK5TpuWOSinHMU"
+CONTROLLER_KEY_PREFIX = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrNI6ELNNRRBbUzK5TpuWOSinHMU"
+)
 
 
 def _controller_key_findings(root: Path) -> list[str]:
