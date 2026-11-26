@@ -23,6 +23,11 @@ ci_jump_destinations:
   - '94.130.108.53'
 ci_jump_keys:
   - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOKdVw+4KmgNBt/qi/41FLl5HPj16+vR2mfzm7LqxrjL'
+  # The ops1 provisioning controller's first hop: edge-t's public address only, which the
+  # controller reaches through edge-t to the tenants hosts.
+  - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrNI6ELNNRRBbUzK5TpuWOSinHMU'
+    destinations:
+      - '94.130.108.53'
 # The Sweego complaint receiver (the sweego_receiver role): the two host ports, published on edge1's
 # private address only. The webhook port is the one the edge proxies to (it is in
 # EDGE_HOST_ALLOWED_PORTS of hetzner/edge/render.ts); the drain port is reachable from ops1 alone by
