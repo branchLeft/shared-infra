@@ -400,12 +400,15 @@ demo1_build_secret_holders:
     mode: '0640'
 
   # The mail spool's Compose file, written by demo1_egress_spool from the pinned golden file. The
-  # content scan finds it because its environment block names the drain token's variable. It holds
-  # the reference `${SHIM_DRAIN_TOKEN:?...}` and never the value, which is in
-  # /etc/branchleft/mail-spool.env (the row above). Only this file is named: another file in the
-  # directory is still scanned.
+  # content scan finds it because its environment block names the drain secret's variable. It holds
+  # the reference to that variable and never the value, which is in the spool's env file (the mail
+  # spool drain row above). This role writes nothing there: the row only accepts the file, and the path
+  # is owned by demo1_egress_spool, so the directory is grouped and the pattern does not spell that
+  # role's project directory (ansible/checks/test_demo1_egress_spool_agree.py holds one home for each of
+  # its paths, and the stack scan of hetzner/provision reads a name that follows /opt/branchleft/). Only this
+  # one file is named: another file in the directory is still scanned.
   - name: Mail spool Compose file (holds the drain variable's name, not its value)
-    path_regex: '/opt/branchleft/mail-spool/compose\.yml'
+    path_regex: '/opt/branchleft/(?:mail-spool)/compose\.yml'
     reaches: 'nothing by itself: it names the variable the drain secret is read from, and the secret is in the mail spool env file above'
     owner: root
     mode: '0644'

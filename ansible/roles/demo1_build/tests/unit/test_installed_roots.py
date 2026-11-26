@@ -58,7 +58,7 @@ STRAY = [
     "/opt/ansible-runtime.bak/venv/stray.env",
     "/var/lib/pull-trigger2/stray.env",
     "/var/lib/pull-trigger-state/stray.env",
-    "/opt/branchleft/stray.env",
+    "/opt/branchleft/demo-host/stray.env",
     "/opt/branchleft/broker/stray.env",
     "/opt/branchleft/broker/nodex/stray.env",
     "/opt/branchleft/broker/releases/0.0.1/stray.env",
