@@ -22,3 +22,8 @@ ci_jump_destinations:
   - '10.20.1.201'
 ci_jump_keys:
   - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOXEOya/JF6dWqkYRMusenbM7/5Qzah8JNUs/qtdCCVl'
+  # The ops1 provisioning controller (ws#4170): app-t1 and db-t1 only, the two tenants hosts it reaches.
+  - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrNI6ELNNRRBbUzK5TpuWOSinHMU'
+    destinations:
+      - '10.20.1.201'
+      - '10.20.1.200'
