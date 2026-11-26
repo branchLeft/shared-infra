@@ -33,9 +33,9 @@ export interface PageRegisterEntry {
    */
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
-   * True while this entry has no target set and so must render no route --
-   * appeal latency, until a target exists; the stopped demo reaper, until the
-   * reaper and its alert rule exist. Flipped by a reviewed change,
+   * True while this entry must render no route -- appeal latency, until a
+   * target exists; the stopped demo reaper, until the reaper and its alert rule
+   * exist; an edge ban, since the owner ruled on 26 Nov that a ban never pages. Flipped by a reviewed change,
    * the same discipline `render.ts`'s `MonitoredHost.expectedUp` uses for
    * the same reason: a hand edit here is a claim about the present, not a
    * permanent property.
@@ -116,13 +116,12 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     id: 'edge-ban',
     name: 'The edge banned an address',
     reason:
-      'A CrowdSec ban refuses that address on every site behind edge1, the sign-in ' +
-      'service included, and the owner has been banned by false alarms three times; a ' +
-      "ban of one of the owner's own addresses pages, with the scenario that made it, " +
-      'and a ban of any other address goes to email.',
+      'Dormant: the owner ruled on 26 Nov that a CrowdSec ban never pages a phone. ' +
+      'EdgeBanIssued is a warning now, so each ban reaches the on-host mailbox by email. ' +
+      'Flip `dormant` to false only in a change that puts a page back, with the ruling.',
     alertName: 'EdgeBanIssued',
     deliveryPath: 'alertmanager',
-    dormant: false,
+    dormant: true,
     tenantScoped: false,
   },
   {

@@ -340,13 +340,11 @@ jobs:
           route ntfy-page alertname=TierTwoSafetyMatch severity=page tenant=acme
           route ntfy-page alertname=TenantFailedUnsafe severity=page tenant=acme
           route ntfy-page alertname=ReadersCannotRead severity=page tenant=acme
-          # The edge ban carries no tenant label, only the scenario that
-          # decided. Each owned ban is its own alert (labelled by decision_id
-          # in the rule), and each reaches the phone through the owned-ban
-          # node; its pace is pinned in pageRegister.test.ts, since amtool
-          # prints receivers and not intervals.
-          route ntfy-page alertname=EdgeBanIssued severity=page reason=scenario-one
-          route ntfy-page alertname=EdgeBanIssued severity=page reason=scenario-two
+          # The edge ban is a warning, never a page (owner ruling 26 Nov): it
+          # reaches the on-host mailbox and no ntfy receiver. The page
+          # register holds it dormant, and pageRegister.test.ts pins that.
+          route email-on-host alertname=EdgeBanIssued severity=warning reason=scenario-one
+          route email-on-host alertname=EdgeBanIssued severity=warning reason=scenario-two
           # The dormant entry (no target set) reaches no route at all.
           route email alertname=AppealLatencyBreach severity=page
           # The abuse-report entry is dormant until its mx1 producer lands:

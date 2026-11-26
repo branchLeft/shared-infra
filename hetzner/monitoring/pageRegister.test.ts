@@ -28,6 +28,16 @@ import {
 } from './pageRegister';
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
+/**
+ * The owner ruled on 26 Nov that a ban never pages, so the register holds the
+ * edge-ban entry dormant and no owned-ban route is rendered. The tests of the
+ * owned-ban route below still run against this register with that one entry
+ * live, so a page a later ruling restores starts from a route already proven.
+ */
+const EDGE_BAN_PAGING: readonly PageRegisterEntry[] = PAGE_REGISTER.map((entry) =>
+  entry.id === 'edge-ban' ? { ...entry, dormant: false } : entry
+);
+
 describe('PAGE_REGISTER', () => {
   it('has exactly ten entries -- the Alertmanager ones, the drain worker and the abuse report outside them, and the secret-scanning page sent by a workflow', () => {
     expect(PAGE_REGISTER).toHaveLength(10);
@@ -67,9 +77,9 @@ describe('PAGE_REGISTER', () => {
     expect(drainWorker?.alertName).toBeNull();
   });
 
-  it('marks exactly appeal-latency-breach and stopped-demo-reaper dormant', () => {
+  it('marks exactly appeal-latency-breach, edge-ban and stopped-demo-reaper dormant', () => {
     const dormant = PAGE_REGISTER.filter((entry) => entry.dormant).map((entry) => entry.id);
-    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper']);
+    expect(dormant).toEqual(['appeal-latency-breach', 'edge-ban', 'stopped-demo-reaper']);
   });
 });
 
@@ -140,7 +150,7 @@ describe('the secret-scanning-alert entry', () => {
   const withoutSecretEntry = PAGE_REGISTER.filter((entry) => entry.id !== SECRET_ENTRY_ID);
   const secretEntries = PAGE_REGISTER.filter((entry) => entry.id === SECRET_ENTRY_ID);
   const alertmanagerRouteMatcher =
-    'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"';
+    'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"';
 
   it('is delivered by a workflow, with no Alertmanager alertname, live and not tenant-scoped', () => {
     const entry = PAGE_REGISTER.find((candidate) => candidate.id === SECRET_ENTRY_ID);
@@ -201,7 +211,6 @@ describe('pageAlertNames', () => {
       'TierTwoSafetyMatch',
       'TenantFailedUnsafe',
       'ReadersCannotRead',
-      'EdgeBanIssued',
       'EdgeBanOwnerStale',
     ]);
   });
@@ -238,12 +247,14 @@ describe('pageAlertNames', () => {
 });
 
 describe('renderPageRoute', () => {
-  it('renders exactly the five live Alertmanager entries into the matcher, from the register and nothing else', () => {
+  it('renders exactly the four live Alertmanager entries into the matcher, from the register and nothing else', () => {
     const route = renderPageRoute(PAGE_REGISTER);
     expect(route).toContain('severity = "page"');
     expect(route).toContain(
-      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued|EdgeBanOwnerStale)$"'
+      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanOwnerStale)$"'
     );
+    // An edge ban is a warning now (owner ruling 26 Nov): no page route names it.
+    expect(route).not.toContain('EdgeBanIssued');
     // Not present: the dormant entry, and the Healthchecks-delivered one.
     expect(route).not.toContain('AppealLatencyBreach');
     expect(route).not.toContain('drain-worker-stopped');
@@ -287,9 +298,10 @@ describe('renderPageRoute', () => {
 describe('the edge-ban entries', () => {
   const entry = (id: string) => PAGE_REGISTER.find((candidate) => candidate.id === id);
 
-  it('says that owned bans page and the rest go to email', () => {
-    expect(entry('edge-ban')?.reason).toMatch(/owner's own addresses? pages/);
-    expect(entry('edge-ban')?.reason).toMatch(/any other address goes to email/);
+  it('says a ban never pages, and is a warning, held dormant by the owner ruling of 26 Nov', () => {
+    expect(entry('edge-ban')?.reason).toMatch(/never pages/);
+    expect(entry('edge-ban')?.reason).toMatch(/is a warning now/);
+    expect(entry('edge-ban')?.dormant).toBe(true);
   });
 
   it('registers the classifier staleness page as a live, untenanted Alertmanager entry with a rule', () => {
@@ -317,10 +329,11 @@ describe('the edge-ban rules', () => {
   const heldExpression =
     '(max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent_over_time(edge_ban_owner_last_run_timestamp_seconds[10m])';
 
-  it('pages EdgeBanIssued for each owned ban by its decision id, or for every ban while the classifier is stale', () => {
+  it('raises EdgeBanIssued for each owned ban by its decision id, or for every ban while the classifier is stale, as a warning and never a page', () => {
     const rule = ruleText('EdgeBanIssued');
     expect(rule).toContain('sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0');
-    expect(rule).toContain('severity: page');
+    expect(rule).toContain('severity: warning');
+    expect(rule).not.toContain('severity: page');
   });
 
   it('holds the page-everything fallback for ten minutes of absence, and only the fallback', () => {
@@ -354,28 +367,32 @@ describe('the edge-ban rules', () => {
 
 describe('renderOwnedEdgeBanRoute', () => {
   it('matches the page severity and the one alertname, and pages the ntfy receiver', () => {
-    const route = renderOwnedEdgeBanRoute(PAGE_REGISTER);
+    const route = renderOwnedEdgeBanRoute(EDGE_BAN_PAGING);
     expect(route).toContain('severity = "page"');
     expect(route).toContain('alertname = "EdgeBanIssued"');
     expect(route).toContain(`receiver: ${PAGE_RECEIVER_NAME}`);
   });
 
   it('groups on the scenario and renotifies a changed group within five minutes', () => {
-    const route = renderOwnedEdgeBanRoute(PAGE_REGISTER);
+    const route = renderOwnedEdgeBanRoute(EDGE_BAN_PAGING);
     expect(route).toContain("group_by: ['alertname', 'reason']");
     expect(route).toContain('group_wait: 30s');
     expect(route).toContain('group_interval: 5m');
   });
 
   it('never continues, so an owned ban is not delivered a second time by the generic route', () => {
-    expect(renderOwnedEdgeBanRoute(PAGE_REGISTER)).not.toContain('continue');
+    expect(renderOwnedEdgeBanRoute(EDGE_BAN_PAGING)).not.toContain('continue');
   });
 
   it('renders nothing once the edge-ban entry is dormant', () => {
-    const dormant = PAGE_REGISTER.map((candidate) =>
+    const dormant = EDGE_BAN_PAGING.map((candidate) =>
       candidate.id === 'edge-ban' ? { ...candidate, dormant: true } : candidate
     );
     expect(renderOwnedEdgeBanRoute(dormant)).toBe('');
+  });
+
+  it('renders no owned-ban route from the committed register, which holds the entry dormant', () => {
+    expect(renderOwnedEdgeBanRoute(PAGE_REGISTER)).toBe('');
   });
 
   it('renders nothing for a register that does not name the alert', () => {
@@ -384,8 +401,8 @@ describe('renderOwnedEdgeBanRoute', () => {
 
   it('sits in the template immediately before the generic page route, in either mode', () => {
     for (const installed of [true, false]) {
-      const rendered = renderAlertmanagerTemplate(PAGE_REGISTER, installed);
-      const routed = installed ? PAGE_REGISTER : holdEdgeBanOwnerStale(PAGE_REGISTER);
+      const rendered = renderAlertmanagerTemplate(EDGE_BAN_PAGING, installed);
+      const routed = installed ? EDGE_BAN_PAGING : holdEdgeBanOwnerStale(EDGE_BAN_PAGING);
       const owned = rendered.indexOf(renderOwnedEdgeBanRoute(routed));
       const generic = rendered.indexOf(renderPageRoute(routed));
       expect(owned).toBeGreaterThan(-1);
@@ -395,7 +412,7 @@ describe('renderOwnedEdgeBanRoute', () => {
   });
 
   it('leaves the generic page route grouped on tenant', () => {
-    expect(renderPageRoute(PAGE_REGISTER)).toContain("group_by: ['tenant']");
+    expect(renderPageRoute(EDGE_BAN_PAGING)).toContain("group_by: ['tenant']");
   });
 });
 
@@ -563,7 +580,7 @@ function routeTimings(template: string): RouteTiming[] {
 }
 
 describe('the page routes deliver fast and re-page inside the hour', () => {
-  const rendered = renderAlertmanagerTemplate();
+  const rendered = renderAlertmanagerTemplate(EDGE_BAN_PAGING);
   const pageNodes = routeTimings(rendered).filter((node) => node.receiver === PAGE_RECEIVER_NAME);
 
   // The owned-ban child route (EdgeBanIssued) is its own phone-sending node
@@ -669,10 +686,11 @@ describe('the amtool routing cases (OBS-3)', () => {
     }
   });
 
-  it('has a case for a ban with no tenant label, the shape EdgeBanIssued takes', () => {
+  it('has a case showing a ban is a warning on the on-host mailbox, and never the page receiver', () => {
     expect(workflow).toContain(
-      `route ${PAGE_RECEIVER_NAME} alertname=EdgeBanIssued severity=page reason=`
+      'route email-on-host alertname=EdgeBanIssued severity=warning reason='
     );
+    expect(workflow).not.toMatch(new RegExp(`route ${PAGE_RECEIVER_NAME} alertname=EdgeBanIssued`));
   });
 });
 
@@ -680,7 +698,7 @@ describe('renderAlertmanagerTemplate wired to the page register', () => {
   it('renders every live register entry into the page route while the classifier is installed', () => {
     const rendered = renderAlertmanagerTemplate(PAGE_REGISTER, true);
     expect(rendered).toContain(
-      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued|EdgeBanOwnerStale)$"'
+      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanOwnerStale)$"'
     );
     expect(rendered).toContain(`name: ${PAGE_RECEIVER_NAME}`);
   });
@@ -1015,6 +1033,13 @@ const ownedBan = (decisionId: string, reason = 'crowdsecurity/http-probing') => 
   reason,
   decision_id: decisionId,
 });
+/** An owned ban as the rule raises it now: a warning, by the owner ruling of 26 Nov. */
+const warnedBan = (decisionId: string) => ({
+  alertname: 'EdgeBanIssued',
+  severity: 'warning',
+  reason: 'crowdsecurity/http-probing',
+  decision_id: decisionId,
+});
 const unownedBan = {
   alertname: 'EdgeBanUnowned',
   severity: 'warning',
@@ -1042,8 +1067,8 @@ describe('the route walker', () => {
 describe('who is paged for an edge ban when the classifier is installed', () => {
   const template = renderAlertmanagerTemplate(PAGE_REGISTER, true);
 
-  it('pages the phone for an owned ban, and nothing else', () => {
-    expect(receiversReached(template, ownedBan('101'))).toEqual([PAGE_RECEIVER_NAME]);
+  it('sends an owned ban to the on-host mailbox and never to the phone', () => {
+    expect(receiversReached(template, warnedBan('101'))).toEqual(['email-on-host']);
   });
 
   it('sends an unowned ban to both mailboxes and never to the phone', () => {
@@ -1061,15 +1086,14 @@ describe('who is paged for an edge ban when the classifier is installed', () => 
     expect(template).not.toContain(DISCARD_RECEIVER_NAME);
   });
 
-  it('puts the owned-ban child before the generic page route, and the child does not continue', () => {
+  it('has no owned-ban route at all, so a ban meets no page route', () => {
     const routes = childRoutes(template);
-    const owned = routes.findIndex((block) => block.includes('alertname = "EdgeBanIssued"'));
-    const generic = routes.findIndex((block) => block.includes('alertname =~ "^(TierTwoSafety'));
-    expect(owned).toBeGreaterThan(-1);
-    expect(generic).toBeGreaterThan(owned);
-    expect(routes[owned]).not.toContain('continue');
-    expect(walkRoutes(template, ownedBan('101'))).toHaveLength(1);
+    expect(routes.findIndex((block) => block.includes('alertname = "EdgeBanIssued"'))).toBe(-1);
   });
+});
+
+describe('the owned-ban route, were a ban ever to page again', () => {
+  const template = renderAlertmanagerTemplate(EDGE_BAN_PAGING, true);
 
   it('groups owned bans by scenario and notifies a new group within the bound', () => {
     const [step] = walkRoutes(template, ownedBan('101'));
@@ -1116,15 +1140,15 @@ describe('who is paged for an edge ban while the classifier is not installed', (
     expect(receiversReached(template, staleClassifier)).toEqual([DISCARD_RECEIVER_NAME]);
   });
 
-  it('still pages the phone for a ban, through the fallback and the owned-ban child', () => {
-    expect(receiversReached(template, ownedBan('101'))).toEqual([PAGE_RECEIVER_NAME]);
+  it('sends a ban to the on-host mailbox, not the phone, when the classifier is not installed', () => {
+    expect(receiversReached(template, warnedBan('101'))).toEqual(['email-on-host']);
     expect(
       receiversReached(template, {
         alertname: 'EdgeBanIssued',
-        severity: 'page',
+        severity: 'warning',
         reason: 'crowdsecurity/http-probing',
       })
-    ).toEqual([PAGE_RECEIVER_NAME]);
+    ).toEqual(['email-on-host']);
   });
 
   it('leaves an unowned ban and a tenant-scoped page as they are in the other mode', () => {
@@ -1140,9 +1164,9 @@ describe('who is paged for an edge ban while the classifier is not installed', (
     const discard = routes.findIndex((block) =>
       block.includes(`receiver: ${DISCARD_RECEIVER_NAME}`)
     );
-    const owned = routes.findIndex((block) => block.includes('alertname = "EdgeBanIssued"'));
+    const generic = routes.findIndex((block) => block.includes('alertname =~ "^(TierTwoSafety'));
     expect(discard).toBeGreaterThan(-1);
-    expect(discard).toBeLessThan(owned);
+    expect(discard).toBeLessThan(generic);
     expect(routes[discard]).not.toContain('continue');
   });
 
@@ -1158,7 +1182,7 @@ describe('who is paged for an edge ban while the classifier is not installed', (
     const generic = childRoutes(template).find((block) =>
       block.includes('alertname =~ "^(TierTwo')
     );
-    expect(generic).toContain('EdgeBanIssued');
+    expect(generic).not.toContain('EdgeBanIssued');
     expect(generic).not.toContain('EdgeBanOwnerStale');
   });
 });
@@ -1168,11 +1192,12 @@ describe('the classifier gate in the page register helpers', () => {
     const held = holdEdgeBanOwnerStale(PAGE_REGISTER);
     expect(held.filter((entry) => entry.dormant).map((entry) => entry.id)).toEqual([
       'appeal-latency-breach',
+      'edge-ban',
       'edge-ban-owner-stale',
       'stopped-demo-reaper',
     ]);
     expect(pageAlertNames(held)).not.toContain('EdgeBanOwnerStale');
-    expect(pageAlertNames(held)).toContain('EdgeBanIssued');
+    expect(pageAlertNames(held)).not.toContain('EdgeBanIssued');
     expect(pageAlertNames(PAGE_REGISTER)).toContain('EdgeBanOwnerStale');
   });
 

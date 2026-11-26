@@ -533,12 +533,11 @@ derived from it rather than from a hardcoded duplicate -- see
 `renderAlertmanagerTemplate` takes a second parameter, `edgeBanOwnerEnabled`, which
 defaults to `EDGE_BAN_OWNER_ENABLED`, the constant that must equal the role's
 `edge_ban_owner_enabled`. While it is false, the classifier's `EdgeBanOwnerStale`
-entry is held dormant, so it is left out of the page routes, and a `discard` route,
-placed before the owned-ban child route, sends it to the `discard` receiver, which
-has no integrations and so notifies no one. The owned-ban child route for
-`EdgeBanIssued` (grouped by `alertname` and `reason`, `group_wait` 30s,
-`group_interval` 5m) is rendered in both modes and matches first without `continue`;
-the generic page route still groups tenant-scoped pages by `tenant`. The alert rules
+entry is held dormant, so it is left out of the page routes, and a `discard` route
+sends it to the `discard` receiver, which has no integrations and so notifies no one.
+`EdgeBanIssued` is a warning (owner ruling 26 Nov) and its page-register entry is
+dormant, so no owned-ban child route is rendered in either mode. The generic page
+route still groups tenant-scoped pages by `tenant`. The alert rules
 are the same in both modes. `render.test.ts` checks that the discard route and
 receiver appear only while the parameter is false, and that the constant equals
 `edge_ban_owner_enabled` in the role's defaults, failing with a message that names
