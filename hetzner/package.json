@@ -14,22 +14,22 @@
   "hetznerHostPinComment": "@branchleft/hetzner-host is a link: dependency because it is not published to the registry yet. Once it is, this pin must become an exact registry version (e.g. \"0.1.0\"), matching @pulumi/hcloud's exact-pin discipline above and for the same reason: an unpinned or caret-ranged @branchleft/hetzner-host could resolve a different @pulumi/hcloud transitively. Until then this link: is the only source, which is why the two directories must always be edited and tested together. A link: dependency does not install or build the linked package's own tree the way a workspace or a registry install would, so `postinstall` below runs `pnpm install --frozen-lockfile` in it explicitly -- without that, tsc cannot resolve @pulumi/hcloud from inside it and node cannot find its unbuilt dist/. Both go away once the pin above becomes a real registry version: a published package ships its dist/ already built and its own dependency resolution is pnpm's normal job again.",
   "dependencies": {
     "@branchleft/hetzner-host": "link:../hetzner-host",
-    "@pulumi/aws": "7.54.0",
-    "@pulumi/hcloud": "1.41.0",
-    "@pulumi/pulumi": "^3.255.0"
+    "@pulumi/aws": "7.55.0",
+    "@pulumi/hcloud": "1.43.4",
+    "@pulumi/pulumi": "^3.277.0"
   },
   "devDependencies": {
     "@branchleft/components": "0.6.0",
-    "@branchleft/tsconfig": "^0.3.1",
-    "@branchleft/vitest-config": "^0.4.0",
+    "@branchleft/tsconfig": "^0.8.8",
+    "@branchleft/vitest-config": "^0.8.8",
     "@types/node": "^26",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.1.1",
     "prettier": "^3.10.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "typescript": "^5.9.0",
-    "vitest": "^4.1.10"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
   }
 }
