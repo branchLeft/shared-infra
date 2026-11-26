@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import http.client
 import json
+import math
 import os
 import re
 import select
@@ -48,6 +49,12 @@ MAX_STATE_DIR_LENGTH: Final = 60
 GIT_TIMEOUT_SECONDS: Final = 600
 TERMINATE_GRACE_SECONDS: Final = 30
 POLL_SECONDS: Final = 0.2
+# A trigger that finds the host lock held waits for it, up to ``lock_wait_seconds`` of the
+# configuration (this when the key is absent), asking again at this interval. The default is well
+# above the length of an ordinary apply, so a check or an apply sent while another runs queues on
+# the host instead of being refused; a holder that outlasts it still ends the wait as ``busy``.
+DEFAULT_LOCK_WAIT_SECONDS: Final = 1_200
+LOCK_POLL_SECONDS: Final = 1.0
 RECAP_TAIL_BYTES: Final = 262_144
 FLOOR_NAME: Final = "last-applied"
 CURRENT_NAME: Final = "current"
@@ -144,7 +151,7 @@ CONFIG_KEYS: Final = frozenset(
 # ``release_signers`` and ``require_release_tag`` are written only for a host that is moved to the
 # release-tag route, so every other host keeps a configuration a program from before them parses.
 OPTIONAL_CONFIG_KEYS: Final = frozenset(
-    {"steps", "source", "release_signers", "require_release_tag"}
+    {"steps", "source", "release_signers", "require_release_tag", "lock_wait_seconds"}
 )
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
@@ -185,19 +192,40 @@ LOOK_UNIT_SECONDS: Final = 10.0
 LOOK_HTTP_SECONDS: Final = 5.0
 LOOK_MAX_FILE_BYTES: Final = 64 * 1024 * 1024
 LOOK_READ_CHUNK: Final = 1024 * 1024
-# Where a file fact may read: the places the roles put programs and unit files. Never a place that
-# holds a secret, because a digest of a short secret can be guessed.
+# Where a file fact may read: the places the roles put programs and unit files, and the monitoring
+# stack's directory (below, narrowed to its public copies). Never a place that holds a secret,
+# because a digest of a short secret can be guessed.
 LOOK_FILE_ROOTS: Final = (
     "/etc/systemd/system/",
     "/usr/local/bin/",
     "/usr/local/lib/",
     "/usr/local/sbin/",
+    "/opt/branchleft/monitoring/",
 )
+# A root that holds secrets beside public files reads only the exact files named here: the
+# repository's own files, copied to the host byte for byte. The monitoring stack's directory also
+# holds what its renderer writes from the secrets file (alertmanager/alertmanager.yml,
+# ntfy/server.yml, prometheus/mx1-metrics-password, prometheus/demo_tls_probe.yml), so a file not
+# named here is not readable, a file the renderer adds later included. Adding a name is a change to
+# this program.
+LOOK_PUBLIC_FILES: Final = {
+    "/opt/branchleft/monitoring/": frozenset(
+        {
+            "/opt/branchleft/monitoring/alertmanager/alertmanager.yml.tmpl",
+            "/opt/branchleft/monitoring/prometheus/alerts.yml",
+            "/opt/branchleft/monitoring/prometheus/prometheus.yml",
+        }
+    ),
+}
 LOOK_LOOPBACK: Final = "127.0.0.1"
 # The declared services an http fact may name: the fact's ``name`` maps to the only loopback ports
 # that fact may GET. A name not here, or a port not in its set, is refused before any request.
 # Adding a service or a port is a change to this program, reviewed by the owner, as a new kind is.
-LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {}
+LOOK_HTTP_PORTS: Final[dict[str, frozenset[int]]] = {
+    # demo1's health routers: one loopback port per slot, from 10100 (health_router.py's base).
+    **{f"demo1-router-{slot}": frozenset({10100 + slot}) for slot in range(7)},
+    "demo1-slot0-port": frozenset({10100}),
+}
 LOOK_NAME_PATTERN: Final = re.compile(r"[a-z][a-z0-9-]{0,47}")
 # The plan job withholds a host's output that matches the credential words of its scan, and that
 # would fail the plan of every host. A name can never be the cause.
@@ -216,11 +244,42 @@ LOOK_MAX_ISSUE: Final = 99_999_999
 LOOK_UNIT_STATES: Final = frozenset(
     {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance"}
 )
+# The one public key file an ssh_public_key fact may read: exactly this path, no glob and no
+# directory. It is the provisioning controller's public key, which shared-infra delivers (mode 0444)
+# and which is public by design, not a secret. Adding a path is a change to this program, reviewed
+# by the owner. Only the key type and the key of its first line are printed; the comment is dropped.
+LOOK_SSH_PUBLIC_KEY_PATH: Final = "/etc/branchleft/provisioning-controller/ssh.pub"
+LOOK_SSH_KEY_TYPES: Final = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+)
+LOOK_SSH_KEY_BLOB: Final = r"[A-Za-z0-9+/]{16,1024}={0,2}"
+LOOK_MAX_KEY_BYTES: Final = 8192
+LOOK_SSH_KEY_TYPE_PATTERN: Final = "|".join(re.escape(name) for name in LOOK_SSH_KEY_TYPES)
+LOOK_SSH_KEY_TYPE_RE: Final = re.compile(LOOK_SSH_KEY_TYPE_PATTERN)
+# The one report an uptime_90d fact may read: the 90-day report the status page's collector
+# writes (ansible/roles/status_page). Exactly this path. Only one endpoint's uptime percentage and
+# the report's generated-at time are printed; every other field of the report is dropped.
+LOOK_UPTIME_REPORT_PATH: Final = "/var/lib/branchleft/status-uptime/report.json"
+LOOK_MAX_REPORT_BYTES: Final = 1_048_576
+LOOK_UPTIME_WINDOW_DAYS: Final = 90
+# The most endpoints one report may hold for a line; more is refused as not-report.
+LOOK_UPTIME_MAX_ENDPOINTS: Final = 64
+LOOK_REPORT_KEY: Final = r"[a-z0-9_-]{1,64}"
+LOOK_REPORT_KEY_RE: Final = re.compile(LOOK_REPORT_KEY)
+LOOK_UPTIME_FIGURE: Final = r"[0-9]{1,3}\.[0-9]{4}"
+LOOK_UPTIME_PAIR: Final = rf"{LOOK_REPORT_KEY}={LOOK_UPTIME_FIGURE}"
+LOOK_UTC_TIME: Final = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
+LOOK_UTC_TIME_RE: Final = re.compile(LOOK_UTC_TIME)
 # The only shape a fact line may have. A line that does not match is never printed.
 LOOK_LINE: Final = re.compile(
     r"look issue=[0-9]{1,8} name=[a-z][a-z0-9-]{0,47} "
-    r"kind=(?:file_sha256|unit_active|http_status) "
-    r"result=(?:[0-9a-f]{64}|[0-9]{3}|[a-z]+(?:-[a-z]+)*)"
+    r"kind=(?:file_sha256|unit_active|http_status|ssh_public_key|uptime_90d) "
+    rf"result=(?:[0-9a-f]{{64}}|[0-9]{{3}}|[a-z]+(?:-[a-z]+)*|(?:{LOOK_SSH_KEY_TYPE_PATTERN}) "
+    rf"{LOOK_SSH_KEY_BLOB}|(?:{LOOK_UPTIME_PAIR} )*{LOOK_UTC_TIME})"
 )
 
 Clock = Callable[[], datetime]
@@ -362,6 +421,8 @@ class LookKind(enum.Enum):
     FILE_SHA256 = "file_sha256"
     UNIT_ACTIVE = "unit_active"
     HTTP_STATUS = "http_status"
+    SSH_PUBLIC_KEY = "ssh_public_key"
+    UPTIME_90D = "uptime_90d"
 
 
 class LookWhy(enum.Enum):
@@ -402,11 +463,15 @@ LOOK_KIND_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
     LookKind.FILE_SHA256: frozenset({"path"}),
     LookKind.UNIT_ACTIVE: frozenset({"unit"}),
     LookKind.HTTP_STATUS: frozenset({"port", "url_path"}),
+    LookKind.SSH_PUBLIC_KEY: frozenset({"path"}),
+    LookKind.UPTIME_90D: frozenset({"path"}),
 }
 LOOK_OPTIONAL_FIELDS: Final[Mapping[LookKind, frozenset[str]]] = {
+    LookKind.UPTIME_90D: frozenset(),
     LookKind.FILE_SHA256: frozenset(),
     LookKind.UNIT_ACTIVE: frozenset(),
     LookKind.HTTP_STATUS: frozenset({"host"}),
+    LookKind.SSH_PUBLIC_KEY: frozenset(),
 }
 
 
@@ -501,9 +566,14 @@ def look_path_allowed(path: object, roots: Sequence[str]) -> bool:
         return False
     if not all(LOOK_FILE_PART.fullmatch(part) for part in pure.parts[1:]):
         return False
-    return any(
+    return look_public_file(path) and any(
         path.startswith(root) and len(pure.parts) > len(PurePosixPath(root).parts) for root in roots
     )
+
+
+def look_public_file(path: str) -> bool:
+    """Say whether a path is readable: below a narrowed root, only if the file is named for it."""
+    return all(path in names for root, names in LOOK_PUBLIC_FILES.items() if path.startswith(root))
 
 
 def _field_problem(entry: Mapping[str, object], kind: LookKind) -> LookWhy | None:
@@ -523,6 +593,11 @@ def _kind_problem(  # noqa: PLR0911 - one answer per field of a kind
     """Return the reason a kind's own fields are refused, or None."""
     if kind is LookKind.FILE_SHA256 and not look_path_allowed(entry["path"], roots):
         return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.SSH_PUBLIC_KEY and entry["path"] != LOOK_SSH_PUBLIC_KEY_PATH:
+        return LookWhy.PATH_NOT_ALLOWED
+    if kind is LookKind.UPTIME_90D:
+        if entry["path"] != LOOK_UPTIME_REPORT_PATH:
+            return LookWhy.PATH_NOT_ALLOWED
     if kind is LookKind.UNIT_ACTIVE and not _text_matching(entry["unit"], LOOK_UNIT_PATTERN, 128):
         return LookWhy.BAD_UNIT
     if kind is LookKind.HTTP_STATUS:
@@ -670,7 +745,7 @@ class ConfirmMismatchError(RefusedError):
 
 
 class BusyError(RefusedError):
-    """Another trigger holds the lock, so this one is refused rather than queued."""
+    """Another trigger held the lock for the whole of this one's wait, so this one is refused."""
 
     exit_code = Exit.BUSY
     reason = "busy"
@@ -831,6 +906,7 @@ class Config:
     source: Literal["remote", "bundle"] = "remote"
     release_signers: tuple[Signer, ...] = ()
     require_release_tag: bool = False
+    lock_wait_seconds: int = DEFAULT_LOCK_WAIT_SECONDS
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1233,6 +1309,11 @@ def parse_config(text: str) -> Config:
         source=SOURCE_BUNDLE if source == SOURCE_BUNDLE else SOURCE_REMOTE,
         release_signers=release_signers,
         require_release_tag=data.get("require_release_tag") is True,
+        lock_wait_seconds=(
+            _whole(data, "lock_wait_seconds", 0, 86_400)
+            if "lock_wait_seconds" in data
+            else DEFAULT_LOCK_WAIT_SECONDS
+        ),
     )
 
 
@@ -1330,23 +1411,47 @@ def write_private_file(path: Path, text: str) -> None:
 
 
 @contextlib.contextmanager
-def single_flight(lock_path: Path) -> Iterator[None]:
-    """Hold the host-wide lock for the duration of a run, or refuse at once.
+def single_flight(
+    lock_path: Path,
+    wait_seconds: float = 0,
+    stop: threading.Event | None = None,
+    on_wait: Callable[[], None] | None = None,
+) -> Iterator[None]:
+    """Hold the host-wide lock for the duration of a run, waiting a bounded time for it.
 
     The lock is ``flock`` on a file. The kernel drops it when the holder exits
     for any reason, including being killed, so a dead holder cannot wedge the
     host and no stale-lock cleanup is needed. The descriptor is not inherited
     by the playbook.
 
+    With ``wait_seconds`` of 0 a held lock is refused at once. Otherwise the lock is asked for
+    every ``LOCK_POLL_SECONDS`` until it is free, the wait runs out or ``stop`` is set.
+
+    Args:
+        lock_path: The lock file.
+        wait_seconds: The longest to wait for a lock another trigger holds.
+        stop: Set by a person's TERM or INT; it ends the wait.
+        on_wait: Called each time the lock is found held and the wait goes on.
+
     Raises:
-        BusyError: Another trigger holds the lock.
+        BusyError: Another trigger held the lock for the whole of the wait.
     """
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise BusyError(Why.LOCK_HELD) from None
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+                    raise BusyError(Why.LOCK_HELD) from None
+            if on_wait is not None:
+                on_wait()
+            if stop is None:
+                time.sleep(LOCK_POLL_SECONDS)
+            else:
+                stop.wait(LOCK_POLL_SECONDS)
         yield
     finally:
         os.close(descriptor)
@@ -2422,7 +2527,112 @@ class Looker:
             return self._file_digest(fact.path)
         if fact.kind is LookKind.UNIT_ACTIVE:
             return self._unit_state(fact.unit)
+        if fact.kind is LookKind.SSH_PUBLIC_KEY:
+            return self._ssh_public_key(fact.path)
+        if fact.kind is LookKind.UPTIME_90D:
+            return self._uptime_90d(fact.path)
         return self._http_status(fact)
+
+    @staticmethod
+    def _uptime_90d(path: str) -> str:
+        """Return every endpoint's 90-day uptime as ``key=figure`` pairs and the report's time.
+
+        The report is opened without following a link and read whole, up to a size cap. Only each
+        endpoint's key and percentage and the generated-at time are printed; every other field is
+        dropped. A report that does not have the expected shape, or a key outside the strict shape,
+        gives the word not-report.
+        """
+        if path != LOOK_UPTIME_REPORT_PATH:
+            return LookWhy.PATH_NOT_ALLOWED.value
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_REPORT_BYTES:
+                return "too-large"
+            raw = os.read(descriptor, LOOK_MAX_REPORT_BYTES + 1)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        if len(raw) > LOOK_MAX_REPORT_BYTES:
+            return "too-large"
+        try:
+            report = json.loads(raw.decode("utf-8"), parse_constant=_refuse_constant)
+        except (ValueError, RecursionError):
+            return "not-report"
+        if not isinstance(report, dict) or report.get("window_days") != LOOK_UPTIME_WINDOW_DAYS:
+            return "not-report"
+        generated = report.get("generated_at")
+        endpoints = report.get("endpoints")
+        if not isinstance(generated, str) or LOOK_UTC_TIME_RE.fullmatch(generated) is None:
+            return "not-report"
+        if not isinstance(endpoints, list):
+            return "not-report"
+        if len(endpoints) > LOOK_UPTIME_MAX_ENDPOINTS:
+            return "not-report"
+        pairs: dict[str, str] = {}
+        for item in endpoints:
+            if not isinstance(item, dict):
+                return "not-report"
+            key = item.get("endpoint_key")
+            if not isinstance(key, str) or LOOK_REPORT_KEY_RE.fullmatch(key) is None:
+                return "not-report"
+            if key in pairs:
+                return "not-report"
+            figure = item.get("uptime_percent")
+            if isinstance(figure, bool) or not isinstance(figure, (int, float)):
+                return "not-report"
+            # A huge integer cannot become a float, so the range is checked before any float test;
+            # a float must also be finite. The range test admits -0.0, which prints as 0.
+            if isinstance(figure, float) and not math.isfinite(figure):
+                return "not-report"
+            if not 0 <= figure <= 100:
+                return "not-report"
+            pairs[key] = f"{key}={float(figure) + 0.0:.4f}"
+        return " ".join([*(pairs[key] for key in sorted(pairs)), generated])
+
+    @staticmethod
+    def _ssh_public_key(path: str) -> str:
+        """Return the key type and key of the first line of the public key file, or a word why not.
+
+        The file is opened without following a link, and only its first line is read. The comment
+        after the key is free text and is never printed.
+        """
+        if path != LOOK_SSH_PUBLIC_KEY_PATH:
+            return LookWhy.PATH_NOT_ALLOWED.value
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "unreadable"
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                return "not-regular"
+            if info.st_size > LOOK_MAX_KEY_BYTES:
+                return "too-large"
+            raw = os.read(descriptor, LOOK_MAX_KEY_BYTES)
+        except OSError:
+            return "unreadable"
+        finally:
+            os.close(descriptor)
+        try:
+            fields = raw.decode("ascii").split("\n", 1)[0].split()
+        except UnicodeDecodeError:
+            return "not-ssh-key"
+        if len(fields) < 2 or LOOK_SSH_KEY_TYPE_RE.fullmatch(fields[0]) is None:
+            return "not-ssh-key"
+        if re.fullmatch(LOOK_SSH_KEY_BLOB, fields[1]) is None:
+            return "not-ssh-key"
+        return f"{fields[0]} {fields[1]}"
 
     def _file_digest(self, path: str) -> str:
         """Return the SHA-256 of a regular file inside a root, or a word saying why not."""
@@ -2430,7 +2640,7 @@ class Looker:
             real = os.path.realpath(path)
         except (OSError, ValueError):
             return "unreadable"
-        if not any(real.startswith(root) for root in self._roots):
+        if not any(real.startswith(root) for root in self._roots) or not look_public_file(real):
             return "outside-root"
         try:
             descriptor = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -2706,7 +2916,7 @@ class Trigger:
         self._workspace.sweep_spool(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
         spool = spool_stream(self._workspace.spool, self._receiving)
         try:
-            with single_flight(self._workspace.lock):
+            with self._single_flight(spool):
                 self._workspace.sweep()
                 self._workspace.sweep_bundle(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
                 return self._admitted_bundle(mode, request.commit, spool)
@@ -2758,9 +2968,32 @@ class Trigger:
         if self._config.playbook not in self._config.playbooks:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
         step = self._admit_step(request)
-        with single_flight(self._workspace.lock):
+        with self._single_flight():
             self._workspace.sweep()
             return self._admitted(mode, request.commit, step)
+
+    def _single_flight(self, spool: Path | None = None) -> contextlib.AbstractContextManager[None]:
+        """Take the host lock, waiting for it as long as the configuration allows.
+
+        The first time the lock is found held, one line says so on standard error, so the log of
+        a request that sits for minutes says why. A bundle's spool file is touched on every wait,
+        so the sweep of the run that holds the lock, which removes spool files older than an
+        upload can take, never removes the file of a request that is waiting.
+        """
+        announced = False
+
+        def waiting() -> None:
+            nonlocal announced
+            if not announced:
+                announced = True
+                say("pull-trigger: waiting: another trigger holds the host lock\n")
+            if spool is not None:
+                with contextlib.suppress(OSError):
+                    os.utime(spool)
+
+        return single_flight(
+            self._workspace.lock, self._config.lock_wait_seconds, self._stop, waiting
+        )
 
     def _admit_step(self, request: Request) -> Step | None:
         """Return the allow-list entry the request names, or None for a request with no step.

@@ -252,7 +252,7 @@ read -r OWNER_IPV4
 ```
 
 ```bash
-case "${OWNER_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
+case "${OWNER_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
 ```
 
 ```bash
@@ -497,7 +497,8 @@ Expect:
 - `edge-t`: updates in place only, to protection, labels, the primary IPs' names
   (`edge-t-ipv4`, `edge-t-ipv6`), their auto-delete (off) and their delete
   protection (on). The addresses themselves do not change. No replace.
-- `db-t1`: `import` of the server, `create` of the `db-t1` firewall (declared and never
+- `db-t1`: `import` of the server, `create` of the `branchleft:hetzner:Host` component (a Pulumi
+  grouping, no Hetzner API call) and `create` of the `db-t1` firewall (declared and never
   attached: a private-only host gets no attachment). No primary IP, no attachment, no update to the network or the public
   interface.
 
@@ -786,7 +787,7 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    ```
 
    ```bash
-   case "${OWNER_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
+   case "${OWNER_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
    ```
 
    ```bash
@@ -850,7 +851,8 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    - **Read the plan.** Open that run from the merge commit's checks. The job `Plan (hetzner tenants,
 pulumi preview)` has finished and its summary, titled `Hetzner tenants plan — read before
 approving the apply`, holds the plan as JSON. Read the `op` and `urn` of each entry in `steps`.
-     Good is: one `import` whose `urn` ends `hcloud:index/server:Server::app-t1`, one `create` whose
+     Good is: one `import` whose `urn` ends `hcloud:index/server:Server::app-t1`, one `create` of the
+     `branchleft:hetzner:Host` component (a Pulumi grouping, no Hetzner API call), one `create` whose
      `urn` ends `hcloud:index/firewall:Firewall::app-t1-firewall` (declared, never attached), and
      every other entry, if the summary lists any, `same`. A `create` of a server, any `replace` or `delete`, any primary IP, any attachment,
      or an import warning is a stop. The plan job also runs the delete guard
@@ -861,8 +863,8 @@ approving the apply`, holds the plan as JSON. Read the `op` and `urn` of each en
      dialog and hand back the summary. The job `Apply (hetzner tenants, pulumi up)` then re-reads
      the plan, runs the delete guard again and applies. Good is that job green.
 
-   The apply puts `app-t1` into the stack's state and creates one firewall; it changes nothing on
-   the server. Undo: "Rolling an adopted host back out of the stack" below.
+   The apply puts `app-t1` into the stack's state and creates the `branchleft:hetzner:Host` component and
+   one firewall; it changes nothing on the server. Undo: "Rolling an adopted host back out of the stack" below.
 
 5. **Bootstrap it through `edge-t`.** Main runbook step 9's "Case A and B: bootstrap db-t1" block (its
    two `ssh` commands), with three substitutions and no others: the address `10.20.1.201` for

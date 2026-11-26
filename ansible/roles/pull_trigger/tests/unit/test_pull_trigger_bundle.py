@@ -266,6 +266,7 @@ class BundleTests(unittest.TestCase):
             state_dir=str(root / "state"),
             log_dir=str(root / "logs"),
             timeout_seconds=60,
+            lock_wait_seconds=0,
             source="bundle",
         )
         data.update(config)
@@ -839,6 +840,36 @@ class BundleTests(unittest.TestCase):
         self.assert_refused(result, "busy", code=21)
         self.assertEqual([], host.applied())
 
+    def test_a_waiting_push_keeps_its_own_upload_from_the_sweep_and_then_runs(self) -> None:
+        host = self.make_host(lock_wait_seconds=60)
+        host.seed(self.commit("c0"))
+        release = threading.Event()
+        held = threading.Event()
+
+        def hold() -> None:
+            with trigger.single_flight(host.state / "lock"):
+                held.set()
+                release.wait(60)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(10))
+        timer = threading.Timer(5, release.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        # With no grace, an upload older than the read deadline is swept: the wait outlasts it.
+        with mock.patch.object(trigger, "SPOOL_GRACE_SECONDS", 0):
+            result = self.push(
+                host,
+                self.commit("c1"),
+                bundle=self.bundle("c1"),
+                receiving=trigger.Receiving(deadline_seconds=3),
+            )
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        self.assertEqual(1, len(host.applied()), "the playbook must run once")
+
     def test_the_sweep_removes_old_uploads_and_leaves_a_young_one_for_a_concurrent_request(
         self,
     ) -> None:
@@ -1111,7 +1142,7 @@ class ConfigSourceTests(unittest.TestCase):
         # ``release_signers`` and ``require_release_tag`` are the release-tag route's two keys
         # (test_pull_trigger_release_tag); a host that does not use it carries neither.
         self.assertEqual(
-            {"steps", "source", "release_signers", "require_release_tag"},
+            {"steps", "source", "release_signers", "require_release_tag", "lock_wait_seconds"},
             set(trigger.OPTIONAL_CONFIG_KEYS),
         )
 
@@ -1145,7 +1176,9 @@ class PullRouteUnchangedTests(unittest.TestCase):
         root.chmod(0o700)
         etc = root / "etc"
         etc.mkdir(mode=0o755)
-        data = valid_config_data(state_dir=str(root / "state"), log_dir=str(root / "logs"))
+        data = valid_config_data(
+            state_dir=str(root / "state"), log_dir=str(root / "logs"), lock_wait_seconds=0
+        )
         config = etc / "config.json"
         config.write_text(json.dumps(data), encoding="utf-8")
         config.chmod(0o644)

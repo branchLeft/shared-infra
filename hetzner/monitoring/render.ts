@@ -32,6 +32,12 @@ const GENERATED_BANNER = [
   '# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.',
 ];
 
+/** Added to the rendering that scrapes demo1, so a reader of the file knows which of the two it is. */
+const DEMO1_VARIANT_BANNER = [
+  '# This variant scrapes demo1. monitoring_stack delivers it as prometheus.yml only when',
+  '# host_tls_identity_peer_cert is set; without that value the pin it names does not exist.',
+];
+
 /**
  * The estate hosts this stack watches, and whether each node_exporter target
  * is expected to answer today -- the first four are, so those node targets
@@ -408,11 +414,26 @@ export function blackboxTargets(sites: readonly EdgeSite[]): string[] {
   );
 }
 
-export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
+/**
+ * Whether the config scrapes demo1's exporter. Off for the config Prometheus
+ * loads by default: a `tls_config` names three files, Prometheus reads each at
+ * load, and the pin among them (`ca.crt`) exists on edge1 only once the owner
+ * has set `host_tls_identity_peer_cert`. Without it the whole stack stops, so the
+ * config that names the files is a second rendering, delivered in place of the
+ * first only when that value is set (render.md#demo1s-node-target).
+ */
+export interface PrometheusConfigOptions {
+  demo1Scrape?: boolean;
+}
+
+export function renderPrometheusConfig(
+  sites: readonly EdgeSite[],
+  options: PrometheusConfigOptions = {}
+): string {
   const targets = blackboxTargets(sites);
-  // demo1's job is not emitted until its pin exists on edge1: its tls_config names a file that is
-  // missing there, and Prometheus stops at config load on a missing file (render.md#demo1s-node-target).
-  const nodeHosts = MONITORED_NODE_HOSTS.filter((host) => host.publicTls !== true);
+  const nodeHosts = MONITORED_NODE_HOSTS.filter(
+    (host) => host.publicTls !== true || options.demo1Scrape === true
+  );
   const nodeTargets = [
     ...hostsScrapedDirectly(nodeHosts, TENANT_TUNNEL_TARGETS).map(nodeTarget),
     ...TENANT_TUNNEL_TARGETS.map(tunnelTarget),
@@ -420,6 +441,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
 
   return `${[
     ...GENERATED_BANNER,
+    ...(options.demo1Scrape === true ? DEMO1_VARIANT_BANNER : []),
     'global:',
     '  scrape_interval: 30s',
     '  evaluation_interval: 30s',
@@ -699,27 +721,27 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // An owned ban pages after the classifier's next run, up to ~5 minutes,
-    // and each owned ban is its own alert (decision_id), so a second ban of a
-    // scenario that is already paging is a new alert. Other bans go to email
-    // (EdgeBanUnowned). A stale classifier, or one missing for ten minutes,
-    // makes every ban page via the fallback branch; EdgeBanOwnerStale pages on
-    // its own. Text and labels never carry an address. Why, and the rest:
-    // hetzner/edge/render.md, "Being told about a ban".
+    // Owner ruling 26 Nov: a ban is never a page. This is a warning, so it
+    // reaches the on-host mailbox (the warning route) and no ntfy receiver;
+    // the page register holds the entry dormant. Each ban is still its own
+    // alert (decision_id), and the rule still names no address. The
+    // classifier's staleness alert, EdgeBanOwnerStale, still pages on its own.
+    // Why owned bans were once paged: hetzner/edge/render.md, "Being told
+    // about a ban".
     '      - alert: EdgeBanIssued',
     `        expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE_HELD}))`,
     '        labels:',
-    '          severity: page',
+    '          severity: warning',
     '        annotations:',
     '          summary: "The edge is banning {{ $value }} address(es), by {{ $labels.reason }}."',
     '          description: >-',
     '            A banned address gets 403 from every site on edge1 until the ban',
     '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
-    '            This page means the address is one of yours: one that made a',
+    '            This alert means the address is one of yours: one that made a',
     '            verified Ghost staff request through the edge in the last 30',
     '            days, or a range holding one. A decision_id label, when there is',
     '            one, is the CrowdSec decision ID, so each owned ban is its own',
-    '            alert. It also pages for every ban while the classifier is more',
+    '            alert. It also fires for every ban while the classifier is more',
     '            than 15 minutes stale or has reported nothing for 10 minutes,',
     '            when nothing says whose they are.',
     '            From a network that is not banned, or over SSH to edge1,',

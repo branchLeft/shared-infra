@@ -1039,6 +1039,7 @@
         scene_name: slow
         scene_overrides:
           ansible_playbook: /var/tmp/ptt/slow-ansible
+          lock_wait_seconds: 0
 
     - name: Forget earlier calls of the slow stand-in
       ansible.builtin.file:

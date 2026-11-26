@@ -80,11 +80,11 @@ read -r EDGE1_IPV4
 ```
 
 ```bash
-case "${EDGET_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: '${EDGET_IPV4}'"; false;; esac
+case "${EDGET_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: '${EDGET_IPV4}'"; false;; esac
 ```
 
 ```bash
-case "${EDGE1_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: '${EDGE1_IPV4}'"; false;; esac
+case "${EDGE1_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: '${EDGE1_IPV4}'"; false;; esac
 ```
 
 ## 2. Prove the gateway (nothing that outlives the run changes)

@@ -2384,11 +2384,11 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-admin-interface-probing
             exp_annotations:
               summary: 'The edge is banning 2 address(es), by crowdsecurity/http-admin-interface-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
 
   # Each owned ban is its own alert, named by its decision_id. A second owned
   # ban of the same scenario is a second alert while the first is still firing:
@@ -2406,29 +2406,29 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
               decision_id: '101'
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
       - eval_time: 7m
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
               decision_id: '101'
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
               decision_id: '102'
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
 
   # An owned ban whose sample goes away (the ban ended, the next run no longer
   # lists it) resolves, and the other ban of the same scenario keeps firing.
@@ -2444,14 +2444,14 @@ tests:
       - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
         eval_time: 3m
         exp_samples:
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
       - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
         eval_time: 8m
         exp_samples:
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="102", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
 
   # An unowned ban is a warning for the owner by email, never a page, and the
@@ -2498,7 +2498,7 @@ tests:
       - expr: ALERTS{alertname=~"EdgeBan.*", alertstate="firing"}
         eval_time: 2m
         exp_samples:
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="201", reason="branchleft/ghost-admin-login-bruteforce", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="201", reason="branchleft/ghost-admin-login-bruteforce", severity="warning"}'
             value: 1
           - labels: 'ALERTS{alertname="EdgeBanUnowned", alertstate="firing", owner_action="true", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
@@ -2524,11 +2524,11 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
             exp_annotations:
               summary: 'The edge is banning 2 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
       - eval_time: 15m30s
         alertname: EdgeBanOwnerStale
         exp_alerts: []
@@ -2555,14 +2555,14 @@ tests:
       - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
         eval_time: 10m
         exp_samples:
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
       - expr: ALERTS{alertname="EdgeBanIssued", alertstate="firing"}
         eval_time: 16m
         exp_samples:
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", decision_id="101", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
-          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", reason="crowdsecurity/http-probing", severity="page"}'
+          - labels: 'ALERTS{alertname="EdgeBanIssued", alertstate="firing", reason="crowdsecurity/http-probing", severity="warning"}'
             value: 1
 
   # No classifier series at all (it has never reported, which is also how the
@@ -2578,11 +2578,11 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
       - eval_time: 4m
         alertname: EdgeBanOwnerStale
         exp_alerts: []
@@ -2651,11 +2651,11 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
       - eval_time: 21m
         alertname: EdgeBanOwnerStale
         exp_alerts:
@@ -2722,12 +2722,12 @@ tests:
         alertname: EdgeBanIssued
         exp_alerts:
           - exp_labels:
-              severity: page
+              severity: warning
               reason: crowdsecurity/http-probing
               decision_id: '101'
             exp_annotations:
               summary: 'The edge is banning 1 address(es), by crowdsecurity/http-probing.'
-              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This page means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also pages for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). This alert means the address is one of yours: one that made a verified Ghost staff request through the edge in the last 30 days, or a range holding one. A decision_id label, when there is one, is the CrowdSec decision ID, so each owned ban is its own alert. It also fires for every ban while the classifier is more than 15 minutes stale or has reported nothing for 10 minutes, when nothing says whose they are. From a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
       - eval_time: 10m
         alertname: EdgeBanIssued
         exp_alerts: []

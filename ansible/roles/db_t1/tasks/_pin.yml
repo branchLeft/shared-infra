@@ -171,6 +171,45 @@
       is printed here.
   when: db_t1_deploy_needed | bool
 
+# ----- The registry read key, checked only when a deploy is due -----
+
+# The image is a private package: the attestation and the pull need the key. Without it the deploy
+# program fails at the registry with a login error that names no file. The key is written by
+# tasks/_registry_key.yml from the host's inputs, or placed by the owner by hand; either way the
+# file is the same, and deploy_verifier judges its content. Metadata only, no content is read.
+- name: Look at the registry read key file
+  ansible.builtin.stat:
+    path: '{{ db_t1_registry_config_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_registry_stat
+  when: db_t1_deploy_needed | bool
+
+# In check mode on a host that is given the inputs and has no file yet, the write above was
+# skipped (ANS-10), so the plan reads the file as absent. The inputs given are the key to come.
+- name: Refuse a deploy with no registry read key on the host or on its way
+  ansible.builtin.assert:
+    that:
+      - >-
+        (db_t1_registry_stat.stat.exists | default(false))
+        or (ansible_check_mode and db_t1_registry_token_given | default(false) | bool)
+      - >-
+        not (db_t1_registry_stat.stat.exists | default(false))
+        or (db_t1_registry_stat.stat.isreg
+        and not db_t1_registry_stat.stat.islnk
+        and db_t1_registry_stat.stat.uid == db_t1_root_user_id
+        and db_t1_registry_stat.stat.gid == db_t1_root_group_id
+        and db_t1_registry_stat.stat.mode == db_t1_registry_file_mode)
+    quiet: true
+    fail_msg: >-
+      db_t1 refused (rule: registry read key): {{ db_t1_registry_config_path }} must be a plain file
+      owned by root, group root, mode 0600, before the private image is pulled. Seed the registry
+      login and token on this host with seed_host_inputs.py --set, then apply again. No value is
+      printed here.
+  when: db_t1_deploy_needed | bool
+
 # ----- The deploy -----
 
 # In check mode the deploy below is skipped, and a skipped command reports no change, so

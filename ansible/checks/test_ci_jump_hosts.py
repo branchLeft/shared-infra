@@ -204,6 +204,13 @@ def _data_findings(root: Path) -> list[str]:
     private = set(tenants.values())
 
     edge1 = _owner_values(root, "edge1")
+    listed = set(_text_list(edge1.get(DESTINATIONS)))
+    for address in _key_destinations(edge1):
+        if address not in listed:
+            found.append(
+                f"owner_vars/edge1.yml: a key's own list holds {address}, which edge1's "
+                f"{DESTINATIONS} does not hold: a key reaches no more than edge1 lists"
+            )
     for address in [*_text_list(edge1.get(DESTINATIONS)), *_key_destinations(edge1)]:
         try:
             ipaddress.IPv4Address(address)
@@ -234,6 +241,30 @@ def _data_findings(root: Path) -> list[str]:
                 f"owner_vars/{host}.yml: {DESTINATIONS} is set but does not hold {OWN_ADDRESS}"
             )
     return found
+
+
+CONTROLLER_KEY_PREFIX = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4BMWTrLt4jaXNkHrNI6ELNNRRBbUzK5TpuWOSinHMU"
+)
+
+
+def _controller_key_findings(root: Path) -> list[str]:
+    """The ops1 provisioning controller's key holds one entry on edge1, whose own list is edge-t's
+    public address and nothing else (ws#4170: the controller's first hop is edge-t)."""
+    keys = _owner_values(root, "edge1").get("ci_jump_keys")
+    entries = [
+        _mapping(entry)
+        for entry in (keys if isinstance(keys, list) else [])
+        if str(_mapping(entry).get("key", "")).startswith(CONTROLLER_KEY_PREFIX)
+    ]
+    if len(entries) != 1:
+        return [f"owner_vars/edge1.yml holds {len(entries)} entries for the controller key, want 1"]
+    if _text_list(entries[0].get("destinations")) != ["94.130.108.53"]:
+        return [
+            "owner_vars/edge1.yml: the controller key's own list is not edge-t's public address "
+            "94.130.108.53 alone"
+        ]
+    return []
 
 
 def _second_hop_findings(root: Path) -> list[str]:
@@ -314,6 +345,7 @@ def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
         found.extend(_playbook_findings(root, host))
     found.extend(_role_findings(root))
     found.extend(_data_findings(root))
+    found.extend(_controller_key_findings(root))
     found.extend(_second_hop_findings(root))
     found.extend(_push_host_findings(root, jump_hosts))
     found.extend(_secret_findings(root))
@@ -430,6 +462,38 @@ class Sabotage(unittest.TestCase):
             f"{OWNER_VARS}/edge1.yml", f"{DESTINATIONS}:\n", f"{DESTINATIONS}:\n  - '192.0.2.7'\n"
         )
         self.assertEqual([], [line for line in problems(self.root) if "tenants private" in line])
+
+    def test_a_key_s_own_list_on_edge1_naming_a_listed_public_address_is_green(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml",
+            "ci_jump_keys:\n",
+            "ci_jump_keys:\n  - key: ssh-ed25519 AAAA\n    destinations: ['94.130.108.53']\n",
+        )
+        self.assertEqual([], problems(self.root))
+
+    def test_a_key_s_own_list_on_edge1_naming_an_unlisted_address_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml",
+            "ci_jump_keys:\n",
+            "ci_jump_keys:\n  - key: ssh-ed25519 AAAA\n    destinations: ['192.0.2.7']\n",
+        )
+        self._expect("a key's own list holds 192.0.2.7")
+
+    def test_removing_the_controller_key_entry_from_edge1_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml",
+            f"  - key: '{CONTROLLER_KEY_PREFIX}'\n    destinations:\n      - '94.130.108.53'\n",
+            "",
+        )
+        self._expect("holds 0 entries for the controller key, want 1")
+
+    def test_widening_the_controller_key_entry_on_edge1_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml",
+            "      - '94.130.108.53'\n",
+            "      - '94.130.108.53'\n      - '94.130.108.53'\n",
+        )
+        self._expect("the controller key's own list is not edge-t's public address")
 
     def test_dropping_the_role_from_edget_is_red(self) -> None:
         self._edit(

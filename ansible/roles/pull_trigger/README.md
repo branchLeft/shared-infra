@@ -33,8 +33,8 @@ caller uses it"). The caller sends one 40-digit commit id and a mode, `apply` or
    argument list.
 2. Checks that the host's configured playbook is on the playbook allowlist and, for a
    step, that the step is on the step allow-list and the word is its word, then
-   takes a single-flight lock. A second request while one runs is refused at
-   once, not queued.
+   takes a single-flight lock. A second request while one runs waits for the lock, up to
+   `pull_trigger_lock_wait_seconds`, and is then refused as `busy`.
 3. Fetches `main`, and only `main`, from the configured read-only remote into a
    root-owned bare cache. The host holds no credential that can write to the
    repository.
@@ -76,17 +76,18 @@ The variables, their types, choices and defaults are in `meta/argument_specs.yml
 and the same defaults are in `defaults/main.yml`. Ansible checks them when the
 role starts.
 
-| Variable                        | Meaning                                                                                                      |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `pull_trigger_remote_url`       | The read-only remote: an `https://` or `file://` URL, no credential in it.                                   |
-| `pull_trigger_signers`          | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block).  |
-| `pull_trigger_playbooks`        | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                     |
-| `pull_trigger_playbook`         | The one playbook this host runs; must be on the allowlist.                                                   |
-| `pull_trigger_ansible_playbook` | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                             |
-| `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                   |
-| `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                            |
-| `pull_trigger_steps`            | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
-| `pull_trigger_floor_seed`       | A commit id written to the rollback floor only if the host has none (default empty). See "Push receiver".    |
+| Variable                         | Meaning                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `pull_trigger_remote_url`        | The read-only remote: an `https://` or `file://` URL, no credential in it.                                   |
+| `pull_trigger_signers`           | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block).  |
+| `pull_trigger_playbooks`         | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                     |
+| `pull_trigger_playbook`          | The one playbook this host runs; must be on the allowlist.                                                   |
+| `pull_trigger_ansible_playbook`  | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                             |
+| `pull_trigger_timeout_seconds`   | Time after which a playbook run is stopped (default 3600).                                                   |
+| `pull_trigger_lock_wait_seconds` | How long a request waits for a held host lock before it is answered busy (default 1200, 0 refuses at once).  |
+| `pull_trigger_keep_runs`         | How many runs' output files to keep (default 50).                                                            |
+| `pull_trigger_steps`             | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
+| `pull_trigger_floor_seed`        | A commit id written to the rollback floor only if the host has none (default empty). See "Push receiver".    |
 
 No variable is a secret. The signers are public keys, and the configuration is
 world-readable by design, so the role leaves the diff of the configuration
@@ -475,7 +476,7 @@ the nightly drift check), so a run can be cited in a `Live:` line.
 
 What it is not: a way to run anything. The caller still sends one commit and nothing else. The
 facts are declared in `ansible/tools/look/facts.json` of the commit being checked, which is
-signed, on `main`, and merges like code. A fact asks for one of three kinds, each with exactly
+signed, on `main`, and merges like code. A fact asks for one of five kinds, each with exactly
 its own fields, and the program (this file, the owner's) holds the list of kinds and the places a
 file fact may read. A new kind, or a new directory, is a change to this program.
 
@@ -497,16 +498,22 @@ Every entry has `issue` (a workspace issue number), `name` (a lowercase word of 
 and hyphen, unique in the file), `playbook` (the host's playbook; only that host looks) and
 `kind`, then the fields of its kind:
 
-| Kind          | Fields                              | Result printed                                                                                                                            |
-| ------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `file_sha256` | `path`                              | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                          |
-| `unit_active` | `unit`                              | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown` |
-| `http_status` | `port`, `url_path`, optional `host` | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed     |
+| Kind             | Fields                                                                          | Result printed                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_sha256`    | `path`                                                                          | the SHA-256 of the file, or `absent`, `not-regular`, `outside-root`, `too-large` or `unreadable`                                                                                                                                                                                                                                  |
+| `unit_active`    | `unit`                                                                          | what `systemctl is-active` says: `active`, `inactive`, `failed`, `activating`, `deactivating`, `reloading`, `maintenance`, else `unknown`                                                                                                                                                                                         |
+| `http_status`    | `port`, `url_path`, optional `host`                                             | the three-digit status of one `GET` to `127.0.0.1`, or `unreachable` or `timeout`; no body or header is read, no redirect is followed                                                                                                                                                                                             |
+| `ssh_public_key` | `path`, which must be exactly `/etc/branchleft/provisioning-controller/ssh.pub` | the key type and base64 key of the file's first line (`ssh-ed25519`, `ssh-rsa`, `ecdsa-sha2-nistp256/384/521`), or `absent`, `not-regular`, `unreadable`, `too-large` or `not-ssh-key`; the comment after the key is dropped                                                                                                      |
+| `uptime_90d`     | `path`, which must be exactly `/var/lib/branchleft/status-uptime/report.json`   | each endpoint's key and `uptime_percent` to four decimals as `key=figure` (sorted by key), then the report's `generated_at`; or `absent`, `not-regular`, `unreadable`, `too-large`, or `not-report` (not the collector's shape, or a key outside `[a-z0-9_-]{1,64}`, or a duplicate key); no other field of the report is printed |
 
-A file fact reads only below `/etc/systemd/system/`, `/usr/local/bin/`, `/usr/local/lib/` and
-`/usr/local/sbin/` (the places the roles put programs and unit files, and no place that holds a
-secret, because a digest of a short secret can be guessed). A link out of those directories is
-`outside-root`. `host` is the name sent in the `Host` header; the connection is to the loopback
+A file fact reads only below `/etc/systemd/system/`, `/usr/local/bin/`, `/usr/local/lib/`,
+`/usr/local/sbin/` and `/opt/branchleft/monitoring/` (the places the roles put programs and unit
+files, and no place that holds a secret, because a digest of a short secret can be guessed). The
+monitoring directory also holds the files its renderer writes from the secrets file, so there only
+three exact files are readable (`LOOK_PUBLIC_FILES`): `alertmanager/alertmanager.yml.tmpl`,
+`prometheus/alerts.yml` and `prometheus/prometheus.yml`, which are copies of the repository's own
+files. Any other file there is `path-not-allowed`, the rendered `alertmanager.yml` included. A link
+out of the allowed places, or to a file there that is not named, is `outside-root`. `host` is the name sent in the `Host` header; the connection is to the loopback
 address whatever it says. A `GET` that changes state is a fault of the declaration, caught at
 review: pick a path that only reads.
 
@@ -528,7 +535,7 @@ Refusals, each a fixed word that repeats nothing from the file. Of the whole fil
 (not JSON, or a key repeated), `file-shape` (not exactly `{"facts": [...]}`), `file-too-large`
 (over 64 KiB), `file-too-many` (over 64 entries), `file-not-regular` (the path is a link or a
 directory in the commit) and `file-unreadable` (git could not give it). Of one entry, the others
-standing: `entry-shape`, `unknown-kind` (not one of the three), `unknown-field` (a field the kind
+standing: `entry-shape`, `unknown-kind` (not one of the five), `unknown-field` (a field the kind
 does not name: `run`, `command`, `args` and the like), `missing-field`, `bad-issue`, `bad-name`
 (also a name holding a word the plan job's secret scan reads, which would fail the plan of every
 host), `duplicate-name`, `bad-playbook`, `path-not-allowed` (relative, not normalised, outside the
@@ -542,7 +549,11 @@ the run is as it would have been without it).
 
 Every value on a line is a number from the file's `issue`, a name that passed its pattern, a
 digest, a three-digit status or a word from the lists above, and a final check admits only
-that shape, so nothing a host holds can reach the log. A unit's reply that is not a known word
+that shape, so nothing a host holds can reach the log. One exception, owner-reviewed: the
+`ssh_public_key` kind prints the key type and public key of one exact file, which is public by
+design (shared-infra delivers it mode 0444); no other file's content can reach a line. The
+`uptime_90d` kind prints each endpoint's key and percentage and the report's time from one exact report
+the status page writes, which is public by design. A unit's reply that is not a known word
 is `unknown`, and the text is dropped. The whole look has 120 seconds, a unit 10 and a `GET` 5,
 and a stop request ends it (`skipped-time`).
 
@@ -561,7 +572,7 @@ refusal is not expected on a merged file.
 | 10   | `applied`      | An apply ran and reported changes.                                                                                             |
 | 11   | `would-change` | Check mode ran and reports that an apply would change something.                                                               |
 | 20   | `refused`      | Refused before any change. See the reasons below.                                                                              |
-| 21   | `busy`         | Another trigger holds the lock. Nothing was run. Ask again later.                                                              |
+| 21   | `busy`         | Another trigger held the lock for the whole of the wait (`pull_trigger_lock_wait_seconds`). Nothing was run. Ask again later.  |
 | 30   | `failed`       | The playbook started and failed (`playbook-failed`, `no-recap`, `interrupted`).                                                |
 | 31   | `timed-out`    | The playbook ran past `pull_trigger_timeout_seconds` and was stopped.                                                          |
 | 40   | `error`        | Invalid or unsafe configuration or state, a missing tool, a failed git command, or `io-error` or `internal-error` (see below). |
@@ -684,9 +695,15 @@ unit test makes each of them.
   made impossible, because ANS-17 requires that a request can be repeated.
 - **Lock semantics.** The lock is `flock` on a file in the state directory. The
   kernel drops it when the holder ends, however it ends, so a dead holder cannot
-  wedge the host and there is no stale-lock cleanup. A second request is
-  refused with exit 21; it does not wait. Local callers who bypass the program are
-  not covered.
+  wedge the host and there is no stale-lock cleanup. A second request
+  asks for the lock again every second for up to `pull_trigger_lock_wait_seconds` (1200 by
+  default, 0 refuses at once) and is refused with exit 21 only when the holder outlasts that.
+  The wait is on the host, so a check and an apply sent together queue there; they are not
+  ordered, and the first to ask after a release takes the lock. A request that is waiting
+  ignores a dropped connection, as a running apply does, and still runs when it gets the
+  lock; a TERM or INT ends the wait as `busy`. A bundle's spool file is touched on every
+  wait, so the run that holds the lock does not sweep it away. Local callers who bypass
+  the program are not covered.
 - **The first run needs the network** to reach the remote, and a remote that is
   down is exit 40, not a refusal.
 - **A root-owned configuration is trusted.** The program refuses a configuration
@@ -806,7 +823,8 @@ which control broke:
   `env_keep` line the request arrives, with another argument list sudo refuses,
   and without the line the answer is exit 20;
 - a failing playbook is exit 30 and still raises the rollback floor;
-- two overlapping triggers: the second is exit 21 and the playbook ran once;
+- two overlapping triggers with `lock_wait_seconds` of 0: the second is exit 21 and the playbook ran once
+  (the wait itself is proved by the unit tests);
 - a run past its limit is stopped, exit 31;
 - the unit tests run again on Debian 13 (see below).
 
@@ -937,20 +955,21 @@ Each was broken on purpose in the program, seen to fail by the named test, resto
 to pass; the record is in the pull request that added the look. The look is read-only and has no
 caller input, so what these hold is that a declaration cannot make it do more.
 
-| Control                                              | Broken by                                          | Fails in                                                                                                                        |
-| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| L1 only the three kinds exist                        | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                          |
-| L2 an entry has exactly its kind's fields            | accepting a field the kind does not name           | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`, `test_a_command_like_entry_is_refused_and_runs_nothing` |
-| L3 a file fact reads only below the four directories | accepting any absolute path                        | `test_a_file_outside_the_four_directories_or_not_plain_is_refused`                                                              |
-| L4 a unit is a plain unit name                       | accepting any text as a unit                       | `test_a_unit_that_is_not_a_plain_unit_name_is_refused`                                                                          |
-| L5 the GET goes to the loopback address only         | connecting to the name given for the `Host` header | `test_the_host_header_is_the_declared_name_but_the_connection_is_loopback`                                                      |
-| L6 a unit's reply is one of a closed list of words   | printing the reply as it came                      | `test_a_unit_answer_that_is_not_a_known_word_is_not_repeated`                                                                   |
-| L7 only a line of the one shape is printed           | dropping the shape check                           | `test_a_line_that_is_not_of_the_one_shape_is_not_printed`                                                                       |
-| L8 an apply and a step print no look                 | printing the look for every mode                   | `test_an_apply_and_a_failed_playbook_print_no_look`                                                                             |
-| L9 a fault in the look cannot change a verdict       | removing the guard around the look                 | `test_a_fault_in_the_look_never_changes_the_verdict`                                                                            |
-| L10 a name cannot trip the plan job's secret scan    | removing the word check                            | `test_a_name_with_a_word_the_plan_scan_reads_is_refused`                                                                        |
-| L11 a refusal runs nothing for the entry             | running the unit check before the field check      | `test_a_refused_entry_runs_nothing_and_is_named`                                                                                |
-| L12 the repository's own file has no refusal         | adding a command-like entry to `facts.json`        | `test_the_declared_file_of_the_repository_has_no_refusal`                                                                       |
+| Control                                                   | Broken by                                          | Fails in                                                                                                                                                                                                                |
+| --------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1 only the five kinds exist                              | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                                                                                                                  |
+| L2 an entry has exactly its kind's fields                 | accepting a field the kind does not name           | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`, `test_a_command_like_entry_is_refused_and_runs_nothing`                                                                                         |
+| L3 a file fact reads only below its allowed directories   | accepting any absolute path                        | `test_a_file_outside_the_four_directories_or_not_plain_is_refused`                                                                                                                                                      |
+| L4 a unit is a plain unit name                            | accepting any text as a unit                       | `test_a_unit_that_is_not_a_plain_unit_name_is_refused`                                                                                                                                                                  |
+| L5 the GET goes to the loopback address only              | connecting to the name given for the `Host` header | `test_the_host_header_is_the_declared_name_but_the_connection_is_loopback`                                                                                                                                              |
+| L6 a unit's reply is one of a closed list of words        | printing the reply as it came                      | `test_a_unit_answer_that_is_not_a_known_word_is_not_repeated`                                                                                                                                                           |
+| L7 only a line of the one shape is printed                | dropping the shape check                           | `test_a_line_that_is_not_of_the_one_shape_is_not_printed`                                                                                                                                                               |
+| L8 an apply and a step print no look                      | printing the look for every mode                   | `test_an_apply_and_a_failed_playbook_print_no_look`                                                                                                                                                                     |
+| L9 a fault in the look cannot change a verdict            | removing the guard around the look                 | `test_a_fault_in_the_look_never_changes_the_verdict`                                                                                                                                                                    |
+| L10 a name cannot trip the plan job's secret scan         | removing the word check                            | `test_a_name_with_a_word_the_plan_scan_reads_is_refused`                                                                                                                                                                |
+| L11 a refusal runs nothing for the entry                  | running the unit check before the field check      | `test_a_refused_entry_runs_nothing_and_is_named`                                                                                                                                                                        |
+| L12 the repository's own file has no refusal              | adding a command-like entry to `facts.json`        | `test_the_declared_file_of_the_repository_has_no_refusal`                                                                                                                                                               |
+| L13 the monitoring directory reads only its public copies | naming a rendered file, or dropping the narrowing  | `test_the_monitoring_directory_reads_only_the_three_public_copies`, `test_the_public_copies_are_repository_files_and_never_a_rendered_output`, `test_a_narrowed_root_hashes_the_named_file_and_never_a_sibling_or_link` |
 
 ### The release-tag route
 

@@ -91,7 +91,7 @@
   when: not (demo1_build_release_ready | default(false) | bool)
 
 - name: Look at the DNS token file the wildcard certificate is issued with
-  ansible.builtin.include_tasks: _dns_token.yml
+  ansible.builtin.include_tasks: _dns_file.yml
 
 # Whether the Caddy image that judges the candidate is on this host, and is the pinned one.
 # Reads only: `docker image inspect` lists the image by the digest in its reference and

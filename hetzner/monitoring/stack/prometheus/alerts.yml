@@ -97,17 +97,17 @@ groups:
       - alert: EdgeBanIssued
         expr: (sum by (reason, decision_id) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() ((max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent_over_time(edge_ban_owner_last_run_timestamp_seconds[10m])))
         labels:
-          severity: page
+          severity: warning
         annotations:
           summary: "The edge is banning {{ $value }} address(es), by {{ $labels.reason }}."
           description: >-
             A banned address gets 403 from every site on edge1 until the ban
             ends (10 minutes for a first ban, up to 4 hours for a repeat).
-            This page means the address is one of yours: one that made a
+            This alert means the address is one of yours: one that made a
             verified Ghost staff request through the edge in the last 30
             days, or a range holding one. A decision_id label, when there is
             one, is the CrowdSec decision ID, so each owned ban is its own
-            alert. It also pages for every ban while the classifier is more
+            alert. It also fires for every ban while the classifier is more
             than 15 minutes stale or has reported nothing for 10 minutes,
             when nothing says whose they are.
             From a network that is not banned, or over SSH to edge1,

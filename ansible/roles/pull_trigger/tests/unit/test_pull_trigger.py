@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -692,10 +693,27 @@ class ConfigTests(unittest.TestCase):
             "timeout text": {"timeout_seconds": "3600"},
             "timeout bool": {"timeout_seconds": True},
             "keep zero": {"keep_runs": 0},
+            "lock wait negative": {"lock_wait_seconds": -1},
+            "lock wait huge": {"lock_wait_seconds": 10**9},
+            "lock wait text": {"lock_wait_seconds": "1200"},
+            "lock wait bool": {"lock_wait_seconds": True},
         }
         for name, changes in cases.items():
             with self.subTest(name), self.assertRaises(trigger.ConfigError):
                 trigger.parse_config(json.dumps(valid_config_data(**changes)))
+
+    def test_the_lock_wait_is_optional_and_may_be_zero(self) -> None:
+        absent = trigger.parse_config(json.dumps(valid_config_data()))
+        self.assertEqual(trigger.DEFAULT_LOCK_WAIT_SECONDS, absent.lock_wait_seconds)
+        for seconds in (0, 90, 86_400):
+            with self.subTest(seconds):
+                config = trigger.parse_config(
+                    json.dumps(valid_config_data(lock_wait_seconds=seconds))
+                )
+                self.assertEqual(seconds, config.lock_wait_seconds)
+
+    def test_the_default_wait_is_above_the_length_of_an_ordinary_apply(self) -> None:
+        self.assertGreaterEqual(trigger.DEFAULT_LOCK_WAIT_SECONDS, 15 * 60)
 
     def test_a_missing_or_an_unknown_key_is_refused(self) -> None:
         missing = valid_config_data()
@@ -1047,6 +1065,46 @@ class LockTests(unittest.TestCase):
         with trigger.single_flight(self.lock):
             pass
 
+    def test_a_waiter_gets_the_lock_when_the_holder_lets_go_within_the_wait(self) -> None:
+        release = threading.Event()
+        held = threading.Event()
+
+        def hold() -> None:
+            with trigger.single_flight(self.lock):
+                held.set()
+                release.wait(30)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(10))
+        asked: list[int] = []
+        timer = threading.Timer(1.5, release.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        with trigger.single_flight(self.lock, 30, on_wait=lambda: asked.append(1)):
+            self.assertTrue(release.is_set(), "the lock was taken while the holder still held it")
+        self.assertGreaterEqual(len(asked), 1)
+
+    def test_a_waiter_is_refused_busy_when_the_holder_outlasts_the_wait(self) -> None:
+        with trigger.single_flight(self.lock):
+            started = time.monotonic()
+            with self.assertRaises(trigger.BusyError), trigger.single_flight(self.lock, 1.5):
+                self.fail("the second holder must not get the lock")
+            self.assertGreaterEqual(time.monotonic() - started, 1.4)
+
+    def test_a_stop_request_ends_the_wait_as_busy(self) -> None:
+        stop = threading.Event()
+        timer = threading.Timer(0.5, stop.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        with trigger.single_flight(self.lock):
+            started = time.monotonic()
+            with self.assertRaises(trigger.BusyError), trigger.single_flight(self.lock, 60, stop):
+                self.fail("the second holder must not get the lock")
+            self.assertLess(time.monotonic() - started, 10)
+
     def test_a_holder_that_is_killed_does_not_leave_the_lock_held(self) -> None:
         holder = subprocess.Popen(  # noqa: S603 - a test helper process
             [
@@ -1278,6 +1336,7 @@ class EndToEndTests(unittest.TestCase):
             state_dir=str(root / "state"),
             log_dir=str(root / "logs"),
             timeout_seconds=60,
+            lock_wait_seconds=0,
         )
         data.update(changes)
         config_path = config_dir / "config.json"
@@ -1746,6 +1805,40 @@ class EndToEndTests(unittest.TestCase):
 
     def test_a_trigger_that_arrives_while_another_runs_is_refused_and_does_not_run(self) -> None:
         scene = self.make_scene()
+        scene.state.mkdir(mode=0o700)
+        with trigger.single_flight(scene.state / "lock"):
+            result = self.request(scene, self.commits["c6"])
+        self.assertEqual(21, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=busy"))
+        self.assert_no_new_run(scene)
+
+    def test_a_trigger_that_arrives_while_another_runs_waits_for_it_and_then_runs(self) -> None:
+        scene = self.make_scene(lock_wait_seconds=60)
+        scene.state.mkdir(mode=0o700)
+        release = threading.Event()
+        held = threading.Event()
+
+        def hold() -> None:
+            with trigger.single_flight(scene.state / "lock"):
+                held.set()
+                release.wait(60)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        self.addCleanup(holder.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(10))
+        timer = threading.Timer(1.5, release.set)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        result = self.request(scene, self.commits["c6"])
+        self.assertEqual(10, result.code, result.summary + result.errors)
+        self.assertTrue(result.has("verdict=applied"))
+        self.assertIn("waiting: another trigger holds the host lock", result.errors)
+        self.assertEqual(1, len(self.step_calls(scene)), "the playbook must run once")
+
+    def test_a_trigger_that_waits_the_whole_wait_is_refused_busy_and_does_not_run(self) -> None:
+        scene = self.make_scene(lock_wait_seconds=1)
         scene.state.mkdir(mode=0o700)
         with trigger.single_flight(scene.state / "lock"):
             result = self.request(scene, self.commits["c6"])

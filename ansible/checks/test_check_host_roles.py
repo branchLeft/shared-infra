@@ -74,7 +74,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's node_exporter and tenant_scrape_tunnel (after the edge
 # stack; the tunnel's edge1 half only reports until its data is filled), then edge1's monitoring
-# roles (exporters_and_collectors, edge_ban_owner, ntfy_pager, then monitoring_stack), then
+# roles (exporters_and_collectors, edge_ban_owner, ntfy_pager, host_tls_identity, then
+# monitoring_stack: the stack mounts the identity's directory, so the role goes first), then
 # sweego_receiver (last of all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
@@ -111,6 +112,7 @@ APPLIED_ON_MAIN = {
         "exporters_and_collectors",
         "edge_ban_owner",
         "ntfy_pager",
+        "host_tls_identity",
         "monitoring_stack",
         "sweego_receiver",
     ],
@@ -134,6 +136,7 @@ APPLIED_ON_MAIN = {
         "mail_collector",
         "spool_paths",
         "ring_controller_host",
+        "provisioning_controller_host",
         "broker_tunnel_client",
     ],
     "app1": [
@@ -487,12 +490,16 @@ class HostRoleLists(unittest.TestCase):
                 "exporters_and_collectors",
                 "edge_ban_owner",
                 "ntfy_pager",
+                "host_tls_identity",
                 "monitoring_stack",
                 "sweego_receiver",
             ],
         )
         self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
+        # The stack mounts the identity's directory and Prometheus reads its files at config load,
+        # so the role runs first and a failure in it restarts nothing onto a missing file.
+        self.assertLess(names.index("host_tls_identity"), names.index("monitoring_stack"))
         self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
@@ -544,6 +551,7 @@ class HostRoleLists(unittest.TestCase):
                 "mail_collector",
                 "spool_paths",
                 "ring_controller_host",
+                "provisioning_controller_host",
                 "broker_tunnel_client",
             ],
         )

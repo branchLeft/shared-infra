@@ -112,13 +112,28 @@ on edge1, mounted read-only at `DEMO1_METRICS_TLS_DIR`. The repository ships non
 key material: the owner makes the CA and both certificates, and the key must be readable by the
 container's user (`nobody`, uid 65534).
 
-**Order matters.** Prometheus reads the three files when it loads its config, so a missing file
-stops it from starting, and with it every alert on edge1. The pin (`ca.crt`) exists on edge1 only
-once the owner has set `host_tls_identity_peer_cert`, so until the files are placed the renderer
-does not emit this job: `renderPrometheusConfig` leaves demo1's target and the job's `tls_config`
-out, and `render.test.ts` holds that the config names no certificate file. The job comes back, by
-removing the filter, in the change that delivers the files. `ci-config-validate.yml` stands
-`/dev/null` in for them, because `promtool check config` checks only that each named file exists.
+**Two renderings, one delivered.** Prometheus reads the three files when it loads its config, so a
+missing file stops it from starting, and with it every alert on edge1. `ca.crt` is the pin: the
+`host_tls_identity` role writes it on edge1 only once the owner has set
+`host_tls_identity_peer_cert` in `ansible/owner_vars/edge1.yml`, and until then it does not exist.
+So the renderer takes an option, `renderPrometheusConfig(sites, { demo1Scrape })`, and commits both:
+
+- `stack/prometheus/prometheus.yml`, without the option: no demo1 target and no `tls_config` on the
+  `node` job. It names no file Prometheus must read, so it loads with or without the owner's value.
+- `stack/prometheus/prometheus.demo1.yml`, with it: the demo1 target and the job's `tls_config`.
+
+The `monitoring_stack` role delivers the second as `prometheus.yml` while
+`host_tls_identity_peer_cert` is non-empty (trimmed, as the pin role reads it), and the first
+otherwise. The container mounts one file, `prometheus.yml`, either way, and the fingerprint hashes
+it where it lies, so setting the value changes the hash and restarts Prometheus onto the config
+that names the pin the same run wrote it (`host_tls_identity` runs before `monitoring_stack` on
+edge1). `render.test.ts` holds that the plain rendering names no file and is the other rendering
+with only demo1's target, its `tls_config` and its banner taken out.
+`ansible/checks/test_edge1_prometheus_tls_files.py` reads both against the files the role writes,
+reads the second as if the value were set, and holds the delivery to that same value.
+`ci-config-validate.yml` runs `promtool check config` on both: the plain one with no certificate
+files mounted, the demo1 one with `/dev/null` standing in for the three, because it checks only
+that each named file exists.
 
 `expectedUp` is `false`, as for the tenant hosts, until the exporter is delivered to demo1 and a
 query for `up{host="demo1"}` returns `1`; the flip to `true` is its own reviewed change. The disk
@@ -518,12 +533,11 @@ derived from it rather than from a hardcoded duplicate -- see
 `renderAlertmanagerTemplate` takes a second parameter, `edgeBanOwnerEnabled`, which
 defaults to `EDGE_BAN_OWNER_ENABLED`, the constant that must equal the role's
 `edge_ban_owner_enabled`. While it is false, the classifier's `EdgeBanOwnerStale`
-entry is held dormant, so it is left out of the page routes, and a `discard` route,
-placed before the owned-ban child route, sends it to the `discard` receiver, which
-has no integrations and so notifies no one. The owned-ban child route for
-`EdgeBanIssued` (grouped by `alertname` and `reason`, `group_wait` 30s,
-`group_interval` 5m) is rendered in both modes and matches first without `continue`;
-the generic page route still groups tenant-scoped pages by `tenant`. The alert rules
+entry is held dormant, so it is left out of the page routes, and a `discard` route
+sends it to the `discard` receiver, which has no integrations and so notifies no one.
+`EdgeBanIssued` is a warning (owner ruling 26 Nov) and its page-register entry is
+dormant, so no owned-ban child route is rendered in either mode. The generic page
+route still groups tenant-scoped pages by `tenant`. The alert rules
 are the same in both modes. `render.test.ts` checks that the discard route and
 receiver appear only while the parameter is false, and that the constant equals
 `edge_ban_owner_enabled` in the role's defaults, failing with a message that names

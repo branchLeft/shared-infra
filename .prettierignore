@@ -15,6 +15,7 @@ Pulumi.*.yaml
 # YAML quote-style rewrite (double to single) disagrees with the renderer, so
 # the two fight over the same bytes every time either one runs.
 hetzner/monitoring/stack/prometheus/prometheus.yml
+hetzner/monitoring/stack/prometheus/prometheus.demo1.yml
 hetzner/monitoring/stack/prometheus/alerts.yml
 hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl
 
@@ -53,6 +54,10 @@ hetzner/edge-t/stack/crowdsec/scenarios/http-admin-interface-probing.yaml
 # sha256 (ansible/roles/demo1_build, ansible/roles/demo1_egress_spool). A formatter that
 # rewrote one would break its pin.
 ansible/roles/*/files/ghost-platform/
+
+# The carried broker release bundle (broker_deploy's files/releases/VERSION/): a pinned,
+# attested artifact. Its sha256 pins in defaults/main.yml break if a formatter rewrites a byte.
+ansible/roles/broker_deploy/files/releases/
 
 # Written by `hetzner/dns/zonecheck.py capture`, not by hand. A recapture must
 # produce a diff of only the records that changed, which it cannot if a

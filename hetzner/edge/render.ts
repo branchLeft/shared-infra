@@ -19,6 +19,7 @@ import {
   WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
   type EdgePosture,
 } from './posture';
+import { blockedPageErrorBlock } from './blockedPage';
 import { SHARED_TENANT_FILES, type StaticTextFile } from './sharedTenantFiles';
 
 // Why: renders config from sites.ts & posture.ts; pure strings, committed to
@@ -721,14 +722,10 @@ function nosniffDirective(): string[] {
   return ['header >X-Content-Type-Options "nosniff"'];
 }
 
-/**
- * The same header on an error Caddy writes itself (502, no healthy upstream),
- * which the route's `header` never reaches. Site level: Caddy refuses a
- * `handle_errors` inside a `route`.
- */
-function nosniffErrorBlock(): string[] {
-  return ['handle_errors {', '\theader >X-Content-Type-Options "nosniff"', '}'];
-}
+// Why: every block that carries `protectionChain` ends with `blockedPageErrorBlock`, so a
+// refusal by the bouncer or AppSec is the branded page everywhere. On a Ghost site the
+// block also carries `nosniff` for an error Caddy writes itself (502, no healthy
+// upstream), which the route's `header` never reaches. See render.md §"Blocked page".
 
 // Why: the token is read only on /ghost/, so anywhere else it is stripped before
 // any other handler. The gate reads the raw request target (Caddy's path matcher
@@ -1092,6 +1089,7 @@ function webhookSiteBlock(
       // refused here, so a missed case fails closed rather than reaching upstream.
       '\trespond 404',
       '}',
+      ...blockedPageErrorBlock({ nosniff: false }),
     ],
   };
 }
@@ -1298,9 +1296,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     `\treverse_proxy ${address}`,
     '}'
   );
-  if (isGhost) {
-    body.push(...nosniffErrorBlock());
-  }
+  body.push(...blockedPageErrorBlock({ nosniff: isGhost }));
 
   return { addresses: hostnames, body };
 }
@@ -1316,6 +1312,7 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
       ...protectionChain(posture, zone, { appsec: 'none' }).map((line) => `\t${line}`),
       `\tredir https://${assertHostname(redirect.to)}{uri} permanent`,
       '}',
+      ...blockedPageErrorBlock({ nosniff: false }),
     ],
   };
 }
@@ -1375,6 +1372,7 @@ function staticFilesBlock(
         'respond 404',
       ].map((line) => `\t${line}`),
       '}',
+      ...blockedPageErrorBlock({ nosniff: false }),
     ],
   };
 }
@@ -1411,6 +1409,7 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
       `\theader Content-Type "${STATIC_SITE_CONTENT_TYPE}"`,
       `\trespond "${html}" 200`,
       '}',
+      ...blockedPageErrorBlock({ nosniff: false }),
     ],
   };
 }
@@ -1454,7 +1453,9 @@ export function probeBlock(
     // 'enforcing'`, and a marker has to survive a posture that turns them off.
     `\theader ${PROBE_MARKER_HEADER} ${marker}`,
     '\trespond 204',
-    '}'
+    '}',
+    // The same page as a real site, so a loopback `curl` from a banned address can see it.
+    ...blockedPageErrorBlock({ nosniff: false })
   );
   return { addresses: [address], body };
 }
@@ -1507,6 +1508,10 @@ export function globalOptions(): string[] {
     // so a CrowdSec restart would answer 500 for every request on every site,
     // including in the posture that is supposed to be unable to affect one.
     '\t\tappsec_fail_open',
+    // A bare flag. Without it the bouncer writes a 403 itself, with no body, and no
+    // `handle_errors` ever sees it; with it the refusal is a Caddy error, so the page in
+    // `blockedPageErrorBlock` answers. Status and logged line are unchanged.
+    '\t\tenable_caddy_error',
     // A bare flag. Without it the bouncer counts nothing: its own counters of
     // AppSec calls and failed calls (`crowdsec_appsec_lapi_requests_total`,
     // `crowdsec_appsec_lapi_requests_failures_total`) are only registered in

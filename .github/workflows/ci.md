@@ -154,3 +154,13 @@ Three things the machinery cannot enforce, on the approver:
   on the run id for every push, so no push run queues behind a run paused for
   approval, and its cancel-in-progress is false for every such run (pinned by
   `scripts/test_workflow_concurrency.py`).
+
+### Planning the tenants stack on demand
+
+`tenants-preview.yml` is a plan job and an apply job for the tenants stack that start
+only by `workflow_dispatch` (Actions tab, "Run workflow", on `main`). They are not in
+`ci.yml`: the jobs here run on a push to main only, and the shared no-op gate check
+refuses an `||` or a missing push operand in them, so a manual trigger cannot join
+them. A dispatch starts none of `ci.yml`'s jobs. Both jobs run on `main` only, the apply
+waits in `production` for the owner, and a no-change plan skips it. Each step is the
+step `ci.yml`'s tenants jobs run, pinned equal by `scripts/test_tenants_preview_workflow.py`.

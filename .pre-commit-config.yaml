@@ -18,7 +18,7 @@ repos:
       # directly without consulting `.prettierignore` -- they are the ones
       # that need it, and only them.
       - id: trailing-whitespace
-        exclude: &generated-config-exclude ^hetzner/monitoring/stack/prometheus/(prometheus|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/caddy/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring|webhook|state-gateway)$|^hetzner/edge-t/stack/caddy/Caddyfile$|^hetzner/edge-t/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/provision/fixtures/offline-attestation/manifest\.json$
+        exclude: &generated-config-exclude ^hetzner/monitoring/stack/prometheus/(prometheus|prometheus\.demo1|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/caddy/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring|webhook|state-gateway)$|^hetzner/edge-t/stack/caddy/Caddyfile$|^hetzner/edge-t/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/provision/fixtures/offline-attestation/manifest\.json$
       - id: end-of-file-fixer
         exclude: *generated-config-exclude
       - id: check-yaml
@@ -26,6 +26,8 @@ repos:
       # and this threshold is meant to be the same number in every repo.
       - id: check-added-large-files
         args: ['--maxkb=500']
+        # The carried broker release bundle is a pinned, attested artifact; see .prettierignore.
+        exclude: ^ansible/roles/broker_deploy/files/releases/
       - id: check-merge-conflict
 
   - repo: local
@@ -102,6 +104,16 @@ repos:
         entry: sh -c "python3 -m unittest discover -s hetzner/monitoring -p 'test_*.py'"
         language: system
         files: ^hetzner/monitoring/.*\.py$
+        pass_filenames: false
+
+      # The edge-t descriptor writer is the only writer of the directory the
+      # certificate check reads; its slug, size and shape refusals gate the
+      # commit rather than only the pull request.
+      - id: hetzner-edge-entry-tests
+        name: edge-t entry program unit tests
+        entry: sh -c "python3 -m unittest discover -s hetzner/edge-t/entry -p 'test_*.py'"
+        language: system
+        files: ^hetzner/edge-t/entry/.*\.py$
         pass_filenames: false
 
       # zone.json is an input too: its checked-in-zone tests pin the mail

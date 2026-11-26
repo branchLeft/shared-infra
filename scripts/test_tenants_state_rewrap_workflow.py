@@ -58,7 +58,35 @@ class TriggerTests(unittest.TestCase):
     def test_it_starts_only_by_hand(self) -> None:
         doc = load()
         triggers = doc["on"]
-        self.assertEqual(triggers, {"workflow_dispatch": {}})
+        assert isinstance(triggers, dict)  # noqa: S101
+        self.assertEqual(list(triggers), ["workflow_dispatch"])
+
+    def test_drop_reproducible_is_a_boolean_input_that_defaults_to_false(self) -> None:
+        triggers = load()["on"]
+        assert isinstance(triggers, dict)  # noqa: S101
+        inputs = triggers["workflow_dispatch"]["inputs"]
+        self.assertEqual(list(inputs), ["drop_reproducible"])
+        self.assertEqual(inputs["drop_reproducible"]["type"], "boolean")
+        self.assertIs(inputs["drop_reproducible"]["default"], False)
+        self.assertIs(inputs["drop_reproducible"]["required"], False)
+
+    def test_the_flag_reaches_inspect_and_rewrap_only_through_the_input_and_never_restore(
+        self,
+    ) -> None:
+        for job_name, step_prefix in (("inspect", "Count"), ("rewrap", "Re-key the state")):
+            with self.subTest(job=job_name):
+                step = step_named(job_named(job_name), step_prefix)
+                env = step["env"]
+                assert isinstance(env, dict)  # noqa: S101
+                self.assertEqual(env["DROP_REPRODUCIBLE"], "${{ inputs.drop_reproducible }}")
+                run = str(step["run"])
+                self.assertIn('if [ "${DROP_REPRODUCIBLE}" = "true" ]; then', run)
+                self.assertIn("args+=(--drop-reproducible)", run)
+                self.assertEqual(run.count("--drop-reproducible"), 1)
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(text.count("--drop-reproducible"), 2)
+        restore = step_named(job_named("rewrap"), "Put the aside copy back")
+        self.assertNotIn("drop", yaml.safe_dump(restore).lower())
 
     def test_there_are_two_jobs_and_both_run_only_on_main(self) -> None:
         found = jobs(load())

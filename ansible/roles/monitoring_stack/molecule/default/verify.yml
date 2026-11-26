@@ -50,6 +50,10 @@
       - render_alertmanager_config.py
       - snds/collect_snds_metrics.py
       - snds/collect_snds_metrics.md
+      # A source of prometheus/prometheus.yml, never a file on the host: it goes in under that
+      # name only while host_tls_identity_peer_cert is set, and this scenario sets no value
+      # (README, "Which Prometheus config").
+      - prometheus/prometheus.demo1.yml
   tasks:
     # The role's defaults hold no secret input (README, "Secrets"). A default for
     # one would let a run with no caller value write a fixed value, so the test

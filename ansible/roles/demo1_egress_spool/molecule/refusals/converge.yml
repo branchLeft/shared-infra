@@ -586,7 +586,7 @@
   vars:
     converge_case:
       name: the drain token file as placed
-      tasks_from: _token.yml
+      tasks_from: _drain_file.yml
       accepted: true
 
 - name: Refuse a drain token file that is not mode 0600
@@ -594,7 +594,7 @@
   vars:
     converge_case:
       name: the drain token file is readable by every user
-      tasks_from: _token.yml
+      tasks_from: _drain_file.yml
       setup:
         - [chmod, '0644', /etc/branchleft/mail-spool.env]
       restore:
@@ -606,7 +606,7 @@
   vars:
     converge_case:
       name: the token line has no value
-      tasks_from: _token.yml
+      tasks_from: _drain_file.yml
       files:
         - path: /etc/branchleft/mail-spool.env
           content: "SHIM_DRAIN_TOKEN=\n"
@@ -617,7 +617,7 @@
   vars:
     converge_case:
       name: the file holds another variable only
-      tasks_from: _token.yml
+      tasks_from: _drain_file.yml
       files:
         - path: /etc/branchleft/mail-spool.env
           content: "OTHER_VARIABLE=1\n"
@@ -628,7 +628,7 @@
   vars:
     converge_case:
       name: the drain token file is absent
-      tasks_from: _token.yml
+      tasks_from: _drain_file.yml
       setup:
         - [mv, /etc/branchleft/mail-spool.env, /etc/branchleft/mail-spool.env.kept]
       restore:

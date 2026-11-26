@@ -164,6 +164,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "not an instance of the Compose template, and nothing here sees whether that "
         "repository declares a health signal for it."
     ),
+    "provisioning-controller": (
+        "branchLeft/ghost-platform commits the provisioning controller's programs, "
+        "and no Compose file for it. This repository names it only in the "
+        "/opt/branchleft/provisioning-controller and /etc/branchleft/provisioning-controller "
+        "paths of the ansible/roles/provisioning_controller_host role. It is a systemd "
+        "unit, not an instance of the Compose template, and nothing here sees whether "
+        "that repository declares a health signal for it."
+    ),
     "state-copy": (
         "branchLeft/ghost-platform commits the state copy's installer and its "
         "systemd units, and no Compose file for it. This repository names it only "
@@ -336,6 +344,7 @@ SCANNED_SUFFIXES = frozenset(
         ".mjs",
         ".mode",
         ".netdev",
+        ".path",
         ".py",
         ".service",
         ".sh",

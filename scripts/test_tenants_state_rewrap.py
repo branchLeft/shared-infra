@@ -14,6 +14,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import shutil
 import stat
 import subprocess
@@ -282,6 +283,120 @@ class PlanTests(unittest.TestCase):
                 self.assertTrue(rw.plan_problems(text)[1])
 
 
+def urn_of(kind: str, name: str) -> str:
+    return step("same", kind, name)["urn"]
+
+
+SERVER = "hcloud:index/server:Server"
+FIREWALL = "hcloud:index/firewall:Firewall"
+HOST = "branchleft:hetzner:Host"
+STACK_TYPE = "pulumi:pulumi:Stack"
+
+
+class PlanAgainstTheOldCheckpointTests(unittest.TestCase):
+    """The program may add what the old checkpoint lacks; it may change nothing the checkpoint holds."""
+
+    def setUp(self) -> None:
+        self.old = frozenset(
+            {
+                urn_of(STACK_TYPE, "proj-production"),
+                urn_of(HOST, "edge-t"),
+                urn_of(SERVER, "edge-t"),
+                urn_of(FIREWALL, "edge-t-firewall"),
+                urn_of("pulumi:providers:hcloud", "default_1_41_0"),
+                urn_of("pulumi:pulumi:StackReference", "organization/estate/production"),
+            }
+        )
+
+    def sames(self, *, leave_out: str = "") -> list[dict[str, str]]:
+        return [
+            {"op": "same", "urn": urn}
+            for urn in sorted(self.old)
+            if rw.is_listed_as_same(urn) and not (leave_out and leave_out in urn)
+        ]
+
+    def judge(self, *extra: dict[str, str], sames: list[dict[str, str]] | None = None) -> list[str]:
+        steps = [*(self.sames() if sames is None else sames), *extra]
+        text = json.dumps({"steps": steps})
+        return rw.plan_problems(text, old_urns=self.old)[1]
+
+    def test_the_run_that_failed_creates_a_host_and_a_firewall_and_imports_a_server(self) -> None:
+        """A production run: the program declares app-t1, which the state never held."""
+        problems = self.judge(
+            step("create", HOST, "app-t1"),
+            step("create", FIREWALL, "app-t1-firewall"),
+            step("import", SERVER, "app-t1"),
+            step("read", "pulumi:pulumi:StackReference", "organization/estate/production"),
+        )
+        self.assertEqual(problems, [])
+
+    def test_the_additions_are_listed_by_op_and_type(self) -> None:
+        text = json.dumps(
+            {
+                "steps": [
+                    *self.sames(),
+                    step("create", HOST, "app-t1"),
+                    step("import", SERVER, "app-t1"),
+                    step("create", SERVER, "edge-t"),  # an old URN: not an addition
+                ]
+            }
+        )
+        self.assertEqual(
+            rw.plan_additions(text, self.old),
+            [f"create of a {HOST}", f"import of a {SERVER}"],
+        )
+        self.assertEqual(rw.plan_additions("not json", self.old), [])
+
+    def test_no_addition_passes_without_the_old_checkpoint(self) -> None:
+        text = json.dumps({"steps": [*self.sames(), step("create", HOST, "app-t1")]})
+        self.assertEqual(rw.plan_problems(text)[1], [f"create of a {HOST}"])
+
+    def test_a_create_of_a_resource_the_checkpoint_holds_is_the_lost_state_case(self) -> None:
+        for kind, name in ((HOST, "edge-t"), (SERVER, "edge-t"), (FIREWALL, "edge-t-firewall")):
+            with self.subTest(kind=kind):
+                problems = self.judge(
+                    step("create", kind, name),
+                    sames=self.sames(leave_out=f"{kind}::{name}"),
+                )
+                self.assertIn(f"create of a {kind} that the old checkpoint holds", problems)
+
+    def test_an_import_of_a_resource_the_checkpoint_holds_is_refused(self) -> None:
+        problems = self.judge(
+            step("import", SERVER, "edge-t"), sames=self.sames(leave_out=f"{SERVER}::edge-t")
+        )
+        self.assertIn(f"import of a {SERVER} that the old checkpoint holds", problems)
+
+    def test_every_op_but_same_on_an_old_urn_is_refused(self) -> None:
+        for op in ("update", "replace", "delete", "create-replacement", "delete-replaced", "read"):
+            with self.subTest(op=op):
+                problems = self.judge(
+                    step(op, SERVER, "edge-t"), sames=self.sames(leave_out=f"{SERVER}::edge-t")
+                )
+                self.assertIn(f"{op} of a {SERVER} that the old checkpoint holds", problems)
+
+    def test_only_create_and_import_may_add_a_resource(self) -> None:
+        for op in ("update", "replace", "delete", "create-replacement", "refresh", "discard"):
+            with self.subTest(op=op):
+                self.assertEqual(self.judge(step(op, SERVER, "app-t1")), [f"{op} of a {SERVER}"])
+
+    def test_an_old_resource_the_plan_does_not_list_is_refused_by_type(self) -> None:
+        problems = self.judge(sames=self.sames(leave_out=f"{SERVER}::edge-t"))
+        self.assertEqual(problems, [f"1 {SERVER} of the old checkpoint did not preview as `same`"])
+
+    def test_a_plan_made_without_show_sames_is_refused_not_trusted(self) -> None:
+        """Without `--show-sames` only the root stack is listed: 17 resources read as 1 step."""
+        problems = self.judge(sames=[{"op": "same", "urn": urn_of(STACK_TYPE, "proj-production")}])
+        self.assertEqual(len(problems), 3, problems)
+        self.assertTrue(all("did not preview as `same`" in p for p in problems))
+
+    def test_a_provider_and_the_stackreference_need_no_same_step(self) -> None:
+        self.assertEqual(self.judge(), [])
+
+    def test_a_plan_of_only_additions_is_not_a_plan_of_this_stack(self) -> None:
+        problems = self.judge(step("create", HOST, "app-t1"), sames=[])
+        self.assertTrue(any("no unchanged resource" in p for p in problems))
+
+
 class RefreshTests(unittest.TestCase):
     def refresh(self, summary: dict[str, int], diff: dict[str, object] | None = None) -> str:
         urn = "urn:pulumi:production::proj::pulumi:pulumi:Stack::proj-production"
@@ -481,6 +596,683 @@ class ChildEnvTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Dropping the encrypted values CI re-derives (synthetic states, no real state)
+# ---------------------------------------------------------------------------
+
+PROVIDER_URN = "urn:pulumi:production::proj::pulumi:providers:hcloud::default_1_60_0"
+
+
+def cipher(tag: str) -> dict[str, object]:
+    return {**SIG, "ciphertext": f"v1:FAKE-{tag}"}
+
+
+def hcloud_provider(
+    *, inputs: dict[str, object] | None = None, outputs: dict[str, object] | None = None
+) -> dict[str, object]:
+    """The default hcloud provider as the state records it: its token, encrypted, both sides."""
+    return {
+        "urn": PROVIDER_URN,
+        "type": "pulumi:providers:hcloud",
+        "id": "0000-fake",
+        "inputs": {"version": "1.60.0", "token": cipher("in")} if inputs is None else inputs,
+        "outputs": {"version": "1.60.0", "token": cipher("out")} if outputs is None else outputs,
+    }
+
+
+def server_with(key: str) -> dict[str, object]:
+    return {
+        "urn": "urn:pulumi:production::proj::hcloud:index/server:Server::db-t1",
+        "type": "hcloud:index/server:Server",
+        "id": "222",
+        "inputs": {"name": "db-t1"},
+        "outputs": {"ipv4": "203.0.113.8", key: cipher("other")},
+    }
+
+
+def stack_resource() -> dict[str, object]:
+    return export_doc()["deployment"]["resources"][0]  # type: ignore[index,no-any-return]
+
+
+class CiphertextListingTests(unittest.TestCase):
+    def test_each_ciphertext_is_named_by_type_urn_name_side_and_key_path(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        found = rw.find_ciphertexts(doc)
+        self.assertEqual(
+            [(c.resource_type, c.name, c.side, c.key_text) for c in found],
+            [
+                ("pulumi:providers:hcloud", "default_1_60_0", "inputs", "token"),
+                ("pulumi:providers:hcloud", "default_1_60_0", "outputs", "token"),
+                ("hcloud:index/server:Server", "db-t1", "outputs", "password"),
+            ],
+        )
+
+    def test_a_nested_key_path_and_a_list_position_are_spelled_out(self) -> None:
+        provider = hcloud_provider(inputs={"cfg": {"list": [{"k": cipher("n")}]}}, outputs={})
+        (found,) = rw.find_ciphertexts(export_doc(resources=[provider]))
+        self.assertEqual(found.key_text, "cfg.list.[0].k")
+
+    def test_the_listing_agrees_with_the_count(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        self.assertEqual(len(rw.find_ciphertexts(doc)), rw.count_encrypted(doc))
+
+    def test_the_description_names_places_and_never_a_value(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        report = rw.Report()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rw.describe_ciphertexts(
+                report, rw.find_ciphertexts(doc), rw.plan_drop(doc, enabled=True)
+            )
+        text = "\n".join(report.lines)
+        self.assertIn("pulumi:providers:hcloud | default_1_60_0 | inputs | token | DROP", text)
+        self.assertIn("hcloud:index/server:Server | db-t1 | outputs | password | KEPT", text)
+        for private in (
+            "FAKE",
+            "ciphertext",
+            rw.SECRET_SIG_VALUE,
+            "urn:pulumi",
+            "203.0.113.8",
+        ):
+            self.assertNotIn(private, text)
+
+
+class PlanDropTests(unittest.TestCase):
+    def test_only_the_provider_token_is_dropped_from_both_sides(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        before = copy.deepcopy(doc)
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        self.assertEqual(plan.remaining, ())
+        self.assertEqual(rw.count_encrypted(plan.doc), 0)
+        provider = resource(plan.doc, 1)
+        self.assertEqual(provider["inputs"], {"version": "1.60.0"})
+        self.assertEqual(provider["outputs"], {"version": "1.60.0"})
+        self.assertEqual(doc, before, "the input document is not mutated")
+        self.assertEqual(rw.gate_problems(rw.inspect_export(plan.doc), dropping=True), [])
+
+    def test_a_token_and_one_other_ciphertext_leaves_the_other_named_and_refuses(
+        self,
+    ) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        self.assertEqual(
+            [(c.resource_type, c.name, c.side, c.key_text) for c in plan.remaining],
+            [("hcloud:index/server:Server", "db-t1", "outputs", "password")],
+        )
+        problems = rw.gate_problems(rw.inspect_export(plan.doc), dropping=True)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("1 encrypted value(s) remain", problems[0])
+        self.assertEqual(resource(plan.doc, 2), server_with("password"), "the other is untouched")
+
+    def test_no_ciphertext_means_the_document_is_unchanged(self) -> None:
+        doc = export_doc()
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(plan.remaining, ())
+        self.assertEqual(plan.doc, doc)
+
+    def test_nothing_is_dropped_unless_asked(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        plan = rw.plan_drop(doc, enabled=False)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(len(plan.remaining), 2)
+        self.assertIs(plan.doc, doc)
+        self.assertTrue(rw.gate_problems(rw.inspect_export(plan.doc)))
+
+    def test_the_allowlist_matches_the_exact_place_and_nothing_near_it(self) -> None:
+        other_provider = {**hcloud_provider(), "type": "pulumi:providers:aws"}
+        near_miss = {**hcloud_provider(), "type": "pulumi:providers:hcloud-other"}
+        not_a_provider = {**hcloud_provider(), "type": "hcloud:index/server:Server"}
+        other_key = hcloud_provider(inputs={"password": cipher("a")}, outputs={"auth": cipher("b")})
+        nested = hcloud_provider(inputs={"cfg": {"token": cipher("c")}}, outputs={})
+        listed = hcloud_provider(inputs={"token": [cipher("d")]}, outputs={})
+        other_side = {
+            **hcloud_provider(inputs={}, outputs={}),
+            "propertyDependencies": {},
+        }
+        other_side["extra"] = {"token": cipher("e")}
+        for label, doc_resource, kept in (
+            ("another provider", other_provider, 2),
+            ("a near-miss type", near_miss, 2),
+            ("a non-provider type", not_a_provider, 2),
+            ("other keys", other_key, 2),
+            ("a nested token", nested, 1),
+            ("a token in a list", listed, 1),
+            ("another side", other_side, 1),
+        ):
+            with self.subTest(label):
+                plan = rw.plan_drop(export_doc(resources=[doc_resource]), enabled=True)
+                self.assertEqual(plan.dropped, ())
+                self.assertEqual(len(plan.remaining), kept)
+
+    def test_a_ciphertext_outside_any_resource_is_never_dropped(self) -> None:
+        doc = export_doc(resources=[hcloud_provider()])
+        deployment(doc)["metadata"] = {"token": cipher("m")}
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(len(plan.dropped), 2)
+        (left,) = plan.remaining
+        self.assertEqual((left.resource_type, left.side), ("(none)", "(outside resources)"))
+
+
+DELTA = "__pulumi_raw_state_delta"
+
+
+def with_delta(
+    kind: str, name: str, delta: dict[str, object], *, other: dict[str, object] | None = None
+) -> dict[str, object]:
+    """A bridged resource as the state records it: the bridge's raw-state record in `outputs`."""
+    return {
+        "urn": f"urn:pulumi:production::proj::{kind}::{name}",
+        "type": kind,
+        "id": "333",
+        "inputs": {"name": name},
+        "outputs": {"name": name, **(other or {}), DELTA: delta},
+    }
+
+
+def primary_ip_delta() -> dict[str, object]:
+    """The shape the owner's run listed: encrypted entries in `obj.ps`, plain ones beside them."""
+    return {
+        "obj": {
+            "ps": {
+                "datacenter": cipher("dc"),
+                "ipNetwork": cipher("net"),
+                "keepers": {"el": 1},
+            }
+        }
+    }
+
+
+class RawStateDeltaDropTests(unittest.TestCase):
+    """The bridge's raw-state record goes whole when a ciphertext sits in it, and nothing else."""
+
+    def test_a_ciphertext_in_the_record_takes_the_whole_key_of_any_resource_type(self) -> None:
+        for kind in (
+            "hcloud:index/primaryIp:PrimaryIp",
+            "hcloud:index/serverNetwork:ServerNetwork",
+        ):
+            with self.subTest(kind):
+                doc = export_doc(
+                    resources=[stack_resource(), with_delta(kind, "edge", primary_ip_delta())]
+                )
+                before = copy.deepcopy(doc)
+                plan = rw.plan_drop(doc, enabled=True)
+                self.assertEqual(len(plan.dropped), 2, "both ciphertexts are gone")
+                self.assertEqual(len(plan.removed), 1, "by one key")
+                self.assertEqual(plan.remaining, ())
+                self.assertEqual(
+                    child(resource(plan.doc, 1), "outputs"), {"name": "edge"}, "the key, no more"
+                )
+                self.assertEqual(child(resource(plan.doc, 1), "inputs"), {"name": "edge"})
+                self.assertEqual(doc, before, "the input document is not mutated")
+                self.assertEqual(rw.gate_problems(rw.inspect_export(plan.doc), dropping=True), [])
+                rw.require_only_dropped(doc, plan.doc, plan.dropped)
+
+    def test_a_record_with_no_ciphertext_is_left_alone(self) -> None:
+        plain: dict[str, object] = {"obj": {"ps": {"keepers": {"el": 1}}}}
+        doc = export_doc(
+            resources=[stack_resource(), with_delta("hcloud:index/primaryIp:PrimaryIp", "a", plain)]
+        )
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual((plan.dropped, plan.removed), ((), ()))
+        self.assertEqual(plan.doc, doc)
+
+    def test_only_the_resource_with_a_ciphertext_loses_its_record(self) -> None:
+        plain: dict[str, object] = {"obj": {"ps": {"keepers": {"el": 1}}}}
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "a", primary_ip_delta()),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "b", plain),
+            ]
+        )
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertNotIn(DELTA, child(resource(plan.doc, 1), "outputs"))
+        self.assertEqual(child(resource(plan.doc, 2), "outputs")[DELTA], plain)
+
+    def test_the_record_beside_a_real_secret_goes_and_the_secret_is_named_and_refused(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta(
+                    "random:index/randomPassword:RandomPassword",
+                    "pw",
+                    primary_ip_delta(),
+                    other={"result": cipher("secret")},
+                ),
+            ]
+        )
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual([(c.side, c.key_text) for c in plan.remaining], [("outputs", "result")])
+        problems = rw.gate_problems(rw.inspect_export(plan.doc), dropping=True)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("1 encrypted value(s) remain", problems[0])
+        self.assertEqual(child(resource(plan.doc, 1), "outputs")["result"], cipher("secret"))
+
+    def test_the_same_key_anywhere_else_is_not_the_record(self) -> None:
+        kind = "hcloud:index/primaryIp:PrimaryIp"
+        as_input = with_delta(kind, "a", {})
+        child(as_input, "inputs")[DELTA] = primary_ip_delta()
+        nested = with_delta(kind, "b", {}, other={"wrapper": {DELTA: primary_ip_delta()}})
+        in_list = with_delta(kind, "c", {}, other={"many": [{DELTA: primary_ip_delta()}]})
+        near = with_delta(kind, "d", {}, other={"__pulumi_raw_state_delta2": cipher("x")})
+        sibling = with_delta(kind, "e", {}, other={"delta": cipher("y")})
+        sibling_meta = with_delta(kind, "f", {})
+        sibling_meta["propertyDependencies"] = {DELTA: cipher("z")}
+        for label, doc_resource, kept in (
+            ("an input of that name", as_input, 2),
+            ("a nested key of that name", nested, 2),
+            ("a key of that name in a list", in_list, 2),
+            ("a near-miss key", near, 1),
+            ("another output", sibling, 1),
+            ("another side of the resource", sibling_meta, 1),
+        ):
+            with self.subTest(label):
+                plan = rw.plan_drop(export_doc(resources=[doc_resource]), enabled=True)
+                self.assertEqual(plan.dropped, ())
+                self.assertEqual(len(plan.remaining), kept)
+
+    def test_a_record_that_is_itself_the_secret_goes_whole(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "a", cipher("whole")),
+            ]
+        )
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual((len(plan.dropped), len(plan.removed), plan.remaining), (1, 1, ()))
+
+    def test_nothing_is_dropped_unless_asked(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "a", primary_ip_delta()),
+            ]
+        )
+        plan = rw.plan_drop(doc, enabled=False)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(len(plan.remaining), 2)
+
+    def test_a_ciphertext_outside_a_resource_under_that_key_is_never_dropped(self) -> None:
+        doc = export_doc()
+        deployment(doc)["metadata"] = {DELTA: cipher("m")}
+        plan = rw.plan_drop(doc, enabled=True)
+        self.assertEqual(plan.dropped, ())
+        self.assertEqual(len(plan.remaining), 1)
+
+    def test_the_proof_refuses_a_record_removed_from_a_resource_with_no_ciphertext_in_it(
+        self,
+    ) -> None:
+        plain: dict[str, object] = {"obj": {"ps": {"keepers": {"el": 1}}}}
+        old = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "a", primary_ip_delta()),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "b", plain),
+            ]
+        )
+        plan = rw.plan_drop(old, enabled=True)
+        too_much = copy.deepcopy(plan.doc)
+        del child(resource(too_much, 2), "outputs")[DELTA]
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(old, too_much, plan.dropped)
+        left_in = copy.deepcopy(plan.doc)
+        child(resource(left_in, 1), "outputs")[DELTA] = {"obj": {}}
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(old, left_in, plan.dropped)
+
+    def test_the_listing_says_why_and_never_shows_a_value(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "edge-t-ipv4", primary_ip_delta()),
+            ]
+        )
+        report = rw.Report()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rw.describe_ciphertexts(
+                report, rw.find_ciphertexts(doc), rw.plan_drop(doc, enabled=True)
+            )
+        text = "\n".join(report.lines)
+        self.assertIn(
+            "hcloud:index/primaryIp:PrimaryIp | edge-t-ipv4 | outputs | "
+            "__pulumi_raw_state_delta.obj.ps.datacenter | DROP (the Terraform bridge's raw-state",
+            text,
+        )
+        for private in ("FAKE", "ciphertext", rw.SECRET_SIG_VALUE, "urn:pulumi"):
+            self.assertNotIn(private, text)
+
+
+class RequireOnlyDroppedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.old = export_doc(resources=[stack_resource(), hcloud_provider()])
+        self.plan = rw.plan_drop(self.old, enabled=True)
+
+    def test_exactly_the_dropped_keys_pass(self) -> None:
+        rw.require_only_dropped(self.old, self.plan.doc, self.plan.dropped)
+
+    def test_the_provider_block_is_left_out_of_the_comparison(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        deployment(new)["secrets_providers"] = new_block()
+        rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_one_more_key_removed_is_refused(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        del child(resource(new, 1), "inputs")["version"]
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_a_dropped_key_left_in_place_is_refused(self) -> None:
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, self.old, self.plan.dropped)
+
+    def test_a_changed_value_or_an_added_key_is_refused(self) -> None:
+        changed = copy.deepcopy(self.plan.doc)
+        child(resource(changed, 1), "inputs")["version"] = "9.9.9"
+        added = copy.deepcopy(self.plan.doc)
+        child(resource(added, 1), "inputs")["extra"] = 1
+        for new in (changed, added):
+            with self.assertRaises(rw.RefusalError):
+                rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+    def test_a_removed_resource_is_refused(self) -> None:
+        new = copy.deepcopy(self.plan.doc)
+        resources = deployment(new)["resources"]
+        assert isinstance(resources, list)  # noqa: S101
+        resources.pop()
+        with self.assertRaises(rw.RefusalError):
+            rw.require_only_dropped(self.old, new, self.plan.dropped)
+
+
+class FakePulumi(rw.Pulumi):
+    """Answers the calls the route makes from a synthetic state; nothing real is touched."""
+
+    def __init__(self, state: dict[str, object]) -> None:
+        super().__init__(
+            binary="pulumi",
+            project_dir=pathlib.Path("."),
+            env={"PULUMI_CONFIG_PASSPHRASE": "x"},
+        )
+        self.state = state
+        self.calls: list[tuple[str, ...]] = []
+        self.imported: dict[str, object] | None = None
+        # What a preview says besides a `same` for every old resource, and how it exits.
+        self.extra_steps: list[dict[str, str]] = []
+        self.preview_code = 0
+
+    def same_steps(self) -> list[dict[str, str]]:
+        """What `preview --show-sames` lists: the old resources, but no provider."""
+        return [
+            {"op": "same", "urn": urn}
+            for urn in sorted(rw.old_urns_of(self.state))
+            if rw.is_listed_as_same(urn)
+        ]
+
+    def call(self, *args: str, stdout_to: pathlib.Path | None = None) -> rw.Completed:
+        self.calls.append(args)
+        out = ""
+        if args[:2] == ("stack", "export"):
+            out = json.dumps(self.state)
+        elif args[:2] == ("stack", "init"):
+            self.state = export_doc(resources=[])
+            deployment(self.state)["secrets_providers"] = new_block()
+        elif args[:2] == ("stack", "import"):
+            self.imported = json.loads(pathlib.Path(args[args.index("--file") + 1]).read_text())
+            self.state = self.imported
+        elif args[0] == "preview":
+            out = json.dumps({"steps": [*self.same_steps(), *self.extra_steps]})
+        elif args[0] == "refresh":
+            out = json.dumps({"changeSummary": {"same": 2}, "steps": []})
+        if stdout_to is not None:
+            stdout_to.write_text(out, encoding="utf-8")
+        return rw.Completed(self.preview_code if args[0] == "preview" else 0, "other")
+
+    def verbs(self) -> list[str]:
+        return [" ".join(c[:2]) for c in self.calls]
+
+
+class DropRouteTests(unittest.TestCase):
+    """The whole route, `run_inspect` and `run_rewrap`, over a synthetic state."""
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="rewrap-drop-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def start(self, doc: dict[str, object], *, drop: bool) -> tuple[rw.Context, FakePulumi, bytes]:
+        raw = json.dumps(doc).encode()
+        store = rw.DirStore(self.tmp / "bucket")
+        store.write(".pulumi/stacks/proj/production.json", raw)
+        scratch = self.tmp / "scratch"
+        scratch.mkdir(exist_ok=True)
+        fake = FakePulumi(doc)
+        ctx = rw.Context(
+            pulumi=fake,
+            store=store,
+            project="proj",
+            stack="production",
+            project_dir=self.tmp,
+            scratch=scratch,
+            run_tag="t-1",
+            report=rw.Report(),
+            now=lambda: datetime.datetime(2026, 11, 25, 12, 0, 0, tzinfo=datetime.UTC),
+            drop_reproducible=drop,
+        )
+        return ctx, fake, raw
+
+    def run_it(self, fn: object, ctx: rw.Context) -> tuple[int, str]:
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = fn(ctx)  # type: ignore[operator]
+        return code, "\n".join(ctx.report.lines)
+
+    def test_only_the_token_is_dropped_and_the_route_completes(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("encrypted values: 2", out)
+        self.assertIn("after dropping 2 reproducible value(s): 0 encrypted value(s) remain", out)
+        self.assertIn("imported: only `deployment.secrets_providers` and the 2 dropped", out)
+        assert fake.imported is not None  # noqa: S101
+        self.assertEqual(rw.count_encrypted(fake.imported), 0)
+        self.assertEqual(deployment(fake.imported)["secrets_providers"], new_block())
+        self.assertEqual(
+            rw.canonical(rw.without_secrets_providers(fake.imported)),
+            rw.canonical(rw.without_secrets_providers(rw.plan_drop(doc, enabled=True).doc)),
+        )
+        aside = ctx.store.read(
+            "aside/proj/production.20261125T120000Z.t-1.json",
+        )
+        self.assertEqual(aside, raw, "the aside copy is the original, token included")
+        self.assertIn("refresh preview", out)
+        for private in ("FAKE", "ciphertext", rw.SECRET_SIG_VALUE):
+            self.assertNotIn(private, out)
+
+    def test_a_second_ciphertext_refuses_names_it_and_touches_nothing(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("hcloud:index/server:Server | db-t1 | outputs | password | KEPT", out)
+        self.assertIn("1 encrypted value(s) remain after dropping", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+        self.assertEqual(ctx.store.keys("aside"), [], "nothing was copied aside")
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_the_token_alone_is_refused_without_the_flag(self) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider()])
+        ctx, fake, _ = self.start(doc, drop=False)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("re-derivable, kept (--drop-reproducible is not set)", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+
+    def test_no_ciphertext_takes_the_unchanged_path_with_or_without_the_flag(
+        self,
+    ) -> None:
+        for drop in (False, True):
+            with self.subTest(drop=drop):
+                ctx, fake, _ = self.start(export_doc(), drop=drop)
+                code, out = self.run_it(rw.run_rewrap, ctx)
+                self.assertEqual(code, rw.EXIT_OK, out)
+                self.assertIn(
+                    "imported: only `deployment.secrets_providers` differs from the old",
+                    out,
+                )
+                self.assertNotIn("and the", out)
+                assert fake.imported is not None  # noqa: S101
+                self.assertEqual(
+                    rw.canonical(rw.without_secrets_providers(fake.imported)),
+                    rw.canonical(rw.without_secrets_providers(export_doc())),
+                )
+
+    def test_the_preview_lists_sames_and_does_not_expect_no_changes(self) -> None:
+        ctx, fake, _ = self.start(export_doc(), drop=False)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        (preview,) = [c for c in fake.calls if c[0] == "preview"]
+        self.assertIn("--show-sames", preview)
+        self.assertNotIn("--expect-no-changes", preview, "it exits 7 for any create or import")
+        self.assertNotIn("new, not in the old checkpoint", out)
+
+    def test_a_program_that_declares_new_resources_still_re_keys_and_says_what_is_new(self) -> None:
+        """A production run: app-t1 is in the program and not in the state."""
+        ctx, fake, _ = self.start(export_doc(), drop=False)
+        fake.extra_steps = [
+            step("create", HOST, "app-t1"),
+            step("create", FIREWALL, "app-t1-firewall"),
+            step("import", SERVER, "app-t1"),
+        ]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("preview after the rewrite: 2 create, 1 import, 2 same", out)
+        for added in (f"create of a {HOST}", f"create of a {FIREWALL}", f"import of a {SERVER}"):
+            self.assertIn(f"  new, not in the old checkpoint, allowed: {added}", out)
+        self.assertNotIn("not allowed", out)
+        self.assertEqual(deployment(fake.state)["secrets_providers"], new_block(), "kept")
+
+    def test_a_create_of_an_old_resource_means_the_rewrite_lost_it_and_restores(self) -> None:
+        ctx, fake, raw = self.start(export_doc(), drop=False)
+        fake.extra_steps = [step("create", SERVER, "edge"), step("create", HOST, "app-t1")]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_RESTORED, out)
+        self.assertIn(f"not allowed: create of a {SERVER} that the old checkpoint holds", out)
+        self.assertIn("RESTORED", out)
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_an_old_resource_missing_from_the_listed_sames_restores(self) -> None:
+        ctx, fake, raw = self.start(export_doc(), drop=False)
+        fake.same_steps = lambda: [  # type: ignore[method-assign]
+            {"op": "same", "urn": urn_of(STACK_TYPE, "proj-production")}
+        ]
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_RESTORED, out)
+        self.assertIn(f"1 {SERVER} of the old checkpoint did not preview as `same`", out)
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_a_preview_that_exits_non_zero_restores_even_when_every_step_is_allowed(self) -> None:
+        for code_given in (1, 7):
+            with self.subTest(exit=code_given):
+                ctx, fake, raw = self.start(export_doc(), drop=False)
+                fake.extra_steps = [step("create", HOST, "app-t1")]
+                fake.preview_code = code_given
+                code, out = self.run_it(rw.run_rewrap, ctx)
+                self.assertEqual(code, rw.EXIT_RESTORED, out)
+                self.assertIn(f"not allowed: `pulumi preview` exited {code_given} (other)", out)
+                self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_inspect_lists_every_ciphertext_and_exits_refused_without_the_flag(
+        self,
+    ) -> None:
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, fake, _ = self.start(doc, drop=False)
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertEqual(out.count("  encrypted: "), 3)
+        self.assertEqual(fake.verbs(), ["stack export"])
+
+    def test_inspect_with_the_flag_passes_for_the_token_alone_and_refuses_for_another(
+        self,
+    ) -> None:
+        ctx, _, _ = self.start(
+            export_doc(resources=[stack_resource(), hcloud_provider()]), drop=True
+        )
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("CLEAN: only the 2 listed reproducible value(s)", out)
+        doc = export_doc(resources=[stack_resource(), hcloud_provider(), server_with("password")])
+        ctx, _, _ = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_inspect, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("db-t1", out)
+
+    def test_a_state_whose_only_ciphertexts_are_in_raw_state_records_completes_the_route(
+        self,
+    ) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                hcloud_provider(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "edge-t-ipv4", primary_ip_delta()),
+                with_delta(
+                    "hcloud:index/serverNetwork:ServerNetwork", "edge-t-network", cipher("s")
+                ),
+            ]
+        )
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("after dropping 5 reproducible value(s): 0 encrypted value(s) remain", out)
+        self.assertIn("imported: only `deployment.secrets_providers` and the 4 dropped", out)
+        assert fake.imported is not None  # noqa: S101
+        self.assertEqual(rw.count_encrypted(fake.imported), 0)
+        self.assertEqual(child(resource(fake.imported, 2), "outputs"), {"name": "edge-t-ipv4"})
+        self.assertEqual(fake.verbs()[-2:], ["preview --stack", "refresh --stack"])
+        self.assertEqual(ctx.store.read("aside/proj/production.20261125T120000Z.t-1.json"), raw)
+
+    def test_a_raw_state_record_is_not_dropped_without_the_flag(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta("hcloud:index/primaryIp:PrimaryIp", "a", primary_ip_delta()),
+            ]
+        )
+        ctx, fake, _ = self.start(doc, drop=False)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("re-derivable, kept (--drop-reproducible is not set)", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+
+    def test_a_real_secret_beside_a_raw_state_record_refuses_and_touches_nothing(self) -> None:
+        doc = export_doc(
+            resources=[
+                stack_resource(),
+                with_delta(
+                    "hcloud:index/primaryIp:PrimaryIp",
+                    "a",
+                    primary_ip_delta(),
+                    other={"password": cipher("p")},
+                ),
+            ]
+        )
+        ctx, fake, raw = self.start(doc, drop=True)
+        code, out = self.run_it(rw.run_rewrap, ctx)
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("| outputs | password | KEPT, not on the allowlist", out)
+        self.assertIn("1 encrypted value(s) remain after dropping", out)
+        self.assertEqual(fake.verbs(), ["stack export"])
+        self.assertEqual(ctx.store.keys("aside"), [])
+        self.assertEqual(ctx.store.read(".pulumi/stacks/proj/production.json"), raw)
+
+    def test_the_flag_is_refused_for_restore(self) -> None:
+        with (
+            self.assertRaises(SystemExit) as caught,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            rw.main(["restore", "--project-dir", ".", "--drop-reproducible"])
+        self.assertEqual(caught.exception.code, rw.EXIT_USAGE)
+
+
+# ---------------------------------------------------------------------------
 # A real pulumi binary on a throwaway file backend
 # ---------------------------------------------------------------------------
 
@@ -511,7 +1303,14 @@ TENANTS_PROGRAM_WITHOUT_REFERENCE = (
 
 
 @unittest.skipUnless(PULUMI or REQUIRE_PULUMI, "no pulumi binary on PATH")
-class RealPulumiTests(unittest.TestCase):
+class RealPulumiBase(unittest.TestCase):
+    """A real `pulumi` on a throwaway `file://` backend, and the fixture project and stack it keeps."""
+
+    tmp: pathlib.Path
+    state: pathlib.Path
+    proj: pathlib.Path
+    other: pathlib.Path
+
     def setUp(self) -> None:
         if PULUMI is None:
             self.fail("REWRAP_REQUIRE_PULUMI=1 but no pulumi binary is on PATH")
@@ -548,38 +1347,6 @@ class RealPulumiTests(unittest.TestCase):
             stdin=subprocess.DEVNULL,
             check=False,
         )
-
-    def build(self, program: str) -> bytes:
-        """The estate stack, then the tenants stack applied under the old passphrase, then the old passphrase forgotten.
-
-        Returns the raw bytes of the tenants state object, which is what a restore must give back.
-        """
-        (self.other / "Pulumi.yaml").write_text(ESTATE_PROGRAM, encoding="utf-8")
-        for cwd, passphrase in ((self.other, OTHER_PASSPHRASE),):
-            self.pulumi(
-                cwd, passphrase, "stack", "init", "production", "--secrets-provider", "passphrase"
-            ).check_returncode()
-            self.pulumi(
-                cwd, passphrase, "up", "--stack", "production", "--yes", "--skip-preview"
-            ).check_returncode()
-        (self.proj / "Pulumi.yaml").write_text(program, encoding="utf-8")
-        self.pulumi(
-            self.proj,
-            OLD_PASSPHRASE,
-            "stack",
-            "init",
-            "production",
-            "--secrets-provider",
-            "passphrase",
-        ).check_returncode()
-        self.pulumi(
-            self.proj, OLD_PASSPHRASE, "up", "--stack", "production", "--yes", "--skip-preview"
-        ).check_returncode()
-        # The old passphrase opens it now; this is the control for the refusal below.
-        self.preview_in(self.proj, OLD_PASSPHRASE).check_returncode()
-        # The CI shape: the committed stack config carries no salt, and the old passphrase is gone.
-        (self.proj / "Pulumi.production.yaml").unlink(missing_ok=True)
-        return self.state_object().read_bytes()
 
     def state_object(self) -> pathlib.Path:
         return self.state / ".pulumi" / "stacks" / "tenantsfixture" / "production.json"
@@ -625,6 +1392,59 @@ class RealPulumiTests(unittest.TestCase):
             *extra,
         ):
             self.assertNotIn(private, text)
+
+    def context(self, pulumi_cls: type[rw.Pulumi]) -> rw.Context:
+        scratch = self.tmp / "scratch"
+        scratch.mkdir(exist_ok=True)
+        env = rw.child_env(
+            self.env(NEW_PASSPHRASE), backend_url=f"file://{self.state}", with_passphrase=True
+        )
+        return rw.Context(
+            pulumi=pulumi_cls(binary=PULUMI or "pulumi", project_dir=self.proj, env=env),
+            store=rw.DirStore(self.state),
+            project="tenantsfixture",
+            stack="production",
+            project_dir=self.proj,
+            scratch=scratch,
+            run_tag="test-2",
+            report=rw.Report(),
+            now=lambda: datetime.datetime(2026, 11, 21, 12, 0, 0, tzinfo=datetime.UTC),
+        )
+
+
+@unittest.skipUnless(PULUMI or REQUIRE_PULUMI, "no pulumi binary on PATH")
+class RealPulumiTests(RealPulumiBase):
+    def build(self, program: str) -> bytes:
+        """The estate stack, then the tenants stack applied under the old passphrase, then the old passphrase forgotten.
+
+        Returns the raw bytes of the tenants state object, which is what a restore must give back.
+        """
+        (self.other / "Pulumi.yaml").write_text(ESTATE_PROGRAM, encoding="utf-8")
+        for cwd, passphrase in ((self.other, OTHER_PASSPHRASE),):
+            self.pulumi(
+                cwd, passphrase, "stack", "init", "production", "--secrets-provider", "passphrase"
+            ).check_returncode()
+            self.pulumi(
+                cwd, passphrase, "up", "--stack", "production", "--yes", "--skip-preview"
+            ).check_returncode()
+        (self.proj / "Pulumi.yaml").write_text(program, encoding="utf-8")
+        self.pulumi(
+            self.proj,
+            OLD_PASSPHRASE,
+            "stack",
+            "init",
+            "production",
+            "--secrets-provider",
+            "passphrase",
+        ).check_returncode()
+        self.pulumi(
+            self.proj, OLD_PASSPHRASE, "up", "--stack", "production", "--yes", "--skip-preview"
+        ).check_returncode()
+        # The old passphrase opens it now; this is the control for the refusal below.
+        self.preview_in(self.proj, OLD_PASSPHRASE).check_returncode()
+        # The CI shape: the committed stack config carries no salt, and the old passphrase is gone.
+        (self.proj / "Pulumi.production.yaml").unlink(missing_ok=True)
+        return self.state_object().read_bytes()
 
     def test_a_plaintext_only_state_is_re_keyed_and_plans_clean_under_the_new_passphrase_only(
         self,
@@ -767,24 +1587,6 @@ class RealPulumiTests(unittest.TestCase):
         self.assertEqual(self.state_object().read_bytes(), original)
         self.assert_nothing_private(out, "203.0.113.10")
 
-    def context(self, pulumi_cls: type[rw.Pulumi]) -> rw.Context:
-        scratch = self.tmp / "scratch"
-        scratch.mkdir(exist_ok=True)
-        env = rw.child_env(
-            self.env(NEW_PASSPHRASE), backend_url=f"file://{self.state}", with_passphrase=True
-        )
-        return rw.Context(
-            pulumi=pulumi_cls(binary=PULUMI or "pulumi", project_dir=self.proj, env=env),
-            store=rw.DirStore(self.state),
-            project="tenantsfixture",
-            stack="production",
-            project_dir=self.proj,
-            scratch=scratch,
-            run_tag="test-2",
-            report=rw.Report(),
-            now=lambda: datetime.datetime(2026, 11, 21, 12, 0, 0, tzinfo=datetime.UTC),
-        )
-
     def test_a_failed_import_after_the_removal_restores_the_original_bytes(self) -> None:
         original = self.build(TENANTS_PROGRAM)
 
@@ -878,6 +1680,303 @@ class RealPulumiTests(unittest.TestCase):
             rw.assert_backend(ctx.pulumi, wrong, ctx.scratch)
         right = rw.Backend(rw.DirStore(self.state), None, f"file://{self.state}")
         rw.assert_backend(ctx.pulumi, right, ctx.scratch)
+
+
+# ---------------------------------------------------------------------------
+# A real bridged provider: the raw-state record is written by the bridge, then dropped
+# ---------------------------------------------------------------------------
+
+RANDOM_VERSION = "4.21.1"
+
+# `random` is a Terraform-bridged provider, as `hcloud` is, and runs with no network and no
+# credentials. Its resources carry the same thing the owner's run listed on the hcloud
+# ones: encrypted entries inside `outputs.__pulumi_raw_state_delta`, and nothing encrypted
+# anywhere else (null-valued properties are what get wrapped here).
+BRIDGE_PROGRAM = f"""name: tenantsfixture
+runtime: yaml
+resources:
+  pet:
+    type: random:index/randomPet:RandomPet
+    properties:
+      length: 2
+    options:
+      version: {RANDOM_VERSION}
+  id1:
+    type: random:index/randomId:RandomId
+    properties:
+      byteLength: 8
+    options:
+      version: {RANDOM_VERSION}
+outputs:
+  note: plain-text-output
+"""
+# The program moves on after the state was written: one resource more (what main did when it
+# declared app-t1), one changed, one gone.
+BRIDGE_PROGRAM_WITH_NEW_PET = BRIDGE_PROGRAM.replace(
+    "outputs:\n",
+    f"""  pet2:
+    type: random:index/randomPet:RandomPet
+    properties:
+      length: 2
+    options:
+      version: {RANDOM_VERSION}
+outputs:
+""",
+)
+BRIDGE_PROGRAM_WITH_CHANGED_PET = BRIDGE_PROGRAM.replace("length: 2", "length: 3")
+BRIDGE_PROGRAM_WITHOUT_ID = (
+    BRIDGE_PROGRAM[: BRIDGE_PROGRAM.index("  id1:")] + "outputs:\n  note: x\n"
+)
+BRIDGE_PROGRAM_WITH_SECRET = BRIDGE_PROGRAM.replace(
+    "outputs:\n",
+    f"""  pw:
+    type: random:index/randomPassword:RandomPassword
+    properties:
+      length: 12
+    options:
+      version: {RANDOM_VERSION}
+outputs:
+""",
+)
+
+
+def delta_keys(doc: dict[str, object]) -> dict[str, bool]:
+    """Per resource of a bridged type: does its `outputs` hold the raw-state record?"""
+    resources = deployment(doc)["resources"]
+    assert isinstance(resources, list)  # noqa: S101
+    return {
+        str(r["urn"]).split("::")[-1]: DELTA in r.get("outputs", {})
+        for r in resources
+        if str(r["type"]).startswith("random:")
+    }
+
+
+@unittest.skipUnless(PULUMI or REQUIRE_PULUMI, "no pulumi binary on PATH")
+class RealBridgeTests(RealPulumiBase):
+    """The route over state a real bridged provider wrote, on a throwaway file backend."""
+
+    def build(self, program: str) -> bytes:
+        """Apply the program under the old passphrase, which is then forgotten."""
+        have = pathlib.Path.home() / ".pulumi" / "plugins" / f"resource-random-v{RANDOM_VERSION}"
+        plugins = self.tmp / "home" / "plugins"
+        plugins.mkdir()
+        if have.is_dir():
+            shutil.copytree(have, plugins / have.name)
+        else:
+            install = self.pulumi(
+                self.proj, None, "plugin", "install", "resource", "random", RANDOM_VERSION
+            )
+            if install.returncode != 0:
+                # A flaky download must not stop the owner's rewrap, which self-tests first.
+                self.skipTest("the random provider plugin could not be installed")
+        (self.proj / "Pulumi.yaml").write_text(program, encoding="utf-8")
+        self.pulumi(
+            self.proj,
+            OLD_PASSPHRASE,
+            "stack",
+            "init",
+            "production",
+            "--secrets-provider",
+            "passphrase",
+        ).check_returncode()
+        up = self.pulumi(
+            self.proj, OLD_PASSPHRASE, "up", "--stack", "production", "--yes", "--skip-preview"
+        )
+        self.assertEqual(up.returncode, 0, (up.stdout + up.stderr)[-800:])
+        self.preview_in(self.proj, OLD_PASSPHRASE).check_returncode()
+        (self.proj / "Pulumi.production.yaml").unlink(missing_ok=True)
+        return self.state_object().read_bytes()
+
+    def test_the_bridge_writes_the_record_with_encrypted_entries_and_nothing_else_is_encrypted(
+        self,
+    ) -> None:
+        self.build(BRIDGE_PROGRAM)
+        doc = self.export()
+        self.assertEqual(delta_keys(doc), {"pet": True, "id1": True})
+        found = rw.find_ciphertexts(doc)
+        self.assertGreaterEqual(len(found), 2)
+        for c in found:
+            self.assertEqual(c.side, "outputs")
+            self.assertEqual(c.key_path[0], DELTA)
+
+    def test_without_the_flag_the_record_is_not_dropped_and_the_route_refuses(self) -> None:
+        original = self.build(BRIDGE_PROGRAM)
+        code, out = self.run_tool()
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("KEPT", out.replace("re-derivable, kept", "KEPT"))
+        self.assertEqual(self.state_object().read_bytes(), original)
+
+    def test_dropping_the_record_re_keys_and_the_preview_and_refresh_show_no_change(self) -> None:
+        original = self.build(BRIDGE_PROGRAM)
+        before = self.export()
+
+        inspected, out = self.run_tool("inspect", passphrase=None, extra=["--drop-reproducible"])
+        self.assertEqual(inspected, rw.EXIT_OK, out)
+        self.assertEqual(self.state_object().read_bytes(), original)
+
+        code, out = self.run_tool(extra=["--drop-reproducible"])
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("0 encrypted value(s) remain", out)
+        self.assertIn("preview after the rewrite: ", out)
+        self.assertIn("refresh preview against the live project: ", out)
+        self.assertNotIn("not allowed", out)
+
+        after = self.export()
+        self.assertEqual(rw.count_encrypted(after), 0)
+        self.assertEqual(delta_keys(after), {"pet": False, "id1": False})
+        # Everything but the record and the provider block is what it was: ids and outputs too.
+        stripped = copy.deepcopy(before)
+        for r in deployment(stripped)["resources"]:  # type: ignore[attr-defined]
+            r.get("outputs", {}).pop(DELTA, None)
+        self.assertEqual(
+            rw.canonical(rw.without_secrets_providers(stripped)),
+            rw.canonical(rw.without_secrets_providers(after)),
+        )
+        # No replace, no update, no delete: the plan holds only `same` steps.
+        under_new = self.preview(NEW_PASSPHRASE)
+        self.assertEqual(under_new.returncode, 0, under_new.stderr[:300])
+        counts, problems = rw.plan_problems(under_new.stdout)
+        self.assertEqual(problems, [])
+        self.assertEqual(set(counts), {"same"})
+        refresh = self.pulumi(
+            self.proj,
+            NEW_PASSPHRASE,
+            "refresh",
+            "--stack",
+            "production",
+            "--preview-only",
+            "--expect-no-changes",
+            "--json",
+        )
+        self.assertEqual(refresh.returncode, 0, refresh.stderr[:300])
+        self.assertEqual(rw.refresh_problems(refresh.stdout)[1], [])
+        aside = list((self.state / "aside" / "tenantsfixture").glob("production.*.test-1.json"))
+        self.assertEqual([a.read_bytes() for a in aside], [original])
+        self.assert_nothing_private(out)
+
+    def test_after_the_drop_a_real_up_and_refresh_replace_nothing_and_the_bridge_rebuilds_it(
+        self,
+    ) -> None:
+        self.build(BRIDGE_PROGRAM)
+        before = self.export()
+        code, out = self.run_tool(extra=["--drop-reproducible"])
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertEqual(delta_keys(self.export()), {"pet": False, "id1": False})
+
+        up = self.pulumi(
+            self.proj, NEW_PASSPHRASE, "up", "--stack", "production", "--yes", "--skip-preview"
+        )
+        self.assertEqual(up.returncode, 0, (up.stdout + up.stderr)[-600:])
+        self.assertNotIn("replac", up.stdout)
+        self.assertNotIn("deleting", up.stdout)
+        refresh = self.pulumi(
+            self.proj, NEW_PASSPHRASE, "refresh", "--stack", "production", "--yes", "--skip-preview"
+        )
+        self.assertEqual(refresh.returncode, 0, (refresh.stdout + refresh.stderr)[-600:])
+        self.assertNotIn("replac", refresh.stdout)
+        self.assertNotIn("deleting", refresh.stdout)
+
+        after = self.export()
+        self.assertEqual(delta_keys(after), {"pet": True, "id1": True}, "the bridge wrote it again")
+
+        # Same resources, same ids, same values: nothing was replaced. (The random values would
+        # have changed with a replace.)
+        def values(doc: dict[str, object]) -> dict[str, object]:
+            out: dict[str, object] = {}
+            for r in deployment(doc)["resources"]:  # type: ignore[attr-defined]
+                if str(r["type"]).startswith("random:index"):
+                    props = {k: v for k, v in r["outputs"].items() if k != DELTA}
+                    out[str(r["urn"])] = [r["id"], props]
+            return out
+
+        self.assertEqual(values(before), values(after))
+        self.assertEqual(len(values(after)), 2)
+
+        # The rebuilt record is the one the bridge wrote at the start, but for the ciphertexts,
+        # which are wrapped afresh under the new passphrase.
+        def records(doc: dict[str, object]) -> str:
+            found = [
+                r["outputs"][DELTA]
+                for r in deployment(doc)["resources"]  # type: ignore[attr-defined]
+                if DELTA in r.get("outputs", {})
+            ]
+            return re.sub(r'"ciphertext": ?"[^"]*"', '"ciphertext":"-"', rw.canonical(found))
+
+        self.assertEqual(records(before), records(after))
+
+    def test_a_real_secret_beside_the_records_still_refuses_and_leaves_the_state_alone(
+        self,
+    ) -> None:
+        original = self.build(BRIDGE_PROGRAM_WITH_SECRET)
+        outside = [c for c in rw.find_ciphertexts(self.export()) if c.key_path[:1] != (DELTA,)]
+        self.assertGreaterEqual(len(outside), 1, "the password's own secrets are not in a record")
+
+        code, out = self.run_tool(extra=["--drop-reproducible"])
+        self.assertEqual(code, rw.EXIT_REFUSED, out)
+        self.assertIn("RandomPassword | pw | outputs | result | KEPT, not on the allowlist", out)
+        self.assertIn(f"{len(outside)} encrypted value(s) remain after dropping", out)
+        self.assertEqual(self.state_object().read_bytes(), original)
+        self.assertFalse((self.state / "aside").exists())
+
+    def change_program(self, program: str) -> None:
+        (self.proj / "Pulumi.yaml").write_text(program, encoding="utf-8")
+
+    def test_a_real_preview_lists_every_resource_only_with_show_sames_and_exits_7_on_a_new_one(
+        self,
+    ) -> None:
+        """What a production run saw: 5 steps for 17 resources, and `exited 7` for a create."""
+        self.build(BRIDGE_PROGRAM)
+        self.change_program(BRIDGE_PROGRAM_WITH_NEW_PET)
+        plain = self.pulumi(self.proj, OLD_PASSPHRASE, "preview", "--stack", "production", "--json")
+        self.assertEqual(plain.returncode, 0, plain.stderr[:300])
+        self.assertEqual(sorted(rw.plan_problems(plain.stdout)[0]), ["create", "same"])
+        self.assertEqual(rw.plan_problems(plain.stdout)[0]["same"], 1, "the root stack only")
+        listed = self.pulumi(
+            self.proj, OLD_PASSPHRASE, "preview", "--stack", "production", "--json", "--show-sames"
+        )
+        self.assertEqual(listed.returncode, 0, listed.stderr[:300])
+        self.assertEqual(rw.plan_problems(listed.stdout)[0], {"same": 3, "create": 1})
+        expecting = self.preview(OLD_PASSPHRASE)
+        self.assertEqual(expecting.returncode, 7, expecting.stderr[:300])
+        self.assertIn("no changes were expected", expecting.stderr)
+
+    def test_a_resource_the_program_declares_and_the_state_never_held_is_allowed(self) -> None:
+        original = self.build(BRIDGE_PROGRAM)
+        before = self.export()
+        self.change_program(BRIDGE_PROGRAM_WITH_NEW_PET)
+
+        code, out = self.run_tool(extra=["--drop-reproducible"])
+        self.assertEqual(code, rw.EXIT_OK, out)
+        self.assertIn("preview after the rewrite: 1 create, 3 same", out)
+        self.assertIn(
+            "  new, not in the old checkpoint, allowed: create of a random:index/randomPet:RandomPet",
+            out,
+        )
+        self.assertNotIn("not allowed", out)
+        after = self.export()
+        self.assertEqual(rw.count_encrypted(after), 0)
+        self.assertEqual(
+            set(delta_keys(after)), set(delta_keys(before)), "nothing was applied: no new resource"
+        )
+        self.assertEqual(len(deployment(after)["resources"]), len(deployment(before)["resources"]))  # type: ignore[arg-type]
+        aside = list((self.state / "aside" / "tenantsfixture").glob("production.*.test-1.json"))
+        self.assertEqual([a.read_bytes() for a in aside], [original])
+
+    def test_a_changed_or_removed_old_resource_is_refused_and_the_state_put_back(self) -> None:
+        for label, program, why in (
+            ("replace", BRIDGE_PROGRAM_WITH_CHANGED_PET, "that the old checkpoint holds"),
+            ("delete", BRIDGE_PROGRAM_WITHOUT_ID, "delete of a random:index/randomId:RandomId"),
+        ):
+            with self.subTest(label):
+                self.setUp()
+                original = self.build(BRIDGE_PROGRAM)
+                self.change_program(program)
+                code, out = self.run_tool(extra=["--drop-reproducible"])
+                self.assertEqual(code, rw.EXIT_RESTORED, out)
+                self.assertIn("not allowed", out)
+                self.assertIn(why, out)
+                self.assertIn("RESTORED", out)
+                self.assertEqual(self.state_object().read_bytes(), original)
 
 
 if __name__ == "__main__":

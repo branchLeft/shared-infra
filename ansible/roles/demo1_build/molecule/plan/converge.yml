@@ -173,7 +173,7 @@
         - name: Run the role's host scan in this plan
           ansible.builtin.include_role:
             name: branchleft.demo1_build
-            tasks_from: _secret_holders.yml
+            tasks_from: _holder_scan.yml
           register: demo1_build_plan_scan
 
         - name: Fail if the plan accepted a host holding a secret it must refuse
