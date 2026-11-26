@@ -55,6 +55,17 @@ What the role does, in the order of `tasks/main.yml`:
    so a path never reads as an assignment to the plan scan. A host once held thousands (a refusal of
    486,151 bytes, printed twice, over the plan's 300,000-byte cap), so the message never grows with
    the host (`ansible/checks/test_plan_output_size.py`, the `bulk` case of `molecule/refusals`).
+   Installed code is not counted: a found path under one of three exact roots,
+   `/opt/ansible-runtime` (the Ansible toolchain's environments and hash-locked requirements),
+   `/var/lib/pull-trigger` (the pull program's cache and work trees) and `/opt/branchleft/broker/node`
+   (the Node runtime, unpacked from a sha256-pinned tarball), is dropped from the found list
+   (`demo1_build_secret_installed_roots`). Each root is the directory one role installs into,
+   pinned to that role's variable by `tests/unit/test_installed_roots.py`. The scan still reads
+   the trees (grep cannot prune by path) and counts a secret beside them: a sibling such as
+   `/opt/ansible-runtime-other`, the rest of `/opt/branchleft` and the broker's `releases` directory.
+   The mail spool's Compose file, which names the drain secret's variable and not its value, has a
+   holder row of its own (`/opt/branchleft/mail-spool/compose.yml`); another file in that directory
+   is still found.
    The `ansible-ci` account's CI key row (`/home/ansible-ci/.ssh/authorized_keys`, enrol
    runbook Part 3) is listed. A host the list covers is
    accepted and says how many files it found. A plan runs the step too.
