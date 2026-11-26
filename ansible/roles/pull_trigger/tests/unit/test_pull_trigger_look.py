@@ -1067,5 +1067,196 @@ class SshPublicKeyTests(unittest.TestCase):
                 self.assertIn(f"result={word}", lines[0])
 
 
+UPTIME_FACT = {
+    "issue": 2103,
+    "name": "ops1-uptime-90d",
+    "playbook": PLAY,
+    "kind": "uptime_90d",
+    "path": "/var/lib/branchleft/status-uptime/report.json",
+}
+GENERATED = "2026-11-26T10:00:00Z"
+
+
+def uptime_report(**changes: object) -> dict[str, object]:
+    """Return a report of the collector's shape with two endpoints, and the changes applied."""
+    report: dict[str, object] = {
+        "window_days": 90,
+        "generated_at": GENERATED,
+        "endpoints": [
+            {
+                "endpoint_key": "test_test",
+                "samples": 4,
+                "successes": 3,
+                "uptime_percent": 75.0,
+                "expected_samples": 129600,
+                "coverage_percent": 0.0,
+                "first_sample": "2026-11-26T09:00:00Z",
+            },
+            {
+                "endpoint_key": "sites_example-site",
+                "samples": 9,
+                "successes": 9,
+                "uptime_percent": 100.0,
+                "expected_samples": 129600,
+                "coverage_percent": 0.0,
+                "first_sample": "2026-11-26T09:00:00Z",
+            },
+        ],
+    }
+    report.update(changes)
+    return report
+
+
+class UptimeReportTests(unittest.TestCase):
+    """The figures a uptime_90d fact may print: each endpoint's key and percentage, and the time."""
+
+    def setUp(self) -> None:
+        """Make a directory for the report files and a stand-in systemctl."""
+        self.root = Path(tempfile.mkdtemp(prefix="look-uptime")).resolve()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.roots = (f"{self.root}/",)
+        self.report = self.root / "report.json"
+
+    def lines_for(self, fact: Mapping[str, object], path: Path) -> list[str]:
+        """Return the look lines for one fact while the report path is the given file."""
+        with mock.patch.object(trigger, "LOOK_UPTIME_REPORT_PATH", str(path)):
+            parsed = trigger.parse_look(declaration(with_fact(fact, path=str(path))), self.roots)
+            tools = trigger.Tools(systemctl=fake_systemctl(self.bin, "active"))
+            return trigger.Looker(tools, threading.Event(), self.roots, 60.0).lines(parsed, PLAY)
+
+    def write(self, body: str) -> None:
+        """Write the report file with the given text."""
+        self.report.write_text(body, encoding="utf-8")
+
+    def test_only_the_exact_report_path_is_accepted(self) -> None:
+        self.assertEqual([], refusals_of(declaration(UPTIME_FACT)))
+        hostile = [
+            "/var/lib/branchleft/status-uptime/samples/test_test.tsv",
+            "/var/lib/branchleft/status-uptime/report.json.bak",
+            "/var/lib/branchleft/status-uptime/*",
+            "/var/lib/branchleft/status-uptime/../report.json",
+            "",
+            7,
+        ]
+        for path in hostile:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    ["path-not-allowed"],
+                    refusals_of(declaration(with_fact(UPTIME_FACT, path=path))),
+                )
+
+    def test_every_endpoint_prints_as_key_and_figure_then_the_time(self) -> None:
+        self.write(json.dumps(uptime_report()))
+        self.assertEqual(
+            [
+                "look issue=2103 name=ops1-uptime-90d kind=uptime_90d "
+                f"result=sites_example-site=100.0000 test_test=75.0000 {GENERATED}",
+                "look-summary declared=1 here=1 refused=0 file=ok",
+            ],
+            self.lines_for(UPTIME_FACT, self.report),
+        )
+
+    def test_no_other_field_of_the_report_reaches_a_line(self) -> None:
+        self.write(json.dumps(uptime_report(note="SECRET-FIELD-VALUE")))
+        text = "".join(self.lines_for(UPTIME_FACT, self.report))
+        for leaked in ("SECRET-FIELD-VALUE", "samples", "successes", "first_sample"):
+            with self.subTest(leaked=leaked):
+                self.assertNotIn(leaked, text)
+
+    def test_a_report_with_no_endpoints_prints_only_the_time(self) -> None:
+        self.write(json.dumps(uptime_report(endpoints=[])))
+        self.assertIn(f"result={GENERATED}", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_missing_or_linked_or_directory_report_gives_a_word(self) -> None:
+        target = self.root / "real.json"
+        target.write_text(json.dumps(uptime_report()), encoding="utf-8")
+        link = self.root / "link.json"
+        link.symlink_to(target)
+        folder = self.root / "dir.json"
+        folder.mkdir()
+        for label, path, word in (
+            ("absent", self.root / "gone.json", "absent"),
+            ("link", link, "unreadable"),
+            ("directory", folder, "not-regular"),
+        ):
+            with self.subTest(case=label):
+                self.assertIn(f"result={word}", self.lines_for(UPTIME_FACT, path)[0])
+
+    def test_an_oversized_report_gives_a_word(self) -> None:
+        self.write("x" * (trigger.LOOK_MAX_REPORT_BYTES + 1))
+        self.assertIn("result=too-large", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_report_of_the_wrong_shape_gives_a_word_and_no_text(self) -> None:
+        cases = {
+            "not-json": "SECRET-BODY {",
+            "window": json.dumps(uptime_report(window_days=30)),
+            "window-bool": json.dumps(uptime_report(window_days=True)),
+            "time": json.dumps(uptime_report(generated_at="yesterday")),
+            "endpoints-not-list": json.dumps(uptime_report(endpoints="SECRET-BODY")),
+            "not-object": json.dumps([1, 2]),
+            "nan": (
+                f'{{"window_days": 90, "generated_at": "{GENERATED}", "endpoints": '
+                '[{"endpoint_key": "test_test", "uptime_percent": NaN}]}'
+            ),
+        }
+        for label, body in cases.items():
+            with self.subTest(case=label):
+                self.write(body)
+                line = self.lines_for(UPTIME_FACT, self.report)[0]
+                self.assertIn("result=not-report", line)
+                self.assertNotIn("SECRET-BODY", line)
+
+    def test_a_key_outside_the_strict_shape_gives_not_report(self) -> None:
+        for key in ("Upper", "has.dot", "sites_a b", "x" * 65, "", 7):
+            with self.subTest(key=key):
+                endpoints = uptime_report()["endpoints"]
+                endpoints[0]["endpoint_key"] = key  # type: ignore[index]
+                self.write(json.dumps(uptime_report(endpoints=endpoints)))
+                self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_duplicate_key_gives_not_report(self) -> None:
+        endpoints = uptime_report()["endpoints"]
+        endpoints[1]["endpoint_key"] = "test_test"  # type: ignore[index]
+        self.write(json.dumps(uptime_report(endpoints=endpoints)))
+        self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_figure_that_is_not_a_percentage_gives_not_report(self) -> None:
+        for figure in ("75.0", True, 101.0, -1, None):
+            with self.subTest(figure=figure):
+                report = uptime_report()
+                report["endpoints"][0]["uptime_percent"] = figure  # type: ignore[index]
+                self.write(json.dumps(report))
+                self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_400_digit_integer_figure_gives_not_report_and_the_other_facts_stand(self) -> None:
+        report = uptime_report()
+        report["endpoints"][0]["uptime_percent"] = 10**399  # type: ignore[index]
+        self.write(json.dumps(report))
+        lines = self.lines_for(UPTIME_FACT, self.report)
+        self.assertEqual(
+            "look issue=2103 name=ops1-uptime-90d kind=uptime_90d result=not-report", lines[0]
+        )
+        self.assertEqual("look-summary declared=1 here=1 refused=0 file=ok", lines[1])
+
+    def test_more_than_64_endpoints_gives_not_report_and_64_is_printed(self) -> None:
+        one = uptime_report()["endpoints"][0]  # type: ignore[index]
+        at_cap = [{**one, "endpoint_key": f"k{number:02d}"} for number in range(64)]
+        self.write(json.dumps(uptime_report(endpoints=at_cap)))
+        self.assertNotIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+        over = [*at_cap, {**one, "endpoint_key": "k64"}]
+        self.write(json.dumps(uptime_report(endpoints=over)))
+        self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_negative_zero_figure_prints_as_zero(self) -> None:
+        report = uptime_report()
+        report["endpoints"][0]["uptime_percent"] = -0.0  # type: ignore[index]
+        self.write(json.dumps(report))
+        line = self.lines_for(UPTIME_FACT, self.report)[0]
+        self.assertIn(f"result=sites_example-site=100.0000 test_test=0.0000 {GENERATED}", line)
+        self.assertNotIn("-0", line)
+
+
 if __name__ == "__main__":
     unittest.main()
