@@ -832,7 +832,11 @@ def _classifier_off(template: str) -> bool:
 
 
 class OwnedEdgeBanRouteTests(unittest.TestCase):
-    """Who is paged for a CrowdSec ban, walked over the real rendered tree."""
+    """Who is told about a CrowdSec ban, walked over the real rendered tree.
+
+    Owner ruling 26 Nov: a ban never pages a phone. EdgeBanIssued is a warning, and its
+    page-register entry is dormant, so no owned-ban route is rendered.
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -844,13 +848,15 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
     ) -> dict[str, str]:
         return {
             "alertname": "EdgeBanIssued",
-            "severity": "page",
+            "severity": "warning",
             "reason": reason,
             "decision_id": decision_id,
         }
 
-    def test_owned_ban_reaches_ntfy_page_and_nothing_else(self) -> None:
-        self.assertEqual(_receivers(self.template, self.owned_ban()), {"ntfy-page"})
+    def test_owned_ban_is_a_warning_on_the_on_host_mailbox_and_never_ntfy(self) -> None:
+        reached = _receivers(self.template, self.owned_ban())
+        self.assertEqual(reached, {"email-on-host"})
+        self.assertNotIn("ntfy-page", reached)
 
     def test_unowned_ban_reaches_email_and_never_ntfy_page(self) -> None:
         labels = {
@@ -863,9 +869,15 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
         self.assertIn("email", reached)
         self.assertNotIn("ntfy-page", reached)
 
-    def test_a_ban_with_no_decision_id_still_reaches_ntfy_page(self) -> None:
-        labels = {"alertname": "EdgeBanIssued", "severity": "page", "reason": EDGE_BAN_SCENARIOS[0]}
-        self.assertEqual(_receivers(self.template, labels), {"ntfy-page"})
+    def test_a_ban_with_no_decision_id_is_a_warning_never_ntfy(self) -> None:
+        labels = {
+            "alertname": "EdgeBanIssued",
+            "severity": "warning",
+            "reason": EDGE_BAN_SCENARIOS[0],
+        }
+        reached = _receivers(self.template, labels)
+        self.assertEqual(reached, {"email-on-host"})
+        self.assertNotIn("ntfy-page", reached)
 
     def test_template_is_in_one_consistent_classifier_mode(self) -> None:
         _classifier_off(self.template)
@@ -916,49 +928,12 @@ class OwnedEdgeBanRouteTests(unittest.TestCase):
         self.assertLess(discard[0], generic[0])
         self.assertNotIn("continue", self.routes[discard[0]])
 
-    def test_owned_ban_child_comes_before_the_generic_page_route(self) -> None:
-        owned = [
-            index
-            for index, block in enumerate(self.routes)
-            if 'alertname = "EdgeBanIssued"' in block
-        ]
-        generic = [
-            index
-            for index, block in enumerate(self.routes)
-            if "alertname =~ " in block and "TierTwoSafetyMatch" in block
-        ]
-        self.assertEqual(len(owned), 1)
-        self.assertEqual(len(generic), 1)
-        self.assertLess(owned[0], generic[0])
-
-    def test_owned_ban_child_does_not_continue_to_the_generic_route(self) -> None:
+    def test_no_owned_ban_child_route_is_rendered(self) -> None:
+        """A ban is a warning, so no route names EdgeBanIssued with a page severity."""
         owned = [block for block in self.routes if 'alertname = "EdgeBanIssued"' in block]
-        self.assertEqual(len(owned), 1)
-        self.assertNotIn("continue", owned[0])
-        self.assertEqual(len(_walk_routes(self.template, self.owned_ban())), 1)
-
-    def test_owned_ban_groups_by_reason_so_a_second_scenario_is_a_new_group(self) -> None:
-        first, second = (
-            _walk_routes(self.template, self.owned_ban(reason))[0] for reason in EDGE_BAN_SCENARIOS
-        )
-        self.assertEqual(first.group_by, ("alertname", "reason"))
-        self.assertNotEqual(first.group_key, second.group_key)
-
-    def test_second_owned_ban_notifies_within_five_minutes(self) -> None:
-        step = _walk_routes(self.template, self.owned_ban(EDGE_BAN_SCENARIOS[1]))[0]
-        self.assertLessEqual(step.group_wait_seconds, OWNED_BAN_SECONDS_BOUND)
-        self.assertLessEqual(step.group_interval_seconds, OWNED_BAN_SECONDS_BOUND)
-
-    def test_second_ban_of_the_same_scenario_joins_the_group_and_notifies_within_five_minutes(
-        self,
-    ) -> None:
-        """A second ban is a different alert by decision_id (the rule test proves that), so it
-        lands in the first ban's group, and the group notifies again within its interval."""
-        first = _walk_routes(self.template, self.owned_ban(decision_id="101"))[0]
-        second = _walk_routes(self.template, self.owned_ban(decision_id="102"))[0]
-        self.assertEqual(first.group_key, second.group_key)
-        self.assertNotIn("decision_id", second.group_by)
-        self.assertLessEqual(second.group_interval_seconds, OWNED_BAN_SECONDS_BOUND)
+        self.assertEqual(owned, [])
+        for block in self.routes:
+            self.assertNotIn('severity = "page"\n        - alertname = "EdgeBanIssued"', block)
 
     def test_keeps_tenant_scoped_pages_grouped_on_tenant_paced_at_the_page_route_interval(self) -> None:
         # Changed from the root's 1h (#971) to the page node's 1m by the page-route
