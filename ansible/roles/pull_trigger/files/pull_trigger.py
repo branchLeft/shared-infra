@@ -243,6 +243,8 @@ LOOK_SSH_KEY_TYPE_RE: Final = re.compile(LOOK_SSH_KEY_TYPE_PATTERN)
 LOOK_UPTIME_REPORT_PATH: Final = "/var/lib/branchleft/status-uptime/report.json"
 LOOK_MAX_REPORT_BYTES: Final = 1_048_576
 LOOK_UPTIME_WINDOW_DAYS: Final = 90
+# The most endpoints one report may hold for a line; more is refused as not-report.
+LOOK_UPTIME_MAX_ENDPOINTS: Final = 64
 LOOK_REPORT_KEY: Final = r"[a-z0-9_-]{1,64}"
 LOOK_REPORT_KEY_RE: Final = re.compile(LOOK_REPORT_KEY)
 LOOK_UPTIME_FIGURE: Final = r"[0-9]{1,3}\.[0-9]{4}"
@@ -2515,6 +2517,8 @@ class Looker:
             return "not-report"
         if not isinstance(endpoints, list):
             return "not-report"
+        if len(endpoints) > LOOK_UPTIME_MAX_ENDPOINTS:
+            return "not-report"
         pairs: dict[str, str] = {}
         for item in endpoints:
             if not isinstance(item, dict):
@@ -2527,9 +2531,13 @@ class Looker:
             figure = item.get("uptime_percent")
             if isinstance(figure, bool) or not isinstance(figure, (int, float)):
                 return "not-report"
-            if not math.isfinite(figure) or not 0 <= figure <= 100:
+            # A huge integer cannot become a float, so the range is checked before any float test;
+            # a float must also be finite. The range test admits -0.0, which prints as 0.
+            if isinstance(figure, float) and not math.isfinite(figure):
                 return "not-report"
-            pairs[key] = f"{key}={figure:.4f}"
+            if not 0 <= figure <= 100:
+                return "not-report"
+            pairs[key] = f"{key}={float(figure) + 0.0:.4f}"
         return " ".join([*(pairs[key] for key in sorted(pairs)), generated])
 
     @staticmethod

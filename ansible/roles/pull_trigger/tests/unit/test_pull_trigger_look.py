@@ -1230,6 +1230,33 @@ class UptimeReportTests(unittest.TestCase):
                 self.write(json.dumps(report))
                 self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
 
+    def test_a_400_digit_integer_figure_gives_not_report_and_the_other_facts_stand(self) -> None:
+        report = uptime_report()
+        report["endpoints"][0]["uptime_percent"] = 10**399  # type: ignore[index]
+        self.write(json.dumps(report))
+        lines = self.lines_for(UPTIME_FACT, self.report)
+        self.assertEqual(
+            "look issue=2103 name=ops1-uptime-90d kind=uptime_90d result=not-report", lines[0]
+        )
+        self.assertEqual("look-summary declared=1 here=1 refused=0 file=ok", lines[1])
+
+    def test_more_than_64_endpoints_gives_not_report_and_64_is_printed(self) -> None:
+        one = uptime_report()["endpoints"][0]  # type: ignore[index]
+        at_cap = [{**one, "endpoint_key": f"k{number:02d}"} for number in range(64)]
+        self.write(json.dumps(uptime_report(endpoints=at_cap)))
+        self.assertNotIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+        over = [*at_cap, {**one, "endpoint_key": "k64"}]
+        self.write(json.dumps(uptime_report(endpoints=over)))
+        self.assertIn("result=not-report", self.lines_for(UPTIME_FACT, self.report)[0])
+
+    def test_a_negative_zero_figure_prints_as_zero(self) -> None:
+        report = uptime_report()
+        report["endpoints"][0]["uptime_percent"] = -0.0  # type: ignore[index]
+        self.write(json.dumps(report))
+        line = self.lines_for(UPTIME_FACT, self.report)[0]
+        self.assertIn(f"result=sites_example-site=100.0000 test_test=0.0000 {GENERATED}", line)
+        self.assertNotIn("-0", line)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -945,7 +945,7 @@ caller input, so what these hold is that a declaration cannot make it do more.
 
 | Control                                              | Broken by                                          | Fails in                                                                                                                        |
 | ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| L1 only the four kinds exist                         | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                          |
+| L1 only the five kinds exist                         | letting an unknown kind through                    | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`                                                          |
 | L2 an entry has exactly its kind's fields            | accepting a field the kind does not name           | `test_a_command_like_entry_is_refused_by_name_whatever_shape_it_takes`, `test_a_command_like_entry_is_refused_and_runs_nothing` |
 | L3 a file fact reads only below the four directories | accepting any absolute path                        | `test_a_file_outside_the_four_directories_or_not_plain_is_refused`                                                              |
 | L4 a unit is a plain unit name                       | accepting any text as a unit                       | `test_a_unit_that_is_not_a_plain_unit_name_is_refused`                                                                          |
