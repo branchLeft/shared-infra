@@ -118,6 +118,13 @@
       "playbook": "ansible/playbooks/db1.yml",
       "kind": "unit_active",
       "unit": "branchleft-db-binlog-ship.timer"
+    },
+    {
+      "issue": 4169,
+      "name": "ops1-provisioning-controller-ssh-public",
+      "playbook": "ansible/playbooks/ops1.yml",
+      "kind": "ssh_public_key",
+      "path": "/etc/branchleft/provisioning-controller/ssh.pub"
     }
   ]
 }
