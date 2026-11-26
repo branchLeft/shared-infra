@@ -44,6 +44,6 @@ jobs:
           persist-credentials: false
 
       - name: Verify every locked @branchleft package
-        uses: branchLeft/github-workflows/.github/actions/verify-package-attestations@b8beebe6342391ed33570265e910a6e26e48fd62 # v1.2.3
+        uses: branchLeft/github-workflows/.github/actions/verify-package-attestations@291ad35742f009d1bdcdb39dcc96f1e2d35c5c7d # v1.2.6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
