@@ -252,7 +252,7 @@ read -r OWNER_IPV4
 ```
 
 ```bash
-case "${OWNER_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
+case "${OWNER_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
 ```
 
 ```bash
@@ -787,7 +787,7 @@ the terminal that set them: in a new terminal, run step 1's reads again.
    ```
 
    ```bash
-   case "${OWNER_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
+   case "${OWNER_IPV4}" in ''|*[^0-9.]*) echo "not an IPv4 address: ${OWNER_IPV4}"; false;; esac
    ```
 
    ```bash
