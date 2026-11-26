@@ -24,6 +24,7 @@
 		appsec_max_body_bytes 65536
 		appsec_timeout 1s
 		appsec_fail_open
+		enable_caddy_error
 		enable_caddy_metrics
 	}
 }
@@ -87,6 +88,34 @@ branchleft.co.uk {
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8080
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 www.branchleft.co.uk {
@@ -118,6 +147,34 @@ www.branchleft.co.uk {
 		}
 		crowdsec
 		redir https://branchleft.co.uk{uri} permanent
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -316,6 +373,32 @@ blog.branchleft.co.uk {
 	}
 	handle_errors {
 		header >X-Content-Type-Options "nosniff"
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -378,6 +461,34 @@ cloud.branchleft.co.uk {
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:11000
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 book.branchleft.co.uk {
@@ -409,6 +520,34 @@ book.branchleft.co.uk {
 		}
 		crowdsec
 		redir https://cloud.branchleft.co.uk{uri} permanent
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -470,6 +609,34 @@ portal.publicpress.co.uk {
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8301
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -541,6 +708,34 @@ console.branchleft.co.uk {
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8302
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -615,6 +810,34 @@ id.publicpress.co.uk {
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8300
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 ntfy.branchleft.co.uk {
@@ -675,6 +898,34 @@ ntfy.branchleft.co.uk {
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.10:2586
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -737,6 +988,34 @@ publicpress.co.uk {
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8081
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 status.branchleft.co.uk {
@@ -798,6 +1077,34 @@ status.branchleft.co.uk {
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.50:8303
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 sites.publicpress.co.uk {
@@ -846,6 +1153,34 @@ Contact: mailto:abuse@branchleft.co.uk
 Expires: 2027-11-07T00:00:00.000Z
 SHARED_TENANT_FILE_EOF
 		respond 404
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
@@ -902,6 +1237,34 @@ http://edge-probe.invalid:8080 {
 		header X-Edge-Probe host-routed
 		respond 204
 	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
+	}
 }
 
 :8080 {
@@ -956,6 +1319,34 @@ http://edge-probe.invalid:8080 {
 		respond @ghost_setup 403
 		header X-Edge-Probe bare-port
 		respond 204
+	}
+	handle_errors {
+		@refused expression `{http.error.status_code} == 403`
+		handle @refused {
+			header Content-Type "text/html; charset=utf-8"
+			header Cache-Control "no-store"
+			header X-Robots-Tag "noindex"
+			header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			respond <<EDGE_BLOCKED_PAGE_EOF
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>BLOCKED_PAGE_TITLE</title>
+</head>
+<body style="font-family: system-ui, sans-serif; line-height: 1.5; max-width: 40rem; margin: 3rem auto; padding: 0 1rem">
+<h1>BLOCKED_PAGE_HEADING</h1>
+<p>BLOCKED_PAGE_EXPLANATION</p>
+<p>BLOCKED_PAGE_NEXT_STEPS</p>
+<p>BLOCKED_PAGE_CONTACT</p>
+<p style="font-size: 0.875rem">BLOCKED_PAGE_REFERENCE_LABEL: {time.now.http}</p>
+</body>
+</html>
+EDGE_BLOCKED_PAGE_EOF 403
+		}
 	}
 }
 
