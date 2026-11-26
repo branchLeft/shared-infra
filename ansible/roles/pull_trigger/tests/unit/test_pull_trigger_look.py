@@ -1111,7 +1111,7 @@ class UptimeReportTests(unittest.TestCase):
     """The figures a uptime_90d fact may print: each endpoint's key and percentage, and the time."""
 
     def setUp(self) -> None:
-        """Make a directory for the report files and the stand-in systemctl, as SshPublicKeyTests does."""
+        """Make a directory for the report files and a stand-in systemctl."""
         self.root = Path(tempfile.mkdtemp(prefix="look-uptime")).resolve()
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.bin = self.root / "bin"
@@ -1143,7 +1143,8 @@ class UptimeReportTests(unittest.TestCase):
         for path in hostile:
             with self.subTest(path=path):
                 self.assertEqual(
-                    ["path-not-allowed"], refusals_of(declaration(with_fact(UPTIME_FACT, path=path)))
+                    ["path-not-allowed"],
+                    refusals_of(declaration(with_fact(UPTIME_FACT, path=path))),
                 )
 
     def test_every_endpoint_prints_as_key_and_figure_then_the_time(self) -> None:
@@ -1195,8 +1196,10 @@ class UptimeReportTests(unittest.TestCase):
             "time": json.dumps(uptime_report(generated_at="yesterday")),
             "endpoints-not-list": json.dumps(uptime_report(endpoints="SECRET-BODY")),
             "not-object": json.dumps([1, 2]),
-            "nan": '{"window_days": 90, "generated_at": "%s", "endpoints": [{"endpoint_key": '
-            '"test_test", "uptime_percent": NaN}]}' % GENERATED,
+            "nan": (
+                f'{{"window_days": 90, "generated_at": "{GENERATED}", "endpoints": '
+                '[{"endpoint_key": "test_test", "uptime_percent": NaN}]}'
+            ),
         }
         for label, body in cases.items():
             with self.subTest(case=label):
