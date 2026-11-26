@@ -886,6 +886,22 @@
       plant: [keys]
       accepted: true
 
+# The node exporter's TLS server key is named by its holder row and accepted; a different .key in the
+# same directory is refused, so the row names one file and not the directory.
+- name: Accept the node exporter TLS server key that the holder list names
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tls]
+      accepted: true
+
+- name: Case refused_secret_tls_other, refuse a different .key beside the node exporter's key
+  ansible.builtin.import_playbook: refused_secret.yml
+  vars:
+    converge_case:
+      plant: [tls_other]
+      expect: 'holds a secret-bearing file that is not on its holder list'
+
 # The broker verify key is named by a holder row, and the row accepts the file (the binary key name
 # rule finds it, and the row lists it).
 - name: Accept the broker request-signing verify key that the holder list names
