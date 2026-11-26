@@ -154,8 +154,7 @@ Decisions a reviewer should know the reasons for:
 ## How the image is pulled
 
 `ghcr.io/branchleft/percona-server` is a public package, so the host pulls the image, and the deploy
-program reads its attestation, with no login. This is the owner's ruling of 26 Nov 2026 on
-[ISSUE branchLeft/workspace#4401](https://github.com/branchLeft/workspace/issues/4401): the hardened
+program reads its attestation, with no login. This is the owner's ruling of 26 Nov 2026: the hardened
 build is published publicly rather than read through a token. The role writes no Docker config, sets no
 `DOCKER_CONFIG`, makes no `/etc/branchleft/registry` directory, takes no registry input and holds no
 registry secret. (The deploy program and the Compose unit still name a shared Docker config directory
