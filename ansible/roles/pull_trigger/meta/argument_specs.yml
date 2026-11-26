@@ -50,6 +50,12 @@ argument_specs:
         type: int
         description: Seconds a playbook run may take before the program stops it, from 1 to 86400.
         default: 3600
+      pull_trigger_lock_wait_seconds:
+        type: int
+        description: >-
+          Seconds a request that finds the host lock held waits for it before it is answered busy,
+          from 0 to 86400. 0 refuses at once. Keep it above the length of an apply.
+        default: 1200
       pull_trigger_keep_runs:
         type: int
         description: How many runs' output files to keep in the log directory, from 1 to 1000.

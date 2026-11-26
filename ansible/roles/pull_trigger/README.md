@@ -33,8 +33,8 @@ caller uses it"). The caller sends one 40-digit commit id and a mode, `apply` or
    argument list.
 2. Checks that the host's configured playbook is on the playbook allowlist and, for a
    step, that the step is on the step allow-list and the word is its word, then
-   takes a single-flight lock. A second request while one runs is refused at
-   once, not queued.
+   takes a single-flight lock. A second request while one runs waits for the lock, up to
+   `pull_trigger_lock_wait_seconds`, and is then refused as `busy`.
 3. Fetches `main`, and only `main`, from the configured read-only remote into a
    root-owned bare cache. The host holds no credential that can write to the
    repository.
@@ -76,17 +76,18 @@ The variables, their types, choices and defaults are in `meta/argument_specs.yml
 and the same defaults are in `defaults/main.yml`. Ansible checks them when the
 role starts.
 
-| Variable                        | Meaning                                                                                                      |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `pull_trigger_remote_url`       | The read-only remote: an `https://` or `file://` URL, no credential in it.                                   |
-| `pull_trigger_signers`          | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block).  |
-| `pull_trigger_playbooks`        | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                     |
-| `pull_trigger_playbook`         | The one playbook this host runs; must be on the allowlist.                                                   |
-| `pull_trigger_ansible_playbook` | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                             |
-| `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                   |
-| `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                            |
-| `pull_trigger_steps`            | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
-| `pull_trigger_floor_seed`       | A commit id written to the rollback floor only if the host has none (default empty). See "Push receiver".    |
+| Variable                         | Meaning                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `pull_trigger_remote_url`        | The read-only remote: an `https://` or `file://` URL, no credential in it.                                   |
+| `pull_trigger_signers`           | Non-empty list of `{format, key}`: `ssh` (one public key line) or `openpgp` (an armoured public key block).  |
+| `pull_trigger_playbooks`         | The playbook allowlist: plain relative paths under `ansible/playbooks/`.                                     |
+| `pull_trigger_playbook`          | The one playbook this host runs; must be on the allowlist.                                                   |
+| `pull_trigger_ansible_playbook`  | Absolute path of `ansible-playbook` (default `/usr/local/bin/ansible-playbook`).                             |
+| `pull_trigger_timeout_seconds`   | Time after which a playbook run is stopped (default 3600).                                                   |
+| `pull_trigger_lock_wait_seconds` | How long a request waits for a held host lock before it is answered busy (default 1200, 0 refuses at once).  |
+| `pull_trigger_keep_runs`         | How many runs' output files to keep (default 50).                                                            |
+| `pull_trigger_steps`             | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
+| `pull_trigger_floor_seed`        | A commit id written to the rollback floor only if the host has none (default empty). See "Push receiver".    |
 
 No variable is a secret. The signers are public keys, and the configuration is
 world-readable by design, so the role leaves the diff of the configuration
@@ -571,7 +572,7 @@ refusal is not expected on a merged file.
 | 10   | `applied`      | An apply ran and reported changes.                                                                                             |
 | 11   | `would-change` | Check mode ran and reports that an apply would change something.                                                               |
 | 20   | `refused`      | Refused before any change. See the reasons below.                                                                              |
-| 21   | `busy`         | Another trigger holds the lock. Nothing was run. Ask again later.                                                              |
+| 21   | `busy`         | Another trigger held the lock for the whole of the wait (`pull_trigger_lock_wait_seconds`). Nothing was run. Ask again later.  |
 | 30   | `failed`       | The playbook started and failed (`playbook-failed`, `no-recap`, `interrupted`).                                                |
 | 31   | `timed-out`    | The playbook ran past `pull_trigger_timeout_seconds` and was stopped.                                                          |
 | 40   | `error`        | Invalid or unsafe configuration or state, a missing tool, a failed git command, or `io-error` or `internal-error` (see below). |
@@ -694,9 +695,15 @@ unit test makes each of them.
   made impossible, because ANS-17 requires that a request can be repeated.
 - **Lock semantics.** The lock is `flock` on a file in the state directory. The
   kernel drops it when the holder ends, however it ends, so a dead holder cannot
-  wedge the host and there is no stale-lock cleanup. A second request is
-  refused with exit 21; it does not wait. Local callers who bypass the program are
-  not covered.
+  wedge the host and there is no stale-lock cleanup. A second request
+  asks for the lock again every second for up to `pull_trigger_lock_wait_seconds` (1200 by
+  default, 0 refuses at once) and is refused with exit 21 only when the holder outlasts that.
+  The wait is on the host, so a check and an apply sent together queue there; they are not
+  ordered, and the first to ask after a release takes the lock. A request that is waiting
+  ignores a dropped connection, as a running apply does, and still runs when it gets the
+  lock; a TERM or INT ends the wait as `busy`. A bundle's spool file is touched on every
+  wait, so the run that holds the lock does not sweep it away. Local callers who bypass
+  the program are not covered.
 - **The first run needs the network** to reach the remote, and a remote that is
   down is exit 40, not a refusal.
 - **A root-owned configuration is trusted.** The program refuses a configuration
@@ -816,7 +823,8 @@ which control broke:
   `env_keep` line the request arrives, with another argument list sudo refuses,
   and without the line the answer is exit 20;
 - a failing playbook is exit 30 and still raises the rollback floor;
-- two overlapping triggers: the second is exit 21 and the playbook ran once;
+- two overlapping triggers with `lock_wait_seconds` of 0: the second is exit 21 and the playbook ran once
+  (the wait itself is proved by the unit tests);
 - a run past its limit is stopped, exit 31;
 - the unit tests run again on Debian 13 (see below).
 

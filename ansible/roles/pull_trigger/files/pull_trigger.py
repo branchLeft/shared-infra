@@ -49,6 +49,12 @@ MAX_STATE_DIR_LENGTH: Final = 60
 GIT_TIMEOUT_SECONDS: Final = 600
 TERMINATE_GRACE_SECONDS: Final = 30
 POLL_SECONDS: Final = 0.2
+# A trigger that finds the host lock held waits for it, up to ``lock_wait_seconds`` of the
+# configuration (this when the key is absent), asking again at this interval. The default is well
+# above the length of an ordinary apply, so a check or an apply sent while another runs queues on
+# the host instead of being refused; a holder that outlasts it still ends the wait as ``busy``.
+DEFAULT_LOCK_WAIT_SECONDS: Final = 1_200
+LOCK_POLL_SECONDS: Final = 1.0
 RECAP_TAIL_BYTES: Final = 262_144
 FLOOR_NAME: Final = "last-applied"
 CURRENT_NAME: Final = "current"
@@ -145,7 +151,7 @@ CONFIG_KEYS: Final = frozenset(
 # ``release_signers`` and ``require_release_tag`` are written only for a host that is moved to the
 # release-tag route, so every other host keeps a configuration a program from before them parses.
 OPTIONAL_CONFIG_KEYS: Final = frozenset(
-    {"steps", "source", "release_signers", "require_release_tag"}
+    {"steps", "source", "release_signers", "require_release_tag", "lock_wait_seconds"}
 )
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
@@ -739,7 +745,7 @@ class ConfirmMismatchError(RefusedError):
 
 
 class BusyError(RefusedError):
-    """Another trigger holds the lock, so this one is refused rather than queued."""
+    """Another trigger held the lock for the whole of this one's wait, so this one is refused."""
 
     exit_code = Exit.BUSY
     reason = "busy"
@@ -900,6 +906,7 @@ class Config:
     source: Literal["remote", "bundle"] = "remote"
     release_signers: tuple[Signer, ...] = ()
     require_release_tag: bool = False
+    lock_wait_seconds: int = DEFAULT_LOCK_WAIT_SECONDS
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1302,6 +1309,11 @@ def parse_config(text: str) -> Config:
         source=SOURCE_BUNDLE if source == SOURCE_BUNDLE else SOURCE_REMOTE,
         release_signers=release_signers,
         require_release_tag=data.get("require_release_tag") is True,
+        lock_wait_seconds=(
+            _whole(data, "lock_wait_seconds", 0, 86_400)
+            if "lock_wait_seconds" in data
+            else DEFAULT_LOCK_WAIT_SECONDS
+        ),
     )
 
 
@@ -1399,23 +1411,47 @@ def write_private_file(path: Path, text: str) -> None:
 
 
 @contextlib.contextmanager
-def single_flight(lock_path: Path) -> Iterator[None]:
-    """Hold the host-wide lock for the duration of a run, or refuse at once.
+def single_flight(
+    lock_path: Path,
+    wait_seconds: float = 0,
+    stop: threading.Event | None = None,
+    on_wait: Callable[[], None] | None = None,
+) -> Iterator[None]:
+    """Hold the host-wide lock for the duration of a run, waiting a bounded time for it.
 
     The lock is ``flock`` on a file. The kernel drops it when the holder exits
     for any reason, including being killed, so a dead holder cannot wedge the
     host and no stale-lock cleanup is needed. The descriptor is not inherited
     by the playbook.
 
+    With ``wait_seconds`` of 0 a held lock is refused at once. Otherwise the lock is asked for
+    every ``LOCK_POLL_SECONDS`` until it is free, the wait runs out or ``stop`` is set.
+
+    Args:
+        lock_path: The lock file.
+        wait_seconds: The longest to wait for a lock another trigger holds.
+        stop: Set by a person's TERM or INT; it ends the wait.
+        on_wait: Called each time the lock is found held and the wait goes on.
+
     Raises:
-        BusyError: Another trigger holds the lock.
+        BusyError: Another trigger held the lock for the whole of the wait.
     """
     descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise BusyError(Why.LOCK_HELD) from None
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+                    raise BusyError(Why.LOCK_HELD) from None
+            if on_wait is not None:
+                on_wait()
+            if stop is None:
+                time.sleep(LOCK_POLL_SECONDS)
+            else:
+                stop.wait(LOCK_POLL_SECONDS)
         yield
     finally:
         os.close(descriptor)
@@ -2880,7 +2916,7 @@ class Trigger:
         self._workspace.sweep_spool(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
         spool = spool_stream(self._workspace.spool, self._receiving)
         try:
-            with single_flight(self._workspace.lock):
+            with self._single_flight(spool):
                 self._workspace.sweep()
                 self._workspace.sweep_bundle(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
                 return self._admitted_bundle(mode, request.commit, spool)
@@ -2932,9 +2968,32 @@ class Trigger:
         if self._config.playbook not in self._config.playbooks:
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
         step = self._admit_step(request)
-        with single_flight(self._workspace.lock):
+        with self._single_flight():
             self._workspace.sweep()
             return self._admitted(mode, request.commit, step)
+
+    def _single_flight(self, spool: Path | None = None) -> contextlib.AbstractContextManager[None]:
+        """Take the host lock, waiting for it as long as the configuration allows.
+
+        The first time the lock is found held, one line says so on standard error, so the log of
+        a request that sits for minutes says why. A bundle's spool file is touched on every wait,
+        so the sweep of the run that holds the lock, which removes spool files older than an
+        upload can take, never removes the file of a request that is waiting.
+        """
+        announced = False
+
+        def waiting() -> None:
+            nonlocal announced
+            if not announced:
+                announced = True
+                say("pull-trigger: waiting: another trigger holds the host lock\n")
+            if spool is not None:
+                with contextlib.suppress(OSError):
+                    os.utime(spool)
+
+        return single_flight(
+            self._workspace.lock, self._config.lock_wait_seconds, self._stop, waiting
+        )
 
     def _admit_step(self, request: Request) -> Step | None:
         """Return the allow-list entry the request names, or None for a request with no step.

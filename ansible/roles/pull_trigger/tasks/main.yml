@@ -56,6 +56,7 @@
       log_dir: '{{ pull_trigger_log_dir }}'
       timeout_seconds: '{{ pull_trigger_timeout_seconds | int }}'
       keep_runs: '{{ pull_trigger_keep_runs | int }}'
+      lock_wait_seconds: '{{ pull_trigger_lock_wait_seconds | int }}'
       steps: '{{ pull_trigger_steps }}'
 
 - name: Create the state directory
