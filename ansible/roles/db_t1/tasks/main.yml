@@ -131,6 +131,18 @@
   when: db_t1_project_directory_stat.stat.exists
   diff: false
 
+# The program of the exporter-account service. It holds no value: it reads the owner-placed
+# credentials file inside the container, as the exporter's user. Delivered before the deploy
+# program reads the compose file, because the service mounts it by name.
+- name: Deliver the program that makes the exporter's account in the database
+  ansible.builtin.copy:
+    src: '{{ db_t1_exporter_account_script_src }}'
+    dest: '{{ db_t1_exporter_account_script_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: db_t1_project_directory_stat.stat.exists
+
 - name: Render the MySQL configuration the database mounts
   ansible.builtin.template:
     src: branchleft.cnf.j2

@@ -160,6 +160,18 @@ db_t1_exporter_metrics_port: 9104
 # who can reach the Docker socket.
 db_t1_exporter_cnf_path: /etc/branchleft/dbt1-exporter.my.cnf
 
+# The exporter's account in the database (account `exporter`, socket only) is made by a third
+# service of the stack, `exporter-account`, on every start of the stack, from the credentials file
+# above: a fresh data directory and an existing one are the same case, and no step is done by hand
+# inside the exporter's health-check window. The service runs the database image (the only image
+# with a MySQL client) as the exporter's own user, because that user alone can read the 0400
+# file. The program is the role's own file under files/, delivered next to the compose file and
+# mounted read-only.
+db_t1_exporter_uid: 65534
+db_t1_exporter_account_script_src: exporter_account.sh
+db_t1_exporter_account_script_path: /opt/branchleft/dbt1/exporter-account.sh
+db_t1_exporter_account_script_target: /usr/local/bin/exporter-account.sh
+
 # What the container's log driver keeps of each service: three files of 10 MB, rotated, whatever
 # the age. Docker's default is one file that grows without bound.
 db_t1_log_max_size: 10m

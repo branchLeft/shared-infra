@@ -30,6 +30,7 @@
         - /etc/branchleft/dbt1.image.env
         - /etc/branchleft/dbt1.env
         - /etc/branchleft/registry
+        - '{{ db_t1_verify_project }}/exporter-account.sh'
       register: db_t1_verify_paths
 
     - name: Assert the directories are root-owned 0755 and the socket directory belongs to the container user
@@ -77,6 +78,16 @@
         quiet: true
         fail_msg: A registry directory exists on the host, which this role no longer makes.
 
+    - name: Assert the program that makes the exporter's account is a root 0644 plain file
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_paths.results[11].stat.isreg
+          - db_t1_verify_paths.results[11].stat.mode == '0644'
+          - db_t1_verify_paths.results[11].stat.uid == 0
+          - db_t1_verify_paths.results[11].stat.gid == 0
+        quiet: true
+        fail_msg: The exporter account program is missing or not a root 0644 plain file.
+
     - name: Read the delivered files
       ansible.builtin.slurp:
         src: '{{ item }}'
@@ -85,12 +96,14 @@
         - '{{ db_t1_verify_project }}/conf.d/branchleft.cnf'
         - /etc/branchleft/dbt1.image.env
         - '{{ scenario_deploy_log }}'
+        - '{{ db_t1_verify_project }}/exporter-account.sh'
       register: db_t1_verify_files
 
     - name: Render the role's own templates on the machine that runs the test
       ansible.builtin.set_fact:
         db_t1_verify_compose: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/compose.yml.j2') }}"
         db_t1_verify_cnf: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/branchleft.cnf.j2') }}"
+        db_t1_verify_program: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/exporter_account.sh', rstrip=false) }}"
 
     - name: Assert the files are the rendered templates, the pin is the one line and the deploy was called once
       ansible.builtin.assert:
@@ -99,6 +112,7 @@
           - (db_t1_verify_files.results[1].content | b64decode) == db_t1_verify_cnf
           - (db_t1_verify_files.results[2].content | b64decode) == ('IMAGE=' ~ scenario_image ~ db_t1_line_end)
           - (db_t1_verify_files.results[3].content | b64decode) == ('dbt1 ' ~ scenario_image ~ db_t1_line_end)
+          - (db_t1_verify_files.results[4].content | b64decode) == db_t1_verify_program
         quiet: true
         fail_msg: >-
           A delivered file differs from its template, the pin is not the one line, or the
@@ -112,6 +126,8 @@
           - "'PERCONA_TELEMETRY_DISABLE' in db_t1_verify_compose"
           - "'network_mode: host' in db_t1_verify_compose"
           - "'ports:' not in db_t1_verify_compose"
+          - "'exporter-account:' in db_t1_verify_compose"
+          - "'network_mode: none' in db_t1_verify_compose"
           - "('bind-address = ' ~ db_t1_private_address ~ '\\n') in db_t1_verify_cnf"
           - "'bind-address = 0.0.0.0' not in db_t1_verify_cnf"
           - "'bind-address = 127.0.0.1' not in db_t1_verify_cnf"

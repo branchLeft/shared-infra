@@ -20,8 +20,11 @@
 # The exporter beside it uses the host network too, and listens on loopback only.
 # Its credentials file is placed by the owner and is mounted by name with
 # create_host_path off, so a missing file fails the start loudly instead of Docker
-# creating a directory in its place. Both services keep a bounded log: three files
-# of 10 MB each.
+# creating a directory in its place. The account that file names is made by the third
+# service, exporter-account, on every start of the stack (fresh data directory or not),
+# before the exporter starts: the exporter's health check needs the account, and a hand step
+# inside its two-minute window made the first deploy fail every time. All three services
+# keep a bounded log: three files of 10 MB each.
 # The configuration is mounted as one file, not as a directory, so the image's own
 # option files (skip-name-resolve among them) stay in force.
 name: {{ db_t1_stack }}
@@ -77,6 +80,52 @@ services:
       retries: 6
       start_period: 120s
 
+  # Makes the exporter's account from the owner's credentials file, then idles. It runs the
+  # database image because that image holds the MySQL client, as the exporter's own user
+  # because only that user can read the 0400 file, with no network (it speaks to the database
+  # over the shared socket directory) and the same root value the database gets. Its health
+  # check connects as the exporter with the file alone and reads the grants back, so the
+  # service is healthy only when the exporter can really log in. It idles instead of exiting:
+  # an exited container of the pinned image reads as "not up" to the deploy program's rollback
+  # decision, and the deploy program requires a health signal on every service.
+  exporter-account:
+    image: ${IMAGE}
+    restart: unless-stopped
+    network_mode: none
+    init: true
+    user: '{{ db_t1_exporter_uid }}:{{ db_t1_exporter_uid }}'
+    entrypoint: ['/bin/sh', '{{ db_t1_exporter_account_script_target }}', 'serve']
+    logging:
+      driver: json-file
+      options:
+        max-size: '{{ db_t1_log_max_size }}'
+        max-file: '{{ db_t1_log_max_file }}'
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in /etc/branchleft/dbt1.env}
+    volumes:
+      - ./run/mysqld:/var/run/mysqld
+      - type: bind
+        source: {{ db_t1_exporter_account_script_path }}
+        target: {{ db_t1_exporter_account_script_target }}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: {{ db_t1_exporter_cnf_path }}
+        target: /etc/mysqld-exporter/.my.cnf
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ['CMD', '/bin/sh', '{{ db_t1_exporter_account_script_target }}', 'check']
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   mysqld-exporter:
     image: {{ db_t1_exporter_image }}
     restart: unless-stopped
@@ -109,6 +158,8 @@ services:
       start_period: 60s
     depends_on:
       mysql:
+        condition: service_healthy
+      exporter-account:
         condition: service_healthy
 
 volumes:
