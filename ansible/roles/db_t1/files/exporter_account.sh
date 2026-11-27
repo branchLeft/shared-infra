@@ -35,8 +35,8 @@ fail() {
 }
 
 root_client() {
-    MYSQL_PWD=${MYSQL_ROOT_PASSWORD:?the root credential is not in the environment} \
-        mysql --protocol=socket --socket="$sock" -uroot "$@"
+    [ -n "${MYSQL_ROOT_PASSWORD-}" ] || fail "the root credential is not in the environment"
+    MYSQL_PWD=$MYSQL_ROOT_PASSWORD mysql --protocol=socket --socket="$sock" -uroot "$@"
 }
 
 if [ "$mode" = check ]; then
@@ -61,12 +61,12 @@ esac
 # The file is checked before the database is touched, so a file that names another account
 # or holds a value the statements cannot carry changes nothing.
 file_user=$(sed -n 's/^user[[:space:]]*=[[:space:]]*//p' "$cnf")
-secret=$(sed -n 's/^password[[:space:]]*=[[:space:]]*//p' "$cnf")
+file_value=$(sed -n 's/^password[[:space:]]*=[[:space:]]*//p' "$cnf")
 [ "$file_user" = "$account_user" ] || fail "the credentials file must name the user $account_user"
-case $secret in
+case $file_value in
     '' | *[!A-Za-z0-9._~-]*) fail "the credentials file has no value of the allowed alphabet" ;;
 esac
-[ "${#secret}" -ge 20 ] || fail "the credentials file value is shorter than 20 characters"
+[ "${#file_value}" -ge 20 ] || fail "the credentials file value is shorter than 20 characters"
 
 steps=0
 until root_client -e 'SELECT 1' >/dev/null 2>&1; do
@@ -77,8 +77,8 @@ done
 
 root_client <<SQL
 SET @@SESSION.SQL_LOG_BIN=0;
-CREATE USER IF NOT EXISTS '$account_user'@'localhost' IDENTIFIED BY '$secret' WITH MAX_USER_CONNECTIONS 3;
-ALTER USER '$account_user'@'localhost' IDENTIFIED BY '$secret' WITH MAX_USER_CONNECTIONS 3;
+CREATE USER IF NOT EXISTS '$account_user'@'localhost' IDENTIFIED BY '$file_value' WITH MAX_USER_CONNECTIONS 3;
+ALTER USER '$account_user'@'localhost' IDENTIFIED BY '$file_value' WITH MAX_USER_CONNECTIONS 3;
 GRANT PROCESS, REPLICATION CLIENT ON *.* TO '$account_user'@'localhost';
 GRANT SELECT ON performance_schema.* TO '$account_user'@'localhost';
 SQL

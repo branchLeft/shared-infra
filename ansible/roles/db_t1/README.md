@@ -383,20 +383,27 @@ ghost-platform `db/percona` adds nothing to it):
 ### A host whose first deploy already failed on this
 
 On db-t1 today the data directory `dbt1_mysql-data` exists, the account does not and the pin was
-deleted by the deploy program, so the role's refusal ("a data directory that has no pin") stops
-every apply. That refusal is kept as it is. The volume holds no tenant data. After the apply of
-this change has delivered the new compose file (it delivers the files and then stops at that
-refusal), the one hand step, as the owner on db-t1, is:
+deleted by the deploy program. The role's refusal ("a data directory that has no pin") is kept as
+it is, and it fires in the plan too, so the delivery's plan fails for db-t1 and the host is never
+applied: it receives no files at all until the directory is gone. The volume holds no tenant data.
+The one hand step, in this order:
 
-```text
-sudo docker compose -p dbt1 down -v
-```
+1. This change merges first. An older commit delivered between the step below and the merge would
+   deploy the old compose file, fail the same way and delete the pin again.
+2. The owner runs on db-t1:
 
-It stops the dbt1 containers and deletes the volume `dbt1_mysql-data` (empty database files; it
-cannot be undone, and nothing else lives in it). The next gated apply then sees no data directory,
-deploys, and the stack comes up with the account made by the stack. Good looks like `mysql_up 1` from
-`curl -s http://127.0.0.1:9104/metrics | grep -x 'mysql_up 1'` on db-t1, and a second apply that
-reports no change.
+   ```text
+   sudo docker compose -p dbt1 down -v
+   ```
+
+   It stops the dbt1 containers and deletes the volume `dbt1_mysql-data` (empty database files; it
+   cannot be undone, and nothing else lives in it).
+
+3. The next delivery run's plan passes for db-t1, and its one approved apply delivers the compose
+   file and the program and deploys in the same run, so the stack comes up with the account made
+   by the stack. Good looks like `mysql_up 1` from
+   `curl -s http://127.0.0.1:9104/metrics | grep -x 'mysql_up 1'` on db-t1, and a second apply that
+   reports no change.
 
 ## Owner step for the exporter
 
@@ -462,9 +469,14 @@ merge), so that change lands first.
   (`docker logs dbt1-exporter-account-1`), and no value in it.
 - The account's value is synced from the file at each start of the stack, not while it runs. A
   value changed in the file reaches the database at the next start of the `exporter-account`
-  service (`docker compose -p dbt1 restart exporter-account`). The service's root value is in its
+  service (`docker compose -p dbt1 restart exporter-account`). The sync also means a wrong value
+  in the file replaces a working account value at the next start; the health check then fails
+  and the exporter does not start, which is loud, not silent. The service's root value is in its
   container environment, as the database's is; the trust boundary is the Docker socket in both
   cases.
+- The program hands the value to the client through a here-document. The image's shell (bash)
+  does that through a pipe for a body this small, so no temporary file holds it; a shell that
+  used a temporary file under `/tmp` would write it to the container's filesystem briefly.
 - The service's program is shell, not Python, because the only image it can run in (the database
   image) carries no Python; it passes `shellcheck` and its tests run it against a fake client.
 - The statements write to the database, so a server later run read-only (`super_read_only`) makes
