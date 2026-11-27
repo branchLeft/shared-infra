@@ -79,6 +79,11 @@
     export_bundler_scenario_calls_seen: >-
       {{ (export_bundler_scenario_attempt_calls.content | default('') | b64decode).splitlines() | map('from_json') | list }}
     export_bundler_scenario_marker_seen: '{{ export_bundler_scenario_attempt_marker.stat.exists }}'
+    # sshd says this on the client's standard error, because the account's home is /nonexistent on
+    # purpose (nothing the account can write). It is not the program's, so it is left out here.
+    export_bundler_scenario_stderr: >-
+      {{ export_bundler_scenario_attempt.stderr_lines | default([])
+      | reject('match', '^Could not chdir to home directory') | join('\n') }}
 
 - name: Assert the client was not left waiting and nothing the client asked for ran by itself
   ansible.builtin.assert:

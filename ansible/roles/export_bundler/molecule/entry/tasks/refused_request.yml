@@ -9,7 +9,7 @@
   ansible.builtin.assert:
     that:
       - export_bundler_scenario_attempt.rc == 2
-      - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=' ~ attempt_reason"
+      - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=' ~ attempt_reason"
       - export_bundler_scenario_attempt.stdout == ''
       - export_bundler_scenario_calls_seen | length == 0
       - not export_bundler_scenario_marker_seen

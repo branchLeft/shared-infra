@@ -246,7 +246,7 @@
         that:
           - export_bundler_scenario_attempt.rc == 0
           - export_bundler_scenario_calls_seen | length == 1
-          - export_bundler_scenario_calls_seen[0].argv == export_bundler_scenario_expected_argv
+          - export_bundler_scenario_calls_seen[0].argv == (export_bundler_scenario_expected_argv | map('string') | list)
           - export_bundler_scenario_calls_seen[0].cwd == '/'
         fail_msg: 'The export did not run as it must: {{ export_bundler_scenario_attempt.stderr }} {{ export_bundler_scenario_calls_seen }}'
         quiet: true
@@ -262,7 +262,7 @@
         that:
           - export_bundler_scenario_calls_seen[0].stdin == scenario_signin
           - export_bundler_scenario_attempt.stdout | trim == 'bundler-ready stdin-length=' ~ (scenario_signin | length)
-          - export_bundler_scenario_attempt.stderr | trim == 'bundler-note'
+          - export_bundler_scenario_stderr == 'bundler-note'
         quiet: true
 
     # Phase 4
@@ -296,7 +296,7 @@
       ansible.builtin.assert:
         that:
           - export_bundler_scenario_attempt.rc == 3
-          - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=no-descriptor'"
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-descriptor'"
           - export_bundler_scenario_calls_seen | length == 0
         quiet: true
 
@@ -317,7 +317,7 @@
       ansible.builtin.assert:
         that:
           - export_bundler_scenario_attempt.rc == 3
-          - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=no-descriptor'"
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-descriptor'"
           - export_bundler_scenario_calls_seen | length == 0
         quiet: true
 
@@ -358,7 +358,7 @@
       ansible.builtin.assert:
         that:
           - export_bundler_scenario_attempt.rc == 4
-          - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=busy'"
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=busy'"
           - export_bundler_scenario_calls_seen | length == 0
         quiet: true
 
@@ -437,7 +437,7 @@
       ansible.builtin.assert:
         that:
           - export_bundler_scenario_attempt.rc == 2
-          - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=no-command'"
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-command'"
           - export_bundler_scenario_calls_seen | length == 0
         quiet: true
 
@@ -476,7 +476,7 @@
         that:
           - export_bundler_scenario_calls_seen | length == 1
           - export_bundler_scenario_calls_seen[0].env == export_bundler_scenario_fixed_env
-          - export_bundler_scenario_calls_seen[0].argv == export_bundler_scenario_expected_argv
+          - export_bundler_scenario_calls_seen[0].argv == (export_bundler_scenario_expected_argv | map('string') | list)
         quiet: true
 
     - name: Ask the server to open a port of its own and send it to a host
@@ -528,7 +528,7 @@
       ansible.builtin.assert:
         that:
           - export_bundler_scenario_attempt.rc == 2
-          - "export_bundler_scenario_attempt.stderr | trim == 'branchleft-export-entry: refused reason=bad-command'"
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=bad-command'"
           - not export_bundler_scenario_marker_seen
         quiet: true
 

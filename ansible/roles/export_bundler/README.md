@@ -166,7 +166,7 @@ table too. A copy that does not match its pin stops the role before it writes.
 ## The export route
 
 An export is started from ops1 (the ops controller) and run on the host that holds the slot, here demo1, because
-that is where the tenant's data and the bundler are (owner decision, 27 Nov 2026, on `branchLeft/workspace#1806`).
+that is where the tenant's data and the bundler are (the owner's decision of 27 Nov 2026).
 ops1 is given one login on demo1 that can run one program and cannot do anything else. The role makes it only when
 the host's inputs hold `export_bundler_controller_key`, ops1's public key, so a host without it (app1) has no
 account, no key and no sshd change.
@@ -236,7 +236,7 @@ export_bundler_controller_key` (the line is typed hidden). The next gated apply 
 **What is not built here.** The ops1 side (the key's custody, the client call and its trigger); the slot's descriptor
 reaching demo1 (it is placed by hand today: a no-touch way is a decision of its own); minting the break-glass token
 and feeding it on standard input; bringing the ciphertext home and the release step; and the import and rewrite on
-the tenant's host, which is `branchLeft/workspace#1807`. The key line has no `from=` address because ops1's address
+the tenant's host. The key line has no `from=` address because ops1's address
 is not a host input yet.
 
 ## Owner steps that stay with the owner
