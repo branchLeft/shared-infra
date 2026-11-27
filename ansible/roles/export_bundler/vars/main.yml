@@ -46,3 +46,44 @@ export_bundler_release_files_hidden:
   - dist/ghostExportClient.js
   - dist/operatorToken.js
   - dist/scratchDatabase.js
+
+# ----- The restricted export account (tasks/_entry.yml) -----
+# Constants, not inputs: a caller's variables cannot move any of them. The only input is the
+# controller's public key, export_bundler_controller_key, from host_inputs.
+
+# The account the controller's key logs in as. It has a shell because sshd runs a forced command
+# through the account's shell (a nologin shell would ignore the command), no password, and no home:
+# its key file is root's, in a directory of its own, so the account cannot add a key or loosen its
+# own restrictions.
+export_bundler_entry_account: promoexport
+export_bundler_entry_shell: /bin/sh
+export_bundler_entry_home: /nonexistent
+
+# The forced-command program, installed from this role's files/ directory.
+export_bundler_entry_program_source: export_entry.py
+export_bundler_entry_program_path: /usr/local/sbin/branchleft-export-entry
+
+# sudo is named by its full path and `-n` makes it fail rather than ask for a password.
+export_bundler_entry_sudo_path: /usr/bin/sudo
+export_bundler_entry_sudoers_path: /etc/sudoers.d/61-branchleft-export-entry
+
+# The key file sshd reads for the account, and the sshd settings that confine it. Both are root's.
+export_bundler_entry_keys_dir: /etc/ssh/branchleft-export-entry
+export_bundler_entry_authorized_keys_path: /etc/ssh/branchleft-export-entry/authorized_keys
+export_bundler_entry_sshd_config_dir: /etc/ssh/sshd_config.d
+export_bundler_entry_sshd_dropin: /etc/ssh/sshd_config.d/43-branchleft-export-entry.conf
+export_bundler_entry_sshd: /usr/sbin/sshd
+export_bundler_entry_sshd_service: ssh
+
+# What the export needs on the host. The Node runtime is the one broker_deploy installs (a test holds
+# the path equal to that role's); Docker must be 28 or newer, as the bundler itself requires.
+export_bundler_entry_node: /opt/branchleft/broker/node/bin/node
+export_bundler_entry_docker: /usr/bin/docker
+export_bundler_entry_docker_min_major: 28
+# Docker's own template, escaped so Ansible does not evaluate it.
+export_bundler_entry_docker_version_format: '{% raw %}{{.Server.Version}}{% endraw %}'
+
+# The shape of the one key line: ed25519 only, the whole line, no comment, no option. 68 characters
+# of base64 follow the key type: the 25 every ed25519 key starts with, then 43 more. \Z, not $,
+# because $ also matches before a trailing line break.
+export_bundler_entry_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}\Z'

@@ -5,7 +5,9 @@
 #
 # The role writes files and directories and nothing else. It never runs node, the
 # bundler, docker or age, never reads or writes a descriptor, a token or the audit log,
-# and starts nothing: the export itself stays the owner's.
+# and starts nothing: the export itself stays the owner's. The one addition is the restricted
+# account that ops1 reaches the export through (_entry.yml), which is off until the owner seeds its
+# key, and which still runs nothing at apply time.
 
 - name: Check the inputs
   ansible.builtin.include_tasks: _inputs.yml
@@ -20,3 +22,6 @@
 
 - name: Make the export's state directories
   ansible.builtin.include_tasks: _state.yml
+
+- name: Make the restricted export account, once the owner has seeded its key
+  ansible.builtin.include_tasks: _entry.yml

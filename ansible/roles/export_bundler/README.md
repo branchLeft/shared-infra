@@ -1,7 +1,9 @@
 # export_bundler
 
-This role delivers the tenant export bundler to app1 as pinned files in a root-only directory, and makes the
-export's state directories, without running anything.
+This role delivers the tenant export bundler to app1 and demo1 as pinned files in a root-only directory, and makes
+the export's state directories, without running anything. On a host whose inputs hold the ops1 controller's public
+key (demo1) it also makes one restricted account through which ops1 can start an export, and nothing else
+(see "The export route").
 
 This README is self-contained and is written for a maintainer new to the repository. It follows the order the
 standard sets for a role README (ANS-14).
@@ -39,7 +41,8 @@ What it does not do:
   owner (below).
 - It never reads, writes or names a descriptor, a break-glass token, a support grant, the audit log or an archive.
   It has no secret input.
-- It does not open the support grant, mint a token or run the export.
+- It does not open the support grant, mint a token or run the export. The account below lets ops1 start one;
+  the role runs none.
 - It does not install the storage gateway's keys. That is a different role that is not built yet (below).
 
 Differences from the runbook's hand steps, all deliberate:
@@ -63,7 +66,9 @@ pinned files is the one home of the bundler's identity.
 | `export_bundler_dir`           | `/root/export-bundler`                 | The bundler on the host.                                        |
 | `export_bundler_state_dir`     | `/root/export-bundler-state`           | The export's state directory on the host.                       |
 
-No variable of this role is a secret, and none is required. The host's play variables are pinned by the enrolment
+No variable is required. One more, `export_bundler_controller_key`, is left out of the table because it has no
+default and is not about the bundler. It is the role's only secret (`no_log`): one `ssh-ed25519 AAAA...` line with no
+comment and no option, from the host's inputs (`host_inputs`, demo1 only; the owner seeds it, below). Unset, empty or absent, the export route is off. The host's play variables are pinned by the enrolment
 check (R2), so a caller cannot override the table of pins on app1: the table can change only by a change to this
 role, which the owner merges.
 
@@ -76,7 +81,10 @@ in `demo1_build`, so a caller's play or inventory variables cannot point the rol
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's `min_ansible_version` is that
   version and the harness checks it.
 - No collections beyond `ansible.builtin`.
-- Target systems: Linux with Python 3. The role is applied to app1, as root, under the gated pull.
+- Target systems: Linux with Python 3. The role is applied to app1 and demo1, as root, under the gated pull. The
+  export route also needs, on a host whose inputs hold the controller key: OpenSSH with its drop-in directory,
+  `sudo` and `visudo`, Docker 28 or newer, and the Node runtime that `broker_deploy` installs. demo1 has them; the
+  role is last in demo1's playbook, so the roles before it have already run.
 - The machine that runs the role reads the vendored files there. Under the pull that is the host itself, from the
   signed commit it has checked out.
 
@@ -90,8 +98,9 @@ in `demo1_build`, so a caller's play or inventory variables cannot point the rol
 | `/root/export-bundler/COMMIT`                    | `root:root` 0600 | The ghost-platform commit the files were built from.   |
 | `/root/export-bundler-state`, `…/flags`, `…/out` | `root:root` 0700 | Where an export keeps its flags, output and audit log. |
 
-It also removes any other file or directory under `/root/export-bundler/dist`. No service, port, user, package or
-unit. The five files listed in `export_bundler_release_files_hidden` (`vars/main.yml`) are copied with their diff
+It also removes any other file or directory under `/root/export-bundler/dist`. With the route on, it adds the files
+under "The export route". No service, port, package or unit of its own: it reloads the host's `ssh` service when
+the account's sshd settings change. The five files listed in `export_bundler_release_files_hidden` (`vars/main.yml`) are copied with their diff
 hidden (ANS-16); the other files show theirs in the plan.
 
 ## Check mode
@@ -154,6 +163,82 @@ Notes a reviewer needs:
 expected values in `molecule/default/verify.yml`. A file added or removed under `dist/` is added or removed in the
 table too. A copy that does not match its pin stops the role before it writes.
 
+## The export route
+
+An export is started from ops1 (the ops controller) and run on the host that holds the slot, here demo1, because
+that is where the tenant's data and the bundler are (owner decision, 27 Nov 2026, on `branchLeft/workspace#1806`).
+ops1 is given one login on demo1 that can run one program and cannot do anything else. The role makes it only when
+the host's inputs hold `export_bundler_controller_key`, ops1's public key, so a host without it (app1) has no
+account, no key and no sshd change.
+
+**What ops1 can ask.** One command, in one shape, and nothing else:
+
+```text
+export-demo SLOT RECIPIENT ERASURE_DATE PORT REFERENCE
+```
+
+`SLOT` is `demo-` and one or two digits. `RECIPIENT` is an age X25519 recipient (`age1` and 58 characters of the
+bech32 alphabet) that the promotion made for this one export. `ERASURE_DATE` is a calendar date. `PORT` is 1024 to 65535. `REFERENCE` is a short plain reference to the consented grant's evidence, which cannot start with a hyphen.
+The sign-in value the bundler needs (the break-glass token) is sent on standard input, once the bundler says it is
+ready, and goes straight through to the bundler: it is never an argument, an environment variable or a file of the
+role.
+
+**How it is held to that, three times over.**
+
+1. The key line in `/etc/ssh/branchleft-export-entry/authorized_keys` is `restrict,command="/usr/bin/sudo -n
+/usr/local/sbin/branchleft-export-entry" ssh-ed25519 ...`. `restrict` turns off forwarding, a terminal, the agent,
+   X11 and the user's rc file. The key file is root's and sits outside the account's home, so the account cannot
+   change it (`StrictModes`, and the file is not in a directory the account owns).
+2. The sshd drop-in `43-branchleft-export-entry.conf` is a `Match User promoexport` block that allows public keys
+   only, turns every forwarding, tunnel and terminal off, names that key file, and sets `ForceCommand` to the same
+   sudo call, whatever the client asked for. The client's request reaches the program only as
+   `SSH_ORIGINAL_COMMAND`. (`PermitUserEnvironment` is not allowed inside a `Match` block: its default is `no`.)
+3. The sudoers file `61-branchleft-export-entry` lets that one account run that one program as root, with no
+   password and with the empty argument list (`""`), so `sudo` itself refuses the program with any argument and
+   refuses every other program. It keeps `SSH_ORIGINAL_COMMAND` through sudo and nothing else (`env_keep`), and is
+   checked with `visudo -csf` before it is put in place.
+
+**What the program does** (`files/export_entry.py`, installed as `/usr/local/sbin/branchleft-export-entry`, root's,
+`0755`). It reads `SSH_ORIGINAL_COMMAND`, which is untrusted text, and refuses before it opens a file or runs a
+program unless the text is exactly the shape above (anchored with `\A` and `\Z`, `[0-9]` for digits, at most 512
+bytes; the date must be on the calendar). Then it checks the host is ready (Node at the path `broker_deploy` installs,
+the bundler's `cli.js`, and the slot's descriptor at `/root/export-bundler-state/<slot>.descriptor.json`, each a plain
+file owned by root, the descriptor closed to everyone else), takes a lock so that only one export runs, and runs the
+bundler once with an argument list it builds itself: the request fills five values and chooses no program, path,
+flag or lane. The grant lane is always `consented`, the media files are always carried, the destination, flag and
+audit paths are fixed under the state directory, and the requester and recipient labels are fixed. The bundler's
+environment is `PATH`, `HOME` and `LANG` only. Standard input, output and error pass through. It writes the slot,
+the status and a refusal's reason to the system log, never the request's other values.
+
+Exit status: `0` exported, `1` the bundler failed, `2` the request was refused, `3` the host is not ready (the
+reason on standard error is `no-node`, `no-bundler`, `no-descriptor` or `no-lock`), `4` an export is already
+running, `70` the export finished but its clean-up did not.
+
+**The role's own checks.** The key must be one ed25519 line (a comment or an option is refused, so a value cannot
+add an option to the line it is written into). The Node runtime must be there. Docker must answer with a server
+version of 28 or newer: the bundler refuses an older engine, so the route stays off rather than be switched on and
+fail at the first export. An existing account of that name with another home or shell is refused, never changed.
+All of them refuse before anything is written. The key and the sshd settings are written last and together; if
+`sshd -t` refuses the whole configuration with them in place, both are taken out again and the run stops, which
+leaves the account unable to log in. With no key, the two files are removed and the sshd service is reloaded; the
+account, the program and the sudoers file stay (the account cannot log in without a key, and removing an account is
+not a task for a role). In check mode the sudoers check and `sshd -t` do not run (ANS-10), so a plan can show a
+changed file that an apply still refuses.
+
+**Owner steps for the route.** These are one-off and per host, not per tenant:
+
+1. Generate ops1's controller key pair on ops1, with the private half kept there. The private half never leaves
+   ops1 and never goes in a repository.
+2. On demo1, as root, after the delivered commit holds the seed tool, put the public line in the host's inputs:
+   `python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host demo1 --set
+export_bundler_controller_key` (the line is typed hidden). The next gated apply writes the account.
+
+**What is not built here.** The ops1 side (the key's custody, the client call and its trigger); the slot's descriptor
+reaching demo1 (it is placed by hand today: a no-touch way is a decision of its own); minting the break-glass token
+and feeding it on standard input; bringing the ciphertext home and the release step; and the import and rewrite on
+the tenant's host, which is `branchLeft/workspace#1807`. The key line has no `from=` address because ops1's address
+is not a host input yet.
+
 ## Owner steps that stay with the owner
 
 The role retires these steps of the runbook: Deliver step 4 (`mkdir`, `rm -rf dist`, `scp`, `COMMIT`), Deliver step
@@ -195,7 +280,12 @@ the interface checks and the container test of a scenario:
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/export_bundler --scenario default
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/export_bundler --scenario plan
 .venv/bin/python ansible/harness/run_harness.py ansible/roles/export_bundler --scenario refusals
+.venv/bin/python ansible/harness/run_harness.py ansible/roles/export_bundler --scenario entry
 ```
+
+The program's own tests and the role's contract tests for the route are unit tests in `tests/unit`. The checks'
+runner, `ansible/checks/run_role_unit_tests.py`, runs them with `files/` on the Python path. They are typed (`mypy`
+strict, `ruff`; see `pyproject.toml`).
 
 Each creates one container on the local Docker daemon and never touches a host. The steps are shared between the
 scenarios (`molecule/*/skip-steps.txt`):
@@ -209,6 +299,19 @@ scenarios (`molecule/*/skip-steps.txt`):
   `verify.yml`, not read from the role.
 - `plan` runs the check steps: a check against a host with nothing on it, an apply, a check that must find nothing to
   change, and Molecule's own check.
+- `entry` runs the whole role on a systemd container with a real OpenSSH server, `sudo`, a stand-in Node runtime
+  that records what it is run with, and a stand-in Docker. It starts with the route on, and proves it as a client
+  meets it: the files, owners, modes and the exact key line; what `sudo -l` and `sshd -T` say about the account;
+  that the account cannot change its key file and that `sudo` runs the program bare and refuses it with an argument;
+  an allowed export (the exact arguments, the fixed environment, standard input passed through); a failed export, a
+  failed clean-up, a slot with no descriptor (or one anyone can read) and an export while another runs, each with
+  its status; about twenty hostile requests (a shell, `;`, `&&`, a pipe, `$()`, backticks, a newline, an extra word,
+  a flag as the reference, a path in the slot, a digit of another script, a short or bad recipient, a port or date
+  out of range, one far too long, none), each refused with nothing run and no marker file made; another key, a
+  terminal and forwarded agent, a remote and a stream forward, the sftp subsystem and an scp write; then the role
+  applied with Docker at 27, with a key that has a comment and with a key that carries an option, each refusing and
+  leaving the key file as it was; then the off state and the way back on. It ends by reading the log of every run
+  for the keys and the system log for the request's values.
 - `refusals` is the safety-class test of the pin check. It runs the whole role against a copy of the bundler made on
   the machine that runs the role, in four cases, and then looks at the host:
   - **a. the pristine copy** is accepted and written (the control: a role that refused everything would fail it);
@@ -223,8 +326,9 @@ scenarios (`molecule/*/skip-steps.txt`):
 ## How it is delivered
 
 A role reaches a host only through the gated workflow (ANS-17), never by running `ansible-playbook` by hand. App1's
-playbook (`ansible/playbooks/app1.yml`) applies this role last, after `deploy_slot_keys`, and
-`ansible/checks/host_roles.yml` lists it for app1. A merge to `main` queues the apply, and the apply waits for the
+playbook (`ansible/playbooks/app1.yml`) applies this role last, after `deploy_slot_keys`, and demo1's
+(`ansible/playbooks/demo1.yml`) applies it last too, after `node_exporter_public`, so a Docker older than 28 stops
+the route and holds nothing else back. `ansible/checks/host_roles/app1.yml` and `demo1.yml` list it. A merge to `main` queues the apply, and the apply waits for the
 owner's approval. The enrolment check pins app1's play variables, so this role takes none from the playbook.
 
 ## How to change it safely

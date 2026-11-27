@@ -1,0 +1,8 @@
+# Managed by the export_bundler role of branchLeft/shared-infra; a change made on the host is
+# overwritten by the next run.
+#
+# The one thing the account may do as root: run the forced-command program with no argument (the
+# empty string at the end of the rule is "no arguments", and a rule with no argument at all would
+# allow any). The program reads the client's request from the one variable kept below.
+Defaults:{{ export_bundler_entry_account }} env_keep += "SSH_ORIGINAL_COMMAND"
+{{ export_bundler_entry_account }} ALL=(root) NOPASSWD: {{ export_bundler_entry_program_path }} ""

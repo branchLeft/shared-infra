@@ -1,0 +1,17 @@
+---
+# One request the forced command serves, and the status it ends with. Inputs: attempt_request and
+# expect_status. The stand-in runtime was run once with the arguments the program builds, whatever
+# the status the grant reference asked it to end with.
+- name: Send the request
+  ansible.builtin.include_tasks: ssh_attempt.yml
+
+- name: Assert the export ran once and ended as the reference asked
+  ansible.builtin.assert:
+    that:
+      - export_bundler_scenario_attempt.rc == expect_status | int
+      - export_bundler_scenario_calls_seen | length == 1
+      - export_bundler_scenario_calls_seen[0].argv[0] == scenario_bundler_cli
+    fail_msg: >-
+      The export did not end with {{ expect_status }}: the client ended with {{ export_bundler_scenario_attempt.rc }}
+      and said {{ export_bundler_scenario_attempt.stderr }}.
+    quiet: true

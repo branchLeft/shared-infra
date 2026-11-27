@@ -1,0 +1,42 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the public key of the controller
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/controller.pub'
+      register: export_bundler_scenario_controller_pub
+      no_log: true
+
+    # The role is applied with the controller's key, as demo1's host inputs hand it over: one line,
+    # no comment. The include has no no_log of its own, so that the role's tasks answer for hiding
+    # the key, and the log check in verify.yml can tell if one does not.
+    - name: Apply the role with the controller's key
+      ansible.builtin.include_role:
+        name: branchleft.export_bundler
+      vars:
+        export_bundler_controller_key: "{{ (export_bundler_scenario_controller_pub.content | b64decode).split()[:2] | join(' ') }}"
+
+    # The descriptor is the owner's, never the role's: a hand-placed file on a real host, the slot's
+    # own description of what to export. Here it is a made-up file, closed to everyone but root as
+    # the forced command requires. It cannot be placed in a check-mode run, which makes no
+    # directory for it.
+    - name: Place the made-up descriptor of the slot
+      ansible.builtin.copy:
+        content: "{}\n"
+        dest: '{{ scenario_state_dir }}/{{ scenario_slot }}.descriptor.json'
+        owner: root
+        group: root
+        mode: '0600'
+      when: not ansible_check_mode
+
+    # The control case for the log check in verify.yml: a task with no no_log that is given a known
+    # value. If the log did not show it, an empty result of the scan would mean nothing.
+    - name: Run a harmless command that is given a canary argument
+      ansible.builtin.command:
+        argv:
+          - /bin/true
+          - SCENARIO_LOG_CANARY
+      changed_when: false
+      check_mode: false
