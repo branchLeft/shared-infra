@@ -16,3 +16,5 @@ ansible/roles/binlog_pull/tests/unit/test_binlog_pull.py
 ansible/roles/db_t1_tenant_entry/files/tenant_db_entry.py
 ansible/roles/db_t1_tenant_entry/molecule/default/files/fake_docker.py
 ansible/roles/db_t1_tenant_entry/tests/unit/test_tenant_db_entry.py
+# The tests of the program that makes the exporter's database account on the tenant database host (database administration, not application code): they hold the statements the program sends as literals, and run it against a fake client. The program itself is shell and holds its statements in a here-document, which this scan does not read.
+ansible/roles/db_t1/tests/unit/test_exporter_account_program.py
