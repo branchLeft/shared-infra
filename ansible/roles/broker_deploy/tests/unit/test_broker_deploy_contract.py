@@ -284,6 +284,18 @@ class Order(unittest.TestCase):
         )
         self.assertIn(pinned, checked)
 
+    def test_the_release_copies_name_exactly_the_pinned_files(self) -> None:
+        """Each pinned file is copied by name in one of the two loops, and no other."""
+        defaults = mapping(ROLE / "defaults" / "main.yml")
+        version = str(defaults["broker_deploy_release_version"])
+        pins = cast("dict[str, dict[str, str]]", defaults["broker_deploy_release_pins"])
+        copied: list[str] = []
+        for task in tasks(ROLE / "tasks" / "_release.yml"):
+            if str(task.get("name", "")).startswith("Deliver the pinned release files"):
+                copied.extend(str(item) for item in cast("list[object]", task["loop"]))
+        self.assertEqual(sorted(pins[version]), sorted(copied))
+        self.assertEqual(len(copied), len(set(copied)))
+
     def test_the_restart_follows_every_input_the_broker_reads(self) -> None:
         main = tasks(ROLE / "tasks" / "main.yml")
         fact = next(
@@ -302,6 +314,7 @@ class Order(unittest.TestCase):
         }
         for register in (
             "broker_deploy_release_copy",
+            "broker_deploy_release_copy_visible",
             "broker_deploy_link_result",
             "broker_deploy_key_result",
             "broker_deploy_env_result",

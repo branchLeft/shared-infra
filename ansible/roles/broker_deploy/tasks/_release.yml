@@ -11,21 +11,44 @@
     group: '{{ broker_deploy_release_group }}'
     mode: '0755'
 
-# A directory copy keeps the directory as the pins describe it, and puts back a byte that
-# changed on the host. A file on the host that is not in the release is left alone.
-# The plan's diff is hidden (ANS-16): the release is a built program that the plan-diff scan
-# cannot read from a pinned directory until one is carried, so it cannot be shown clear of a
-# line the scan would withhold. The pinned digests, not the diff, say what is delivered.
-- name: Deliver the pinned release files
-  ansible.builtin.copy:
-    src: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/'
-    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/'
+# Each pinned file is copied by name, so a byte that changed on the host is put back and a file
+# on the host that is not in the release is left alone. The plan's diff is hidden (ANS-16) for
+# the files the plan-diff scan matches, and shown for the rest: the lists below are held to the
+# pins by a contract test, so a file added to a release is named in one of them. The pinned
+# digests, not the diff, say what is delivered.
+- name: Create the plugins directory of this release
+  ansible.builtin.file:
+    path: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/plugins'
+    state: directory
     owner: '{{ broker_deploy_release_owner }}'
     group: '{{ broker_deploy_release_group }}'
-    mode: 'u=rwX,go=rX'
-    directory_mode: 'u=rwX,go=rX'
+    mode: '0755'
+
+- name: Deliver the pinned release files that hold a secret-like line
+  ansible.builtin.copy:
+    src: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/{{ item }}'
+    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/{{ item }}'
+    owner: '{{ broker_deploy_release_owner }}'
+    group: '{{ broker_deploy_release_group }}'
+    mode: '0644'
+  loop:
+    - broker.mjs
+    - plugins/dockerImageLoader.mjs
+    - plugins/ghostAdminApi.mjs
+    - plugins/renderCorePlugin.mjs
   diff: false
   register: broker_deploy_release_copy
+
+- name: Deliver the pinned release files with no secret-like line
+  ansible.builtin.copy:
+    src: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/{{ item }}'
+    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/{{ item }}'
+    owner: '{{ broker_deploy_release_owner }}'
+    group: '{{ broker_deploy_release_group }}'
+    mode: '0644'
+  loop:
+    - plugins/refusingDrainSource.mjs
+  register: broker_deploy_release_copy_visible
 
 - name: Point the current link at the release
   ansible.builtin.file:
