@@ -18,10 +18,6 @@
         db_t1_data_directory: "{{ db_t1_case.data | default(db_t1_scratch ~ '/empty-data') }}"
         db_t1_secrets_path: "{{ db_t1_case.root_file | default(db_t1_scratch ~ '/good.env') }}"
         db_t1_deploy_program: "{{ db_t1_case.program | default('/bin/true') }}"
-        db_t1_registry_config_path: "{{ db_t1_case.registry_file | default('/etc/branchleft/registry/docker/config.json') }}"
-        # Empty is not given. The cases that give them use throwaway text of the right or wrong shape.
-        db_t1_registry_login: "{{ db_t1_case.login | default('') }}"
-        db_t1_registry_token: "{{ db_t1_case.token | default('') }}"
 
     - name: Record that the role went through
       ansible.builtin.set_fact:

@@ -49,7 +49,7 @@ seeds edge1, edget (edge-t), ops1, app1, appt1 (app-t1), dbt1 (db-t1) and mx1. a
 only typed inputs: the tenant entry controller's key, and for appt1 its source addresses (one line,
 space-separated) and for dbt1 its address. edget has two inputs, `ci_jump_user` and
 `ci_jump_spool_user` (the names of its two jump accounts), each typed because it exists nowhere on
-the host; the second is added later with `--set ci_jump_spool_user` when the spool tunnels are wanted. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. dbt1 has two more, `db_t1_registry_login` and `db_t1_registry_token` (the reader account's GitHub login and its classic token with only `read:packages`, which the `db_t1` role writes as the host's registry key). Both are optional and set only with `--set`, once the host's file exists; a fill never asks for them. db1 already has its file and no live file to read; a test names it, so
+the host; the second is added later with `--set ci_jump_spool_user` when the spool tunnels are wanted. mx1 has one input, `mx1_abuse_page_token`, typed for the same reason. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:

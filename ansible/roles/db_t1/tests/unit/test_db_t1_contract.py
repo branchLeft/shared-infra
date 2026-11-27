@@ -729,106 +729,74 @@ def address_plan() -> dict[str, str]:
     return dict(re.findall(r"(\w+): '([0-9.]+)'", block.group(1)))
 
 
-class RegistryKeyContract(unittest.TestCase):
-    """The registry read key the role writes: where, how closed, and that no task shows it."""
-
-    VERIFIER_VARS = yaml.safe_load(
-        (ROLE.parent / "deploy_verifier" / "vars" / "main.yml").read_text(encoding="utf-8")
+ROLE_FILES = [
+    path
+    for path in sorted(ROLE.rglob("*"))
+    if path.is_file()
+    and "tests" not in path.relative_to(ROLE).parts
+    and "molecule" not in path.relative_to(ROLE).parts
+    and not any(
+        part.startswith(".") or part == "__pycache__" for part in path.relative_to(ROLE).parts
     )
+]
+# The words of a registry login. Only the README may name them, to say they are gone.
+AUTH_WORDS = (
+    "db_t1_registry",
+    "registry_key",
+    "registry key",
+    "/etc/branchleft/registry",
+    "DOCKER_CONFIG",
+    "config.json",
+    "ghcr-read-key",
+    "read:packages",
+    "ghp_",
+    "docker login",
+)
+
+
+class NoRegistryAuthContract(unittest.TestCase):
+    """The image is pulled anonymously by digest: no login, key, path or input remains."""
+
     SPEC = yaml.safe_load((ROLE / "meta" / "argument_specs.yml").read_text(encoding="utf-8"))
-    NAMES = ("db_t1_registry_login_value", "db_t1_registry_token_value")
 
-    def test_the_paths_are_the_ones_the_verifier_and_the_unit_read(self) -> None:
-        verifier = self.VERIFIER_VARS
-        self.assertEqual(
-            VARS["db_t1_registry_docker_directory"], verifier["deploy_verifier_registry_docker_dir"]
-        )
-        self.assertEqual(
-            VARS["db_t1_registry_config_path"], verifier["deploy_verifier_registry_config"]
-        )
-        self.assertEqual(VARS["db_t1_registry_host"], verifier["deploy_verifier_registry_host"])
-        self.assertEqual(VARS["db_t1_registry_file_mode"], "0600")
+    def test_the_role_names_no_registry_login_in_any_file_but_its_readme(self) -> None:
+        for path in ROLE_FILES:
+            if path.name == "README.md":
+                continue
+            text = path.read_text(encoding="utf-8")
+            for word in AUTH_WORDS:
+                with self.subTest(file=str(path.relative_to(ROLE)), word=word):
+                    self.assertNotIn(word.lower(), text.lower())
 
-    def test_the_token_is_a_secret_option_with_no_default_and_the_login_has_none_either(
-        self,
-    ) -> None:
+    def test_the_task_file_that_wrote_the_key_is_gone(self) -> None:
+        self.assertFalse((ROLE / "tasks" / "_registry_key.yml").exists())
+        for task in all_tasks():
+            self.assertNotIn("registry key", str(task).lower(), task["name"])
+            self.assertNotIn("registry read", str(task).lower(), task["name"])
+
+    def test_the_one_input_is_the_image(self) -> None:
         options = mapping(mapping(mapping(self.SPEC["argument_specs"])["main"])["options"])
-        token = mapping(options["db_t1_registry_token"])
-        login = mapping(options["db_t1_registry_login"])
-        self.assertIs(token["no_log"], True)
-        for option in (token, login):
-            self.assertIs(option["required"], False)
-            self.assertNotIn("default", option)
-        self.assertNotIn("db_t1_registry_token", DEFAULTS)
-        self.assertNotIn("db_t1_registry_login", DEFAULTS)
+        self.assertEqual(set(options), {"db_t1_image"})
 
-    def test_every_task_that_names_the_token_hides_its_output_and_diff(self) -> None:
-        named = [task for task in all_tasks() if "db_t1_registry_token_value" in str(task)]
-        self.assertGreaterEqual(len(named), 2)
-        for task in named:
-            self.assertIs(task["no_log"], True, task["name"])
-            self.assertIs(task["diff"], False, task["name"])
+    def test_no_default_or_var_is_a_registry_input(self) -> None:
+        for name in (*DEFAULTS, *VARS):
+            self.assertNotIn("registry", name)
 
-    def test_the_file_is_written_whole_root_closed_and_by_one_task(self) -> None:
-        writers = [
-            task
-            for task in all_tasks()
-            if isinstance(task[module_of(task)], dict)
-            and arguments_of(task).get("dest") == "{{ db_t1_registry_config_path }}"
-        ]
-        self.assertEqual(len(writers), 1)
-        arguments = arguments_of(writers[0])
-        self.assertEqual(module_of(writers[0]), "ansible.builtin.copy")
-        self.assertEqual(arguments["mode"], "0600")
-        self.assertEqual(arguments["owner"], "{{ db_t1_root_user_id }}")
-        self.assertEqual(arguments["group"], "{{ db_t1_root_group_id }}")
-        self.assertNotIn("backup", arguments)
-        self.assertNotIn("src", arguments)
-
-    def test_the_directory_is_closed_to_everyone_but_root(self) -> None:
-        made = {
-            arguments_of(task)["path"]: arguments_of(task)["mode"]
-            for task in all_tasks()
-            if module_of(task) == "ansible.builtin.file"
-            and "registry" in str(arguments_of(task)["path"])
-        }
+    def test_the_only_digest_pinned_images_are_the_two_public_ones(self) -> None:
+        pinned = set()
+        for path in ROLE_FILES:
+            if path.name != "README.md":
+                text = path.read_text(encoding="utf-8")
+                pinned |= set(re.findall(r"[a-z0-9./-]+(?=@sha256:[0-9a-f]{64})", text))
         self.assertEqual(
-            made,
-            {
-                "{{ db_t1_registry_parent_directory }}": "0755",
-                "{{ db_t1_registry_docker_directory }}": "0700",
-            },
+            pinned,
+            {"ghcr.io/branchleft/percona-server", "ghcr.io/branchleft/mysqld-exporter"},
         )
 
-    def test_the_login_and_token_patterns_take_a_github_login_and_a_classic_token_only(
-        self,
-    ) -> None:
-        login = re.compile(text_var("db_t1_registry_login_pattern"))
-        token = re.compile(text_var("db_t1_registry_token_pattern"))
-        for good in ("reader", "branch-left-reader", "a", "a" * 39):
-            self.assertIsNotNone(login.match(good), good)
-        for bad in ("", "a" * 40, "-a", "a-", "a--b", "a:b", "a b", "a\n"):
-            self.assertIsNone(login.match(bad), bad)
-        self.assertIsNotNone(token.match("ghp_" + "A" * 36))
-        for bad in (
-            "",
-            "ghp_" + "A" * 35,
-            "github_pat_" + "A" * 40,
-            "ghp_" + "A" * 36 + "\n",
-            "ghp_{{ x }}" + "A" * 36,
-        ):
-            self.assertIsNone(token.match(bad), bad)
-
-    def test_a_deploy_is_refused_when_the_file_is_not_on_the_host_or_on_its_way(self) -> None:
-        task = task_named("Refuse a deploy with no registry read key")
-        self.assertEqual(task.get("when"), "db_t1_deploy_needed | bool")
-        text = str(task)
-        for needle in (
-            "db_t1_registry_stat.stat.mode == db_t1_registry_file_mode",
-            "db_t1_registry_stat.stat.isreg",
-            "not db_t1_registry_stat.stat.islnk",
-        ):
-            self.assertIn(needle, text)
+    def test_the_readme_says_the_package_must_be_public_before_the_first_apply(self) -> None:
+        text = " ".join((ROLE / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn("The package must be public before the first apply", text)
+        self.assertIn("no login", text)
 
 
 class ListenerRuleContract(unittest.TestCase):

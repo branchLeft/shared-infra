@@ -38,9 +38,6 @@
       - name: empty.env
         content: ''
         mode: '0600'
-      - name: loose-key.json
-        content: '{}'
-        mode: '0644'
     # name, the text the refusal must contain (empty: the role must go through), and the
     # inputs it changes. The defaults are in tasks/case.yml.
     db_t1_cases:
@@ -85,26 +82,6 @@
       - name: a second line led by a space
         fragment: 'must hold one line'
         root_file: '{{ db_t1_scratch }}/spaced.env'
-      - name: a registry login with no token
-        fragment: 'rule: registry key pair'
-        login: scenario-reader
-      - name: a registry token with no login
-        fragment: 'rule: registry key pair'
-        token: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      - name: a registry login with a colon
-        fragment: 'rule: registry key shape'
-        login: 'reader:account'
-        token: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      - name: a fine-grained registry token
-        fragment: 'rule: registry key shape'
-        login: scenario-reader
-        token: github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      - name: no registry key on the host when a deploy is due
-        fragment: 'rule: registry read key'
-        registry_file: '{{ db_t1_scratch }}/absent-key.json'
-      - name: a registry key open to others
-        fragment: 'rule: registry read key'
-        registry_file: '{{ db_t1_scratch }}/loose-key.json'
   tasks:
     - name: Reset the case result
       ansible.builtin.set_fact:
