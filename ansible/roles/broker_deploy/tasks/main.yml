@@ -223,7 +223,7 @@
 - name: Work out whether what the broker runs changed in this run
   ansible.builtin.set_fact:
     broker_deploy_inputs_changed: >-
-      {{ [broker_deploy_release_copy, broker_deploy_link_result,
+      {{ [broker_deploy_release_copy, broker_deploy_release_copy_visible, broker_deploy_link_result,
       broker_deploy_key_result, broker_deploy_env_result, broker_deploy_unit_result]
       | map(attribute='changed') | select | list | length > 0 }}
   # Names the environment file's result, which is hidden for the owner's address (ANS-16).

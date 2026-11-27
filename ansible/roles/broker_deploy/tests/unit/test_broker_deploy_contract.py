@@ -284,6 +284,27 @@ class Order(unittest.TestCase):
         )
         self.assertIn(pinned, checked)
 
+    def test_the_release_copies_are_split_over_the_pins_by_the_plain_files_list(self) -> None:
+        """The hidden copy covers the pins but the plain files; the shown copy is the plain files."""
+        defaults = mapping(ROLE / "defaults" / "main.yml")
+        version = str(defaults["broker_deploy_release_version"])
+        pins = cast("dict[str, dict[str, str]]", defaults["broker_deploy_release_pins"])
+        plain = cast("list[str]", defaults["broker_deploy_release_plain_files"])
+        if version:
+            self.assertTrue(set(plain) <= set(pins[version]))
+        release = {
+            str(t.get("name", "")): t
+            for t in tasks(ROLE / "tasks" / "_release.yml")
+            if str(t.get("name", "")).startswith("Deliver the pinned release files")
+        }
+        hidden = release["Deliver the pinned release files that hold a secret-like line"]
+        shown = release["Deliver the pinned release files with no secret-like line"]
+        self.assertIn("difference(broker_deploy_release_plain_files)", str(hidden["loop"]))
+        self.assertEqual(
+            sorted(plain), sorted(str(item) for item in cast("list[object]", shown["loop"]))
+        )
+        self.assertIn("broker_deploy_release_pins", str(shown["when"]))
+
     def test_the_restart_follows_every_input_the_broker_reads(self) -> None:
         main = tasks(ROLE / "tasks" / "main.yml")
         fact = next(
@@ -302,6 +323,7 @@ class Order(unittest.TestCase):
         }
         for register in (
             "broker_deploy_release_copy",
+            "broker_deploy_release_copy_visible",
             "broker_deploy_link_result",
             "broker_deploy_key_result",
             "broker_deploy_env_result",

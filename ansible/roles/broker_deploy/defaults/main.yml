@@ -10,12 +10,22 @@ broker_deploy_node_checksums:
 broker_deploy_node_base_url: https://nodejs.org/dist
 # The broker release the host runs: the files of a CI release, carried in the role under
 # broker_deploy_release_dir/VERSION/ and held to the sha256 pinned for each of them below.
-# No release is pinned until one is carried: the files of a release are added with their
-# pins after the release's attestation has been verified (the README says how), and until
-# then the role waits: it says so and changes nothing. A version with no pins, or pins with no
-# version, is still refused. A release is never replaced; a new version is a new pin.
-broker_deploy_release_version: ''
-broker_deploy_release_pins: {}
+# The files of a release are added with their pins after the release's attestation has been
+# verified (the README says how). With the version and the pins both empty the role waits: it
+# says so and changes nothing. A version with no pins, or pins with no version, is still
+# refused. A release is never replaced; a new version is a new pin.
+broker_deploy_release_version: '0.2.0'
+broker_deploy_release_pins:
+  '0.2.0':
+    'broker.mjs': '39a94363d7f064e6b57e2c311ff71744065d7f98f14b8e47a59096eed6fcd49b'
+    'plugins/dockerImageLoader.mjs': '310a1b306e35eeae5947c50ef9102ccee197ab3ff73186a24fef896b311e6fc9'
+    'plugins/ghostAdminApi.mjs': 'e84850497a089049bcc8d5cdf4f5156ba979483ba80f2f2f095578bc7b80b6b3'
+    'plugins/refusingDrainSource.mjs': '72ef8b00a6f25bdf3e53353d91fef29d545856923b080230e4ad33ea439d776c'
+    'plugins/renderCorePlugin.mjs': '99c11b3d6d2c727f8590de7b47c0c809dcab34270f20ef0b92076d52ea1aad33'
+# The pinned release files whose plan diff is shown: those with no secret-like line (the plan-diff
+# scan, ANS-16). Every other pinned file's diff is hidden. A test holds this list to the carried files.
+broker_deploy_release_plain_files:
+  - plugins/refusingDrainSource.mjs
 # Where the releases are, on the machine that runs the role. Nothing is fetched.
 broker_deploy_release_dir: '{{ role_path }}/files/releases'
 # The public half of the request-signing key, carried in the role as the 64 hex digits of its
