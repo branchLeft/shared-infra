@@ -96,7 +96,14 @@ class Lab(unittest.TestCase):
         for name in ("defaults", "vars"):
             shutil.copytree(ROLE / name, self.role / name)
         self.defaults = self.role / "defaults" / "main.yml"
-        self.before = self.defaults.read_text(encoding="utf-8")
+        # The tool starts from the placeholders, so the scratch copy is set back to them: the
+        # release block the live defaults carry is replaced by the two placeholder lines.
+        text = self.defaults.read_text(encoding="utf-8")
+        start = text.index("broker_deploy_release_version:")
+        end = text.index("# Where the releases are")
+        text = text[:start] + tool.VERSION_LINE + "\n" + tool.PINS_LINE + "\n" + text[end:]
+        self.defaults.write_text(text, encoding="utf-8")
+        self.before = text
 
     def tarball(self, members: list[Member] | None = None, name: str = "release.tar.gz") -> Path:
         """Write a release tarball and return its path."""
@@ -336,11 +343,11 @@ class Shape(unittest.TestCase):
         self.assertIn(r"is not search('(^|/)\.\.(/|\Z)')", task)
         self.assertEqual(r"(^|/)\.\.(/|\Z)", tool.DOT_DOT.pattern)
 
-    def test_the_placeholders_are_the_real_defaults(self) -> None:
-        """The two lines the tool replaces are each in the role's defaults exactly once."""
+    def test_the_real_defaults_hold_the_block_the_tool_writes(self) -> None:
+        """The role's defaults carry the release in exactly the shape the tool writes."""
         lines = (ROLE / "defaults" / "main.yml").read_text(encoding="utf-8").split("\n")
-        self.assertEqual(1, lines.count(tool.VERSION_LINE))
-        self.assertEqual(1, lines.count(tool.PINS_LINE))
+        self.assertEqual(1, sum(1 for line in lines if tool.BLOCK_VERSION.match(line)))
+        self.assertEqual(1, lines.count(tool.BLOCK_PINS_HEAD))
 
     def test_the_entry_point_is_the_one_the_role_requires(self) -> None:
         """The role refuses a release with no entry point of this name."""

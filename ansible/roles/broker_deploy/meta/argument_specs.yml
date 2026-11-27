@@ -23,7 +23,7 @@ argument_specs:
           release's files under the release directory of the role. Empty until a
           release is carried; while it and the pins are both empty the role waits and
           changes nothing, and pins with an empty version are refused.
-        default: ''
+        default: '0.2.0'
       broker_deploy_release_pins:
         type: dict
         description: >-
@@ -32,7 +32,13 @@ argument_specs:
           sha256 as 64 lower-case hex digits. The role refuses, before it writes
           anything, a release whose files are not exactly those pinned, byte for
           byte, or that holds a link. A digest is not a secret.
-        default: {}
+        default:
+          '0.2.0':
+            'broker.mjs': '39a94363d7f064e6b57e2c311ff71744065d7f98f14b8e47a59096eed6fcd49b'
+            'plugins/dockerImageLoader.mjs': '310a1b306e35eeae5947c50ef9102ccee197ab3ff73186a24fef896b311e6fc9'
+            'plugins/ghostAdminApi.mjs': 'e84850497a089049bcc8d5cdf4f5156ba979483ba80f2f2f095578bc7b80b6b3'
+            'plugins/refusingDrainSource.mjs': '72ef8b00a6f25bdf3e53353d91fef29d545856923b080230e4ad33ea439d776c'
+            'plugins/renderCorePlugin.mjs': '99c11b3d6d2c727f8590de7b47c0c809dcab34270f20ef0b92076d52ea1aad33'
       broker_deploy_release_dir:
         type: path
         description: >-

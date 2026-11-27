@@ -51,12 +51,13 @@ attestation has been verified against the broker's release workflow, as the brok
 runbook describes, and the tarball unpacked. The role does not verify an attestation, and a
 pin proves the bytes did not change since it was chosen, not that CI built them.
 
-No release is carried yet: `broker_deploy_release_version` is empty and
-`broker_deploy_release_pins` is empty, so the role waits. It says so (a debug task, ANS-10) and
-ends with `meta: end_role`, first of `tasks/_release_pin.yml`, with nothing read from the host
-or written to it, in a plan and in an apply; the verify key check and every task after it are
-skipped with it, and the rest of the host's play goes on. A run does the whole role from the
-first pull after a version and its pins are carried. A release that is only half carried, a
+Release 0.2.0 is carried: `broker_deploy_release_version` is `0.2.0` and
+`broker_deploy_release_pins` holds its five files. While no release is carried (both inputs
+empty), the role waits. It says so (a debug task, ANS-10) and ends with `meta: end_role`, first of
+`tasks/_release_pin.yml`, with nothing read from the host or written to it, in a plan and in an
+apply; the verify key check and every task after it are skipped with it, and the rest of the
+host's play goes on. A run does the whole role from the first pull after a version and its pins
+are carried. A release that is only half carried, a
 version with no pins or pins with no version, is not a wait: it is refused below, as are all
 the other refusals. The step that carries the first release sets the version, the pins and the
 files in one change. That

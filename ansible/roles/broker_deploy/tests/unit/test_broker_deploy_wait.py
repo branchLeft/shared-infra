@@ -210,7 +210,10 @@ class WaitRun(unittest.TestCase):
     def test_nothing_carried_ends_the_role_and_the_play_goes_on(self) -> None:
         for check in (False, True):
             with self.subTest(check=check):
-                outcome = self.run_pin_check({}, check=check)
+                outcome = self.run_pin_check(
+                    {"broker_deploy_release_version": "", "broker_deploy_release_pins": {}},
+                    check=check,
+                )
                 self.assertEqual(outcome.code, 0, outcome.output)
                 self.assertIn(WAIT_MESSAGE, outcome.output)
                 self.assertNotIn(AFTER_THE_PIN_CHECK, outcome.output)
