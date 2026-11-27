@@ -1,17 +1,18 @@
-# The owner reviews only two kinds of path (workspace#4323); every other path merges on the reviewer
+# The owner reviews only two kinds of path (owner ruling); every other path merges on the reviewer
 # App's approval and green CI, and a host change that merges still reaches a host only through the
 # gated apply. The owner has extended trust to agents on the edge, Caddy, firewall, mail host,
 # Ansible roles and playbooks, inventories, Pulumi programs, hetzner/ and ovh/ code, ssh and sudoers
 # roles, and secrets handling code, so none of those is listed.
 #   (a) Guardrails: a path whose silent weakening would stop an agent guardrail or a required check
 #       protecting us: this file and its proof (ansible/checks/test_codeowners.py and
-#       codeowners_match.py), CLAUDE.md, .claude/, the workflows, actions and dependabot settings
-#       (/.github/, by the standards lines), the gate scripts those checks run (the checks in
-#       ansible/checks/, ansible/harness/, all of scripts/ and the named hetzner/scripts
-#       checks), the apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer
-#       include), the guards that stop a destructive apply, the floors and lint settings, the image
-#       verifier, and the exemption files. The tests of a gate in ansible/checks/ and hetzner/ are
-#       not listed: they are released.
+#       codeowners_match.py), CLAUDE.md, .claude/, the workflows that enforce a required check or
+#       gate a deploy, hold a secret or grant a write permission, and the actions they call (named
+#       below, and docs-lint and standards by the standards lines), the gate scripts and tests
+#       those checks run (ansible/checks/, ansible/harness/, scripts/ and the named
+#       hetzner/scripts checks), the
+#       apply-gate allowlists (ansible/checks/host_roles/, ansible/trust/, the signer include), the
+#       guard tests and guards that stop a destructive apply, the floors and lint settings, the
+#       image verifier, and the exemption files.
 #   (b) Human-facing documents: README, the licences, and the launch page copy.
 # When in doubt: if this file were silently weakened, would a guardrail or a required check stop
 # protecting us? Yes, owner. No, released.
@@ -21,6 +22,22 @@
 # (SYNC-1). `codeowners_match.py --against OLD` lists every tracked file that lost or gained an owner.
 
 /.ansible-lint                                               @branchLeft/branchleft-admin
+/.github/actions/                                            @branchLeft/branchleft-admin
+/.github/scripts/                                            @branchLeft/branchleft-admin
+/.github/workflows/ansible-delivery.yml                      @branchLeft/branchleft-admin
+/.github/workflows/ansible-drift-check.yml                   @branchLeft/branchleft-admin
+/.github/workflows/ansible-environment-probe.yml             @branchLeft/branchleft-admin
+/.github/workflows/ansible.yml                               @branchLeft/branchleft-admin
+/.github/workflows/ci-config-validate.yml                    @branchLeft/branchleft-admin
+/.github/workflows/ci.yml                                    @branchLeft/branchleft-admin
+/.github/workflows/crowdsec-hub-pin-check.yml                @branchLeft/branchleft-admin
+/.github/workflows/ovh-copy2-probe.yml                       @branchLeft/branchleft-admin
+/.github/workflows/publish-edge-caddy.yml                    @branchLeft/branchleft-admin
+/.github/workflows/publish-hetzner-host.yml                  @branchLeft/branchleft-admin
+/.github/workflows/secret-alert-pager.yml                    @branchLeft/branchleft-admin
+/.github/workflows/tenants-preview.yml                       @branchLeft/branchleft-admin
+/.github/workflows/tenants-state-rewrap.yml                  @branchLeft/branchleft-admin
+/.github/workflows/verify-package-attestations.yml           @branchLeft/branchleft-admin
 /.image-scan-exemptions.json                                 @branchLeft/branchleft-admin
 /.pre-commit-config.yaml                                     @branchLeft/branchleft-admin
 /.prettierignore                                             @branchLeft/branchleft-admin
@@ -32,6 +49,8 @@
 /ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
 /ansible/roles/status_page/tests/unit/test_status_page_drop_guard.py @branchLeft/branchleft-admin
 /ansible/trust/                                              @branchLeft/branchleft-admin
+/hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
+/hetzner/projectGuard.test.ts                                @branchLeft/branchleft-admin
 /hetzner/projectGuard.ts                                     @branchLeft/branchleft-admin
 /hetzner/provision/stack_keys_check.py                       @branchLeft/branchleft-admin
 /hetzner/provision/test_counts/                              @branchLeft/branchleft-admin
@@ -44,17 +63,18 @@
 /hetzner/scripts/test_check_crowdsec_hub_pin.py              @branchLeft/branchleft-admin
 /hetzner/scripts/test_check_hetzner_*                        @branchLeft/branchleft-admin
 /hetzner/scripts/test_proof_harness.py                       @branchLeft/branchleft-admin
-/ovh/copy2/configGuard.ts                                    @branchLeft/branchleft-admin
-/ovh/copy2/projectGuard.ts                                   @branchLeft/branchleft-admin
+/ovh/copy2/configGuard*                                      @branchLeft/branchleft-admin
+/ovh/copy2/projectGuard*                                     @branchLeft/branchleft-admin
 /scripts/                                                    @branchLeft/branchleft-admin
 /tools/floors.tsv                                            @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
+test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 
-# Released, with no owner: documents, every test in ansible/checks/ but the proof of this file (a test
-# of a gate does not judge a merge or a deploy; the gate it reads stays owned; test_plan_diff_scan.py
-# and test_step_allowlist.py are owned again below because each is itself a check), and the helpers
-# and probes there that guard no gate. Under scripts/ only four files, released before this change, are released: a script
-# there is imported first by the scripts that run with credentials, so a new file is owned too.
+# Released, with no owner: documents, the workflows that hold no secret and no write permission
+# (the offline render, the ghost pin lag), the Dependabot settings, and the checks that guard no
+# gate: the agreement tests and probes in ansible/checks/ run in the required lint's checks and
+# slow legs, but they hold a host role or a stack to its siblings and do not judge a merge or a
+# deploy.
 *.md
 /ansible/checks/advisory_passes.py
 /ansible/checks/advisory_passes_fixture.json
@@ -62,28 +82,41 @@ branchleft-verify-image*                                     @branchLeft/branchl
 /ansible/checks/offline_render.py
 /ansible/checks/pip-requirements.txt
 /ansible/checks/sabotage_offline_render.py
-/ansible/checks/test_*.py
+/ansible/checks/test_broker_paths_agree.py
+/ansible/checks/test_ci_jump_hosts.py
+/ansible/checks/test_db1_stack_verify_parts.py
+/ansible/checks/test_demo1_egress_spool_agree.py
+/ansible/checks/test_demo1_no_github_fetch.py
+/ansible/checks/test_deploy_tooling_edge1_class.py
+/ansible/checks/test_deploy_tooling_internal_class.py
+/ansible/checks/test_deploy_tooling_links.py
+/ansible/checks/test_deploy_tooling_probe_name.py
+/ansible/checks/test_deploy_tooling_single_owner.py
+/ansible/checks/test_edge_single_home.py
+/ansible/checks/test_egress_nat_single_gateway.py
+/ansible/checks/test_host_baseline_matches_scripts.py
+/ansible/checks/test_monitoring_single_home.py
+/ansible/checks/test_mx1_stack_agree.py
+/ansible/checks/test_offline_render.py
+/ansible/checks/test_patterns_typecheck.py
 /scripts/assert-min-python-version.py
 /scripts/nvmrc-node-exec.*
 /scripts/test_assert_min_python_version.py
 /scripts/test_nvmrc_node_exec.py
 
-# Owned again after the releases: the instructions, the hook directory, the proof of this file and of two checks, the licences, the README and the launch page.
+# Owned again after the releases: the instructions, the hook directory, the licences, the README and the launch page.
 /.claude/                                                    @branchLeft/branchleft-admin
 /LICENSE                                                     @branchLeft/branchleft-admin
 /README.md                                                   @branchLeft/branchleft-admin
-/ansible/checks/test_codeowners.py                           @branchLeft/branchleft-admin
-/ansible/checks/test_plan_diff_scan.py                       @branchLeft/branchleft-admin
-/ansible/checks/test_step_allowlist.py                       @branchLeft/branchleft-admin
 /hetzner-host/LICENSE                                        @branchLeft/branchleft-admin
-/hetzner/edge-t/media.test.ts                                @branchLeft/branchleft-admin
-/hetzner/edge-t/media.ts                                     @branchLeft/branchleft-admin
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 CLAUDE.md                                                    @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners at the v0.8.8 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above.
+# The shared set from branchLeft/standards templates/codeowners at the tag the Standards job is pinned to (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, this file, and the standards and docs-lint callers, which are the required Standards gates and docs-lint checks. The floors file, /tools/floors.tsv, is listed above.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin
 /.standards-db-tooling   @branchLeft/branchleft-admin
-/.github/                @branchLeft/branchleft-admin
+/.github/CODEOWNERS      @branchLeft/branchleft-admin
+/.github/workflows/standards.yml  @branchLeft/branchleft-admin
+/.github/workflows/docs-lint.yml  @branchLeft/branchleft-admin
