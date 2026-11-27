@@ -103,12 +103,19 @@ def services() -> dict[str, dict[str, object]]:
     """Return the compose file's services, each as a mapping.
 
     Raises:
-        AssertionError: the file holds a service other than mysql and the exporter.
+        AssertionError: the file holds a service other than mysql, the exporter and its account.
         TypeError: the services or a service is not a mapping.
     """
     found = compose()["services"]
-    if not isinstance(found, dict) or sorted(found) != ["mysql", "mysqld-exporter"]:
-        message = "the compose file must hold the mysql and mysqld-exporter services and no other"
+    if not isinstance(found, dict) or sorted(found) != [
+        "exporter-account",
+        "mysql",
+        "mysqld-exporter",
+    ]:
+        message = (
+            "the compose file must hold the mysql, exporter-account and mysqld-exporter "
+            "services and no other"
+        )
         raise AssertionError(message)
     result: dict[str, dict[str, object]] = {}
     for name, service in found.items():
@@ -122,6 +129,11 @@ def services() -> dict[str, dict[str, object]]:
 def mysql_service() -> dict[str, object]:
     """Return the mysql service of the compose file."""
     return services()["mysql"]
+
+
+def account_service() -> dict[str, object]:
+    """Return the exporter-account service of the compose file."""
+    return services()["exporter-account"]
 
 
 def exporter_service() -> dict[str, object]:
@@ -333,8 +345,14 @@ class ExporterContract(unittest.TestCase):
 
     def test_it_starts_only_once_the_database_is_healthy_and_is_judged_on_mysql_up(self) -> None:
         service = exporter_service()
+        # The exporter's health check needs the account, so it starts only after the account
+        # service says the exporter can log in.
         self.assertEqual(
-            mapping(service["depends_on"]), {"mysql": {"condition": "service_healthy"}}
+            mapping(service["depends_on"]),
+            {
+                "mysql": {"condition": "service_healthy"},
+                "exporter-account": {"condition": "service_healthy"},
+            },
         )
         command = str(sequence(mapping(service["healthcheck"])["test"])[1])
         self.assertIn('grep -qx "mysql_up 1"', command)
@@ -347,10 +365,90 @@ class ExporterContract(unittest.TestCase):
         self.assertNotIn(path, str(DEFAULTS))
 
 
+class ExporterAccountContract(unittest.TestCase):
+    """The service that makes the exporter's account, so the first deploy needs no hand step."""
+
+    def test_it_runs_the_database_image_from_the_pin_never_a_literal(self) -> None:
+        self.assertEqual(account_service()["image"], "${IMAGE}")
+
+    def test_it_runs_as_the_user_that_can_read_the_closed_credentials_file(self) -> None:
+        uid = VARS["db_t1_exporter_uid"]
+        self.assertEqual(uid, 65534)
+        self.assertEqual(account_service()["user"], f"{uid}:{uid}")
+
+    def test_it_has_no_network_and_publishes_nothing(self) -> None:
+        service = account_service()
+        self.assertEqual(service["network_mode"], "none")
+        self.assertNotIn("ports", service)
+        self.assertNotIn("expose", service)
+
+    def test_it_is_started_after_the_database_is_healthy_and_is_judged_on_a_real_login(
+        self,
+    ) -> None:
+        service = account_service()
+        self.assertEqual(
+            mapping(service["depends_on"]), {"mysql": {"condition": "service_healthy"}}
+        )
+        target = str(VARS["db_t1_exporter_account_script_target"])
+        self.assertEqual(
+            mapping(service["healthcheck"])["test"], ["CMD", "/bin/sh", target, "check"]
+        )
+        self.assertEqual(service["entrypoint"], ["/bin/sh", target, "serve"])
+
+    def test_it_mounts_the_program_and_the_credentials_read_only_and_by_name(self) -> None:
+        mounts = {
+            str(mapping(volume)["source"]): mapping(volume)
+            for volume in sequence(account_service()["volumes"])
+            if isinstance(volume, dict)
+        }
+        for source, target in (
+            (
+                VARS["db_t1_exporter_account_script_path"],
+                VARS["db_t1_exporter_account_script_target"],
+            ),
+            (VARS["db_t1_exporter_cnf_path"], "/etc/mysqld-exporter/.my.cnf"),
+        ):
+            with self.subTest(str(source)):
+                mount = mounts[str(source)]
+                self.assertEqual(mount["target"], target)
+                self.assertIs(mount["read_only"], True)
+                self.assertIs(mapping(mount["bind"])["create_host_path"], False)
+        self.assertIn("./run/mysqld:/var/run/mysqld", sequence(account_service()["volumes"]))
+
+    def test_the_only_environment_is_the_root_value_from_the_units_file_failing_closed(
+        self,
+    ) -> None:
+        environment = mapping(account_service()["environment"])
+        self.assertEqual(list(environment), [ROOT_KEY])
+        self.assertRegex(str(environment[ROOT_KEY]), r"^\$\{MYSQL_ROOT_PASSWORD:\?[^}]+\}$")
+
+    def test_the_credentials_file_is_not_read_or_written_by_a_task(self) -> None:
+        # The program reads it inside the container. A task that copied it would put the value
+        # in a second place on the host and in a result.
+        text = yaml.safe_dump(all_tasks())
+        self.assertNotIn(str(VARS["db_t1_exporter_cnf_path"]), text)
+
+    def test_the_program_is_delivered_before_the_deploy_reads_the_compose_file(self) -> None:
+        main = [str(task.get("name")) for task in task_files()["main.yml"]]
+        deliver = main.index(
+            "Deliver the program that makes the exporter's account in the database"
+        )
+        self.assertLess(
+            deliver, main.index("Pin the image and start the stack once, on an empty host")
+        )
+        arguments = arguments_of(task_named("Deliver the program that makes the exporter's"))
+        self.assertEqual(arguments["src"], "{{ db_t1_exporter_account_script_src }}")
+        self.assertEqual(arguments["dest"], "{{ db_t1_exporter_account_script_path }}")
+        self.assertEqual(
+            (arguments["owner"], arguments["group"], arguments["mode"]), ("root", "root", "0644")
+        )
+        self.assertTrue((ROLE / "files" / str(VARS["db_t1_exporter_account_script_src"])).is_file())
+
+
 class LogRetentionContract(unittest.TestCase):
     """Each container's log is bounded in size and rotated, never left to grow."""
 
-    def test_both_services_keep_three_files_of_ten_megabytes(self) -> None:
+    def test_every_service_keeps_three_files_of_ten_megabytes(self) -> None:
         for name, service in services().items():
             with self.subTest(name):
                 logging = mapping(service["logging"])
