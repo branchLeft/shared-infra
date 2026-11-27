@@ -6,10 +6,14 @@
     name: ssh
     state: reloaded
 
+# Skipped in check mode when fail2ban is not installed yet (ANS-10), for the reason the enable
+# task in _updates_fail2ban.yml gives: check mode installs nothing, so the unit does not exist
+# and a reload of it fails. A real run installs the package before this handler flushes.
 - name: Reload fail2ban
   ansible.builtin.systemd_service:
     name: fail2ban
     state: reloaded
+  when: not ansible_check_mode or 'fail2ban' in ansible_facts['packages']
 
 - name: Reload systemd manager
   ansible.builtin.systemd_service:

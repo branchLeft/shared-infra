@@ -34,9 +34,20 @@
     # The check-fresh scenario's host has no Docker yet: the Docker packages and
     # unit are left out there, and only there. It is the state a first plan on a
     # new host meets (molecule/check-fresh/converge.yml says why it is a plan).
+    # The check-fresh host also has no unattended-upgrades and no fail2ban: a new host has none
+    # of the role's packages before the first apply, so a handler that reloads fail2ban has no
+    # unit to reload in check mode.
     prepare_fresh_host: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME', default='default') == 'check-fresh' }}"
-    prepare_packages: '{{ prepare_base_packages + ([] if prepare_fresh_host | bool else prepare_docker_packages) }}'
-    prepare_units: "{{ prepare_base_units + ([] if prepare_fresh_host | bool else ['docker']) }}"
+    # Every placeholder the role's packages need, built as a .deb. On the fresh host the
+    # unattended-upgrades and fail2ban placeholders are built but not installed: they are
+    # indexed as a local apt source instead (below), so the role's check-mode apt call finds
+    # candidates to simulate, as a real host's index does.
+    prepare_fresh_absent:
+      - unattended-upgrades
+      - fail2ban
+    prepare_repo_packages: '{{ prepare_base_packages + ([] if prepare_fresh_host | bool else prepare_docker_packages) }}'
+    prepare_packages: '{{ (prepare_repo_packages | difference(prepare_fresh_absent)) if prepare_fresh_host | bool else prepare_repo_packages }}'
+    prepare_units: "{{ (prepare_base_units | difference(prepare_fresh_absent)) if prepare_fresh_host | bool else (prepare_base_units + ['docker']) }}"
   tasks:
     - name: Create a package directory for each placeholder package
       ansible.builtin.file:
@@ -45,7 +56,7 @@
         owner: root
         group: root
         mode: '0755'
-      loop: '{{ prepare_packages }}'
+      loop: '{{ prepare_repo_packages }}'
 
     - name: Describe each placeholder package
       ansible.builtin.copy:
@@ -59,7 +70,7 @@
         owner: root
         group: root
         mode: '0644'
-      loop: '{{ prepare_packages }}'
+      loop: '{{ prepare_repo_packages }}'
 
     - name: Build each placeholder package
       ansible.builtin.command:
@@ -69,13 +80,109 @@
           - '/usr/local/share/host_baseline_test/{{ item }}'
           - '/usr/local/share/host_baseline_test/{{ item }}.deb'
         creates: '/usr/local/share/host_baseline_test/{{ item }}.deb'
-      loop: '{{ prepare_packages }}'
+      loop: '{{ prepare_repo_packages }}'
 
     - name: Install each placeholder package from its local file
       ansible.builtin.apt:
         deb: '/usr/local/share/host_baseline_test/{{ item }}.deb'
         state: present
       loop: '{{ prepare_packages }}'
+
+    # check-fresh only. The packages the fresh host lacks are indexed as a local, offline apt source
+    # (only that file path, no network), so the role's check-mode apt call sees candidates as on a
+    # real host. Nothing is installed here: the apt task simulates, and no unit exists for them.
+    - name: Index the placeholder packages the fresh host lacks as a local apt source
+      when: prepare_fresh_host | bool
+      block:
+        - name: Create the local apt repository directory
+          ansible.builtin.file:
+            path: /usr/local/share/host_baseline_test/repo
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Copy each missing placeholder package into the repository
+          ansible.builtin.copy:
+            src: '/usr/local/share/host_baseline_test/{{ item }}.deb'
+            dest: '/usr/local/share/host_baseline_test/repo/{{ item }}.deb'
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+          loop: '{{ prepare_fresh_absent }}'
+
+        - name: Read the size and digest of each repository package
+          ansible.builtin.stat:
+            path: '/usr/local/share/host_baseline_test/repo/{{ item }}.deb'
+            checksum_algorithm: sha256
+          loop: '{{ prepare_fresh_absent }}'
+          register: host_baseline_repo_debs
+
+        - name: Write the repository index
+          ansible.builtin.copy:
+            content: |
+              {% for r in host_baseline_repo_debs.results %}
+              Package: {{ r.item }}
+              Version: 0.0.0+placeholder
+              Architecture: all
+              Maintainer: PLACEHOLDER <placeholder@example.invalid>
+              Description: PLACEHOLDER package for the host_baseline test
+              Filename: ./{{ r.item }}.deb
+              Size: {{ r.stat.size }}
+              SHA256: {{ r.stat.checksum }}
+
+              {% endfor %}
+            dest: /usr/local/share/host_baseline_test/repo/Packages
+            owner: root
+            group: root
+            mode: '0644'
+          register: host_baseline_repo_index
+
+        - name: Read the size and digest of the repository index
+          ansible.builtin.stat:
+            path: /usr/local/share/host_baseline_test/repo/Packages
+            checksum_algorithm: sha256
+          register: host_baseline_repo_stat
+
+        - name: Write the repository release file that names the index
+          ansible.builtin.copy:
+            content: |
+              Origin: PLACEHOLDER
+              Label: PLACEHOLDER
+              Suite: placeholder
+              Codename: placeholder
+              Architectures: all
+              SHA256:
+               {{ host_baseline_repo_stat.stat.checksum }} {{ host_baseline_repo_stat.stat.size }} Packages
+            dest: /usr/local/share/host_baseline_test/repo/Release
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Point apt at the repository alone, with no network source
+          ansible.builtin.copy:
+            content: |
+              deb [trusted=yes] file:/usr/local/share/host_baseline_test/repo ./
+            dest: /etc/apt/sources.test.list
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Make apt read that source list and no other
+          ansible.builtin.copy:
+            content: |
+              Dir::Etc::SourceList "/etc/apt/sources.test.list";
+              Dir::Etc::SourceParts "-";
+            dest: /etc/apt/apt.conf.d/99host-baseline-test
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Refresh the apt index from the local repository
+          ansible.builtin.command:
+            argv: [apt-get, update]
+          changed_when: false
 
     - name: Create the directory that holds the reload counters
       ansible.builtin.file:

@@ -252,9 +252,13 @@ What each part of the scenario does:
 ### The fresh-host scenario
 
 `molecule/check-fresh/` is a second shard, the plan a first run on a new host
-meets: a host with no Docker. Its `prepare.yml` imports the default one, which
-leaves out the Docker packages and unit when the scenario is `check-fresh`
-(`MOLECULE_SCENARIO_NAME`). Its `converge.yml` plans the role only in check mode:
+meets: a host with no Docker, no fail2ban and no unattended-upgrades. Its `prepare.yml`
+imports the default one, which leaves those out when the scenario is `check-fresh`
+(`MOLECULE_SCENARIO_NAME`). The two missing packages are indexed as a local, offline apt
+source, so the role's check-mode apt call simulates them as it does on a real host. The
+`reload fail2ban` handler, queued by the jail and flushed at the end of the role, would
+fail here without its check-mode guard: that is the case this shard holds (a red run is
+"Could not find the requested service fail2ban" at the `Reload fail2ban` handler). Its `converge.yml` plans the role only in check mode:
 this instance has no network and no apt index that holds `docker-ce`, so a real
 apply could not install Docker here. The harness's `check-fresh` step runs that
 play under `--check` and must complete; the scenario leaves out `idempotence`,
