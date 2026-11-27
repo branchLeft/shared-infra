@@ -1,6 +1,7 @@
 ---
-# The role as the delivery plan and the pull run it while no release is carried: the role's own
-# defaults, with no variable of this scenario's converge. Started by verify
+# The role as the delivery plan and the pull run it while no release is carried. Verify passes
+# the empty release on the command line, because the role's defaults carry a release now, and
+# no variable of this scenario's converge is set. Started by verify
 # (tasks/wait_probe.yml), once as an apply and once as a plan, and again with a half-carried
 # release. It is not one of Molecule's own steps, because the converge sets a release.
 - name: Run the role with the defaults

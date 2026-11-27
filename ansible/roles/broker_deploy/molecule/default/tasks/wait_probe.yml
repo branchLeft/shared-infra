@@ -36,6 +36,8 @@
       - ansible-playbook
       - --inventory
       - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{"broker_deploy_release_version": "", "broker_deploy_release_pins": {}}'
       - '{{ playbook_dir }}/wait.yml'
   delegate_to: localhost
   register: broker_deploy_wait_apply
@@ -50,6 +52,8 @@
       - --diff
       - --inventory
       - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{"broker_deploy_release_version": "", "broker_deploy_release_pins": {}}'
       - '{{ playbook_dir }}/wait.yml'
   delegate_to: localhost
   register: broker_deploy_wait_plan
