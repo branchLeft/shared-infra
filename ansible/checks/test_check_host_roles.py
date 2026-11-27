@@ -646,6 +646,7 @@ class HostRoleLists(unittest.TestCase):
                 "spool_path_account",
                 "host_tls_identity",
                 "node_exporter_public",
+                "export_bundler",
             ],
         )
         # The account's read-back of the drain port needs the spool running, so it follows the role
