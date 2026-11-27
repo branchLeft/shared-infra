@@ -52,6 +52,15 @@ def _is_comment_line(line: str, suffix: str) -> bool:
 # test_no_caller_role_writes_the_program holds every caller to the no-copy rule.
 CALLER_ROLES = frozenset({"tenant_compose", "tenant_entry"})
 
+# One file outside the caller roles names the program by path, and only that file: the broker's
+# release bundle (roles/broker_deploy, release 0.2.0, plugins/renderCorePlugin.mjs). Its
+# renderProvisionScript writes a per-tenant shell script that calls the installed program at
+# /root/platform-provision/provision_tenant_volume.py and never writes or installs the program. It
+# is a caller by path, as tenant_compose and tenant_entry are. The file is a pinned, attested
+# release artifact, so it cannot be edited to drop the name. The test
+# test_the_file_allowance_is_one_caller_file holds this list to exactly that file.
+CALLER_FILES = frozenset({"roles/broker_deploy/files/releases/0.2.0/plugins/renderCorePlugin.mjs"})
+
 # Modules that put bytes at a path. A caller that names the program in one of these would be a
 # second installer, so the guard refuses it. Molecule scenarios are excluded: a stand-in put
 # at the program's path for a test is not a production install.
@@ -92,6 +101,8 @@ def _offenders(roles_dir: Path, patterns_dir: Path, role: Path) -> list[str]:
     offenders = []
     for path in others:
         if path.is_relative_to(roles_dir) and path.relative_to(roles_dir).parts[0] in CALLER_ROLES:
+            continue
+        if str(path.relative_to(roles_dir.parent)) in CALLER_FILES:
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -244,6 +255,13 @@ class RuleTests(unittest.TestCase):
             _offenders(ROLES_DIR, PATTERNS_DIR, ROLE),
             [],
             "a role or pattern other than tenant_compose names the tenant program",
+        )
+
+    def test_the_file_allowance_is_one_caller_file(self) -> None:
+        # The allowance is exactly the one release file named above, and no folder or role.
+        self.assertEqual(
+            sorted(CALLER_FILES),
+            ["roles/broker_deploy/files/releases/0.2.0/plugins/renderCorePlugin.mjs"],
         )
 
     def test_no_caller_role_writes_the_program(self) -> None:
