@@ -13,16 +13,16 @@
 
 # Each pinned file is copied by name, so a byte that changed on the host is put back and a file
 # on the host that is not in the release is left alone. The plan's diff is hidden (ANS-16) for
-# the files the plan-diff scan matches, and shown for the rest: the lists below are held to the
-# pins by a contract test, so a file added to a release is named in one of them. The pinned
-# digests, not the diff, say what is delivered.
-- name: Create the plugins directory of this release
+# every pinned file except those named in broker_deploy_release_plain_files, which hold no
+# secret-like line and are shown. The pinned digests, not the diff, say what is delivered.
+- name: Create the directories of this release's pinned files
   ansible.builtin.file:
-    path: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/plugins'
+    path: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/{{ item }}'
     state: directory
     owner: '{{ broker_deploy_release_owner }}'
     group: '{{ broker_deploy_release_group }}'
     mode: '0755'
+  loop: '{{ broker_deploy_release_pins[broker_deploy_release_version] | list | map("dirname") | reject("equalto", "") | unique | list }}'
 
 - name: Deliver the pinned release files that hold a secret-like line
   ansible.builtin.copy:
@@ -31,11 +31,7 @@
     owner: '{{ broker_deploy_release_owner }}'
     group: '{{ broker_deploy_release_group }}'
     mode: '0644'
-  loop:
-    - broker.mjs
-    - plugins/dockerImageLoader.mjs
-    - plugins/ghostAdminApi.mjs
-    - plugins/renderCorePlugin.mjs
+  loop: '{{ broker_deploy_release_pins[broker_deploy_release_version] | list | difference(broker_deploy_release_plain_files) }}'
   diff: false
   register: broker_deploy_release_copy
 
@@ -48,6 +44,7 @@
     mode: '0644'
   loop:
     - plugins/refusingDrainSource.mjs
+  when: item in broker_deploy_release_pins[broker_deploy_release_version]
   register: broker_deploy_release_copy_visible
 
 - name: Point the current link at the release
