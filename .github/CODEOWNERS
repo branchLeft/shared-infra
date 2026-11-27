@@ -35,6 +35,7 @@
 /.github/workflows/publish-edge-caddy.yml                    @branchLeft/branchleft-admin
 /.github/workflows/publish-hetzner-host.yml                  @branchLeft/branchleft-admin
 /.github/workflows/secret-alert-pager.yml                    @branchLeft/branchleft-admin
+/.github/workflows/tenants-preview.yml                       @branchLeft/branchleft-admin
 /.github/workflows/tenants-state-rewrap.yml                  @branchLeft/branchleft-admin
 /.github/workflows/verify-package-attestations.yml           @branchLeft/branchleft-admin
 /.image-scan-exemptions.json                                 @branchLeft/branchleft-admin
