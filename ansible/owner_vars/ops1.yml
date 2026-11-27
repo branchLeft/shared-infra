@@ -15,21 +15,19 @@
 #
 # control_plane_db_apps_image is the applications image every step runs, pinned by digest as
 # NAME@sha256: and 64 lower-case hex digits (the role's control_plane_db_image_pattern; a tag is
-# not a pin). A plain apply runs no step, so setting it changes nothing on ops1 by itself: the
-# migrate marker is keyed by this digest, so the first migrate request after a new digest runs
-# the image's pending migrations and a repeat of the same digest is skipped. It is not the image
-# the running containers use: that is the deploy wrapper's pin (the control_plane role keeps the
-# running image unless control_plane_app_image is given), moved by that key below. Moving this value to a newer digest is
-# a new migration request; the migrate step refuses an image that predates the migration login.
+# not a pin). The migrate marker is keyed by this digest, so the migrations of a digest run once.
 #
-# control_plane_app_image is the image the running control plane uses, pinned the same way. It is
-# the one key this file may leave out. While it is absent the control_plane role keeps the image the
-# deploy wrapper last pinned and a gated apply changes no image. Adding it (one line, merged by the
-# owner) makes the next gated apply run /usr/local/sbin/branchleft-deploy control-plane with that
-# digest, so the portal and console are recreated on it; the role refuses a value that is not
-# NAME@sha256: and 64 lower-case hex digits before it writes anything. Once it is set it is the pin:
-# a digest moved by hand on the host is put back to this one at the next apply, so move it here.
-# The migration image above is a separate value and is not changed by this one.
+# control_plane_app_image is the image the running control plane uses, pinned the same way: the
+# control_plane role runs /usr/local/sbin/branchleft-deploy control-plane with it, so the portal and
+# console are recreated on it, and the role refuses a value that is not NAME@sha256: and 64 lower-case
+# hex digits before it writes anything. It is the pin: a digest moved by hand on the host is put
+# back to this one at the next apply, so move it here.
+#
+# Both are the one signed portal-apps image, published by portal-apps-image.yml from ghost-platform main, so
+# the deploy wrapper verifies its attestation. While the two are equal, a plain apply migrates that image's
+# database before the wrapper moves the stack onto it, with the migration login the control_plane_db role
+# makes itself (the owner's ruling of 27 Nov 2026; the role's README, "The delivery's migration"). Move
+# them together: a control_plane_app_image that is not the migration image migrates nothing.
 #
 # control_plane_db_identity_hostnames is not set here. With it unset the identity step refuses
 # by name.
@@ -43,7 +41,8 @@ pull_trigger_steps:
   - id: provision
     tag: control_plane_db_provision
     word: PROVISION-OPS1
-control_plane_db_apps_image: 'ghcr.io/branchleft/portal-apps@sha256:06f282c3701cc4ac192cf367c8e290a2c31bb8b77fc70c74555072f7d5631d28'
+control_plane_db_apps_image: 'ghcr.io/branchleft/portal-apps@sha256:0dc42156834552c12ba94527605c1baff4c0cd56511cfb36c5fe88acaeadb222'
+control_plane_app_image: 'ghcr.io/branchleft/portal-apps@sha256:0dc42156834552c12ba94527605c1baff4c0cd56511cfb36c5fe88acaeadb222'
 #
 # The step account's route (the ci_step_login role). ci_step_login_key is the public half of the
 # step key the owner's deployment environment holds the private half of; the host keeps it as the

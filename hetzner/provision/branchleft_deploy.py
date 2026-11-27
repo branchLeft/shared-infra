@@ -108,26 +108,6 @@ UNATTESTED_STACK_IMAGES: dict[str, frozenset[str]] = {
     "mail-spool": frozenset({"ghcr.io/branchleft/mailgun-shim"}),
 }
 
-# The reviewed exemption for single digests: for each stack, the exact registered
-# images (name@digest) it may redeploy with no attestation check. TEMPORARY, by the
-# owner's ruling. An entry is a running image published before its workflow attested,
-# kept only until the stack moves to an attested digest. It never covers a name: any
-# other digest of the same image, and this digest on any other stack, is verified or
-# refused exactly as before. test_branchleft_deploy_digest_exemption.py fails once a
-# host's pin moves off the exempt digest, so the entry is removed with that move. See
-# branchleft_deploy.md, "UNATTESTED_STACK_DIGESTS".
-UNATTESTED_STACK_DIGESTS: dict[str, frozenset[str]] = {
-    # The portal image ops1 runs: built from ghost-platform main by portal-apps-image.yml
-    # on 11 Oct 2026, before that workflow attested its images.
-    "control-plane": frozenset(
-        {
-            "ghcr.io/branchleft/portal-apps@sha256:"
-            "2231a370a0d7e7746778e502ad70963e5c322bfae0de427e3ed2021d80ac0f7b"
-        }
-    ),
-}
-
-
 # The directory the pinned gh binary is installed into, by the deploy_verifier
 # role, and the empty root-only directory the verifier's gh reads its config from.
 # Neither is on the general PATH, and the home is empty so that root's own
@@ -364,7 +344,7 @@ def verify_attestation(image: str, *, stack: str, run=subprocess.run) -> bool:
 
     Returns True for a registered image the verifier accepted, and False for an
     image that a reviewed exemption list names for this stack (not verified):
-    UNATTESTED_STACK_IMAGES by name, or UNATTESTED_STACK_DIGESTS by exact digest.
+    UNATTESTED_STACK_IMAGES, by name.
     Raises DeployError for an image in neither place, and when a registered image
     cannot be verified, for any reason: refused, unknown digest, or the verifier
     missing. There is no argument, environment variable or stack setting that
@@ -390,13 +370,6 @@ def verify_attestation(image: str, *, stack: str, run=subprocess.run) -> bool:
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.
     canonical = f"{name}@{image.partition('@')[2]}"
-    if canonical in UNATTESTED_STACK_DIGESTS.get(stack, frozenset()):
-        print(
-            f"branchleft-deploy: {stack}: {canonical} is deployed unattested by its "
-            "digest's exemption (UNATTESTED_STACK_DIGESTS)",
-            file=sys.stderr,
-        )
-        return False
     if os.path.lexists(OFFLINE_TRUSTED_ROOT):
         verify_attestation_offline(canonical, signer, run=run)
         return True

@@ -254,27 +254,6 @@ register name and the digest.
 The rollback restore is not re-verified. It returns to the pin that last ran,
 and blocking it could leave the host with nothing running.
 
-## UNATTESTED_STACK_DIGESTS
-
-`UNATTESTED_STACK_DIGESTS` is a second, narrower exemption, TEMPORARY by the owner's
-ruling. For each stack it names exact `name@sha256:...` references of a registered
-image that may be redeployed with no attestation check. It exists for a running image
-that its workflow published before that workflow attested images. A redeploy of that
-image is refused like any unsigned one, so every delivery to the host would stop at it.
-
-It is looked up after `attested_name`, on the register name and the digest, so a tag or
-port spelling of the exempt digest is exempt too. It covers nothing else. Another digest
-of the same image goes to the verifier, and the exempt digest on another stack does too.
-The deploy log says when the exemption was used.
-
-It holds one entry. On `control-plane` it names the portal-apps image that ops1 runs,
-built from ghost-platform main on 11 Oct 2026, before `portal-apps-image.yml` attested.
-It ends when ops1 moves to an attested portal-apps digest. That move needs the portal's
-migrations run first, and is a pin of `control_plane_app_image` in
-`ansible/owner_vars/ops1.yml`. `test_branchleft_deploy_digest_exemption.py` fails once
-that pin names any other digest while the entry is still here, so the entry is
-removed in the same change as the move.
-
 The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
 the copy and that constant in one change, and take the bytes only from
 ghost-platform's script.

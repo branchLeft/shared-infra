@@ -1637,7 +1637,7 @@ class Sabotage(unittest.TestCase):
     # ops1's owner_vars file holds the step allow-list and the applications image the steps run
     # (wiring ws#2531), and nothing else. The positive control first: the real file passes, and it
     # is the two keys, so a check that refused every ops1 file would not pass for a strict one.
-    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_the_image_and_the_ring_inputs(
+    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_the_images_and_the_ring_inputs(
         self,
     ) -> None:
         self.assertEqual(check(self.root), [])
@@ -1649,6 +1649,7 @@ class Sabotage(unittest.TestCase):
                 [
                     "ci_step_login_from",
                     "ci_step_login_key",
+                    "control_plane_app_image",
                     "control_plane_db_apps_image",
                     "pull_trigger_steps",
                     *RING_CONTROLLER_TEXT_KEYS,
@@ -1764,6 +1765,19 @@ class Sabotage(unittest.TestCase):
             },
             dict(OPTIONAL_OWNER_KEYS),
         )
+        # ops1 sets the pin (the portal image the control plane deploys); the check still allows a
+        # file that leaves it out, and refuses it on any other host.
+        self.assertIn("control_plane_app_image", self._ops1_keys())
+        path = self.ansible / "owner_vars" / "ops1.yml"
+        text = path.read_text(encoding="utf-8")
+        kept = "".join(
+            line
+            for line in text.splitlines(keepends=True)
+            if not line.startswith("control_plane_app_image:")
+        )
+        self.assertNotEqual(text, kept, "the sabotage removed nothing")
+        path.write_text(kept, encoding="utf-8")
+        self.assertEqual(check(self.root), [])
         self.assertNotIn("control_plane_app_image", self._ops1_keys())
         self._edit(
             "owner_vars/ops1.yml",
