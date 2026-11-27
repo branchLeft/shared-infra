@@ -4,18 +4,25 @@
 It records every call as one JSON line, with the state of each file the call mounts
 at the moment of the call, and it answers the way the applications image's programs
 do: the lines the real ones print, read from the files they are told about. The mode
-file picks a behaviour: ok, fail, leak, drift, no-flag, no-network, stale-hba, not-reloaded or no-db. It never
-starts a container and never opens a network connection.
+file picks a behaviour: ok, fail, leak, drift, no-flag, no-network, stale-hba, not-reloaded, no-db,
+stopped or sql-leak. It never starts a container and never opens a network connection.
+
+It also stands in for the database's psql, for the delivery's login module. The state of that
+database is one file (pg.json): whether the migration login exists and the verifier it holds, who owns
+the portal database, and how many objects the administrator still owns in it. The statements the module
+sends change that file the way the real ones change the server, and the file is all the test reads.
 """
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 STATE = Path("/var/tmp/fake-docker")  # noqa: S108 - the test container's own scratch directory
 LOG = STATE / "calls.jsonl"
 MODE = STATE / "mode"
+PG = STATE / "pg.json"
 # The file the stack delivered, which the stand-in database "holds" as its access rules.
 DELIVERED_HBA = Path("/opt/branchleft/control-plane/postgres/pg_hba.conf")
 MIGRATE_LINES = [
@@ -36,6 +43,9 @@ VALUE_FLAGS = frozenset(
         "--add-host",
     }
 )
+# The server before the delivery: no migration login, the portal database the administrator's, and
+# three objects in it that the administrator owns.
+PG_START: dict[str, object] = {"verifier": None, "owner": "postgres", "left": 3, "writes": []}
 PROVISION_LINES = [
     "pre-check passed: no difference from the manifest",
     "created role portal_owner",
@@ -167,6 +177,68 @@ def run_program(command: list[str], mounts: dict[str, str], env: dict[str, str])
     return 2
 
 
+def pg_read() -> dict[str, object]:
+    """Read the stand-in database's state, or its starting state when it has none."""
+    try:
+        state: dict[str, object] = json.loads(PG.read_text(encoding="utf-8"))
+    except OSError:
+        return dict(PG_START, writes=[])
+    return state
+
+
+def pg_write(state: dict[str, object]) -> None:
+    """Keep the stand-in database's state."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    PG.write_text(json.dumps(state), encoding="utf-8")
+
+
+def run_psql(args: list[str]) -> int:
+    """Answer the exec the login module makes: `-i <db> sh -c <script> sh <database> <login> <portal>`.
+
+    The SQL arrives on standard input. The answers are the rows psql prints with the module's
+    flags (tuples only, unaligned, separated by a bar). A statement that writes changes the state,
+    and the sql-leak mode makes a write fail with the statement quoted back on standard error, as a
+    server that echoes its statement would, to show that the module does not print it.
+    """
+    sql = sys.stdin.read()
+    login = args[-2]
+    state = pg_read()
+    writes = state["writes"]
+    assert isinstance(writes, list)  # noqa: S101 - the test's own state file
+    if "pg_catalog.pg_authid" in sql:
+        verifier = state["verifier"]
+        if verifier is not None:
+            print(f"f|f|f|f|f|t|{verifier}")
+        return 0
+    if "pg_get_userbyid(datdba)" in sql:
+        print(state["owner"])
+        return 0
+    if "select count(*) from owned" in sql:
+        print(state["left"])
+        return 0
+    if mode() == "sql-leak":
+        print(f"ERROR: could not run: {sql}", file=sys.stderr)
+        return 1
+    match = re.search(r"password '([^']+)'", sql)
+    if sql.startswith(("create role", "alter role")):
+        if match:
+            state["verifier"] = match.group(1)
+        elif state["verifier"] is None:
+            state["verifier"] = ""
+        writes.append("role")
+    elif sql.startswith("alter database"):
+        state["owner"] = login
+        writes.append("database")
+    elif "\\gexec" in sql:
+        state["left"] = 0
+        writes.append("objects")
+    else:
+        print(f"fake docker: unknown SQL {sql[:60]!r}", file=sys.stderr)
+        return 2
+    pg_write(state)
+    return 0
+
+
 def run_server_check(args: list[str]) -> int:
     """Answer the exec that asks the server what it has loaded: `-i <db> sh -s -- <rules file>`.
 
@@ -206,6 +278,8 @@ def run_exec(args: list[str]) -> int:
     if mode() == "no-db":
         print(f"Error response from daemon: No such container: {args[0]}", file=sys.stderr)
         return 1
+    if asking and args[1:3] == ["sh", "-c"]:
+        return run_psql(args)
     if asking:
         return run_server_check(args)
     if args[1:] != ["cat", "/etc/postgresql-hba/pg_hba.conf"]:
@@ -235,6 +309,13 @@ def main() -> int:
             print("Error: No such network", file=sys.stderr)
             return 1
         print("[]")
+        return 0
+    if argv[:1] == ["inspect"]:
+        record(argv, {})
+        if mode() == "no-db":
+            print(f"Error: No such object: {argv[-1]}", file=sys.stderr)
+            return 1
+        print("false" if mode() == "stopped" else "true")
         return 0
     if argv[:1] == ["exec"]:
         record(argv, {})

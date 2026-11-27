@@ -1,0 +1,185 @@
+---
+# The delivery's migration, run by a plain apply, before the deploy wrapper moves the stack onto an
+# image. The owner's ruling of 27 Nov 2026: the delivery makes the migration login itself, with the
+# administrator's password the host already holds, and keeps its credential root-only, so no step is
+# the owner's. Applied migrations cannot be rolled back.
+#
+# It runs only when the image this apply deploys (control_plane_app_image, the one the control_plane
+# role gives the deploy wrapper) is the migration image (control_plane_db_apps_image), and only while
+# that image's migration has no marker. So a host that pins no image to deploy, or pins one that is not
+# the migration image, migrates nothing, and the same digest is migrated once. The marker is the one the
+# migrate step writes, so a migrate by request and a delivery agree on what has been done.
+#
+# In order: read the marker; find the database running on the rules the stack delivered; make the
+# login and its credential file (control_plane_db_login); stage a copy of the credential where the
+# image's user can read it; run the migrate step's own tasks on that copy, which remove it on every
+# way out. The credential file itself stays root:root 0600 and is never mounted.
+#
+# A database that is not running is not migrated: a stack that has not been deployed has nothing to
+# migrate, and the first provision is the owner's step. A database not yet running on the delivered
+# access rules is not migrated either, and this does not stop the apply, because the control_plane role
+# that delivers those rules runs after this one; the next apply migrates (see the README, named limits).
+
+- name: Refuse an image that is not pinned by digest
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_apps_image is string
+      - control_plane_db_apps_image is match(control_plane_db_image_pattern)
+    quiet: true
+    fail_msg: 'REFUSED: control_plane_db_apps_image must be NAME@sha256: followed by 64 lower-case hex digits. A tag is not a pin.'
+
+- name: Name the marker of this image's migration
+  ansible.builtin.set_fact:
+    control_plane_db_marker: 'migrate-{{ control_plane_db_apps_image | ansible.builtin.regex_replace("^.*@sha256:", "") }}'
+
+- name: Create the state directory of the step markers
+  ansible.builtin.file:
+    path: '{{ control_plane_db_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Read the marker of the migration
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_state_dir }}/{{ control_plane_db_marker }}'
+    get_checksum: false
+  register: control_plane_db_delivery_marker_stat
+
+# Its own name, not the migrate step's: that step's guard reads the marker again under control_plane_db_marker_stat,
+# and a skipped read overwrites a registered result with one that has no `stat`, which this condition (handed to
+# every imported task below) would then fail on.
+- name: Migrate this image's database before the stack is moved onto it
+  when: not control_plane_db_delivery_marker_stat.stat.exists
+  block:
+    # Read-only, so it runs in check mode too, and its result is what the plan shows.
+    - name: Look at the database container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - '{% raw %}{{.State.Running}}{% endraw %}'
+          - '{{ control_plane_db_hba_container }}'
+      register: control_plane_db_delivery_container
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Work out whether the database is running
+      ansible.builtin.set_fact:
+        control_plane_db_delivery_db_up: "{{ control_plane_db_delivery_container.rc == 0 and (control_plane_db_delivery_container.stdout | trim) == 'true' }}"
+        control_plane_db_delivery_hba_current: true
+
+    - name: Say why nothing is migrated while the database is not running
+      ansible.builtin.debug:
+        msg: >-
+          control_plane_db: {{ control_plane_db_hba_container }} is not running, so nothing is migrated here.
+          The first provision of a new stack is the owner's step.
+      when: not (control_plane_db_delivery_db_up | ansible.builtin.bool)
+
+    - name: Migrate a running database
+      when: control_plane_db_delivery_db_up | ansible.builtin.bool
+      block:
+        # The same read the provision step makes, and the same refusals, but a refusal here only holds the
+        # migration back: the access rules are delivered by the role that runs after this one.
+        - name: Find out whether the database runs on the access rules the stack delivered
+          block:
+            - name: Check the database runs on rules that admit the portal logins
+              ansible.builtin.import_tasks: _hba.yml
+          rescue:
+            - name: Hold the migration back until the delivered access rules are in force
+              ansible.builtin.set_fact:
+                control_plane_db_delivery_hba_current: false
+
+        - name: Say why the migration waits for the next apply
+          ansible.builtin.debug:
+            msg: >-
+              control_plane_db: the database is not yet running on the access rules the stack delivered, so
+              the migration of this image waits for the next apply. The control_plane role that runs after
+              this one delivers and loads them.
+          when: not (control_plane_db_delivery_hba_current | ansible.builtin.bool)
+
+        - name: Migrate on the delivered access rules
+          when: control_plane_db_delivery_hba_current | ansible.builtin.bool
+          block:
+            # The module reads the server and the file and changes neither in check mode. Its failure shows
+            # its own message, which holds no password and no verifier, and no output of the program. The
+            # failed_when below makes the result's `failed` false, so the refusal reads `msg` and `actions`.
+            - name: Make the migration login and keep its credential, root-only
+              control_plane_db_login:
+                container: '{{ control_plane_db_hba_container }}'
+                database: '{{ control_plane_db_database_name }}'
+                login: '{{ control_plane_db_migrator_login }}'
+                credential_file: '{{ control_plane_db_migrator_credential_file }}'
+                host: '{{ control_plane_db_database_host }}'
+                owner: root
+                group: root
+                mode: '0600'
+              register: control_plane_db_login_result
+              failed_when: false
+              no_log: true
+
+            - name: Refuse a migration login that could not be made
+              ansible.builtin.assert:
+                that:
+                  - control_plane_db_login_result.msg is not defined
+                  - control_plane_db_login_result.actions is defined
+                quiet: true
+                fail_msg: 'REFUSED: {{ control_plane_db_login_result.msg | default("the migration login module did not run") | truncate(400) }}'
+
+            # The credential file is root:root 0600, which the image's user cannot read, so a copy is staged
+            # for the run in the directory the owner's inputs use, at the owner, group and mode that
+            # directory's files have. It is made empty first, at its final mode, and then filled, so no
+            # moment of it is readable by anyone else (the control_plane role writes a secret the same way).
+            # A plan stages nothing. The copy is removed on every way out, here and again by the migrate
+            # step's own tasks, which also remove it when they are the ones that stop.
+            - name: Run the migration on a staged copy of the credential, and take the copy off the disk
+              when: not ansible_check_mode
+              block:
+                - name: Create the staged copy of the credential, empty, at its final owner and mode
+                  ansible.builtin.copy:
+                    content: ''
+                    dest: '{{ control_plane_db_migrator_url_file }}'
+                    owner: '{{ control_plane_db_input_owner }}'
+                    group: '{{ control_plane_db_input_gid }}'
+                    mode: '{{ control_plane_db_input_mode }}'
+                    force: true
+                  no_log: true
+                  diff: false
+
+                - name: Stage a copy of the credential for the image's user
+                  ansible.builtin.copy:
+                    src: '{{ control_plane_db_migrator_credential_file }}'
+                    dest: '{{ control_plane_db_migrator_url_file }}'
+                    remote_src: true
+                    owner: '{{ control_plane_db_input_owner }}'
+                    group: '{{ control_plane_db_input_gid }}'
+                    mode: '{{ control_plane_db_input_mode }}'
+                    force: true
+                  no_log: true
+                  diff: false
+
+                # The migrate step's own tasks: its guard, its input check, the image check, the program, the
+                # output check and the marker. The step's second key is given by this import: a delivery is
+                # the owner's ruling, not a request that was typed.
+                - name: Run the migrate step's tasks on the staged copy
+                  ansible.builtin.import_tasks: _migrate.yml
+                  vars:
+                    control_plane_db_step: migrate
+              always:
+                - name: Remove the staged copy of the credential on every way out
+                  ansible.builtin.file:
+                    path: '{{ control_plane_db_migrator_url_file }}'
+                    state: absent
+
+            # A plan reads the server and the file but starts no container, so it cannot know whether the
+            # migrations are pending. It says that this image's would be applied, which the apply then does
+            # or finds already done, and never reports a change on a host whose marker exists.
+            - name: Report that this image's migrations would be applied
+              ansible.builtin.command:
+                argv:
+                  - 'true'
+              changed_when: true
+              check_mode: false
+              when: ansible_check_mode

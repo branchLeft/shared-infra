@@ -19,6 +19,8 @@ from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
 PULL_TRIGGER = ROLE.parent / "pull_trigger" / "files" / "pull_trigger.py"
+PLAYBOOK = ROLE.parents[1] / "playbooks" / "ops1.yml"
+OWNER_VARS = ROLE.parents[1] / "owner_vars" / "ops1.yml"
 STEPS = ("migrate", "identity", "provision")
 Task = dict[str, object]
 
@@ -61,6 +63,11 @@ def _text(name: str) -> str:
     return (ROLE / "tasks" / name).read_text(encoding="utf-8")
 
 
+def _plays() -> list[dict[str, object]]:
+    """Return the plays of ops1's playbook."""
+    return cast(list[dict[str, object]], _load(PLAYBOOK))
+
+
 def _module(task: Task) -> str:
     """Return the short module name a task uses, or an empty string."""
     for key in task:
@@ -101,6 +108,7 @@ class TagTests(unittest.TestCase):
             str(task["name"]): task
             for task in _tasks(ROLE / "tasks" / "main.yml")
             if _module(task) == "import_tasks"
+            and task["ansible.builtin.import_tasks"] != "_deliver.yml"
         }
         self.assertEqual(len(imports), len(STEPS))
         for step in STEPS:
@@ -369,14 +377,20 @@ def _hba_rule_pattern(login: str) -> re.Pattern[str]:
 
 
 class DatabaseRulesTests(unittest.TestCase):
-    def test_provision_checks_the_database_rules_before_it_looks_at_or_reads_any_input(self) -> None:
+    def test_provision_checks_the_database_rules_before_it_looks_at_or_reads_any_input(
+        self,
+    ) -> None:
         names = _names(ROLE / "tasks" / "_provision.yml")
         check = names.index(HBA_CHECK)
-        self.assertLess(check, names.index("Check the administrator URL file and the four password files"))
+        self.assertLess(
+            check, names.index("Check the administrator URL file and the four password files")
+        )
         self.assertLess(check, names.index("Read the four passwords"))
         self.assertLess(check, names.index("Look at the two connection URL files"))
         self.assertLess(check, names.index("Create the portal database, its roles and logins"))
-        imported = next(t for t in _tasks(ROLE / "tasks" / "_provision.yml") if t["name"] == HBA_CHECK)
+        imported = next(
+            t for t in _tasks(ROLE / "tasks" / "_provision.yml") if t["name"] == HBA_CHECK
+        )
         self.assertEqual(imported["ansible.builtin.import_tasks"], "_hba.yml")
 
     def test_only_provision_imports_the_check(self) -> None:
@@ -389,7 +403,10 @@ class DatabaseRulesTests(unittest.TestCase):
             for needle in ("admin_url", "password", "input_dir", "input_files", "url_file"):
                 self.assertNotIn(needle, str(task).lower(), f"{task['name']}: {needle}")
         reads = [t for t in tasks if _module(t) == "slurp"]
-        self.assertEqual([t["ansible.builtin.slurp"] for t in reads], [{"src": "{{ control_plane_db_hba_file }}"}])
+        self.assertEqual(
+            [t["ansible.builtin.slurp"] for t in reads],
+            [{"src": "{{ control_plane_db_hba_file }}"}],
+        )
 
     def test_the_running_rules_are_read_from_the_container_and_compared_byte_for_byte(self) -> None:
         tasks = _tasks(ROLE / "tasks" / "_hba.yml")
@@ -410,14 +427,17 @@ class DatabaseRulesTests(unittest.TestCase):
         self.assertIs(reads[0]["changed_when"], False)
         text = _text("_hba.yml")
         self.assertIn(
-            "control_plane_db_hba_running.stdout == (control_plane_db_hba_delivered.content | ansible.builtin.b64decode)",
+            "control_plane_db_hba_running.stdout == "
+            "(control_plane_db_hba_delivered.content | ansible.builtin.b64decode)",
             text,
         )
         self.assertIn("control_plane_db_hba_running.rc == 0", text)
         self.assertIn("REFUSED:", text)
 
     def test_each_of_the_four_logins_is_looked_for_in_the_delivered_file(self) -> None:
-        checks = [t for t in _tasks(ROLE / "tasks" / "_hba.yml") if "accepting rule" in str(t["name"])]
+        checks = [
+            t for t in _tasks(ROLE / "tasks" / "_hba.yml") if "accepting rule" in str(t["name"])
+        ]
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0]["loop"], "{{ control_plane_db_hba_logins }}")
         self.assertEqual(
@@ -430,10 +450,14 @@ class DatabaseRulesTests(unittest.TestCase):
             ],
         )
         constants = _vars()
-        self.assertEqual(constants["control_plane_db_provisioner_login"], "portal_provisioner_login")
+        self.assertEqual(
+            constants["control_plane_db_provisioner_login"], "portal_provisioner_login"
+        )
 
     def test_the_delivered_path_is_the_one_the_control_plane_role_delivers_to(self) -> None:
-        control_plane = cast(dict[str, object], _load(ROLE.parent / "control_plane" / "vars" / "main.yml"))
+        control_plane = cast(
+            dict[str, object], _load(ROLE.parent / "control_plane" / "vars" / "main.yml")
+        )
         self.assertEqual(
             _vars()["control_plane_db_hba_file"],
             f"{control_plane['control_plane_project_dir']}/postgres/pg_hba.conf",
@@ -444,9 +468,13 @@ class DatabaseRulesTests(unittest.TestCase):
         project = re.search(r"^name: (\S+)\s*$", compose, re.MULTILINE)
         mount = re.search(r"^\s+- \./postgres:(/\S+):ro\s*$", compose, re.MULTILINE)
         if project is None or mount is None:
-            self.fail("the compose file no longer names its project or mounts the postgres directory")
+            self.fail(
+                "the compose file no longer names its project or mounts the postgres directory"
+            )
         self.assertEqual(_vars()["control_plane_db_hba_container"], f"{project.group(1)}-db-1")
-        self.assertEqual(_vars()["control_plane_db_hba_container_file"], f"{mount.group(1)}/pg_hba.conf")
+        self.assertEqual(
+            _vars()["control_plane_db_hba_container_file"], f"{mount.group(1)}/pg_hba.conf"
+        )
         self.assertEqual(_vars()["control_plane_db_network"], f"{project.group(1)}_default")
 
     def test_the_logins_are_the_ones_the_stacks_file_admits_to_the_portal_database(self) -> None:
@@ -481,10 +509,16 @@ class DatabaseRulesTests(unittest.TestCase):
         ):
             self.assertNotRegex(bad, pattern)
 
-    def test_the_server_is_asked_what_it_loaded_after_the_container_is_shown_to_hold_the_file(self) -> None:
+    def test_the_server_is_asked_what_it_loaded_after_the_container_is_shown_to_hold_the_file(
+        self,
+    ) -> None:
         tasks = _tasks(ROLE / "tasks" / "_hba.yml")
         names = [str(t["name"]) for t in tasks]
-        asks = [t for t in tasks if _module(t) == "command" and "sh" in str(t["ansible.builtin.command"])]
+        asks = [
+            t
+            for t in tasks
+            if _module(t) == "command" and "sh" in str(t["ansible.builtin.command"])
+        ]
         self.assertEqual(len(asks), 1)
         command = cast(dict[str, object], asks[0]["ansible.builtin.command"])
         self.assertEqual(
@@ -500,10 +534,16 @@ class DatabaseRulesTests(unittest.TestCase):
                 "{{ control_plane_db_hba_container_file }}",
             ],
         )
-        self.assertEqual(command["stdin"], "{{ lookup('ansible.builtin.file', 'server_loaded_hba.sh') }}")
+        self.assertEqual(
+            command["stdin"], "{{ lookup('ansible.builtin.file', 'server_loaded_hba.sh') }}"
+        )
         self.assertIs(asks[0]["changed_when"], False)
         self.assertEqual(asks[0]["when"], "not ansible_check_mode")
-        verdict = next(t for t in tasks if _module(t) == "assert" and "loaded the delivered rules" in str(t["name"]))
+        verdict = next(
+            t
+            for t in tasks
+            if _module(t) == "assert" and "loaded the delivered rules" in str(t["name"])
+        )
         body = cast(dict[str, object], verdict["ansible.builtin.assert"])
         self.assertIn("control_plane_db_hba_loaded.rc == 0", cast(list[str], body["that"]))
         self.assertIn("control_plane_db_hba_loaded.stderr", str(body["fail_msg"]))
@@ -511,11 +551,15 @@ class DatabaseRulesTests(unittest.TestCase):
         self.assertEqual(verdict["when"], "not ansible_check_mode")
         self.assertLess(names.index(str(asks[0]["name"])), names.index(str(verdict["name"])))
         self.assertLess(
-            names.index("Refuse a database that is not running or holds other rules than the delivered file"),
+            names.index(
+                "Refuse a database that is not running or holds other rules than the delivered file"
+            ),
             names.index(str(asks[0]["name"])),
         )
 
-    def test_the_server_read_uses_the_containers_own_credential_and_the_task_names_none(self) -> None:
+    def test_the_server_read_uses_the_containers_own_credential_and_the_task_names_none(
+        self,
+    ) -> None:
         script = (ROLE / "files" / "server_loaded_hba.sh").read_text(encoding="utf-8")
         self.assertIn("${POSTGRES_PASSWORD:?", script)
         self.assertNotRegex(script, r"(?m)^\s*set -[a-z]*x|set -o xtrace")
@@ -555,7 +599,9 @@ CONTAINER_HBA = "/etc/postgresql-hba/pg_hba.conf"
 STAND_IN_CREDENTIAL = "stand-in-credential-for-the-test"
 
 
-def _run_the_check(environment: dict[str, str], arguments: list[str], programs: Path) -> "subprocess.CompletedProcess[str]":
+def _run_the_check(
+    environment: dict[str, str], arguments: list[str], programs: Path
+) -> "subprocess.CompletedProcess[str]":
     """Run the check the way the role does: `sh -s -- <file>`, the script on standard input."""
     for name, body in (("psql", FAKE_PSQL), ("stat", FAKE_STAT)):
         program = programs / name
@@ -582,7 +628,10 @@ def _ask_the_server(
     hba_file: str = CONTAINER_HBA,
     credential: str = STAND_IN_CREDENTIAL,
 ) -> "subprocess.CompletedProcess[str]":
-    """Ask the check about a stand-in server that reloaded at `loaded`, for a file changed at mtime and ctime."""
+    """Ask the check about a stand-in server that reloaded at `loaded`.
+
+    The file it is asked about was changed at `mtime` and `ctime`.
+    """
     environment = {
         "FAKE_HBA_FILE": hba_file,
         "FAKE_ERRORS": str(errors),
@@ -623,7 +672,9 @@ class ServerLoadedRulesTests(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("has not reloaded", done.stderr)
 
-    def test_a_file_the_server_cannot_parse_is_refused_though_the_reload_is_late_enough(self) -> None:
+    def test_a_file_the_server_cannot_parse_is_refused_though_the_reload_is_late_enough(
+        self,
+    ) -> None:
         done = _ask_the_server(loaded=2000, errors=2)
         self.assertEqual(done.returncode, 1)
         self.assertIn("does not parse", done.stderr)
@@ -635,7 +686,7 @@ class ServerLoadedRulesTests(unittest.TestCase):
 
     def test_a_container_without_its_own_credential_is_refused(self) -> None:
         done = _ask_the_server(loaded=2000, credential="")
-        # A shell that meets an unset ${VAR:?} exits non-zero, and dash makes it 2 where bash makes it 1.
+        # A shell that meets an unset ${VAR:?} exits non-zero: dash makes it 2, bash makes it 1.
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("POSTGRES_PASSWORD", done.stderr)
 
@@ -655,10 +706,15 @@ class ServerLoadedRulesTests(unittest.TestCase):
 
 
 def _step_task(step: str, name: str) -> Task:
-    """Return the task of a step with this name, which must be unique in its file."""
+    """Return the task of a step with this name, which must be unique in its file.
+
+    Raises:
+        AssertionError: The file holds no task of this name, or more than one.
+    """
     found = [t for t in _tasks(ROLE / "tasks" / f"_{step}.yml") if t.get("name") == name]
     if len(found) != 1:
-        raise AssertionError(f"{step}: expected one task named {name!r}, found {len(found)}")
+        message = f"{step}: expected one task named {name!r}, found {len(found)}"
+        raise AssertionError(message)
     return found[0]
 
 
@@ -675,7 +731,7 @@ def _image_needle(step: str, name: str) -> str:
 
 
 class MigratorTests(unittest.TestCase):
-    """The migration login is not the administrator, and the role never hands migrate the administrator."""
+    """The migration login is not the administrator; migrate is never handed the administrator."""
 
     def test_the_constants_name_the_login_its_two_inputs_and_the_provision_marker(self) -> None:
         constants = _vars()
@@ -685,9 +741,13 @@ class MigratorTests(unittest.TestCase):
         for kind in ("password", "url"):
             self.assertEqual(
                 constants[f"control_plane_db_migrator_{kind}_file"],
-                f"{{{{ control_plane_db_input_dir }}}}/{{{{ control_plane_db_migrator_{kind}_name }}}}",
+                f"{{{{ control_plane_db_input_dir }}}}/"
+                f"{{{{ control_plane_db_migrator_{kind}_name }}}}",
             )
-        logins = [constants[f"control_plane_db_{n}_login"] for n in ("tenant", "owner", "provisioner", "migrator")]
+        logins = [
+            constants[f"control_plane_db_{n}_login"]
+            for n in ("tenant", "owner", "provisioner", "migrator")
+        ]
         self.assertEqual(len(set(logins)), 4)
         sets = [t for t in _tasks(ROLE / "tasks" / "_provision.yml") if _module(t) == "set_fact"]
         facts = cast(dict[str, str], sets[0]["ansible.builtin.set_fact"])
@@ -716,15 +776,20 @@ class MigratorTests(unittest.TestCase):
 
     def test_the_image_must_carry_the_variable_each_step_reads_for_the_migrator(self) -> None:
         self.assertEqual(
-            _image_needle("migrate", "Check the image carries the migrator login"), "PORTAL_MIGRATOR_URL_FILE"
+            _image_needle("migrate", "Check the image carries the migrator login"),
+            "PORTAL_MIGRATOR_URL_FILE",
         )
         self.assertEqual(
             _image_needle("provision", "Check the image carries the migrator login"),
             "PORTAL_MIGRATOR_PASSWORD_FILE",
         )
 
-    def test_provision_checks_reads_mounts_and_names_the_migrator_password_with_the_others(self) -> None:
-        files = _input_files("provision", "Check the administrator URL file and the four password files")
+    def test_provision_checks_reads_mounts_and_names_the_migrator_password_with_the_others(
+        self,
+    ) -> None:
+        files = _input_files(
+            "provision", "Check the administrator URL file and the four password files"
+        )
         self.assertEqual(files[-1], "{{ control_plane_db_migrator_password_file }}")
         self.assertEqual(len(files), 5)
         read = _step_task("provision", "Read the four passwords")
@@ -732,12 +797,247 @@ class MigratorTests(unittest.TestCase):
         self.assertEqual(len(cast(list[str], read["loop"])), 4)
         text = _text("_provision.yml")
         self.assertIn("'-v', control_plane_db_migrator_password_file", text)
-        self.assertIn("'-e', 'PORTAL_MIGRATOR_PASSWORD_FILE=/provision/' ~ control_plane_db_migrator_password_name", text)
+        self.assertIn(
+            "'-e', 'PORTAL_MIGRATOR_PASSWORD_FILE=/provision/' ~ "
+            "control_plane_db_migrator_password_name",
+            text,
+        )
         self.assertEqual(text.count("'-v', "), 5)
 
-    def test_provision_still_gives_the_program_the_administrator_url_it_needs_for_the_first_steps(self) -> None:
+    def test_provision_still_gives_the_program_the_administrator_url_it_needs_for_the_first_steps(
+        self,
+    ) -> None:
         # Out of scope for this change: the administrator creates the roles and the database.
-        self.assertIn("'-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name", _text("_provision.yml"))
+        self.assertIn(
+            "'-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name",
+            _text("_provision.yml"),
+        )
+
+
+def _deliver_tasks() -> list[Task]:
+    """Return every task of the delivery's file, with the tasks of its blocks, in file order."""
+    return _tasks(ROLE / "tasks" / "_deliver.yml")
+
+
+def _deliver_task(name: str) -> Task:
+    """Return the delivery's task of this name."""
+    return _step_task("deliver", name)
+
+
+STAGED_RUN = "Run the migration on a staged copy of the credential, and take the copy off the disk"
+
+
+class DeliveryTests(unittest.TestCase):
+    """The owner's ruling of 27 Nov 2026: the delivery migrates, with no step for the owner."""
+
+    def test_a_plain_apply_reaches_the_delivery_only_for_the_deployed_migration_image(
+        self,
+    ) -> None:
+        (task,) = [
+            t
+            for t in _tasks(ROLE / "tasks" / "main.yml")
+            if t.get("ansible.builtin.import_tasks") == "_deliver.yml"
+        ]
+        self.assertNotIn("tags", task)
+        self.assertEqual(
+            task["when"],
+            [
+                "control_plane_db_plain_apply | ansible.builtin.bool",
+                "control_plane_db_config_dir_stat.stat.exists",
+                "control_plane_db_delivery_image | length > 0",
+                "control_plane_db_delivery_image == control_plane_db_apps_image",
+            ],
+        )
+
+    def test_the_plain_apply_gate_is_a_fact_the_imported_step_cannot_override(self) -> None:
+        """The delivery imports migrate with the step key set, so the gate must not read it."""
+        tasks = _tasks(ROLE / "tasks" / "main.yml")
+        facts = [
+            cast(dict[str, str], t["ansible.builtin.set_fact"])
+            for t in tasks
+            if isinstance(t.get("ansible.builtin.set_fact"), dict)
+        ]
+        (gate,) = [f for f in facts if "control_plane_db_plain_apply" in f]
+        self.assertEqual(gate["control_plane_db_plain_apply"], "{{ control_plane_db_step == '' }}")
+        deliver = "Deliver the migrations of the image this apply deploys"
+        names = [str(t["name"]) for t in tasks]
+        fact_index = [
+            i
+            for i, t in enumerate(tasks)
+            if isinstance(t.get("ansible.builtin.set_fact"), dict)
+            and "control_plane_db_plain_apply"
+            in cast(dict[str, str], t["ansible.builtin.set_fact"])
+        ]
+        self.assertLess(fact_index[0], names.index(deliver))
+        conditions = cast(list[str], tasks[names.index(deliver)]["when"])
+        self.assertNotIn("control_plane_db_step", " ".join(conditions))
+
+    def test_the_deployed_image_is_the_one_the_control_plane_role_gives_the_wrapper(self) -> None:
+        constants = _vars()
+        self.assertEqual(
+            constants["control_plane_db_delivery_image"],
+            "{{ control_plane_app_image | default('', true) }}",
+        )
+
+    def test_the_delivery_runs_before_the_control_plane_moves_the_stack_onto_the_image(
+        self,
+    ) -> None:
+        roles = [
+            str(entry["role"]).rsplit("/", 1)[-1]
+            for entry in cast(list[dict[str, object]], _plays()[0]["roles"])
+        ]
+        self.assertLess(roles.index("control_plane_db"), roles.index("control_plane"))
+
+    def test_the_delivery_goes_in_this_order_and_the_marker_comes_last(self) -> None:
+        names = [str(t["name"]) for t in _deliver_tasks()]
+        order = [
+            "Read the marker of the migration",
+            "Look at the database container",
+            "Check the database runs on rules that admit the portal logins",
+            "Make the migration login and keep its credential, root-only",
+            "Refuse a migration login that could not be made",
+            "Create the staged copy of the credential, empty, at its final owner and mode",
+            "Stage a copy of the credential for the image's user",
+            "Run the migrate step's tasks on the staged copy",
+            "Remove the staged copy of the credential on every way out",
+        ]
+        positions = [names.index(name) for name in order]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_the_marker_is_the_one_the_migrate_step_writes_so_a_digest_is_migrated_once(
+        self,
+    ) -> None:
+        text = _text("_deliver.yml")
+        self.assertIn(
+            "'migrate-{{ control_plane_db_apps_image | ansible.builtin.regex_replace", text
+        )
+        self.assertIn(
+            "migrate-{{ control_plane_db_apps_image | ansible.builtin.regex_replace",
+            _text("_migrate.yml"),
+        )
+        self.assertIn("when: not control_plane_db_delivery_marker_stat.stat.exists", text)
+        self.assertNotIn("register: control_plane_db_marker_stat", text)
+
+    def test_a_login_the_module_could_not_make_stops_the_delivery_before_anything_is_staged(
+        self,
+    ) -> None:
+        """failed_when false empties `failed`, so the refusal reads what a failure leaves."""
+        names = [str(t["name"]) for t in _deliver_tasks()]
+        refusal = _deliver_task("Refuse a migration login that could not be made")
+        self.assertEqual(
+            cast(dict[str, list[str]], refusal["ansible.builtin.assert"])["that"],
+            [
+                "control_plane_db_login_result.msg is not defined",
+                "control_plane_db_login_result.actions is defined",
+            ],
+        )
+        self.assertLess(
+            names.index("Refuse a migration login that could not be made"),
+            names.index(STAGED_RUN),
+        )
+
+    def test_the_migration_login_is_made_with_the_credential_file_root_only(self) -> None:
+        task = _deliver_task("Make the migration login and keep its credential, root-only")
+        module = cast(dict[str, str], task["control_plane_db_login"])
+        self.assertEqual(
+            (module["owner"], module["group"], module["mode"]), ("root", "root", "0600")
+        )
+        self.assertEqual(
+            module["credential_file"], "{{ control_plane_db_migrator_credential_file }}"
+        )
+        self.assertEqual(task["no_log"], True)
+
+    def test_the_standing_credential_is_in_the_configuration_directory_and_never_mounted(
+        self,
+    ) -> None:
+        constants = _vars()
+        self.assertEqual(
+            constants["control_plane_db_migrator_credential_file"],
+            "{{ control_plane_db_config_dir }}/{{ control_plane_db_migrator_credential_name }}",
+        )
+        for name in sorted(path.name for path in (ROLE / "tasks").glob("*.yml")):
+            self.assertNotIn(
+                "-v', control_plane_db_migrator_credential_file",
+                _text(name).replace('"', "'"),
+                name,
+            )
+            if name != "_deliver.yml":
+                self.assertNotIn("control_plane_db_migrator_credential_file", _text(name), name)
+
+    def test_every_task_that_stages_or_makes_the_credential_hides_its_output_and_its_diff(
+        self,
+    ) -> None:
+        for name in (
+            "Make the migration login and keep its credential, root-only",
+            "Create the staged copy of the credential, empty, at its final owner and mode",
+            "Stage a copy of the credential for the image's user",
+        ):
+            task = _deliver_task(name)
+            with self.subTest(task=name):
+                self.assertEqual(task.get("no_log"), True)
+        for name in (
+            "Create the staged copy of the credential, empty, at its final owner and mode",
+            "Stage a copy of the credential for the image's user",
+        ):
+            self.assertEqual(_deliver_task(name).get("diff"), False, name)
+
+    def test_the_staged_copy_is_the_input_file_migrate_checks_and_is_removed_on_every_exit(
+        self,
+    ) -> None:
+        staged = _deliver_task("Stage a copy of the credential for the image's user")
+        copy = cast(dict[str, object], staged["ansible.builtin.copy"])
+        self.assertEqual(copy["dest"], "{{ control_plane_db_migrator_url_file }}")
+        self.assertEqual(copy["src"], "{{ control_plane_db_migrator_credential_file }}")
+        self.assertEqual(copy["mode"], "{{ control_plane_db_input_mode }}")
+        self.assertEqual(copy["group"], "{{ control_plane_db_input_gid }}")
+        block = next(
+            t
+            for t in _deliver_tasks()
+            if "always" in t and "Remove the staged copy" in str(t["always"])
+        )
+        (removal,) = cast(list[Task], block["always"])
+        removal_file = cast(dict[str, str], removal["ansible.builtin.file"])
+        self.assertEqual(removal_file["state"], "absent")
+        self.assertEqual(removal_file["path"], "{{ control_plane_db_migrator_url_file }}")
+
+    def test_only_the_delivery_supplies_the_steps_second_key_and_only_as_migrate(self) -> None:
+        importing = [
+            name
+            for name in sorted(path.name for path in (ROLE / "tasks").glob("*.yml"))
+            if re.search(r"^\s+control_plane_db_step:", _text(name), re.MULTILINE)
+        ]
+        self.assertEqual(importing, ["_deliver.yml"])
+        self.assertIn("control_plane_db_step: migrate", _text("_deliver.yml"))
+
+    def test_a_plan_stages_nothing_and_starts_no_container_and_says_what_would_be_done(
+        self,
+    ) -> None:
+        outer = _deliver_task(
+            "Run the migration on a staged copy of the credential, and take the copy off the disk"
+        )
+        self.assertEqual(outer["when"], "not ansible_check_mode")
+        report = _deliver_task("Report that this image's migrations would be applied")
+        self.assertEqual(report["when"], "ansible_check_mode")
+        self.assertEqual(report["changed_when"], True)
+
+    def test_a_database_not_yet_on_the_delivered_rules_holds_the_migration_back_without_failing(
+        self,
+    ) -> None:
+        names = [str(t["name"]) for t in _deliver_tasks()]
+        rescue = _deliver_task(
+            "Hold the migration back until the delivered access rules are in force"
+        )
+        facts = cast(dict[str, object], rescue["ansible.builtin.set_fact"])
+        self.assertEqual(facts, {"control_plane_db_delivery_hba_current": False})
+        self.assertIn("Migrate on the delivered access rules", names)
+
+    def test_the_migration_and_the_deployed_image_cannot_name_different_digests_on_ops1(
+        self,
+    ) -> None:
+        owner = cast(dict[str, object], _load(OWNER_VARS))
+        deployed = owner.get("control_plane_app_image")
+        if deployed:
+            self.assertEqual(deployed, owner["control_plane_db_apps_image"])
 
 
 class PatternTests(unittest.TestCase):

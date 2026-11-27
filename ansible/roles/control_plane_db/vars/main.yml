@@ -51,6 +51,19 @@ control_plane_db_provisioner_password_file: '{{ control_plane_db_input_dir }}/{{
 control_plane_db_migrator_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_migrator_password_name }}'
 control_plane_db_migrator_url_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_migrator_url_name }}'
 
+# The migration login's standing credential, made by the delivery (control_plane_db_login): a connection
+# URL, root:root 0600, in the configuration directory. It is never mounted into a container. A migrate
+# is given a copy staged at control_plane_db_migrator_url_file for the run, which is removed on every
+# exit (C11, C25). Owner's ruling 27 Nov 2026, which supersedes "no standing credential" for this login.
+control_plane_db_migrator_credential_name: migrator-database-url
+control_plane_db_migrator_credential_file: '{{ control_plane_db_config_dir }}/{{ control_plane_db_migrator_credential_name }}'
+
+# The image the control plane deploys this apply: the one the control_plane role gives the deploy
+# wrapper, set in the host's owner file, or empty when the host pins none (the role then keeps the
+# running image). The delivery migrates only when it is the migration image. A constant, so an
+# inventory cannot point it elsewhere; a play variable of this name is the control_plane role's input.
+control_plane_db_delivery_image: "{{ control_plane_app_image | default('', true) }}"
+
 # The input files' owner, group and mode. The group is the applications image's
 # user, which reads them through a read-only mount and nothing else can.
 control_plane_db_input_owner: root

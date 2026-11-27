@@ -1,0 +1,23 @@
+---
+# Read the stand-in database's state, as data: whether the migration login exists and the verifier it
+# holds, who owns the portal database, how many objects the administrator still owns in it, and which
+# kinds of write were made, in order. A database nothing has written to is in its starting state.
+- name: Look for the stand-in database's state
+  ansible.builtin.stat:
+    path: /var/tmp/fake-docker/pg.json
+  register: control_plane_db_verify_pg_stat
+
+- name: Read the stand-in database's state
+  ansible.builtin.slurp:
+    src: /var/tmp/fake-docker/pg.json
+  register: control_plane_db_verify_pg_slurp
+  when: control_plane_db_verify_pg_stat.stat.exists
+  no_log: true
+
+- name: Keep the state as data, without the verifier
+  ansible.builtin.set_fact:
+    control_plane_db_verify_pg: >-
+      {{ (control_plane_db_verify_pg_slurp.content | ansible.builtin.b64decode | ansible.builtin.from_json)
+         if control_plane_db_verify_pg_stat.stat.exists
+         else {'verifier': none, 'owner': 'postgres', 'left': 3, 'writes': []} }}
+  no_log: true

@@ -46,6 +46,8 @@ provisioner:
           identity: identity.example.invalid
         # Throwaways made from the harness's run id: never committed, and the
         # verify play looks for them in every run's output.
+        # The image a plain apply deploys, for the delivery section: the migration image itself.
+        scenario_deliver_image: '{{ control_plane_db_apps_image }}'
         scenario_run: "{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
         # The stack's own access rules, read from the repository by the controller so
         # the scenario holds no second copy. prepare.yml and reset.yml put them where the

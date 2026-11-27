@@ -1,0 +1,42 @@
+---
+# One case of a delivery held back: put the stand-in in the mode, request a plain apply that deploys the
+# migration image, and assert that it stopped nothing, made nothing, and migrated nothing. Takes hold,
+# a mapping with the stand-in's mode.
+- name: 'Start from a clean slate: {{ hold.mode }}'
+  ansible.builtin.import_tasks: tasks/reset.yml
+
+- name: 'Put the stand-in in the mode: {{ hold.mode }}'
+  ansible.builtin.copy:
+    content: "{{ hold.mode }}\n"
+    dest: /var/tmp/fake-docker/mode
+    mode: '0644'
+
+- name: 'Request the plain apply: {{ hold.mode }}'
+  ansible.builtin.import_tasks: tasks/ask.yml
+  vars:
+    ask_name: 'delivery held back: {{ hold.mode }}'
+    ask_extra: { control_plane_app_image: '{{ scenario_deliver_image }}' }
+
+- name: 'Read the calls and the state: {{ hold.mode }}'
+  ansible.builtin.import_tasks: tasks/calls.yml
+
+- name: 'Read the database state: {{ hold.mode }}'
+  ansible.builtin.import_tasks: tasks/pg.yml
+
+- name: 'Look at the credential and the marker: {{ hold.mode }}'
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /etc/branchleft/control-plane/migrator-database-url
+    - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+  register: control_plane_db_verify_hold_case_stats
+
+- name: 'Assert the hold stopped nothing and made and migrated nothing: {{ hold.mode }}'
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_ask_result.rc == 0
+      - control_plane_db_verify_pg.writes == []
+      - control_plane_db_verify_calls | selectattr('argv.0', 'equalto', 'run') | list | length == 0
+      - control_plane_db_verify_hold_case_stats.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+    quiet: true
+    fail_msg: 'A delivery held back ({{ hold.mode }}) wrote to the server, made a credential or a marker, or started a program.'
