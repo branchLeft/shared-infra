@@ -172,6 +172,7 @@ APPLIED_ON_MAIN = {
         "spool_path_account",
         "host_tls_identity",
         "node_exporter_public",
+        "export_bundler",
     ],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).

@@ -40,6 +40,11 @@
 # private network with the monitoring host. The role waits, changing nothing, until the owner has
 # placed the CA, certificate and key files (roles/node_exporter_public/README.md).
 #
+# export_bundler is last of all. It carries the pinned export bundler that a demo's promotion runs
+# (a root-only copy under /root/export-bundler, no fetch) and, once the owner has seeded ops1's public
+# key as the host input export_bundler_controller_key, the one restricted account that key logs in as.
+# It refuses a Docker older than 28 only when that key is seeded, and it is last so that refusal holds
+# nothing else back.
 # The roles have no secret and no required input. The variables files are the shared pull values,
 # the host's trust file, which holds the signer list and nothing else, and the owner's public
 # certificate value. The inventory has no entry for the host: a playbook and its trust file enrol it.
@@ -71,3 +76,4 @@
     - role: ../roles/spool_path_account # noqa: role-name[path]
     - role: ../roles/host_tls_identity # noqa: role-name[path]
     - role: ../roles/node_exporter_public # noqa: role-name[path]
+    - role: ../roles/export_bundler # noqa: role-name[path]
