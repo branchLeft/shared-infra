@@ -1,3 +1,4 @@
+import { MediaTreeRefusedError, MediaTreeTooLargeError, readMediaTree } from './mediaTree.js';
 import { parseErasureDate, countSiteRelativeReferences, planMedia, scanMediaReferences, } from './mediaManifest.js';
 export const MEMBERS_ENTRY = 'members.json';
 export const MEMBERS_CSV_ENTRY = 'members.csv';
@@ -228,7 +229,56 @@ export async function collectMedia(deps) {
         return failure('media', err);
     }
 }
-/** Runs all three; one failing never stops the others. */
+/**
+ * The originals of a demo slot's served media tree. A link, a device or any
+ * other non-file in the tree is not a failure to report but a refusal, and it
+ * ends the export: the error is thrown, never turned into a report.
+ */
+export async function collectMediaFiles(deps) {
+    const tree = deps.mediaTree;
+    if (tree === undefined)
+        throw new Error('collectMediaFiles needs a media tree');
+    let result;
+    try {
+        result = await readMediaTree({ ...tree, contentJson: deps.contentJson });
+    }
+    catch (err) {
+        if (err instanceof MediaTreeRefusedError || err instanceof MediaTreeTooLargeError)
+            throw err;
+        return failure('media_files', err);
+    }
+    const { listing } = result;
+    const oversized = listing.files.filter((f) => f.status === 'oversized');
+    const notSent = listing.files.filter((f) => f.status === 'not-sent');
+    const notes = [];
+    if (listing.unrepresentable.length > 0) {
+        notes.push(`${listing.unrepresentable.length} files have names the bundle cannot carry and were listed, not carried`);
+    }
+    return {
+        report: {
+            name: 'media_files',
+            status: statusFor(notes),
+            expected: listing.treeFileCount,
+            present: listing.files.length + listing.unreferenced.length,
+            notes,
+            info: [
+                `${result.files.length} referenced files carried`,
+                `${listing.unreferenced.length} files no content references counted, left out`,
+                `${notSent.length} files under media listed, not sent`,
+                `${oversized.length} files over the upload ceiling listed, not carried`,
+                `${listing.danglingReferences.length} references to files the tree does not hold`,
+            ],
+        },
+        files: result.files,
+        mediaFiles: listing,
+    };
+}
+/** Runs them all; one failing never stops the others. A media tree refusal still ends the export. */
 export async function collectExtensions(deps) {
-    return [await collectMedia(deps), await collectMembers(deps), await collectComments(deps)];
+    const outcomes = [
+        await collectMedia(deps),
+        await collectMembers(deps),
+        await collectComments(deps),
+    ];
+    return deps.mediaTree === undefined ? outcomes : [...outcomes, await collectMediaFiles(deps)];
 }

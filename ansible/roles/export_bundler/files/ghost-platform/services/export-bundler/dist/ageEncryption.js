@@ -57,6 +57,8 @@ export function countAgeRecipientStanzas(ciphertext) {
 // The header is textual and bounded; one X25519 stanza is well under 1 KiB.
 const HEADER_READ_BYTES = 16 * 1024;
 export const DEFAULT_AGE_TIMEOUT_MS = 10 * 60 * 1000;
+// The largest delay Node's timers accept (a signed 32-bit millisecond count).
+const MAX_TIMER_MS = 2 ** 31 - 1;
 /**
  * Encrypts `plaintext` to `recipient` into a new file at `destPath`, created
  * 0600 and exclusively (an existing file is never overwritten). `plaintext`
@@ -69,6 +71,11 @@ export const DEFAULT_AGE_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export async function encryptToFile(plaintext, recipient, destPath, ageCommand = 'age', timeoutMs = DEFAULT_AGE_TIMEOUT_MS) {
     assertAgeRecipient(recipient);
+    // setTimeout treats anything above 2^31-1, Infinity and NaN as 1 ms, which
+    // would kill a healthy age straight away.
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
+        throw new AgeEncryptionError(`timeoutMs must be a finite positive integer no greater than ${MAX_TIMER_MS}, got ${String(timeoutMs)}`);
+    }
     const handle = await open(destPath, 'wx+', 0o600);
     let ok = false;
     try {

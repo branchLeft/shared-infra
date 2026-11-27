@@ -59,7 +59,7 @@ pinned files is the one home of the bundler's identity.
 | Variable                       | Default                                | What it is                                                      |
 | ------------------------------ | -------------------------------------- | --------------------------------------------------------------- |
 | `export_bundler_source_sha`    | the pinned ghost-platform commit       | Written to `COMMIT`. A bump changes it with the files and pins. |
-| `export_bundler_release_files` | `package.json` and 22 files in `dist/` | One path and one sha256 each. The role writes exactly these.    |
+| `export_bundler_release_files` | `package.json` and 28 files in `dist/` | One path and one sha256 each. The role writes exactly these.    |
 | `export_bundler_dir`           | `/root/export-bundler`                 | The bundler on the host.                                        |
 | `export_bundler_state_dir`     | `/root/export-bundler-state`           | The export's state directory on the host.                       |
 
@@ -86,7 +86,7 @@ in `demo1_build`, so a caller's play or inventory variables cannot point the rol
 | ------------------------------------------------ | ---------------- | ------------------------------------------------------ |
 | `/root/export-bundler`                           | `root:root` 0700 | The bundler's directory.                               |
 | `/root/export-bundler/package.json`              | `root:root` 0600 | Says the compiled files are ES modules.                |
-| `/root/export-bundler/dist/*.js`                 | `root:root` 0600 | The 22 compiled files, each held to its pin.           |
+| `/root/export-bundler/dist/*.js`                 | `root:root` 0600 | The 28 compiled files, each held to its pin.           |
 | `/root/export-bundler/COMMIT`                    | `root:root` 0600 | The ghost-platform commit the files were built from.   |
 | `/root/export-bundler-state`, `…/flags`, `…/out` | `root:root` 0700 | Where an export keeps its flags, output and audit log. |
 
@@ -105,22 +105,22 @@ both: a check against a host with nothing on it, then a check after an apply, wh
 ## Vendored files
 
 The role's `files/ghost-platform/services/export-bundler/` is a built copy of `branchLeft/ghost-platform`
-`services/export-bundler`: `package.json` and the 22 files tsc writes to `dist/`. The host takes them from the
+`services/export-bundler`: `package.json` and the 28 files tsc writes to `dist/`. The host takes them from the
 signed commit; it never builds, fetches or installs anything. They are pinned by sha256 in
 `defaults/main.yml`, and `export_bundler_source_sha` records the commit they came from.
 
-**The pinned commit** is `5fb63577cb5850b351c964caa49c93a382516367`, the last ghost-platform commit that changed the
+**The pinned commit** is `664ef25ffa3c4dbc5b5d727e8113ce5d110c923f`, the last ghost-platform commit that changed the
 build inputs (`src/`, `pnpm-lock.yaml`, the tsconfig files, `package.json`). It is not the moving tip of `main`: a
 later commit that does not touch those inputs produces the same bytes.
 
 **To reproduce the files** (and for a reviewer to check them), from a clean detached worktree of that commit. The
-repository converted from npm to pnpm in the pinned commit, so the runbook's old `npm ci` no longer applies. The
+repository uses pnpm, so the runbook's old `npm ci` no longer applies. The
 package manager is the one `package.json` names (`packageManager`: `pnpm@11.17.0`, from the corepack cache), the
 Node is the one `.nvmrc` names (26.5.0), and no bare `pnpm`, `npm` or `npx` is used, because on the owner's
 workstation those names are shell functions that read a registry token:
 
 ```text
-git -C ghost-platform worktree add --detach ../export-bundler-build 5fb63577cb5850b351c964caa49c93a382516367
+git -C ghost-platform worktree add --detach ../export-bundler-build 664ef25ffa3c4dbc5b5d727e8113ce5d110c923f
 cd ../export-bundler-build/services/export-bundler
 PATH=$HOME/.nvm/versions/node/v26.5.0/bin:$PATH NPM_CONFIG_USERCONFIG=/dev/null node $HOME/.cache/node/corepack/v1/pnpm/11.17.0/bin/pnpm.cjs install --prefer-offline --frozen-lockfile --ignore-scripts
 PATH=$HOME/.nvm/versions/node/v26.5.0/bin:$PATH NPM_CONFIG_USERCONFIG=/dev/null node $HOME/.cache/node/corepack/v1/pnpm/11.17.0/bin/pnpm.cjs run build
@@ -129,8 +129,9 @@ PATH=$HOME/.nvm/versions/node/v26.5.0/bin:$PATH NPM_CONFIG_USERCONFIG=/dev/null 
 ```
 
 Then compare: `shasum -a 256 package.json dist/*.js` against the table in `defaults/main.yml`, or
-`diff -r dist <this role>/files/ghost-platform/services/export-bundler/dist`. At the pinned commit the build emits 22
-files, the typecheck is clean, and all 406 unit tests pass in a full clean checkout.
+`diff -r dist <this role>/files/ghost-platform/services/export-bundler/dist`. At the pinned commit the build emits 28
+files, the typecheck is clean, and the unit tests pass in a full clean checkout (672 pass and 62 are skipped, the
+Linux-only media-tree tests, on the macOS workstation that built it).
 
 Notes a reviewer needs:
 
@@ -144,6 +145,13 @@ Notes a reviewer needs:
   holds no absolute path, and the files import only `node:` modules, so nothing is installed on the host. It is not
   proven on another operating system or toolchain, so the check that matters is the pin: the files in this role are
   what the pins say, whoever built them.
+- **Provenance of the bump to `664ef25f`** (the commit of ghost-platform `main` that last changed the bundler: later
+  commits on `main` touch no build input, and `git log origin/main -- services/export-bundler` ends there). There is
+  no signed release or attestation for the bundler, unlike the broker, so the evidence is a rebuild plus the pins: a
+  clean detached worktree of that commit, a frozen-lockfile install with `--ignore-scripts`, two builds one after the
+  other that gave identical `shasum -a 256` lists, and `diff -r` between that `dist` and this role's copy empty. The
+  typecheck is clean and `vitest run` passed (672 passed, 62 skipped as Linux-only). Anyone can repeat it with the
+  commands above and compare with the table in `defaults/main.yml`.
 - Nothing rebuilds the files in CI. The control on a bump is the pins, the review class for
   `ansible/roles/*/files/ghost-platform/**`, and the owner's merge. A CI job that reproduces `dist` from the pinned commit would close this; it needs a
   GitHub Packages login for `@branchleft/tsconfig` and is filed as its own piece of work.
@@ -204,7 +212,7 @@ scenarios (`molecule/*/skip-steps.txt`):
   stale copy of one pinned file, a file and a directory the release does not have, an old `COMMIT`, and a state
   directory holding an audit line, a descriptor, a flag and an archive. It applies the role, applies it again (which
   must report no change) and verifies: every directory is `root:root` `0700`, every pinned file has its pin and mode
-  `0600`, `dist` holds the 22 pinned files and nothing else, `COMMIT` is the pinned commit, and the state directory
+  `0600`, `dist` holds the 28 pinned files and nothing else, `COMMIT` is the pinned commit, and the state directory
   holds exactly what it held, with the same modes and the same audit line. The expected checksums are written out in
   `verify.yml`, not read from the role.
 - `plan` runs the check steps: a check against a host with nothing on it, an apply, a check that must find nothing to

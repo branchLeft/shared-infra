@@ -68,7 +68,7 @@
     - name: Assert the case is real, that the changed copy differs from the pinned file
       ansible.builtin.assert:
         that:
-          - export_bundler_converge_cli.results[0].stat.checksum == '9699e83d55d2acd5f0cf10a96afbca0720324e76c7968f0efa39e3089a6c4472'
+          - export_bundler_converge_cli.results[0].stat.checksum == 'b19d49078a1e32796a63c3d5a01fb2bb5b45896ea2c7db3032149942815e082e'
           - export_bundler_converge_cli.results[1].stat.checksum != export_bundler_converge_cli.results[0].stat.checksum
         quiet: true
         fail_msg: The changed copy was not changed, or the pristine copy is not the pinned one.

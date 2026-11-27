@@ -1,3 +1,22 @@
+export function sidecarOf(manifest) {
+    const { mediaFiles, ...rest } = manifest;
+    if (mediaFiles === undefined)
+        return rest;
+    const carried = mediaFiles.files.filter((f) => f.status === 'carried');
+    return {
+        ...rest,
+        mediaFiles: {
+            treeFileCount: mediaFiles.treeFileCount,
+            carried: carried.length,
+            carriedBytes: carried.reduce((n, f) => n + f.size, 0),
+            oversized: mediaFiles.files.filter((f) => f.status === 'oversized').length,
+            notSent: mediaFiles.files.filter((f) => f.status === 'not-sent').length,
+            unreferenced: mediaFiles.unreferenced.length,
+            unrepresentable: mediaFiles.unrepresentable.length,
+            danglingReferences: mediaFiles.danglingReferences.length,
+        },
+    };
+}
 export const REQUIRED_EXTENSIONS = [
     'media',
     'members_and_subscriptions',
@@ -32,7 +51,11 @@ export const KNOWN_EXPORT_GAPS = [
 ];
 function shortfalls(extensions) {
     const gaps = [];
-    for (const name of REQUIRED_EXTENSIONS) {
+    // The media files of a demo slot are required exactly when they were attempted.
+    const required = extensions.some((e) => e.name === 'media_files')
+        ? [...REQUIRED_EXTENSIONS, 'media_files']
+        : REQUIRED_EXTENSIONS;
+    for (const name of required) {
         const report = extensions.find((e) => e.name === name);
         if (report === undefined) {
             gaps.push({ name, reason: 'not attempted' });
@@ -54,15 +77,44 @@ function shortfalls(extensions) {
     }
     return gaps;
 }
-export function buildManifest(tenantId, generatedAtIso, encryption, included, extensions = [], permanentGaps = KNOWN_EXPORT_GAPS) {
+export function buildManifest(tenantId, generatedAtIso, encryption, included, extensions = [], permanentGaps = KNOWN_EXPORT_GAPS, mediaFiles, activeTheme = null) {
     const failed = shortfalls(extensions);
+    // The bytes are in this archive when the slot's media files were carried.
+    const gaps = mediaFiles === undefined
+        ? permanentGaps
+        : permanentGaps.filter((g) => g.name !== 'media_bytes');
     return {
+        ...(mediaFiles === undefined ? {} : { mediaFiles }),
         tenantId,
         generatedAt: generatedAtIso,
         encryption,
+        activeTheme,
         complete: failed.length === 0,
         extensions,
         included,
-        excluded: [...failed, ...permanentGaps],
+        excluded: [...failed, ...gaps],
     };
+}
+/**
+ * The `active_theme` setting from Ghost's own content export
+ * (`db[0].data.settings`), or null when the export holds no such row or is
+ * not the JSON that export writes. Never throws: the manifest then names no
+ * theme rather than failing the export.
+ */
+export function activeThemeOf(contentJson) {
+    let parsed;
+    try {
+        parsed = JSON.parse(contentJson);
+    }
+    catch {
+        return null;
+    }
+    const db = parsed?.db;
+    const settings = Array.isArray(db)
+        ? db[0]?.data?.settings
+        : undefined;
+    if (!Array.isArray(settings))
+        return null;
+    const row = settings.find((r) => typeof r === 'object' && r !== null && r.key === 'active_theme');
+    return typeof row?.value === 'string' ? row.value : null;
 }

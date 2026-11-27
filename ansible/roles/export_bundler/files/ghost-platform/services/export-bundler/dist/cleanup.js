@@ -6,10 +6,18 @@ import { execFileSync } from 'node:child_process';
  * SIGINT or SIGTERM every remover still registered runs before the process
  * exits: a signal handler that exits first leaves a second Ghost and a copy
  * of the tenant's database running with nothing to stop them.
+ *
+ * A `docker` client still in flight when the signal lands is a second hole:
+ * its `create` can reach the daemon after the remover's `rm -f` has already
+ * found nothing to remove. So runAll() kills every tracked client first, and
+ * records that it did, which tells the container removers to keep removing
+ * until the container stays gone (dockerRemoveUntilGoneSync).
  */
 export class CleanupRegistry {
     #steps = new Map();
+    #children = new Set();
     #next = 0;
+    #killedInFlight = 0;
     register(label, step) {
         const id = this.#next++;
         this.#steps.set(id, { label, step });
@@ -17,12 +25,40 @@ export class CleanupRegistry {
             this.#steps.delete(id);
         };
     }
+    /** Tracks a spawned docker client until it exits; call the result on exit. */
+    trackChild(child) {
+        this.#children.add(child);
+        return () => {
+            this.#children.delete(child);
+        };
+    }
     get labels() {
         return [...this.#steps.values()].map((s) => s.label);
     }
-    /** Newest first, every step attempted; returns the labels that threw. */
+    /** How many still-running docker clients the last runAll() killed. */
+    get killedInFlight() {
+        return this.#killedInFlight;
+    }
+    /**
+     * First SIGKILLs every tracked client still running, then runs the steps
+     * newest first, every step attempted; returns the labels that threw.
+     */
     runAll() {
         const failed = [];
+        let killed = 0;
+        for (const child of this.#children) {
+            if (child.exitCode !== null || child.signalCode !== null)
+                continue;
+            try {
+                if (child.kill('SIGKILL'))
+                    killed += 1;
+            }
+            catch {
+                // Already gone between the check and the kill.
+            }
+        }
+        this.#children.clear();
+        this.#killedInFlight = killed;
         const steps = [...this.#steps.entries()].reverse();
         this.#steps.clear();
         for (const [, { label, step }] of steps) {
@@ -87,4 +123,55 @@ export function dockerRemoveSync(argv, dockerCommand = 'docker') {
         env: { PATH: process.env.PATH ?? '' },
         stdio: 'ignore',
     });
+}
+const GONE_POLLS = 20;
+const GONE_POLL_MS = 200;
+// A daemon can take a while to act on a create it was already sent, so absence
+// must hold for about 1.8 s (ten reads) before the container is called gone.
+const GONE_CONSECUTIVE_ABSENT = 10;
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+/**
+ * `docker rm` of a container, then -- only when runAll() killed a docker
+ * client that was still in flight -- keeps removing it until it stays gone.
+ * A killed `docker run` may already have sent its create to the daemon, so
+ * the container can appear after the first `rm -f` found nothing. Bounded at
+ * 20 reads 200 ms apart (about 4 s), stops after 10 absent reads in a row,
+ * repeats `rm -f` whenever the container shows up, and never throws. With
+ * nothing killed this is exactly one `rm`, as before.
+ */
+export function dockerRemoveUntilGoneSync(name, dockerCommand, registry, rmFlag = '-f') {
+    const remove = () => {
+        try {
+            dockerRemoveSync(['rm', rmFlag, name], dockerCommand);
+        }
+        catch {
+            // Already gone, or never created.
+        }
+    };
+    remove();
+    if (registry.killedInFlight === 0)
+        return;
+    let absent = 0;
+    for (let read = 0; read < GONE_POLLS; read += 1) {
+        let present = true;
+        try {
+            dockerRemoveSync(['inspect', '--type', 'container', name], dockerCommand);
+        }
+        catch {
+            present = false;
+        }
+        if (present) {
+            absent = 0;
+            remove();
+        }
+        else {
+            absent += 1;
+            if (absent >= GONE_CONSECUTIVE_ABSENT)
+                return;
+        }
+        if (read < GONE_POLLS - 1)
+            sleepSync(GONE_POLL_MS);
+    }
 }

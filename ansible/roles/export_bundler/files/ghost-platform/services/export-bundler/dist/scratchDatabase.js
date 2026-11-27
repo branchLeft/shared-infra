@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { dockerRemoveSync, processCleanup } from './cleanup.js';
+import { dockerRemoveUntilGoneSync, processCleanup } from './cleanup.js';
 import { NO_CONTAINER_LOGS, runDocker } from './containerRunner.js';
 import { withEnvFile } from './envFile.js';
 /**
@@ -208,7 +208,7 @@ export function mysqlErrorSummary(stderr) {
     return `MySQL error ${match[1]} (${match[2]})${match[3] ? ` at line ${match[3]}` : ''}`;
 }
 /** Streams the dump's stdout straight into the import's stdin: nothing is written to disk. */
-export function streamDumpIntoScratch(dockerCommand, dumpArgs, importArgs, onChunk) {
+export function streamDumpIntoScratch(dockerCommand, dumpArgs, importArgs, onChunk, registry = processCleanup) {
     return new Promise((resolve, reject) => {
         const env = { PATH: process.env.PATH ?? '' };
         const dump = spawn(dockerCommand, [...dumpArgs], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -217,8 +217,14 @@ export function streamDumpIntoScratch(dockerCommand, dumpArgs, importArgs, onChu
         let importStderr = '';
         let dumpCode;
         let importCode;
+        // Both clients are tracked while in flight: a signal kills them before the
+        // removers run, so a container create they have not yet sent is never sent.
+        const untrackDump = registry.trackChild(dump);
+        const untrackLoad = registry.trackChild(load);
         const finish = () => {
             if (dumpCode !== undefined && importCode !== undefined) {
+                untrackDump();
+                untrackLoad();
                 resolve({ dumpCode, importCode, dumpStderr, importStderr });
             }
         };
@@ -247,30 +253,21 @@ export function createMysqlScratch(spec, options = {}) {
     const password = options.scratchPassword ?? randomBytes(24).toString('hex');
     const { container, network, dump } = mysqlScratchNames(spec.runId);
     const removeSync = () => {
-        for (const argv of [
-            // A dump still running holds a transaction on the live server and
-            // streams the database; it goes first.
-            ['rm', '-f', dump],
-            ['rm', '-fv', container],
-            ['network', 'rm', network],
-        ]) {
-            try {
-                dockerRemoveSync(argv, docker);
-            }
-            catch {
-                // Already gone, or never created.
-            }
-        }
+        // A dump still running holds a transaction on the live server and
+        // streams the database; it goes first.
+        dockerRemoveUntilGoneSync(dump, docker, registry);
+        dockerRemoveUntilGoneSync(container, docker, registry, '-fv');
+        removeScratchResourceSync(['network', 'rm', network], docker);
     };
     let unregister;
     async function query(sql) {
-        return runDocker(docker, buildScratchQueryArgs(spec.runId, sql));
+        return runDocker(docker, buildScratchQueryArgs(spec.runId, sql), registry);
     }
     return {
         async prepare() {
             unregister = registry.register(`scratch database ${container}`, removeSync);
-            await runDocker(docker, buildRunNetworkArgs(spec.runId));
-            await withEnvFile({ MYSQL_ROOT_PASSWORD: password }, (envFile) => runDocker(docker, buildScratchMysqlRunArgs(spec.runId, envFile)), registry);
+            await runDocker(docker, buildRunNetworkArgs(spec.runId), registry);
+            await withEnvFile({ MYSQL_ROOT_PASSWORD: password }, (envFile) => runDocker(docker, buildScratchMysqlRunArgs(spec.runId, envFile), registry), registry);
             // A real `SELECT 1` over TCP, as restore_drained.py's
             // wait_for_mysql_ready does: the image's first-boot init server listens
             // on the socket only, so TCP answers only once the real server is up.
@@ -299,7 +296,7 @@ export function createMysqlScratch(spec, options = {}) {
                 throw new ScratchCopyError(`the scratch target is not empty: ${present.join(', ')}`);
             }
             const floor = createFloorWatcher();
-            const result = await withEnvFile({ MYSQL_PWD: spec.livePassword }, (envFile) => streamDumpIntoScratch(docker, buildDumpArgs(spec, envFile), buildImportArgs(spec.runId), (c) => floor.observe(c)), registry);
+            const result = await withEnvFile({ MYSQL_PWD: spec.livePassword }, (envFile) => streamDumpIntoScratch(docker, buildDumpArgs(spec, envFile), buildImportArgs(spec.runId), (c) => floor.observe(c), registry), registry);
             if (result.dumpCode !== 0) {
                 throw new ScratchCopyError(`mysqldump exited ${String(result.dumpCode)}: ${result.dumpStderr}`);
             }
@@ -356,10 +353,20 @@ export function sqliteScratchVolume(runId) {
 export function sqliteScratchFilename() {
     return `${SCRATCH_SQLITE_DIR}/ghost.db`;
 }
+/**
+ * The backup container's name. It is named so the run's remover can find it:
+ * a `docker run` killed on a signal may already have sent its create, and an
+ * unnamed container could not be removed.
+ */
+export function sqliteBackupName(runId) {
+    return `${runId}-backup`;
+}
 export function buildSqliteBackupArgs(spec) {
     const args = [
         'run',
         '--rm',
+        '--name',
+        sqliteBackupName(spec.runId),
         '--user',
         '0:0',
         '--entrypoint',
@@ -376,22 +383,57 @@ export function buildSqliteBackupArgs(spec) {
     args.push(spec.owner ?? '');
     return args;
 }
+/**
+ * Removes one scratch resource. Only "already gone, or never created" is
+ * ignored: any other failure (the daemon refuses, permission, a resource
+ * still in use) is rethrown, so a live resource is never reported as cleaned
+ * up. stderr is captured so the two can be told apart.
+ */
+function removeScratchResourceSync(argv, docker) {
+    try {
+        execFileSync(docker, [...argv], {
+            env: { PATH: process.env.PATH ?? '' },
+            stdio: ['ignore', 'ignore', 'pipe'],
+        });
+    }
+    catch (err) {
+        if (isNotFoundFailure(err))
+            return;
+        throw err;
+    }
+}
+function isNotFoundFailure(err) {
+    const stderr = err?.stderr;
+    return stderr !== undefined && /\b(no such|not found)\b/i.test(String(stderr));
+}
 export function createSqliteScratch(spec, options = {}) {
     const docker = options.dockerCommand ?? 'docker';
     const registry = options.registry ?? processCleanup;
     const volume = sqliteScratchVolume(spec.runId);
     const { network } = mysqlScratchNames(spec.runId);
+    const backup = sqliteBackupName(spec.runId);
     const removeSync = () => {
+        // A backup still running holds the volume; it goes first. Never throws.
+        dockerRemoveUntilGoneSync(backup, docker, registry);
+        // Both removals are attempted: a volume that will not go must not leave
+        // the run network behind as well. Every failure is then reported.
+        const failures = [];
         for (const argv of [
             ['volume', 'rm', '-f', volume],
             ['network', 'rm', network],
         ]) {
             try {
-                dockerRemoveSync(argv, docker);
+                removeScratchResourceSync(argv, docker);
             }
-            catch {
-                // Already gone, or never created.
+            catch (err) {
+                failures.push(err);
             }
+        }
+        if (failures.length === 1)
+            throw failures[0];
+        if (failures.length > 1) {
+            throw new AggregateError(failures, `${failures.length} scratch removals failed: ` +
+                failures.map((f) => (f instanceof Error ? f.message : String(f))).join('; '));
         }
     };
     let unregister;
@@ -400,9 +442,9 @@ export function createSqliteScratch(spec, options = {}) {
             unregister = registry.register(`scratch volume ${volume}`, removeSync);
             // The same internal network the MySQL tier uses: the colour gets no
             // route out of the host on either tier.
-            await runDocker(docker, buildRunNetworkArgs(spec.runId));
-            await runDocker(docker, ['volume', 'create', volume]);
-            const out = await runDocker(docker, buildSqliteBackupArgs(spec));
+            await runDocker(docker, buildRunNetworkArgs(spec.runId), registry);
+            await runDocker(docker, ['volume', 'create', volume], registry);
+            const out = await runDocker(docker, buildSqliteBackupArgs(spec), registry);
             if (!out.includes(SQLITE_MARKER)) {
                 throw new ScratchCopyError('the SQLite backup did not report completion');
             }

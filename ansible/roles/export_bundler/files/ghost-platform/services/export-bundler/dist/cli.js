@@ -4,16 +4,18 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createFileDrainFlag } from './drainFlag.js';
 import { createDrainFlagStore, flagPathFor } from './drainFlagStore.js';
-import { createDockerContainerRunner } from './containerRunner.js';
+import { createDockerContainerRunner, GHOST_CONTENT_DIR, startup, } from './containerRunner.js';
+import { createContainerMediaSource } from './mediaSource.js';
+import { DEFAULT_UPLOAD_CEILING_BYTES } from './mediaTree.js';
 import { createHttpMediaProbe } from './mediaManifest.js';
 import { createHttpGhostExportClient } from './ghostExportClient.js';
 import { createHttpGhostProbe } from './ghostProbe.js';
 import { createFileAuditLog } from './auditLog.js';
-import { runExport } from './exportRunner.js';
+import { cleanupErrorsOf, describeCleanupErrors, ExportCleanupError, runExport, } from './exportRunner.js';
 import { createPromptedTokenSource } from './operatorToken.js';
 import { createDockerStatusProbe } from './supportAccountProbe.js';
 import { parseSupportGrant } from './supportGrant.js';
-import { installSignalCleanup, processCleanup } from './cleanup.js';
+import { processCleanup } from './cleanup.js';
 import { createMysqlScratch, createSqliteScratch, databaseTargetOf } from './scratchDatabase.js';
 import { isolateExportColour } from './colourIsolation.js';
 import { bindTenant, loadComposeConfig, mediaBaseUrlOf, parseComposeConfig, parseDescriptorFacts, TenantConfigError, } from './tenantConfig.js';
@@ -35,6 +37,14 @@ function requireFlag(argv, name) {
         throw new Error(`missing required flag --${name}`);
     return value;
 }
+function parseCeiling(value) {
+    if (value === undefined)
+        return DEFAULT_UPLOAD_CEILING_BYTES;
+    if (!/^[1-9][0-9]{0,15}$/.test(value)) {
+        throw new Error('--upload-ceiling-bytes must be a positive whole number');
+    }
+    return Number(value);
+}
 export function parseArgs(argv) {
     // First, so a missing grant is refused before any other flag is read.
     const grant = parseSupportGrant(flagValue(argv, 'grant-lane'), flagValue(argv, 'grant-reference'));
@@ -43,6 +53,13 @@ export function parseArgs(argv) {
         throw new TenantConfigError(`${retired} is not accepted: the tenant's environment, image, volumes and support ` +
             `identity come from its own rendered stack`);
     }
+    // A flag with no value is refused, never read as absent: absent would fall
+    // back to the descriptor's own recipient.
+    const promotionRecipient = flagValue(argv, 'promotion-recipient');
+    if (argv.includes('--promotion-recipient') &&
+        (promotionRecipient === undefined || promotionRecipient.startsWith('--'))) {
+        throw new TenantConfigError('--promotion-recipient has no value');
+    }
     return {
         grant,
         descriptorPath: requireFlag(argv, 'descriptor'),
@@ -50,6 +67,7 @@ export function parseArgs(argv) {
         secretsEnv: flagValue(argv, 'secrets-env'),
         imageEnv: flagValue(argv, 'image-env'),
         ageRecipient: requireFlag(argv, 'age-recipient'),
+        promotionRecipient,
         requestedBy: requireFlag(argv, 'requested-by'),
         deliveredTo: requireFlag(argv, 'delivered-to'),
         destDir: requireFlag(argv, 'dest-dir'),
@@ -57,12 +75,17 @@ export function parseArgs(argv) {
         auditLogPath: requireFlag(argv, 'audit-log'),
         loopbackPort: Number(requireFlag(argv, 'loopback-port')),
         erasureDate: requireFlag(argv, 'erasure-date'),
+        carryMediaFiles: argv.includes('--carry-media-files'),
+        uploadCeilingBytes: parseCeiling(flagValue(argv, 'upload-ceiling-bytes')),
     };
 }
-async function main(argv) {
-    // First: a Ctrl-C at any later point removes whatever the run has created
-    // (colour, scratch copy, network, env files) before the process exits.
-    installSignalCleanup();
+export async function main(argv, deps = {}) {
+    const dockerCommand = deps.dockerCommand ?? 'docker';
+    // First, before anything that can create a resource: a Ctrl-C at any later
+    // point removes whatever the run has created (colour, scratch copy, network,
+    // env files) before the process exits, and a Docker engine older than 28 is
+    // refused. test/unit/cli.test.ts proves this call is made and made first.
+    await startup({ dockerCommand, signalTarget: deps.signalTarget });
     const opts = parseArgs(argv);
     let descriptorJson;
     try {
@@ -79,8 +102,10 @@ async function main(argv) {
             opts.secretsEnv ?? `/etc/branchleft/${slug}.env`,
             opts.imageEnv ?? `/etc/branchleft/${slug}.image.env`,
         ],
-    }));
-    const ageRecipient = bindTenant(descriptor, runtime, opts.ageRecipient);
+    }, dockerCommand));
+    const ageRecipient = bindTenant(descriptor, runtime, opts.ageRecipient, opts.promotionRecipient === undefined
+        ? null
+        : { recipient: opts.promotionRecipient, grantLane: opts.grant.lane });
     const colourId = `${slug}-export-${process.pid}`;
     // runExport clears the flag itself on every normal exit; this covers a signal.
     processCleanup.register(`drain flag ${colourId}`, () => rmSync(flagPathFor(opts.flagDir, colourId), { force: true }));
@@ -97,19 +122,30 @@ async function main(argv) {
             liveUser: runtime.env.database__connection__user ?? '',
             livePassword: runtime.env.database__connection__password ?? '',
             liveUsesTls: Object.keys(runtime.env).some((k) => k.startsWith('database__connection__ssl')),
-        })
+        }, { dockerCommand })
         : createSqliteScratch({
             runId: colourId,
             image: runtime.image,
             tenantVolumes: volumes,
             live: liveDatabase,
             owner: runtime.user,
-        });
+        }, { dockerCommand });
     const container = { user: runtime.user, volumes };
+    let mediaTree;
+    if (opts.carryMediaFiles) {
+        const content = volumes.find((v) => v.mountPath === GHOST_CONTENT_DIR);
+        if (content === undefined) {
+            throw new TenantConfigError(`the rendered stack mounts no volume at ${GHOST_CONTENT_DIR}`);
+        }
+        mediaTree = {
+            source: createContainerMediaSource({ runId: colourId, image: runtime.image, user: runtime.user, volume: content.volume }, { dockerCommand }),
+            uploadCeilingBytes: opts.uploadCeilingBytes,
+        };
+    }
     const result = await runExport({
         drainFlags: createDrainFlagStore(opts.flagDir),
         readDrainFlag: (id) => createFileDrainFlag(flagPathFor(opts.flagDir, id)),
-        supportAccount: createDockerStatusProbe({ ...container, image: runtime.image }, runtime.env),
+        supportAccount: createDockerStatusProbe({ ...container, image: runtime.image }, runtime.env, dockerCommand),
         scratch,
         containerRunner: createDockerContainerRunner({
             ...container,
@@ -117,7 +153,7 @@ async function main(argv) {
             image: runtime.image,
             loopbackPort: opts.loopbackPort,
             network: null,
-        }),
+        }, dockerCommand),
         probe: createHttpGhostProbe(2000),
         exportClient: createHttpGhostExportClient(createPromptedTokenSource(process.stdin, process.stderr, `export-bundler: the export colour is up. Mint a break-glass token now for tenant ` +
             `"${slug}", identity ${runtime.supportIdentity}, lifetime 600s or less, ` +
@@ -142,16 +178,47 @@ async function main(argv) {
             baseUrl: mediaBaseUrlOf(runtime.env),
             erasureDate: opts.erasureDate,
         },
+        ...(mediaTree === undefined ? {} : { mediaTree }),
     });
-    console.log(`export-bundler: wrote ${result.archivePath}`);
-    console.log(`export-bundler: sha256 ${result.archiveSha256}`);
-    console.log(`export-bundler: manifest ${result.manifestPath}`);
-    console.log(`export-bundler: complete ${String(result.manifest.complete)}`);
+    reportExport(result, (line) => console.log(line));
+}
+/** Exit code when the export succeeded but a teardown step failed; the code a failed signal cleanup uses. */
+export const EXIT_CLEANUP_FAILED = 70;
+/**
+ * Prints the result, then refuses to call the run clean. The archive, its
+ * sha256 and the manifest are printed first, because they exist and are
+ * audited whatever teardown did; a teardown failure then raises
+ * ExportCleanupError so the process exits non-zero with the leftover named.
+ */
+export function reportExport(result, out) {
+    out(`export-bundler: wrote ${result.archivePath}`);
+    out(`export-bundler: sha256 ${result.archiveSha256}`);
+    out(`export-bundler: manifest ${result.manifestPath}`);
+    out(`export-bundler: complete ${String(result.manifest.complete)}`);
+    if (result.cleanupErrors !== undefined && result.cleanupErrors.length > 0) {
+        throw new ExportCleanupError(result, result.cleanupErrors);
+    }
+}
+/** The lines written to stderr for a run that did not end clean: the error, then any teardown failures. */
+export function failureLines(err) {
+    const error = err;
+    const lines = [`export-bundler: ${error.name}: ${error.message}`];
+    // ExportCleanupError already names its failures in its own message.
+    if (!(err instanceof ExportCleanupError)) {
+        const attached = cleanupErrorsOf(err);
+        if (attached.length > 0) {
+            lines.push(`export-bundler: and then ${describeCleanupErrors(attached)}`);
+        }
+    }
+    return lines;
+}
+export function exitCodeFor(err) {
+    return err instanceof ExportCleanupError ? EXIT_CLEANUP_FAILED : 1;
 }
 if (import.meta.url === `file://${process.argv[1]}`) {
     main(process.argv.slice(2)).catch((err) => {
-        const error = err;
-        console.error(`export-bundler: ${error.name}: ${error.message}`);
-        process.exitCode = 1;
+        for (const line of failureLines(err))
+            console.error(line);
+        process.exitCode = exitCodeFor(err);
     });
 }
