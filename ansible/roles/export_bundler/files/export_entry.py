@@ -1,28 +1,14 @@
 #!/usr/bin/python3
 """The forced command of the demo host's export route: run one promotion export, and nothing else.
 
-sshd runs this program as root through `sudo -n` for the ops1 controller's key, whatever the client
-asked for, and leaves the client's request in SSH_ORIGINAL_COMMAND. That request is untrusted text.
-It is accepted in exactly one shape,
+sshd runs this as root through `sudo -n` for the ops1 controller's key and leaves the client's
+request in SSH_ORIGINAL_COMMAND, which is untrusted. It is accepted in one shape only,
+`export-demo SLOT RECIPIENT ERASURE_DATE PORT REFERENCE`; anything else is refused before a file is
+opened or a program run. For a valid request the pinned bundler runs once, with an argument list
+built here: nothing in the request chooses a program, path, flag or lane.
 
-    export-demo SLOT RECIPIENT ERASURE_DATE PORT REFERENCE
-
-where SLOT is a demo slot's name (`demo-` and one or two digits), RECIPIENT is the age recipient
-the promotion made for this one export, ERASURE_DATE is a calendar date, PORT is an unused local
-port and REFERENCE says where the consented grant's evidence lives. Anything else is refused before
-any file is opened or any program is run.
-
-For a valid request the program runs the pinned export bundler, once, with an argument list it
-builds itself. Nothing in the request chooses a program, a path, a flag or a lane: the grant lane is
-always `consented`, the media files are always carried, and the descriptor, the output directory,
-the flag directory and the audit log are fixed paths under the bundler's state directory. The
-bundler reads the one-time sign-in value it needs from standard input once it is ready, so
-standard input, output and error are passed straight through to the client.
-
-Standard error carries one line, `branchleft-export-entry: refused reason=<code>`, for a refusal.
-Exit status: 0 exported, 1 the bundler failed, 2 refused request, 3 not ready (the Node runtime,
-the bundler or the slot's descriptor is not as the role leaves it), 4 busy (an export is running),
-70 the export finished but its clean-up did not. The role's README holds the full reasoning.
+Exit status: 0 exported, 1 the bundler failed, 2 refused request, 3 not ready, 4 busy, 70 the export
+finished but its clean-up did not. The role's README ("The export route") has the full account.
 """
 
 from __future__ import annotations
