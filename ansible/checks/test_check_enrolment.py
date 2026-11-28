@@ -1344,6 +1344,19 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_one("R10 owner_vars/demo1.yml: must hold exactly")
 
+    # R10 for edge1's pin, the one server certificate its Prometheus trusts (landed by #1099).
+    def test_r10_edge1_owner_vars_lacks_the_peer_certificate(self) -> None:
+        self._edit("owner_vars/edge1.yml", "host_tls_identity_peer_cert: ''\n", "")
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    def test_r10_edge1_owner_vars_peer_certificate_is_not_text(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "host_tls_identity_peer_cert: ''",
+            "host_tls_identity_peer_cert: 5",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: host_tls_identity_peer_cert must be text")
+
     def test_r10_the_pin_key_is_allowed_only_for_the_hosts_that_apply_the_role(self) -> None:
         for host, keys in OWNER_VARS_KEYS.items():
             self.assertEqual(HOST_TLS_KEY in keys, host in HOST_TLS_HOSTS, host)
