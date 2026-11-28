@@ -5,8 +5,9 @@
 #
 # Idempotent: systemd_service with enabled and state started changes nothing once a router is
 # enabled and running, and it never restarts one. A router keeps the code it started with until
-# the owner restarts it. The routers name no colour unit, so a colour's stop or start never
-# reaches them.
+# it is restarted, and the handler "Restart the health routers" does that in the apply that
+# changed the router program or its unit; an apply with nothing changed restarts none.
+# The routers name no colour unit, so a colour's stop or start never reaches them.
 #
 # Not checked here: whether a router is active or listening. A container cannot run the unit,
 # so those are proved on the host after the gated apply (see the README, "Health routers").

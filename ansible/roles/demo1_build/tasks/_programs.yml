@@ -43,7 +43,22 @@
     owner: root
     group: root
     mode: '0755'
-  loop: '{{ demo1_build_installed_programs }}'
+  loop: '{{ demo1_build_installed_programs | rejectattr("dest", "equalto", demo1_build_router_script_path) | list }}'
   loop_control:
     label: '{{ item.name }}'
+  when: demo1_build_release_ready | bool
+
+# Its own task, not an item of the loop above: a notify on a loop task fires when any item changed,
+# and a change to the wrapper or the sidecar must not restart the routers. A running router keeps the
+# code it started with, so a changed program is not the one that runs until each slot's router is
+# restarted. The handler is in handlers/main.yml and runs once, after this apply's writes.
+- name: Install the health router program, and restart the routers when it changed
+  ansible.builtin.copy:
+    src: '{{ demo1_build_provision_dir }}/health_router.py'
+    remote_src: true
+    dest: '{{ demo1_build_router_script_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart the health routers
   when: demo1_build_release_ready | bool

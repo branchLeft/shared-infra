@@ -123,7 +123,9 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Reload systemd manager
+  notify:
+    - Reload systemd manager
+    - Restart the health routers
   when: demo1_build_release_ready | bool
 
 - name: Load queued unit changes before the role goes on
