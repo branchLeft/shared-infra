@@ -69,6 +69,21 @@
   check_mode: false
   when: (attempt_route | default('direct')) == 'proxyjump'
 
+# A refusal is judged on a connection that was accepted. Right after the role reloads sshd the
+# daemon may still be starting, and a connection then ends in a reset before any banner, which
+# reads as a refusal that never happened. So a refusal, denial, or no-command case first waits, a
+# bounded time, until the test sshd sends its banner on the port the attempts use. The probe reads
+# the banner and nothing else; a reset after it still fails the attempt, and the refusal assertions
+# below are unchanged.
+- name: Wait until the test SSH server answers before a refusal is judged
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: '{{ scenario_ssh_port }}'
+    search_regex: '^SSH-2\.0-'
+    timeout: 60
+  check_mode: false
+  when: attempt_expect != 'through'
+
 - name: Connect with the key
   ansible.builtin.command:
     argv: >-
