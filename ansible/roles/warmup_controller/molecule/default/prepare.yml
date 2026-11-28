@@ -1,0 +1,16 @@
+---
+# The parent directories an earlier role on ops1 makes, which the role asserts and never makes.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/branchleft
+        - /opt/branchleft

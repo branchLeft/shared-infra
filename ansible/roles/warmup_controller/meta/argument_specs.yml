@@ -1,0 +1,10 @@
+---
+argument_specs:
+  main:
+    short_description: Installs the IP2 warm-up controller's units on ops1.
+    options:
+      warmup_controller_timer_enabled:
+        type: bool
+        required: false
+        default: false
+        description: Enables and starts the daily timer. False holds it off.

@@ -1,0 +1,92 @@
+---
+# The role makes the IP2 warm-up controller's host side on ops1: its service account, its state
+# directory and its two units. It starts nothing: the timer is held disabled and stopped until
+# warmup_controller_timer_enabled is true. It touches only the paths in vars/main.yml.
+
+- name: Refuse a timer switch that is not true or false
+  ansible.builtin.assert:
+    that: warmup_controller_timer_enabled is boolean
+    quiet: true
+    fail_msg: warmup_controller_timer_enabled must be true or false.
+
+# What the role stands on: asserted, never made or changed.
+- name: Look at the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ warmup_controller_parents }}'
+  register: warmup_controller_parent_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others.
+  loop: '{{ warmup_controller_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Create the service group
+  ansible.builtin.group:
+    name: '{{ warmup_controller_account }}'
+    system: true
+
+- name: Create the service account, with no login and no home
+  ansible.builtin.user:
+    name: '{{ warmup_controller_account }}'
+    group: '{{ warmup_controller_account }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+- name: Make the state directory, owned by the service account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ warmup_controller_state_dir }}'
+    state: directory
+    owner: '{{ warmup_controller_account }}'
+    group: '{{ warmup_controller_account }}'
+    mode: '0700'
+
+- name: Install the controller's service and timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ warmup_controller_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ warmup_controller_units }}'
+  notify: Reload systemd manager
+
+- name: Load queued unit changes before the timer is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit on a fresh host, so the timer is only named once its file is there.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: '{{ warmup_controller_unit_dir }}/{{ warmup_controller_timer_unit }}'
+  register: warmup_controller_timer_stat
+
+- name: Enable and start the timer when the owner has turned it on
+  ansible.builtin.systemd_service:
+    name: '{{ warmup_controller_timer_unit }}'
+    enabled: true
+    state: started
+  when: warmup_controller_timer_enabled and warmup_controller_timer_stat.stat.exists
+
+- name: Hold the timer off while the owner has not turned it on
+  ansible.builtin.systemd_service:
+    name: '{{ warmup_controller_timer_unit }}'
+    enabled: false
+    state: stopped
+  when: not warmup_controller_timer_enabled and warmup_controller_timer_stat.stat.exists

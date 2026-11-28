@@ -1,0 +1,13 @@
+# The daily tick of the IP2 warm-up controller. Installed by the warmup_controller role and held off
+# until the owner turns it on. It fires after the UTC day's evidence is complete, and a run missed
+# while ops1 was down is taken on the next boot.
+[Unit]
+Description=IP2 warm-up controller, once a UTC day
+
+[Timer]
+OnCalendar=*-*-* 01:15:00 UTC
+Persistent=true
+Unit=warmup-controller.service
+
+[Install]
+WantedBy=timers.target

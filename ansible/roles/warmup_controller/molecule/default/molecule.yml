@@ -1,0 +1,34 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run.
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # The same systemd test base the ring controller role uses, trusted by digest.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        scenario_account: warmup-controller
+        scenario_state_dir: /var/lib/branchleft/warmup-controller
+        scenario_service: /etc/systemd/system/warmup-controller.service
+        scenario_timer: /etc/systemd/system/warmup-controller.timer
+verifier:
+  name: ansible
