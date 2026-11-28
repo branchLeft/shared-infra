@@ -295,9 +295,13 @@ and their digests.
 The tool never extracts with `tarfile`: it reads each regular file's bytes, writes it with an
 exclusive create that does not follow a link, mode 0644, and reads it back. The role's defaults
 are edited only where they are the two placeholder lines (`broker_deploy_release_version: ''` and
-`broker_deploy_release_pins: {}`, each exactly once), so a tree that already pins a release is
-changed by hand. The block the tool writes is read back by a strict line reader that accepts only
-the shape it writes (no YAML library is used), and it must equal the version and pins. Every path
+`broker_deploy_release_pins: {}`, each exactly once), or where they are a block this tool already
+wrote. A later release is carried beside the ones pinned there: its version line is set to the new
+release, its pins go in as the first release of the mapping, and every other line of the defaults
+and of the earlier releases is kept as it was (a test holds their release files byte-identical). A
+release already pinned is refused with `release_already_carried`. The block is read back by a
+strict line reader that accepts only the shape it writes (no YAML library is used), and it must
+equal the version and pins. Every path
 and digest is quoted, so a path such as `true` or a digest of digits stays text. If the defaults
 cannot be replaced, the release directory is removed again.
 
