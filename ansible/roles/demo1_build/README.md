@@ -132,7 +132,9 @@ What the role does, in the order of `tasks/main.yml`:
    `demo1_build_sidecar_digest` (the attested sidecar digest). See "The sidecar's pin file".
    8b. **Enables and starts the seven health routers** (`_routers.yml`): `branchleft-health-router@0`
    to `@6`, one per slot, on loopback ports 10100 to 10106. Idempotent: an enabled, running router is
-   not touched, and a router already running keeps the code it started with. The role does not check
+   not touched, unless the apply changed the router program or its unit, when the handler
+   `Restart the health routers` restarts all seven in that apply, so the code that runs is the code
+   the apply installed (an apply that changed neither restarts none). The role does not check
    that a router is active or listening; that is proved on the host (see "Health routers").
 9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
    `_dns_file.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
@@ -1224,7 +1226,7 @@ other unit tests of `ansible/harness`.
   not been checked.
 - **The uid register has no lock** against a concurrent tenant allocation.
   The role consumes it as it is.
-- **A running health router keeps its old code** until the owner restarts it.
+- **A running health router keeps its old code** until it is restarted. The apply that changes the router program or its unit restarts all seven (`tests/unit/test_router_restart.py` holds that to the task and handler text); a router started by hand from other code is not seen by the role.
 
 ## How it is delivered
 
@@ -1410,4 +1412,5 @@ host, not in the Molecule container, because the container is unprivileged and c
 
 - **Finish line, after the gated apply on demo1:** each router is `active` and listening on
   127.0.0.1 at 10100 to 10106 (`systemctl is-active`, `ss -ltn`).
-- **Idempotence, on demo1:** a second apply reports zero changes for the router tasks.
+- **Idempotence, on demo1:** a second apply reports zero changes for the router tasks and restarts no router.
+- **The restart, on demo1:** after the gated apply that changed the router program, `ss -ltnp` shows `python3` on 127.0.0.1:10100 to 10106. The Molecule container cannot run a router, so the restart is held by the unit test `tests/unit/test_router_restart.py`, which reads the tasks and handlers.

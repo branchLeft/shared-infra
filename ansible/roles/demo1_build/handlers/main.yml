@@ -2,3 +2,25 @@
 - name: Reload systemd manager
   ansible.builtin.systemd_service:
     daemon_reload: true
+
+# The two handlers below answer one notification, "Restart the health routers", and run in this order
+# (a listening handler runs in the order it is written). They run after the reload above, because the
+# role's flush in _units.yml runs the queued handlers in file order, and so after the unit is loaded.
+- name: Look at whether the router template unit is installed, before restarting the routers
+  ansible.builtin.stat:
+    path: '{{ demo1_build_unit_dir }}/{{ demo1_build_router_unit }}'
+    follow: false
+  register: demo1_build_router_restart_unit_stat
+  listen: Restart the health routers
+
+# Restarts every slot's router, so each runs the program this apply installed. A fresh host in check
+# mode has no unit yet, so there is nothing to restart and the plan stays quiet about it.
+- name: Restart the health router of each slot
+  ansible.builtin.systemd_service:
+    name: 'branchleft-health-router@{{ item }}.service'
+    state: restarted
+  loop: '{{ demo1_build_slots }}'
+  loop_control:
+    label: '{{ item }}'
+  when: not ansible_check_mode or demo1_build_router_restart_unit_stat.stat.exists
+  listen: Restart the health routers
