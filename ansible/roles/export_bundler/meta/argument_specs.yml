@@ -13,6 +13,14 @@ argument_specs:
       touches anything inside the state directory.
     author: branchLeft
     options:
+      export_bundler_controller_key:
+        type: str
+        no_log: true
+        description: >-
+          The public key of the ops1 controller that may start a promotion's export on this host:
+          one `ssh-ed25519 AAAA...` line with no option and no comment. Private input from
+          host_inputs (demo1's row), with no default and not required: unset leaves the restricted
+          export account off, and a host that does not have the input (app1) never sets it.
       export_bundler_source_sha:
         type: str
         description: >-

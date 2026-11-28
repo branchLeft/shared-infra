@@ -152,8 +152,12 @@ and claim rules equal its module's.
 
 Usage, on the host as root:
 
-    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 [--replace]
-    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1|demo1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|edget|ops1|app1|appt1|dbt1|mx1|demo1 --set KEY
+
+On demo1 the key `export_bundler_controller_key` is set only: the fill never asks for it, and
+`--set export_bundler_controller_key` types it once, hidden, as one `ssh-ed25519` public key line
+with no option and no comment (the public half of the key ops1 holds for demo1's export route).
 
 The one seed command per host that this change adds, run as root on that host:
 

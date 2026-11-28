@@ -43,9 +43,15 @@ PLAYBOOKS = ROOT / "ansible" / "playbooks"
 DEMO1 = PLAYBOOKS / "demo1.yml"
 # Ansible shows no diff for a source over this size (MAX_FILE_SIZE_FOR_DIFF).
 ANSIBLE_DIFF_LIMIT = 104448
-# The shown diff of the files demo1's roles copy, in bytes. The plan's cap per host is 300,000 and
-# the rest of the output (task lines, results, failures) needs room, so the files get two thirds.
-SHOWN_DIFF_BUDGET = 200_000
+# The shown diff of the files demo1's roles copy, in bytes, counted as if every file were new. The
+# plan's cap per host is 300,000. Until the export bundler joined demo1's roles the sum was under
+# 165,000 and the budget was two thirds of the cap (200,000), leaving the rest for task lines.
+# The bundler's 28 pinned files add 130,866 bytes and take the sum to about 289,000, so the budget
+# is now the cap itself. It is not an estimate of a plan: Ansible shows a diff only for a file that
+# changes, and the plans measured on 27 Nov for hosts that were not changing were 35,000 to
+# 134,000 bytes in all. Only a first delivery of the bundler, or a bump that changes most of its
+# files, shows its 131,000 bytes at once, on top of a plan of about 50,000.
+SHOWN_DIFF_BUDGET = 300_000
 # A loop over a list a command or a find makes on the host. Each is a task file and a task name, and
 # why the list has a few items at most. None is added for a scan: a list that grows with the host
 # is collected in one expression and not looped.
@@ -54,6 +60,10 @@ BOUNDED_HOST_LOOPS: dict[tuple[str, str], str] = {
         "ansible/roles/demo1_build/tasks/_candidate.yml",
         "Remove the superseded per-slot candidates",
     ): "one file per slot of the slot table, left by an earlier version of the role",
+    (
+        "ansible/roles/export_bundler/tasks/_bundler.yml",
+        "Remove what the pinned release does not hold from dist",
+    ): "files an earlier release left in the bundler's dist directory, none once converged",
 }
 HOST_LISTS = re.compile(r"\.(stdout_lines|stdout|files|content)\b")
 LOOP_KEYS = ("loop", "with_items", "with_list", "with_dict", "with_fileglob", "with_lines")

@@ -95,6 +95,7 @@ host_inputs_required_by_host:
     - mx1_abuse_page_token
   demo1:
     - broker_deploy_owner_due_diligence_email
+    - export_bundler_controller_key
 
 # The inputs of a row that the file may leave out. Each is a name from the same host's row above
 # (checks/test_host_inputs_registry.py), and each feeds a role that does nothing with it until the
@@ -112,6 +113,7 @@ host_inputs_optional_by_host:
     - control_plane_portal_support_smtp_password
   demo1:
     - broker_deploy_owner_due_diligence_email
+    - export_bundler_controller_key
   edge1:
     - ntfy_pager_mx1_token
     - ci_jump_user
