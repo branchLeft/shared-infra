@@ -61,7 +61,7 @@ argument_specs:
           digits. The role refuses, before it writes anything, a key file that is
           not exactly 64 hex digits or whose 32 bytes do not have this digest, and
           refuses an empty value. A digest is not a secret.
-        default: 'a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17'
+        default: '9647c37c09ae127cc30d175210245706b87fdb23df606c2fa2bf64deb3d48c22'
       broker_deploy_node_version:
         type: str
         description: The Node version the broker runs, as it appears in the download path.

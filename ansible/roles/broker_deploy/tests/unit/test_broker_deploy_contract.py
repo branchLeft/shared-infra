@@ -28,8 +28,8 @@ TENANT_PLATFORM_ZONE = "sites.publicpress.co.uk"
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 # The broker's request-signing public key, as the owner published it, and the sha256 of its 32
 # raw bytes. Both are public. A change to either, or to the carried file, is a change of key.
-OWNER_VERIFY_KEY_HEX = "74a5954901b7cc2bc854628f6cf176bf0829145141343f3b6652f3284afb74cc"
-OWNER_VERIFY_KEY_SHA256 = "a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17"
+OWNER_VERIFY_KEY_HEX = "8c982742f57d3cac32e06fc01c263dfd3654b268ae4ac2bf653553a5c4bd9b21"
+OWNER_VERIFY_KEY_SHA256 = "9647c37c09ae127cc30d175210245706b87fdb23df606c2fa2bf64deb3d48c22"
 # Modules that only read, decide or refuse: a task of any other module is a write to the host.
 READ_ONLY_MODULES = frozenset(
     {
