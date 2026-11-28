@@ -153,6 +153,41 @@
       "playbook": "ansible/playbooks/edge1.yml",
       "kind": "file_sha256",
       "path": "/opt/branchleft/monitoring/prometheus/prometheus.yml"
+    },
+    {
+      "issue": 2363,
+      "name": "app1-website-compose-unit",
+      "playbook": "ansible/playbooks/app1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-compose@website.service"
+    },
+    {
+      "issue": 2364,
+      "name": "demo1-sidecar-program",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/lib/branchleft/demo_sidecar.py"
+    },
+    {
+      "issue": 2365,
+      "name": "demo1-egress-unit",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "unit_active",
+      "unit": "branchleft-demo-egress.service"
+    },
+    {
+      "issue": 2868,
+      "name": "demo1-router-program",
+      "playbook": "ansible/playbooks/demo1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/lib/branchleft/health_router.py"
+    },
+    {
+      "issue": 3132,
+      "name": "app1-deploy-program",
+      "playbook": "ansible/playbooks/app1.yml",
+      "kind": "file_sha256",
+      "path": "/usr/local/sbin/branchleft-deploy"
     }
   ]
 }
