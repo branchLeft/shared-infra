@@ -120,9 +120,11 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_verify_plain_open.rc != 0
-              - "'REFUSED: /etc/branchleft/control-plane must exist' in (control_plane_db_verify_plain_open.stdout ~ control_plane_db_verify_plain_open.stderr)"
+              - "'REFUSED: /etc/branchleft/control-plane must be a directory of root' in control_plane_db_verify_plain_open_text"
             quiet: true
             fail_msg: The role built under a configuration directory open to others.
+          vars:
+            control_plane_db_verify_plain_open_text: '{{ control_plane_db_verify_plain_open.stdout ~ control_plane_db_verify_plain_open.stderr }}'
 
         - name: Close the configuration directory again
           ansible.builtin.file:
@@ -131,6 +133,47 @@
             owner: root
             group: root
             mode: '0750'
+
+        # This role runs before the control_plane role, which makes the directory, so on a host that
+        # role has not reached the plain apply must wait, not fail, and must migrate nothing.
+        - name: Move the configuration directory away, as on a host the control_plane role has not reached
+          ansible.builtin.command:
+            argv:
+              - mv
+              - '{{ verify_config }}'
+              - '{{ verify_config }}.away'
+          changed_when: true
+
+        - name: Request a plain apply that deploys the migration image, with no configuration directory
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: plain apply before the configuration directory exists
+            ask_extra: { control_plane_app_image: '{{ scenario_deliver_image }}' }
+
+        - name: Look at what that apply made
+          ansible.builtin.stat:
+            path: '{{ verify_config }}'
+          register: control_plane_db_verify_plain_absent
+
+        - name: Read the calls of that apply
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Put the configuration directory back
+          ansible.builtin.command:
+            argv:
+              - mv
+              - '{{ verify_config }}.away'
+              - '{{ verify_config }}'
+          changed_when: true
+
+        - name: Assert the apply waited for the directory, made nothing and started nothing
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - not control_plane_db_verify_plain_absent.stat.exists
+              - control_plane_db_verify_calls | length == 0
+            quiet: true
+            fail_msg: A plain apply before the control_plane role made the directory failed, made the directory itself, or migrated.
 
     # 2. A step named by its tag without its confirmation, with another step's id, with a
     # value outside the closed list, or with an image that is not a digest, is refused,
@@ -1547,6 +1590,380 @@
             fail_msg: A failed reconciler run was not refused, or left its working directory.
 
     # 11. Nothing in the run's log holds a throwaway secret.
+    # 9. delivery: a plain apply that deploys the migration image makes the migration login, keeps its
+    # credential root-only, migrates once on a staged copy that is taken off the disk, and repeats nothing.
+    - name: Section delivery
+      when: verify_sections | length == 0 or 'delivery' in verify_sections
+      vars:
+        verify_deliver_extra: { control_plane_app_image: '{{ scenario_deliver_image }}' }
+        verify_credential: /etc/branchleft/control-plane/migrator-database-url
+        verify_staged: /etc/branchleft/control-plane/provision/migrator-url
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Request a plain apply that deploys the migration image
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery for the first digest
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the stand-in's calls and the database's state
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Read the database's state
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Read the credential, the staged copy and the marker
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            get_checksum: true
+          loop:
+            - '{{ verify_credential }}'
+            - '{{ verify_staged }}'
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_deliver_stats
+
+        - name: Read the credential's text
+          ansible.builtin.slurp:
+            src: '{{ verify_credential }}'
+          register: control_plane_db_verify_deliver_credential
+          no_log: true
+
+        - name: Keep the credential's password and whether its URL has the expected shape
+          ansible.builtin.set_fact:
+            control_plane_db_verify_deliver_url: '{{ (control_plane_db_verify_deliver_credential.content | ansible.builtin.b64decode) | trim }}'
+          no_log: true
+
+        - name: Assert the login was made, owns what the administrator owned, and its credential is root-only
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_pg.verifier is string
+              - control_plane_db_verify_pg.verifier.startswith('SCRAM-SHA-256$')
+              - control_plane_db_verify_pg.owner == 'portal_migrator_login'
+              - control_plane_db_verify_pg.left == 0
+              - control_plane_db_verify_pg.writes == ['role', 'database', 'objects']
+              - control_plane_db_verify_deliver_stats.results[0].stat.exists
+              - control_plane_db_verify_deliver_stats.results[0].stat.pw_name == 'root'
+              - control_plane_db_verify_deliver_stats.results[0].stat.gr_name == 'root'
+              - control_plane_db_verify_deliver_stats.results[0].stat.mode == '0600'
+              - control_plane_db_verify_deliver_url is match('^postgres://portal_migrator_login:[A-Za-z0-9._~-]{24,}@db:5432/portal$')
+            quiet: true
+            fail_msg: The delivery did not make the migration login with its handover and keep a root-only credential.
+          no_log: true
+
+        - name: Assert the migration ran once, left a marker, and left no staged copy of the credential
+          ansible.builtin.assert:
+            that:
+              - not control_plane_db_verify_deliver_stats.results[1].stat.exists
+              - control_plane_db_verify_deliver_stats.results[2].stat.exists
+              - control_plane_db_verify_deliver_stats.results[2].stat.pw_name == 'root'
+              - control_plane_db_verify_calls | selectattr('argv', 'contains', '--migrate-only') | list | length == 1
+            quiet: true
+            fail_msg: The delivery did not migrate exactly once, or left the staged credential on the disk.
+
+        - name: Assert the migration container read a staged copy at the image user's mode, and the credential file itself was never mounted
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_deliver_call.mounts['/etc/branchleft/control-plane/provision/migrator-url'].mode == '0640'
+              - control_plane_db_verify_deliver_call.mounts['/etc/branchleft/control-plane/provision/migrator-url'].gid == 1000
+              - verify_credential not in control_plane_db_verify_argv_text
+              - "'SCRAM-SHA-256' not in control_plane_db_verify_argv_text"
+              - control_plane_db_verify_deliver_password not in control_plane_db_verify_argv_text
+            quiet: true
+            fail_msg: The migration container was not given the staged copy, or a credential is in a docker argument.
+          vars:
+            control_plane_db_verify_deliver_call: "{{ (control_plane_db_verify_calls | selectattr('argv', 'contains', '--migrate-only') | list)[-1] }}"
+            control_plane_db_verify_argv_text: "{{ control_plane_db_verify_calls | map(attribute='argv') | map('join', ' ') | join(' ') }}"
+            control_plane_db_verify_deliver_password: "{{ control_plane_db_verify_deliver_url.split('@')[0].split(':')[2] }}"
+          no_log: true
+
+        - name: Assert the output of the run shows neither the password nor a verifier
+          ansible.builtin.assert:
+            that:
+              - "'SCRAM-SHA-256$' not in control_plane_db_ask_result.stdout"
+              - control_plane_db_verify_deliver_password not in control_plane_db_ask_result.stdout
+              - control_plane_db_verify_deliver_password not in control_plane_db_ask_result.stderr
+            quiet: true
+            fail_msg: The output of the delivery held the login's password or its verifier.
+          vars:
+            control_plane_db_verify_deliver_password: "{{ control_plane_db_verify_deliver_url.split('@')[0].split(':')[2] }}"
+          no_log: true
+
+        - name: Request the same plain apply again
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery again for the same digest
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the calls and the state after the second apply
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Read the database's state after the second apply
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Read the credential after the second apply
+          ansible.builtin.stat:
+            path: '{{ verify_credential }}'
+            get_checksum: true
+          register: control_plane_db_verify_deliver_again
+
+        - name: Assert the second apply changed nothing, wrote nothing and ran nothing
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_ask_result.stdout is search('changed=0 ')
+              - control_plane_db_verify_pg.writes == ['role', 'database', 'objects']
+              - control_plane_db_verify_calls | selectattr('argv', 'contains', '--migrate-only') | list | length == 1
+              - control_plane_db_verify_deliver_again.stat.checksum == control_plane_db_verify_deliver_stats.results[0].stat.checksum
+            quiet: true
+            fail_msg: A second apply of the same digest did something.
+
+        - name: Take the marker away, as an image that is not yet migrated would have none
+          ansible.builtin.file:
+            path: '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+            state: absent
+
+        - name: Request the apply when the login is already made
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery when the login is made and the marker is not
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the state and the credential after the repeat
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Read the credential after the repeat
+          ansible.builtin.stat:
+            path: '{{ verify_credential }}'
+            get_checksum: true
+          register: control_plane_db_verify_deliver_repeat
+
+        - name: Assert the login and its credential were found right and left as they were
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_pg.writes == ['role', 'database', 'objects']
+              - control_plane_db_verify_deliver_repeat.stat.checksum == control_plane_db_verify_deliver_stats.results[0].stat.checksum
+            quiet: true
+            fail_msg: A made login was written again, or its credential changed, when nothing was wrong.
+
+        - name: Take the credential and the marker away, as a host whose file was lost would be
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - '{{ verify_credential }}'
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+
+        - name: Request the apply when the credential is lost
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery when the credential is lost
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the state and the credential after the loss
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Read the credential made again
+          ansible.builtin.stat:
+            path: '{{ verify_credential }}'
+            get_checksum: true
+          register: control_plane_db_verify_deliver_lost
+
+        - name: Assert a lost credential gave the login a new password and a new root-only file
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_pg.writes == ['role', 'database', 'objects', 'role']
+              - control_plane_db_verify_deliver_lost.stat.exists
+              - control_plane_db_verify_deliver_lost.stat.mode == '0600'
+              - control_plane_db_verify_deliver_lost.stat.pw_name == 'root'
+              - control_plane_db_verify_deliver_lost.stat.checksum != control_plane_db_verify_deliver_stats.results[0].stat.checksum
+            quiet: true
+            fail_msg: A lost credential was not replaced with a new password and a root-only file.
+
+    - name: Section delivery check mode and holds
+      when: verify_sections | length == 0 or 'delivery_holds' in verify_sections
+      vars:
+        verify_deliver_extra: { control_plane_app_image: '{{ scenario_deliver_image }}' }
+        verify_credential: /etc/branchleft/control-plane/migrator-database-url
+        verify_staged: /etc/branchleft/control-plane/provision/migrator-url
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Request the plain apply in check mode
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery in check mode
+            ask_extra: '{{ verify_deliver_extra }}'
+            ask_check: true
+
+        - name: Read the calls, the state and what a plan may not leave
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Read the database's state
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Look at the credential, the staged copy and the marker
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_credential }}'
+            - '{{ verify_staged }}'
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_hold_stats
+
+        - name: Assert a plan wrote nothing to the server or the disk, started no container, and reports a change
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_ask_result.stdout is search('changed=[1-9]')
+              - control_plane_db_verify_pg.writes == []
+              - control_plane_db_verify_calls | selectattr('argv.0', 'equalto', 'run') | list | length == 0
+              - control_plane_db_verify_hold_stats.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+            quiet: true
+            fail_msg: A plan made the login, staged a credential, started a container, or did not report that the migration would be applied.
+
+        - name: Start from a clean slate for an apply that deploys another image
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Request a plain apply that deploys an image that is not the migration image
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery of another image
+            ask_extra: { control_plane_app_image: '{{ verify_image_two }}' }
+
+        - name: Read the calls and the state
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Read the database's state
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Assert another image migrated nothing
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 0
+              - control_plane_db_verify_pg.writes == []
+            quiet: true
+            fail_msg: An apply that deploys another image touched the database or started a container.
+
+        - name: Start from a clean slate for an apply that deploys no image
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Request a plain apply that names no image
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery with no image
+
+        - name: Read the calls and the state
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert no image migrated nothing
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls | length == 0
+            quiet: true
+            fail_msg: An apply that deploys no image touched the database or started a container.
+
+        - name: Hold back while the database is stopped, then while it runs on stale access rules
+          ansible.builtin.include_tasks: tasks/delivery_hold.yml
+          loop:
+            - { mode: stopped }
+            - { mode: stale-hba }
+          loop_control:
+            loop_var: hold
+
+    - name: Section delivery failures
+      when: verify_sections | length == 0 or 'delivery_failures' in verify_sections
+      vars:
+        verify_deliver_extra: { control_plane_app_image: '{{ scenario_deliver_image }}' }
+        verify_credential: /etc/branchleft/control-plane/migrator-database-url
+        verify_staged: /etc/branchleft/control-plane/provision/migrator-url
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the server refuse a statement and quote it back
+          ansible.builtin.copy:
+            content: "sql-leak\n"
+            dest: /var/tmp/fake-docker/mode
+            mode: '0644'
+
+        - name: Request the plain apply
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery when the server refuses a statement
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the calls and the state
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Look at the credential, the staged copy and the marker
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_credential }}'
+            - '{{ verify_staged }}'
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_fail_stats
+
+        - name: Assert a refused statement stopped the apply with a message that quotes no statement, and left nothing behind
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr) is search('REFUSED')
+              - "'SCRAM-SHA-256$' not in control_plane_db_ask_result.stdout"
+              - "'SCRAM-SHA-256$' not in control_plane_db_ask_result.stderr"
+              - control_plane_db_verify_calls | selectattr('argv.0', 'equalto', 'run') | list | length == 0
+              - control_plane_db_verify_fail_stats.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+            quiet: true
+            fail_msg: A refused statement was quoted back, started a migration, or left a credential or a marker.
+
+        - name: Start from a clean slate for a migration that fails
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the migration program fail
+          ansible.builtin.copy:
+            content: "fail\n"
+            dest: /var/tmp/fake-docker/mode
+            mode: '0644'
+
+        - name: Request the plain apply
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: delivery when the migration fails
+            ask_extra: '{{ verify_deliver_extra }}'
+
+        - name: Read the state
+          ansible.builtin.import_tasks: tasks/pg.yml
+
+        - name: Look at the credential, the staged copy and the marker
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_credential }}'
+            - '{{ verify_staged }}'
+            - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
+          register: control_plane_db_verify_fail_stats
+
+        - name: Assert a failed migration stopped the apply, kept the login's credential root-only, and left no staged copy and no marker
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc != 0
+              - control_plane_db_verify_pg.writes == ['role', 'database', 'objects']
+              - control_plane_db_verify_fail_stats.results[0].stat.exists
+              - control_plane_db_verify_fail_stats.results[0].stat.mode == '0600'
+              - control_plane_db_verify_fail_stats.results[0].stat.pw_name == 'root'
+              - not control_plane_db_verify_fail_stats.results[1].stat.exists
+              - not control_plane_db_verify_fail_stats.results[2].stat.exists
+            quiet: true
+            fail_msg: A failed migration left the staged credential, wrote a marker, or lost the login's credential.
+
     - name: The log holds no secret
       when: verify_sections | length == 0 or 'log' in verify_sections
       block:

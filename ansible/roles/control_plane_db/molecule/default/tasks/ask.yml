@@ -5,12 +5,14 @@
 # for the assertion that follows. The run is verbose, so a task whose result carries
 # a secret and has no no_log would print it, and no throwaway may be in the output.
 #
-# Takes ask_name and ask_tags, and optionally ask_extra (a mapping) and ask_check.
+# Takes ask_name, and optionally ask_tags (none is a plain apply, as the gated pull runs the host's
+# playbook without a step), ask_extra (a mapping) and ask_check.
 - name: 'Request: {{ ask_name }}'
   ansible.builtin.command:
     argv: >-
       {{ ['ansible-playbook', '-vv', '-i', lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE'),
-          playbook_dir ~ '/request.yml', '--tags', ask_tags]
+          playbook_dir ~ '/request.yml']
+         + (['--tags', ask_tags] if (ask_tags | default('')) | length > 0 else [])
          + (['-e', ask_extra | ansible.builtin.to_json] if (ask_extra | default({})) | length > 0 else [])
          + (['--check'] if ask_check | default(false) else []) }}
   delegate_to: localhost

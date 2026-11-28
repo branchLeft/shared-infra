@@ -11,6 +11,8 @@
     - /var/lib/branchleft/control-plane/reconciler-work
     - /var/tmp/fake-docker/calls.jsonl
     - /var/tmp/fake-docker/mode
+    - /var/tmp/fake-docker/pg.json
+    - /etc/branchleft/control-plane/migrator-database-url
     - /var/tmp/verify-target
     - /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
     - /etc/branchleft/control-plane/portal-database-url

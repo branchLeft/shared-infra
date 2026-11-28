@@ -5,6 +5,10 @@ database migration, run the identity reconciler, and create the portal database 
 its roles and logins. Each step runs only when it is asked for by name and confirmed,
 and each is recorded so that it does not run twice by accident.
 
+It also delivers the migrations of the image the control plane is about to deploy, in a plain
+apply, with no step for the owner. That is the one thing a plain apply does beyond the input
+directory, and it is described in "The delivery's migration" below.
+
 This README follows the order the standard sets for a role README (ANS-14). It is
 written for a maintainer who has not seen the role before.
 
@@ -12,8 +16,11 @@ written for a maintainer who has not seen the role before.
 
 On a **plain apply** it makes one directory, `/etc/branchleft/control-plane/provision`
 (root, group 1000, mode 0750), where the owner places a step's inputs, and it runs no
-step. It refuses to build under a configuration directory that is absent, not root's,
-or open to others. Nothing else changes, so a second plain apply reports no change.
+step. It refuses to build under a configuration directory that is not root's or is open to
+others. The role runs before `control_plane` (see "How it is delivered"), so on a host that role has
+not reached the directory is absent, and the plain apply then makes no input directory and migrates
+nothing; the next apply does. A plain apply that deploys the migration image also runs the delivery's migration
+(next section). Nothing else changes, so a second plain apply reports no change.
 
 On a **step request** it runs one of three steps, each in the applications image, as a
 one-off container on the stack's network (or the host's, for the reconciler):
@@ -23,6 +30,41 @@ one-off container on the stack's network (or the host's, for the reconciler):
 | `migrate`   | Applies the pending migrations with the image's `--migrate-only` mode, connecting as the migration login, never as the administrator. It creates no role, no password. | `migrator-url`                                                                                |
 | `identity`  | Renders the reconciler's configuration, runs it against the sign-in service, installs its identifiers.                                                                 | none (the token is the sign-in service's own file)                                            |
 | `provision` | Creates the database, schema, roles and logins (the migration login among them), then writes the two connection URL files.                                             | `admin-url`, `tenant-password`, `owner-password`, `provisioner-password`, `migrator-password` |
+
+## The delivery's migration
+
+The owner's ruling of 27 Nov 2026:
+"The delivery creates the migration login itself, using the admin password ops1 already holds, and
+keeps its credential root-only". There is no step for the owner, ever. A plain apply, before the
+`control_plane` role runs its deploy wrapper, does this (`tasks/_deliver.yml`):
+
+1. It runs only when `control_plane_app_image` (the image the `control_plane` role gives the deploy
+   wrapper) is the migration image, `control_plane_db_apps_image`, and only while that digest has no
+   `migrate-<digest>` marker. A host that pins no image, or another one, migrates nothing; the same digest
+   is migrated once.
+2. It looks at the `db` container. A stack that is not running has nothing to migrate and the first
+   provision of a new stack stays the owner's step. A database not yet running on the access rules the stack
+   delivered (the check `provision` makes, `tasks/_hba.yml`) is held back, not refused, because the
+   `control_plane` role that delivers and loads those rules runs after this one: the next apply migrates.
+3. It makes the migration login with the module `control_plane_db_login`: a login that is not a superuser,
+   cannot create roles or databases, and has no BYPASSRLS or replication; its password is a SCRAM-SHA-256
+   verifier made by the module and sent over standard input of `docker exec ... psql` in the `db` container,
+   whose own `POSTGRES_PASSWORD` is the administrator's password (the same value `/etc/branchleft/control-plane.env`
+   holds). No password or verifier is in an argument, an environment of this host, the output or the log. It
+   hands the `portal` database and every object the administrator owns in it to the login, so the login is
+   the schema's owner. It writes the login's URL to `/etc/branchleft/control-plane/migrator-database-url`
+   (root, root, 0600). It changes nothing when the server and the file already agree, and gives the login a new
+   password only when the file is absent or no longer matches the server's verifier. A superuser of that name, or
+   one that is a member of another role, is refused and never altered. The administrator's SQL runs with the search
+   path pinned to the catalogs, because the login owns the database it runs in.
+4. It stages a copy of that file where the image's user can read it (`provision/migrator-url`, root, group 1000,
+   0640), runs the migrate step's own tasks on it, and removes the copy on every way out. The credential file itself
+   is never mounted into a container.
+5. A plan (check mode) reads the server and the file, changes neither, and reports that the migrations would be
+   applied.
+
+Applied migrations cannot be rolled back. The control C11 below does not apply to this one login, by that
+ruling: the host holds a standing, root-only credential of the schema-owning login.
 
 The grants themselves are not written here. The image's program holds a closed manifest
 of every role, login, grant and default privilege, checks the server against it before
@@ -66,21 +108,23 @@ reached. The role holds no SQL; the grants are the applications image's closed m
 (`portal/data/provision/manifest.ts` in the Ghost platform repository), which the program
 checks before and after it acts and refuses to repair.
 
-| Login                      | What it can do                                                                                                                             | Defined by                                                | Reached how                                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `postgres` (administrator) | Everything. `provision` runs as it for the steps that need a superuser (creating roles and the database); `migrate` does not.              | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                          |
-| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).                                   | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                                          |
-| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.                                    | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                       |
-| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.                                    | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                                             |
-| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only.                               | The program's manifest, created by `provision`            | No URL file; provisioning connects as it once; `pg_hba.conf`: `portal` only                                                      |
-| `portal_migrator_login`    | Not a superuser, no BYPASSRLS. Owns the `portal` database and its objects: applies migrations and the manifest's grants, and nothing else. | The program's manifest, created by `provision`            | `migrator-url`, owner-placed per `migrate`, removed on every exit; `provision` connects as it once; `pg_hba.conf`: `portal` only |
+| Login                      | What it can do                                                                                                                             | Defined by                                                                                    | Reached how                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres` (administrator) | Everything. `provision` runs as it for the steps that need a superuser (creating roles and the database); `migrate` does not.              | The `db` image's first start                                                                  | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                                                                                   |
+| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).                                   | The sign-in service's `init` phase, run once by the owner                                     | The stack network; `pg_hba.conf`: its own database only                                                                                                                                   |
+| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.                                    | The program's manifest, created by `provision`                                                | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                                                                                |
+| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.                                    | The program's manifest, created by `provision`                                                | The console's URL file; `pg_hba.conf`: `portal` only                                                                                                                                      |
+| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only.                               | The program's manifest, created by `provision`                                                | No URL file; provisioning connects as it once; `pg_hba.conf`: `portal` only                                                                                                               |
+| `portal_migrator_login`    | Not a superuser, no BYPASSRLS. Owns the `portal` database and its objects: applies migrations and the manifest's grants, and nothing else. | The delivery's module `control_plane_db_login`, or the program's manifest through `provision` | `migrator-database-url`, root:root 0600, made by the delivery and staged as `migrator-url` for each migration then removed; `provision` connects as it once; `pg_hba.conf`: `portal` only |
 
 The migration role is the migration login, `portal_migrator_login`, and not the administrator.
 `migrate` is given its URL alone (`migrator-url`): the administrator's file is neither checked,
 mounted nor named in that step, and the program, which connects only as the login its URL names,
-refuses a URL that names another. The URL is placed by the owner for each `migrate` request and
-removed on every way out, so no standing file on the host holds the credential of the login that
-owns the schema. The administrator still runs the first steps of `provision` (it creates the
+refuses a URL that names another. For a `migrate` the owner requests by hand, the owner places the URL and the
+step removes it on every way out. For the delivery, the credential is the root-only file the delivery's
+module keeps (`migrator-database-url`), staged as that URL for the run and removed. The one standing file on
+the host that holds the credential of the login that owns the schema is that root-only one (the owner's ruling
+above). The administrator still runs the first steps of `provision` (it creates the
 roles and the database, which only a superuser can), through the owner-placed `admin-url`, which
 the step also removes on every exit. Neither credential is given to a runtime service
 (`hetzner/provision/test_control_plane_stack.py` fails if a compose service names either). The
@@ -104,12 +148,13 @@ named limit below.
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the inputs and
 [`defaults/main.yml`](defaults/main.yml) holds the same defaults. No input is a secret.
 
-| Variable                              | Default | Meaning                                                                                                                  |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `control_plane_db_step`               | empty   | The step this run confirms. The gated pull sets it on the command line. Never in an inventory.                           |
-| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step. Set for ops1 in `owner_vars/ops1.yml`. |
-| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                                                    |
-| `control_plane_db_identity_tenants`   | `[]`    | The reconciler's tenant list. Empty. See the limits.                                                                     |
+| Variable                              | Default | Meaning                                                                                                                                                                        |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `control_plane_db_step`               | empty   | The step this run confirms. The gated pull sets it on the command line. Never in an inventory.                                                                                 |
+| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step. Set for ops1 in `owner_vars/ops1.yml`.                                                       |
+| `control_plane_app_image`             | empty   | Read, not owned: the image the `control_plane` role deploys. When it equals the migration image, a plain apply migrates it (see above). Set for ops1 in `owner_vars/ops1.yml`. |
+| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                                                                                                          |
+| `control_plane_db_identity_tenants`   | `[]`    | The reconciler's tenant list. Empty. See the limits.                                                                                                                           |
 
 The fixed values (every path, the modes, the logins, the patterns an image, a password
 and a hostname must match) are in `vars/main.yml`, not in the interface, so an inventory
@@ -129,6 +174,9 @@ cannot loosen them.
 ## What it changes on a host
 
 - `/etc/branchleft/control-plane/provision` (root, group 1000, 0750), on every apply.
+- `/etc/branchleft/control-plane/migrator-database-url` (root, root, 0600): the migration login's URL, made
+  by the delivery and kept (the owner's ruling; see C11). The delivery also makes the login and hands the
+  `portal` database and what the administrator owns in it to the login on the server, which no later run undoes.
 - `/var/lib/branchleft/control-plane-db` (root, 0755) and one marker in it per step that
   ran: `migrate-<digest>`, `identity-<hash>` and `provision-migrator`, each root, 0644,
   holding its own name. The provision marker is not the step's id: the program now also
@@ -141,9 +189,10 @@ cannot loosen them.
 - `identity`: `/etc/branchleft/control-plane/identity-outputs.json` (root, group 1000,
   0640), and, while it runs, the working directory
   `/var/lib/branchleft/control-plane/reconciler-work` (uid 1000, 0700).
-- It removes the owner-placed `migrator-url` on every way out of `migrate`, `admin-url` on
-  every way out of `provision`, and the four password files (the migrator's among them) once
-  `provision` is recorded. No standing file holds the migration login's credential.
+- It removes the `migrator-url` (owner-placed, or staged by the delivery) on every way out of `migrate`,
+  `admin-url` on every way out of `provision`, and the four password files (the migrator's among them) once
+  `provision` is recorded. The one standing file holding the migration login's credential is the delivery's
+  root-only `migrator-database-url`.
 - Containers are started with `--rm` and leave nothing. No package, user, service, port
   or firewall rule.
 
@@ -174,33 +223,44 @@ seen red, the edit is reverted, and the test is seen green. C3 (link), C17 (URL 
 and C19 are shown red by the unit tests only; the container scenario stays green for
 those edits.
 
-| Control                                                                         | Edit that must turn it red                                                                      | Where it is shown                                                  |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| C1 a plain apply runs no step                                                   | drop the `never` tag of a step                                                                  | unit test, `plain` section                                         |
-| C2 the step id must equal the confirmation                                      | drop the comparison in `_guard.yml`                                                             | `guard` section                                                    |
-| C3 an input file is root's, group 1000, 0640, regular, not empty                | accept 0644, or accept a link                                                                   | `inputs` section, unit test                                        |
-| C4 the input directory is root:1000 0750, and a plain apply restores it         | set 0755 in `main.yml`                                                                          | `plain` and `inputs` sections                                      |
-| C5 the configuration directory is not open to others                            | drop its assertion                                                                              | `plain` section                                                    |
-| C6 the image is pinned by digest                                                | loosen `control_plane_db_image_pattern`                                                         | `guard` section, unit test                                         |
-| C7 the image carries what the step needs                                        | drop `_image.yml`                                                                               | `migrate_preconditions`, `provision_failures`                      |
-| C8 the stack network must exist                                                 | drop the network check                                                                          | `migrate_preconditions`                                            |
-| C9 a step ends clean or is refused                                              | drop the output assertion                                                                       | `migrate_failures`, `provision_failures`, `identity_failures`      |
-| C10 the marker is written after the effect and its checks                       | write it first                                                                                  | `migrate_failures`, unit test                                      |
-| C11 the credential URL file a step was given is removed on every exit           | drop the `always` section                                                                       | `inputs`, `migrate_failures`                                       |
-| C12 a marker is keyed by what the step acts on                                  | key `migrate` by a constant                                                                     | `migrate`, `identity`                                              |
-| C13 each URL file holds its own login, and no file holds the provisioner's      | swap the two logins                                                                             | `provision` section, unit test                                     |
-| C14 a password must survive as one URL component                                | drop the shape check                                                                            | `provision_refusals`                                               |
-| C15 provision does not rotate the passwords the applications hold               | drop the URL file comparison                                                                    | `provision_refusals`                                               |
-| C16 no secret in a container's arguments or environment, and no added privilege | add `--privileged`, or a password in an `-e`                                                    | `migrate`, `provision`, unit test                                  |
-| C17 a task that handles a secret has `no_log`                                   | remove it                                                                                       | `migrate_failures`, `provision_failures`, unit test                |
-| C18 the service account token is the sign-in service's, regular, 0600           | accept 0644, or a link                                                                          | `identity_refusals`                                                |
-| C19 a working directory this run did not make is not removed                    | remove it unconditionally                                                                       | `identity_refusals`                                                |
-| C20 a check-mode request starts no container and writes no marker               | not shown to fail: the container tasks are skipped in check mode                                | `check_mode` section (asserts the outcome only)                    |
-| C21 the running server has loaded the delivered rules                           | drop the byte comparison, or the load-time comparison in `server_loaded_hba.sh`, or the ask     | `provision_hba` section (not-reloaded case), unit test             |
-| C22 the delivered rules admit each of the four portal logins                    | drop the per-login rule check in `_hba.yml`, or the migrator from `control_plane_db_hba_logins` | `provision_hba` section, unit test                                 |
-| C23 the rules are checked before any secret file is looked at or read           | move the import after the input check in `_provision.yml`                                       | unit test (task order)                                             |
-| C24 migrate is given the migrator's URL file and never the administrator's      | put the administrator's mount or `PORTAL_ADMIN_URL_FILE` back into `_migrate.yml`               | `migrate` section (exact argument and environment list), unit test |
-| C25 the migrator's URL file is removed on every exit of migrate                 | drop the `always` removal of `migrator-url` in `_migrate.yml`                                   | `migrate_failures` section, unit test                              |
+| Control                                                                                                                                                                                                                                       | Edit that must turn it red                                                                      | Where it is shown                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| C1 a plain apply runs no step                                                                                                                                                                                                                 | drop the `never` tag of a step                                                                  | unit test, `plain` section                                             |
+| C2 the step id must equal the confirmation                                                                                                                                                                                                    | drop the comparison in `_guard.yml`                                                             | `guard` section                                                        |
+| C3 an input file is root's, group 1000, 0640, regular, not empty                                                                                                                                                                              | accept 0644, or accept a link                                                                   | `inputs` section, unit test                                            |
+| C4 the input directory is root:1000 0750, and a plain apply restores it                                                                                                                                                                       | set 0755 in `main.yml`                                                                          | `plain` and `inputs` sections                                          |
+| C5 the configuration directory is not open to others                                                                                                                                                                                          | drop its assertion                                                                              | `plain` section                                                        |
+| C6 the image is pinned by digest                                                                                                                                                                                                              | loosen `control_plane_db_image_pattern`                                                         | `guard` section, unit test                                             |
+| C7 the image carries what the step needs                                                                                                                                                                                                      | drop `_image.yml`                                                                               | `migrate_preconditions`, `provision_failures`                          |
+| C8 the stack network must exist                                                                                                                                                                                                               | drop the network check                                                                          | `migrate_preconditions`                                                |
+| C9 a step ends clean or is refused                                                                                                                                                                                                            | drop the output assertion                                                                       | `migrate_failures`, `provision_failures`, `identity_failures`          |
+| C10 the marker is written after the effect and its checks                                                                                                                                                                                     | write it first                                                                                  | `migrate_failures`, unit test                                          |
+| C11 the credential URL file a step was given is removed on every exit (the migration login's delivered credential excepted, by the owner's ruling of 27 Nov 2026 that the delivery makes the login itself and keeps its credential root-only) | drop the `always` section                                                                       | `inputs`, `migrate_failures`                                           |
+| C12 a marker is keyed by what the step acts on                                                                                                                                                                                                | key `migrate` by a constant                                                                     | `migrate`, `identity`                                                  |
+| C13 each URL file holds its own login, and no file holds the provisioner's                                                                                                                                                                    | swap the two logins                                                                             | `provision` section, unit test                                         |
+| C14 a password must survive as one URL component                                                                                                                                                                                              | drop the shape check                                                                            | `provision_refusals`                                                   |
+| C15 provision does not rotate the passwords the applications hold                                                                                                                                                                             | drop the URL file comparison                                                                    | `provision_refusals`                                                   |
+| C16 no secret in a container's arguments or environment, and no added privilege                                                                                                                                                               | add `--privileged`, or a password in an `-e`                                                    | `migrate`, `provision`, unit test                                      |
+| C17 a task that handles a secret has `no_log`                                                                                                                                                                                                 | remove it                                                                                       | `migrate_failures`, `provision_failures`, unit test                    |
+| C18 the service account token is the sign-in service's, regular, 0600                                                                                                                                                                         | accept 0644, or a link                                                                          | `identity_refusals`                                                    |
+| C19 a working directory this run did not make is not removed                                                                                                                                                                                  | remove it unconditionally                                                                       | `identity_refusals`                                                    |
+| C20 a check-mode request starts no container and writes no marker                                                                                                                                                                             | not shown to fail: the container tasks are skipped in check mode                                | `check_mode` section (asserts the outcome only)                        |
+| C21 the running server has loaded the delivered rules                                                                                                                                                                                         | drop the byte comparison, or the load-time comparison in `server_loaded_hba.sh`, or the ask     | `provision_hba` section (not-reloaded case), unit test                 |
+| C22 the delivered rules admit each of the four portal logins                                                                                                                                                                                  | drop the per-login rule check in `_hba.yml`, or the migrator from `control_plane_db_hba_logins` | `provision_hba` section, unit test                                     |
+| C23 the rules are checked before any secret file is looked at or read                                                                                                                                                                         | move the import after the input check in `_provision.yml`                                       | unit test (task order)                                                 |
+| C24 migrate is given the migrator's URL file and never the administrator's                                                                                                                                                                    | put the administrator's mount or `PORTAL_ADMIN_URL_FILE` back into `_migrate.yml`               | `migrate` section (exact argument and environment list), unit test     |
+| C25 the migrator's URL file is removed on every exit of migrate                                                                                                                                                                               | drop the `always` removal of `migrator-url` in `_migrate.yml`                                   | `migrate_failures` section, unit test                                  |
+| C26 the delivered login is never a superuser, and a superuser of its name is refused                                                                                                                                                          | drop `nosuperuser` from the role statement, or the refusal in `decide`                          | unit tests, real-server test (`test_control_plane_db_login_server.py`) |
+| C27 the delivered credential is root:root 0600, and is never mounted or put in an argument                                                                                                                                                    | set `0644` on the module task in `_deliver.yml`, or mount the file                              | `delivery` section, unit test                                          |
+| C28 no password or verifier in an argument, output or log                                                                                                                                                                                     | remove `no_log` from the module task, or put the password in an argument                        | `delivery`, `delivery_failures` sections, unit test                    |
+| C29 the delivery migrates only the image the control plane deploys, once per digest                                                                                                                                                           | drop the image equality from `when` in `main.yml`                                               | `delivery_holds` section, unit test                                    |
+| C30 the delivery runs before the deploy wrapper                                                                                                                                                                                               | move `control_plane_db` after `control_plane` in `playbooks/ops1.yml`                           | unit test (playbook order)                                             |
+| C31 a plan changes neither the server nor the disk                                                                                                                                                                                            | make the module apply in check mode                                                             | `delivery_holds` section, unit test                                    |
+| C32 the staged copy of the credential is removed on every exit of the delivery                                                                                                                                                                | drop the `always` section in `_deliver.yml`                                                     | `delivery_failures` section, unit test                                 |
+| C33 a database that is stopped, or not on the delivered rules, is not touched                                                                                                                                                                 | drop the container look or the rules check in `_deliver.yml`                                    | `delivery_holds` section, unit test                                    |
+| C34 a plain apply before the `control_plane` role has made the directory waits and migrates nothing                                                                                                                                           | drop the `exists` condition from the delivery's `when` in `main.yml`                            | `plain` section, unit test                                             |
+| C35 the administrator's SQL in the login's database resolves names in the catalogs first, so an object the login plants cannot make it a superuser                                                                                            | drop the `PGOPTIONS` search path from `CONTAINER_SHELL`                                         | unit test, real-server test                                            |
+| C36 an existing login of the name that is a member of another role is refused, never altered                                                                                                                                                  | drop the membership refusal in `decide`                                                         | unit tests, real-server test                                           |
 
 ## What the owner does
 
@@ -238,7 +298,9 @@ password manager.
    files once `provision` is recorded, and the connection URL files are the only copy
    left on the host. A failed `provision` keeps them for the retry.
 
-3. Place the migrator URL before **each** `migrate` request. It is the migration login's
+3. Nothing, for a delivery: the delivery makes the migration login and its credential itself. Only
+   a `migrate` the owner requests by hand needs this step: place the migrator URL before **each** such
+   request. It is the migration login's
    connection URL, with the password from step 2 (the same value, saved in the password
    manager), `postgres://portal_migrator_login:MIGRATOR_PASSWORD@db:5432/portal`. The program
    refuses a URL that names another login. The step removes the file on every exit, so a
@@ -289,8 +351,8 @@ Only through the gated pull. A plain apply of the host's playbook delivers the i
 directory. A step is requested with the commit, the step id and the step's word, over the
 step key, and the pull runs the playbook with `--tags control_plane_db_<id> -e
 control_plane_db_step=<id>`. The host's step allow-list names the id, this role's tag and
-the word. For ops1 the role is in the host's playbook (last, after `control_plane`), on the
-host's role list, and the allow-list is in `owner_vars/ops1.yml`. The applications image
+the word. For ops1 the role is in the host's playbook (right before `control_plane`, so the delivery's migration runs
+before the deploy wrapper moves the stack onto the image), on the host's role list, and the allow-list is in `owner_vars/ops1.yml`. The applications image
 digest is an owner value in `owner_vars/ops1.yml`; the identity step refuses by name
 while `control_plane_db_identity_hostnames` is unset. The one-time host steps a step request needs
 are in the pull_trigger README, "Step requests".
@@ -352,9 +414,22 @@ are in the pull_trigger README, "Step requests".
   the server (the migration login has no rule in the running file) and shows the program's
   refusal lines; the `control_plane` apply that delivers the file reloads the server, so
   this happens only before that apply has run (step 0).
-- **The migrator URL is placed for every `migrate`.** No standing file holds the login that
-  owns the schema, at the cost of one placement per request. A standing, group-readable file
-  written by `provision` would be a small follow-up if that cost is too high.
+- **The delivery leaves a standing credential of the schema's owner on the host.** `migrator-database-url`,
+  root:root 0600. The owner chose this on 27 Nov 2026 over a hand step, so the rule of C11 that no standing
+  file holds a step's credential does not apply to this login. A host's root can read it; the login owns the `portal`
+  schema, is not a superuser, and is admitted to `portal` only by `pg_hba.conf`.
+- **Applied migrations cannot be rolled back.** The delivery runs them before the stack is moved onto the
+  image, once per digest. A migration that fails stops the apply and leaves no marker, and the next apply runs it
+  again.
+- **The delivery cannot run on a database that was never provisioned.** The image's `--migrate-only` needs the
+  principals the manifest names, and refuses to repair. A host whose `portal` database lacks them stops by name
+  at the migration, and the full `provision` stays a step.
+- **A database not yet on the delivered access rules waits one apply.** The `control_plane` role runs after
+  this one and delivers them; the migration of the image is held back until the apply after, and an apply that
+  deploys the new image in between may start it before its migrations.
+- **The scenario's database is a stand-in.** The module's SQL, SCRAM login, handover and idempotence are shown
+  against a real PostgreSQL by `tests/unit/test_control_plane_db_login_server.py` (it needs Docker and fails
+  without it), and the scenario shows the role's order, files, flags and refusals against the stand-in.
 - **The marker is host-local and is not a lock.** A rebuilt host has none; two requests
   at once could both run. The gated pull serialises requests.
 - **A marker says a step ran, not what it did.** After an outside change to the identity

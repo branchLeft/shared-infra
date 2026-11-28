@@ -25,11 +25,13 @@ values, see its README), then `roles/exporters_and_collectors`, then `roles/edge
 `playbooks/ops1.yml` adds `roles/ci_step_login` (the step account, its one-command sudoers file and
 its one forced-command key line; its key and source addresses are in `owner_vars/ops1.yml`), then
 `roles/breakglass_mint_host`, then
-`roles/control_plane`, then `roles/status_page` (after it, because the control plane installs the
-DOCKER-USER drop for the page's port), then `roles/nextcloud_stack`, then
+`roles/control_plane_db` (before the control plane: a plain apply makes one directory and, when the
+image the control plane deploys is the migration image, migrates it once per digest before the deploy
+wrapper moves the stack onto it; it needs the configuration directory the control plane made on an
+earlier apply), then `roles/control_plane`, then `roles/status_page` (after it, because the control
+plane installs the DOCKER-USER drop for the page's port), then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
-reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
-plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
+reads). `owner_vars/ops1.yml` holds ops1's step
 allow-list (`pull_trigger_steps`) and the values of its other roles that R10 allows. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, `roles/publicpress_website_app1`, then

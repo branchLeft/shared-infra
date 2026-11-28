@@ -1,6 +1,6 @@
 ---
 # A plain apply makes the directory the owner places step inputs in and runs no
-# step. Each step is imported with the never tag, which Ansible runs only when that
+# step; the one program it may run is the delivery's migration (_deliver.yml). Each step is imported with the never tag, which Ansible runs only when that
 # exact tag is named, plus its own tag, and it also needs control_plane_db_step to
 # be its id (see the README, "The guard"). Nothing here carries the always tag: a
 # step run is the step's own tasks and nothing a plain apply would repeat.
@@ -13,16 +13,26 @@
 
 # The input files are 0640 for the image's group, so what keeps every other
 # account from them is this directory. The control_plane role makes it; this role
-# does not widen it and refuses to build under one that is not.
-- name: Refuse a configuration directory that is absent, not root's, or open to others
+# does not widen it and refuses to build under one that is not. This role runs before the
+# control_plane role (so the delivery's migration is done before that role's deploy wrapper moves
+# the stack), so on a host that role has not yet reached the directory is absent: the plain apply
+# then does nothing here, and the next apply, which finds the directory, does the rest.
+- name: Say why a plain apply waits for the control_plane role to make the configuration directory
+  ansible.builtin.debug:
+    msg: >-
+      control_plane_db: {{ control_plane_db_config_dir }} does not exist yet, so this apply makes no
+      input directory and migrates nothing. The control_plane role, which runs after this one, makes it.
+  when: not control_plane_db_config_dir_stat.stat.exists
+
+- name: Refuse a configuration directory that is not a directory of root, or is open to others
   ansible.builtin.assert:
     that:
-      - control_plane_db_config_dir_stat.stat.exists
       - control_plane_db_config_dir_stat.stat.isdir
       - (control_plane_db_config_dir_stat.stat.pw_name | default('')) == 'root'
       - control_plane_db_config_dir_stat.stat.mode in ['0750', '0700']
     quiet: true
-    fail_msg: 'REFUSED: {{ control_plane_db_config_dir }} must exist, be a directory of root and have mode 0750 or 0700 before this role builds under it.'
+    fail_msg: 'REFUSED: {{ control_plane_db_config_dir }} must be a directory of root and have mode 0750 or 0700 before this role builds under it.'
+  when: control_plane_db_config_dir_stat.stat.exists
 
 - name: Create the directory the owner places the step inputs in
   ansible.builtin.file:
@@ -31,6 +41,26 @@
     owner: '{{ control_plane_db_input_owner }}'
     group: '{{ control_plane_db_input_gid }}'
     mode: '{{ control_plane_db_input_dir_mode }}'
+  when: control_plane_db_config_dir_stat.stat.exists
+
+# The one thing a plain apply does beyond the directory: migrate the image this apply deploys, before
+# the deploy wrapper moves the stack onto it (the playbook runs this role before the control plane).
+# It runs only for a plain apply (a step request names a tag and skips what has none), only when the
+# image the control plane deploys is the migration image, and once per digest. See _deliver.yml.
+# The plain-apply condition is read into a fact first. A static import hands its `when` to every task
+# it imports, and the delivery imports the migrate step's tasks with the step's second key set, which
+# would make `control_plane_db_step == ''` false for exactly those tasks and skip them all.
+- name: Note whether this run is a plain apply, with no step confirmed
+  ansible.builtin.set_fact:
+    control_plane_db_plain_apply: "{{ control_plane_db_step == '' }}"
+
+- name: Deliver the migrations of the image this apply deploys
+  ansible.builtin.import_tasks: _deliver.yml
+  when:
+    - control_plane_db_plain_apply | ansible.builtin.bool
+    - control_plane_db_config_dir_stat.stat.exists
+    - control_plane_db_delivery_image | length > 0
+    - control_plane_db_delivery_image == control_plane_db_apps_image
 
 - name: Guarded step migrate
   ansible.builtin.import_tasks: _migrate.yml

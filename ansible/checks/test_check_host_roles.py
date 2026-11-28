@@ -86,13 +86,14 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
-# (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
-# the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
-# backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
-# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host,
-# then broker_tunnel_client last of all (inert until the owner seeds it), and demo1's
-# broker_deploy (first: demo1_build reads what it leaves behind), two build roles and
+# (first), ci_step_login right after host_baseline, control_plane_db (its delivery migrates the
+# image before control_plane's deploy wrapper moves the stack onto it), control_plane, then the
+# status page (it binds the private address, so it follows the drop's role), nextcloud_stack,
+# backup_worker and backup_restore (the restore reads the worker's variables, so it follows), then
+# the node exporter, mail_collector_inputs (it only reads), mail_collector, spool_paths (it reads
+# mail_collector's descriptors), ring_controller_host, then broker_tunnel_client last of all (inert
+# until the owner seeds it), and demo1's broker_deploy (first: demo1_build reads what it leaves
+# behind), two build roles and
 # spool_path_account. ops1 and db1 also apply
 # deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
@@ -125,12 +126,12 @@ APPLIED_ON_MAIN = {
         "safety_channel_key",
         "deploy_verifier",
         "deploy_tooling",
+        "control_plane_db",
         "control_plane",
         "status_page",
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
-        "control_plane_db",
         "node_exporter",
         "mail_collector_inputs",
         "mail_collector",
@@ -519,9 +520,9 @@ class HostRoleLists(unittest.TestCase):
     # control_plane, which installs the drop for its port), then the roles that take the loader's
     # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
     # reads the worker's variables in the same play, so it follows the worker. The database role
-    # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
-    # any role moves or is dropped, green with the roles named in this order. The node exporter
-    # is last, so its disk check cannot hold any other role back.
+    # precedes control_plane, so the image's migrations are done before the stack moves onto it.
+    # Red when any role moves or is dropped, green with the roles named in this order. The node
+    # exporter is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -540,12 +541,12 @@ class HostRoleLists(unittest.TestCase):
                 "safety_channel_key",
                 "deploy_verifier",
                 "deploy_tooling",
+                "control_plane_db",
                 "control_plane",
                 "status_page",
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
-                "control_plane_db",
                 "node_exporter",
                 "mail_collector_inputs",
                 "mail_collector",
@@ -562,8 +563,10 @@ class HostRoleLists(unittest.TestCase):
         # The paths role reads the descriptors the collector role writes, so it follows that role.
         self.assertLess(names.index("mail_collector"), names.index("spool_paths"))
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
-        # The database role asserts the directory the control plane makes, so it follows it.
-        self.assertLess(names.index("control_plane"), names.index("control_plane_db"))
+        # The database role migrates the image before the control plane's deploy wrapper moves the
+        # stack onto it, so it precedes that role; on a host the control plane has not reached it
+        # waits for the directory that role makes.
+        self.assertLess(names.index("control_plane_db"), names.index("control_plane"))
         self.assertEqual(names[2], "host_inputs")
         self.assertEqual(check(ROOT), [])
 
