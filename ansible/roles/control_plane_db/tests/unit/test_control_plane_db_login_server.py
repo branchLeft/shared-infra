@@ -9,7 +9,6 @@ and nothing a migrator may not, and that a second run changes nothing. It needs 
 the image; without one it fails, because a skipped role test is a control that does not run.
 """
 
-# ruff: noqa: S603, S607, S608
 # The programs are docker and the test's own SQL on a throwaway container: nothing is untrusted.
 
 import os

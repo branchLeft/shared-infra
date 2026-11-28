@@ -3,28 +3,20 @@
 
 The login is the one the image's migration program connects as: not a superuser, no BYPASSRLS, no
 CREATEROLE, no CREATEDB, no REPLICATION, and the owner of the portal database and of what the
-migrations create in it. The owner's ruling of 27 Nov 2026 has the delivery make it with the
-database administrator's password the host already holds and keep its credential in a root-only
-file, so no step is the owner's.
+migrations create in it. The delivery makes it with the database administrator's password the host
+already holds and keeps its credential in a root-only file, so no step is the owner's.
 
-The administrator's password is never read here. SQL goes to the database container through
-``docker exec`` on standard input, and the shell that runs ``psql`` inside the container takes the
-password from the container's own ``POSTGRES_PASSWORD``, the value
-``/etc/branchleft/control-plane.env`` gave it. So no secret is in an argument, and the module
-holds none of the administrator's.
+The administrator's password is never read here, and control-plane.env is not opened. SQL goes to
+the database container through ``docker exec`` on standard input, and the shell that runs ``psql``
+inside the container takes the password from the container's own ``POSTGRES_PASSWORD``. So no
+secret is in an argument.
 
-The new login's password is made here, written only to the credential file (created 0600, so never
-wider), and sent to the server as a SCRAM-SHA-256 verifier, which PostgreSQL stores as it is, so the
-password itself is in no statement, no server log and no output. The file is the only copy.
+The new login's password is made here, written only to the credential file (created 0600), and sent
+to the server as a SCRAM-SHA-256 verifier, so the password is in no statement, server log or output.
 
-What it does, each part only when needed, so a second run changes nothing:
-
-* makes the login, or puts its attributes right, and sets its password when the credential file is
-  absent, malformed or holds a password the server's stored verifier does not match;
-* hands the portal database and what the administrator owns in it to the login, so the program's
-  own check of ownership passes (a database made before the login existed was the administrator's);
-* sets the owner, group and mode of the credential file on every run.
-
+Each part runs only when needed, so a second run changes nothing: the login and its attributes, its
+password (when the file is absent, malformed or does not match the stored verifier), the handover of
+the portal database and what the administrator owns in it, and the file's owner, group and mode.
 A superuser of that name is refused, never altered: it was not made by this module.
 """
 

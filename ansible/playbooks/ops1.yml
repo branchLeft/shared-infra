@@ -18,13 +18,16 @@
 # worker and the backup restore, which take their inputs from the loader. The backup
 # restore reads the backup worker's variables in the same play, so it follows it. Both
 # leave their timers off.
+#
 # The control plane's database role goes BEFORE the control plane, not after it: on a plain apply it
 # migrates the image the control plane is about to deploy (control_plane_app_image, once per digest),
 # so the applications never start on a schema older than their image. It makes the migration login and
-# its root-only credential itself (the owner's ruling of 27 Nov 2026) and needs only the configuration
-# directory the control plane made on an earlier apply. A step runs only when the gated pull asks for
+# its root-only credential itself (the owner's ruling of 27 Nov 2026). On a host the control plane has not
+# reached, where its configuration directory does not exist yet, it waits for that apply. A step runs only when the gated pull asks for
 # it, by tag, for an id on the step allow-list in owner_vars/ops1.yml. No playbook, inventory or
-# owner file sets its step variable. The ring controller's host role makes the controller's two
+# owner file sets its step variable.
+#
+# The ring controller's host role makes the controller's two
 # keys and installs its units, takes five public inputs from owner_vars/ops1.yml, and holds its
 # timer off until the owner sets a bundle digest there, so its failure holds nothing else back.
 # The provisioning controller's host role comes after it: it makes the controller's ssh key,

@@ -23,3 +23,12 @@ ignore_missing_imports = true
 # The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
 extend = "../../pyproject.toml"
 target-version = "py313"
+
+# The server test starts docker and runs its own fixed SQL on a throwaway container; none of it is
+# input from outside, which is what these three rules guard against.
+[tool.ruff.lint.per-file-ignores]
+"tests/unit/test_control_plane_db_login_server.py" = [
+  "start-process-with-partial-path",
+  "subprocess-without-shell-equals-true",
+  "hardcoded-sql-expression",
+]

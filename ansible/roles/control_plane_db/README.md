@@ -62,8 +62,8 @@ keeps its credential root-only". There is no step for the owner, ever. A plain a
 5. A plan (check mode) reads the server and the file, changes neither, and reports that the migrations would be
    applied.
 
-Applied migrations cannot be rolled back. The control C11 below is superseded for this one login by that
-ruling: the host now holds a standing, root-only credential of the schema-owning login.
+Applied migrations cannot be rolled back. The control C11 below does not apply to this one login, by that
+ruling: the host holds a standing, root-only credential of the schema-owning login.
 
 The grants themselves are not written here. The image's program holds a closed manifest
 of every role, login, grant and default privilege, checks the server against it before
@@ -412,8 +412,8 @@ are in the pull_trigger README, "Step requests".
   refusal lines; the `control_plane` apply that delivers the file reloads the server, so
   this happens only before that apply has run (step 0).
 - **The delivery leaves a standing credential of the schema's owner on the host.** `migrator-database-url`,
-  root:root 0600. The owner chose this on 27 Nov 2026 over a hand step, and it supersedes the earlier rule
-  (C11) that no standing file holds that credential. A host's root can read it; the login owns the `portal`
+  root:root 0600. The owner chose this on 27 Nov 2026 over a hand step, so the rule of C11 that no standing
+  file holds a step's credential does not apply to this login. A host's root can read it; the login owns the `portal`
   schema, is not a superuser, and is admitted to `portal` only by `pg_hba.conf`.
 - **Applied migrations cannot be rolled back.** The delivery runs them before the stack is moved onto the
   image, once per digest. A migration that fails stops the apply and leaves no marker, and the next apply runs it
