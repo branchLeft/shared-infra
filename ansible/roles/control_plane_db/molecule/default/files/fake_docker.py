@@ -208,7 +208,7 @@ def run_psql(args: list[str]) -> int:
     if "pg_catalog.pg_authid" in sql:
         verifier = state["verifier"]
         if verifier is not None:
-            print(f"f|f|f|f|f|t|{verifier}")
+            print(f"f|f|f|f|f|t|{verifier}|0")
         return 0
     if "pg_get_userbyid(datdba)" in sql:
         print(state["owner"])

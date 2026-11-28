@@ -54,8 +54,9 @@ keeps its credential root-only". There is no step for the owner, ever. A plain a
    hands the `portal` database and every object the administrator owns in it to the login, so the login is
    the schema's owner. It writes the login's URL to `/etc/branchleft/control-plane/migrator-database-url`
    (root, root, 0600). It changes nothing when the server and the file already agree, and gives the login a new
-   password only when the file is absent or no longer matches the server's verifier. A superuser of that name is
-   refused and never altered.
+   password only when the file is absent or no longer matches the server's verifier. A superuser of that name, or
+   one that is a member of another role, is refused and never altered. The administrator's SQL runs with the search
+   path pinned to the catalogs, because the login owns the database it runs in.
 4. It stages a copy of that file where the image's user can read it (`provision/migrator-url`, root, group 1000,
    0640), runs the migrate step's own tasks on it, and removes the copy on every way out. The credential file itself
    is never mounted into a container.
@@ -258,6 +259,8 @@ those edits.
 | C32 the staged copy of the credential is removed on every exit of the delivery                                                                                                                                                                | drop the `always` section in `_deliver.yml`                                                     | `delivery_failures` section, unit test                                 |
 | C33 a database that is stopped, or not on the delivered rules, is not touched                                                                                                                                                                 | drop the container look or the rules check in `_deliver.yml`                                    | `delivery_holds` section, unit test                                    |
 | C34 a plain apply before the `control_plane` role has made the directory waits and migrates nothing                                                                                                                                           | drop the `exists` condition from the delivery's `when` in `main.yml`                            | `plain` section, unit test                                             |
+| C35 the administrator's SQL in the login's database resolves names in the catalogs first, so an object the login plants cannot make it a superuser                                                                                            | drop the `PGOPTIONS` search path from `CONTAINER_SHELL`                                         | unit test, real-server test                                            |
+| C36 an existing login of the name that is a member of another role is refused, never altered                                                                                                                                                  | drop the membership refusal in `decide`                                                         | unit tests, real-server test                                           |
 
 ## What the owner does
 

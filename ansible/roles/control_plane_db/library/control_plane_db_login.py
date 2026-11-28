@@ -17,7 +17,8 @@ to the server as a SCRAM-SHA-256 verifier, so the password is in no statement, s
 Each part runs only when needed, so a second run changes nothing: the login and its attributes, its
 password (when the file is absent, malformed or does not match the stored verifier), the handover of
 the portal database and what the administrator owns in it, and the file's owner, group and mode.
-A superuser of that name is refused, never altered: it was not made by this module.
+A superuser of that name, or one that is a member of another role, is refused, never altered: it
+was not made by this module.
 """
 
 from __future__ import annotations
@@ -128,19 +129,24 @@ SHOWN: Final = 300
 
 # The shell the database container runs. The password comes from the container's own environment,
 # so it is in no argument. $1 is the database, $2 the login and $3 the portal database.
+# The search path is pinned to the catalogs: the administrator runs SQL inside a database the
+# login owns, so a function or operator the login planted in public must never be found first.
 CONTAINER_SHELL: Final = (
     'PGPASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set in the db container}"; '
     "export PGPASSWORD; "
+    'PGOPTIONS="-c search_path=pg_catalog,pg_temp"; export PGOPTIONS; '
     'exec psql --username=postgres --dbname="$1" --no-password --no-psqlrc --quiet '
     "--set=ON_ERROR_STOP=1 --tuples-only --no-align --field-separator='|' "
     '--set=login="$2" --set=portal="$3"'
 )
 
-# What the server says about the login: its attributes and its stored password verifier. One row, or
-# none when the login is absent.
+# What the server says about the login: its attributes, its stored password verifier and how many
+# roles it is a member of. One row, or none when the login is absent.
 ROLE_SQL: Final = (
     "select rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolreplication, rolcanlogin, "
-    "coalesce(rolpassword, '') from pg_catalog.pg_authid where rolname = :'login';"
+    "coalesce(rolpassword, ''), "
+    "(select count(*) from pg_catalog.pg_auth_members m where m.member = a.oid) "
+    "from pg_catalog.pg_authid a where rolname = :'login';"
 )
 # The owner of the portal database: one row, or none when the database is absent.
 DATABASE_SQL: Final = (
@@ -224,6 +230,7 @@ class RoleRow:
     replication: bool
     canlogin: bool
     verifier: str
+    memberships: int = 0
 
     def attributes_are_right(self) -> bool:
         """True when the login has exactly the attributes the manifest gives it."""
@@ -341,10 +348,10 @@ def read_role(database: Database) -> RoleRow | None:
     if not rows:
         return None
     row = rows[0]
-    if len(row) != 7:
+    if len(row) != 8 or not row[7].isdigit():
         raise LoginError("shape", "the server's answer about the login has an unexpected shape")
     flags = [value == "t" for value in row[:6]]
-    return RoleRow(flags[0], flags[1], flags[2], flags[3], flags[4], flags[5], row[6])
+    return RoleRow(flags[0], flags[1], flags[2], flags[3], flags[4], flags[5], row[6], int(row[7]))
 
 
 def role_statement(login: str, exists: bool, verifier: str | None) -> str:
@@ -424,13 +431,20 @@ def decide(
     """The plan from the server's state.
 
     Raises:
-        LoginError: A superuser of the name exists, which is refused and never altered.
+        LoginError: A superuser of the name exists, or one that is a member of another role. Both
+            are refused and never altered: this module did not make them.
     """
     if role is not None and role.superuser:
         raise LoginError(
             "superuser",
             f"the role {login} on the server is a superuser, so this module did not make it; "
             "refusing to change it",
+        )
+    if role is not None and role.memberships > 0:
+        raise LoginError(
+            "membership",
+            f"the role {login} on the server is a member of another role, so this module did not "
+            "make it; refusing to change it",
         )
     return Plan(
         make_role=role is None,

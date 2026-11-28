@@ -211,6 +211,23 @@ class PlanTests(unittest.TestCase):
             login.decide(self.role(superuser=True), True, LOGIN, LOGIN, 0)
         self.assertIn("superuser", str(caught.exception))
 
+    def test_a_login_that_is_a_member_of_another_role_is_refused_not_altered(self) -> None:
+        member = login.RoleRow(False, False, False, False, False, True, "v", memberships=1)
+        with self.assertRaises(login.LoginError) as caught:
+            login.decide(member, True, LOGIN, LOGIN, 0)
+        self.assertIn("member of another role", str(caught.exception))
+        self.assertEqual(login.decide(self.role(), True, LOGIN, LOGIN, 0).names(), [])
+
+    def test_the_server_s_answer_carries_the_login_s_memberships(self) -> None:
+        row = "f|f|f|f|f|t|SCRAM-SHA-256$4096:aa$bb:cc|2\n"
+        read = login.read_role(database(Server(role_row=row)))
+        self.assertIsNotNone(read)
+        assert read is not None  # noqa: S101 - narrows the type for mypy
+        self.assertEqual(read.memberships, 2)
+        for bad in ("f|f|f|f|f|t|v\n", "f|f|f|f|f|t|v|x\n"):
+            with self.subTest(bad=bad), self.assertRaises(login.LoginError):
+                login.read_role(database(Server(role_row=bad)))
+
     def test_a_missing_database_is_not_handed_over(self) -> None:
         self.assertEqual(login.decide(self.role(), True, None, LOGIN, 0).names(), [])
 
@@ -361,6 +378,14 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(
             set(documented), {"container", "database", "login", "credential_file", "host", "docker"}
         )
+
+    def test_the_administrator_s_search_path_is_pinned_to_the_catalogs_before_psql(self) -> None:
+        # The login owns the database the administrator's SQL runs in, so a name resolved through
+        # public could be the login's. The real-server test plants one and shows it is not run.
+        shell = login.CONTAINER_SHELL
+        pin = 'PGOPTIONS="-c search_path=pg_catalog,pg_temp"; export PGOPTIONS; '
+        self.assertIn(pin, shell)
+        self.assertLess(shell.index(pin), shell.index("exec psql"))
 
     def test_the_module_reads_no_password_and_puts_none_in_an_argument(self) -> None:
         source = Path(login.__file__).read_text(encoding="utf-8")

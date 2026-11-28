@@ -49,6 +49,20 @@ create sequence public.standalone;
 create function public.identity(x integer) returns integer language sql as 'select x';
 """
 
+# What a migration (or anyone with the login's credential) could plant in public: a format() whose
+# arguments fit the module's table statement better than the catalog's, and which, when the
+# administrator runs it, makes the login a superuser, then does what the catalog's would.
+PLANTED_FORMAT = f"""
+create function public.format(text, text, name, name, text) returns text language plpgsql as $body$
+begin
+  if (select rolsuper from pg_catalog.pg_roles where rolname = current_user) then
+    execute 'alter role {LOGIN} superuser';
+  end if;
+  return pg_catalog.format($1, $2, $3, $4, $5);
+end
+$body$;
+"""
+
 
 class Module:
     """Stands in for AnsibleModule where the module writes its file."""
@@ -324,6 +338,54 @@ class MigratorLoginAgainstARealServerTests(unittest.TestCase):
                 ),
                 "f|f",
             )
+
+    def test_a_function_the_login_plants_cannot_make_it_a_superuser(self) -> None:
+        # The login owns the database and so may write to public. The administrator's SQL runs in
+        # that database, so a format() planted there that fits the arguments better than the
+        # catalog's would run as the administrator unless its search path is pinned to the catalogs.
+        self.reset()
+        with tempfile.TemporaryDirectory() as directory:
+            where = Path(directory)
+            self.run_module(where)
+            password = str(
+                login.password_in_url(
+                    (where / "migrator-url").read_text(encoding="utf-8"), LOGIN, HOST, DATABASE
+                )
+            )
+            planted = self.as_login(password, PLANTED_FORMAT)
+            self.assertEqual(planted.returncode, 0, planted.stderr)
+            # An administrator-owned object again, so the next run counts and hands it over.
+            made = self.admin(DATABASE, "create table public.made_later (id integer)")
+            self.assertEqual(made, "")
+            self.assertEqual(
+                self.run_module(where),
+                ["handed what the administrator owned in the portal database to the login"],
+            )
+            self.assertEqual(
+                self.admin("postgres", f"select rolsuper from pg_roles where rolname = '{LOGIN}'"),
+                "f",
+            )
+            self.assertEqual(
+                self.admin(DATABASE, "select pg_get_userbyid(relowner) from pg_class "
+                           "where oid = 'public.made_later'::regclass"),
+                LOGIN,
+            )  # fmt: skip
+
+    def test_a_login_that_is_a_member_of_another_role_is_refused_and_left_as_it_is(self) -> None:
+        self.reset()
+        self.admin("postgres", f"create role {LOGIN} login; grant pg_write_server_files to {LOGIN}")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(login.LoginError) as caught:
+                self.run_module(Path(directory))
+            self.assertIn("member of another role", str(caught.exception))
+        self.assertEqual(
+            self.admin(
+                "postgres",
+                "select count(*) from pg_auth_members m join pg_roles r on r.oid = m.member "
+                f"where r.rolname = '{LOGIN}'",
+            ),
+            "1",
+        )
 
     def test_a_superuser_of_the_name_is_refused_and_left_as_it_is(self) -> None:
         self.reset()
