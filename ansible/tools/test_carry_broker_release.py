@@ -182,8 +182,7 @@ class Carrying(Lab):
         self.run_tool(self.tarball(), write=True)
         defaults = self.defaults.read_text(encoding="utf-8")
         status, out = self.run_tool(self.tarball(), write=True)
-        self.assertEqual(1, status)
-        self.assertIn("reason=defaults_not_placeholders", out)
+        self.assertEqual((1, "carry=REFUSED reason=release_already_carried\n"), (status, out))
         self.assertEqual(defaults, self.defaults.read_text(encoding="utf-8"))
 
     def test_a_version_already_in_the_tree_is_refused(self) -> None:
@@ -212,6 +211,58 @@ class Carrying(Lab):
         self.assertEqual((1, "carry=REFUSED reason=write_failed\n"), (status, out))
         self.assertFalse((self.role / "files" / "releases" / VERSION).exists())
         self.assertEqual(self.before, self.defaults.read_text(encoding="utf-8"))
+
+
+class CarriedBeside(Lab):
+    """A later release is carried beside the releases the live defaults already pin."""
+
+    def setUp(self) -> None:
+        """Start from the live tree: the defaults and the release files PR 1150 carried."""
+        super().setUp()
+        self.defaults.write_text((ROLE / "defaults" / "main.yml").read_text(encoding="utf-8"))
+        shutil.copytree(ROLE / "files" / "releases", self.role / "files" / "releases")
+        self.before = self.defaults.read_text(encoding="utf-8")
+        self.earlier = {
+            str(path.relative_to(self.role)): path.read_bytes()
+            for path in (self.role / "files" / "releases").rglob("*")
+            if path.is_file()
+        }
+
+    def test_a_second_release_is_carried_beside_the_live_ones(self) -> None:
+        """The new release is added as the current one, and the earlier releases are untouched."""
+        later = [(name, kind, content + b"// 0.2.2\n") for name, kind, content in GOOD]
+        status, out = self.run_tool(self.tarball(later), version="0.2.2", write=True)
+        self.assertEqual(0, status)
+        self.assertTrue(out.endswith("carry=WRITTEN files=3\n"), out)
+        loaded = yaml.safe_load(self.defaults.read_text(encoding="utf-8"))
+        self.assertEqual("0.2.2", loaded["broker_deploy_release_version"])
+        self.assertEqual({"0.2.0", "0.2.1", "0.2.2"}, set(loaded["broker_deploy_release_pins"]))
+        live = yaml.safe_load(self.before)["broker_deploy_release_pins"]
+        self.assertEqual(live["0.2.1"], loaded["broker_deploy_release_pins"]["0.2.1"])
+        self.assertEqual(live["0.2.0"], loaded["broker_deploy_release_pins"]["0.2.0"])
+        for relative, content in self.earlier.items():
+            self.assertEqual(content, (self.role / relative).read_bytes(), relative)
+
+    def test_only_the_version_line_and_the_new_block_change_in_the_defaults(self) -> None:
+        """The live file keeps every other line, so the comments above the pins stay put."""
+        self.run_tool(self.tarball(), version="0.2.2", write=True)
+        after = self.defaults.read_text(encoding="utf-8").split("\n")
+        removed = [line for line in self.before.split("\n") if line not in after]
+        self.assertEqual(["broker_deploy_release_version: '0.2.1'"], removed)
+
+    def test_a_version_the_live_tree_already_pins_is_refused(self) -> None:
+        """A release that is already pinned is never replaced, and nothing is written."""
+        status, out = self.run_tool(self.tarball(), version="0.2.1", write=True)
+        self.assertEqual((1, "carry=REFUSED reason=release_already_carried\n"), (status, out))
+        self.assertEqual(self.before, self.defaults.read_text(encoding="utf-8"))
+        self.assertEqual(
+            self.earlier,
+            {
+                str(path.relative_to(self.role)): path.read_bytes()
+                for path in (self.role / "files" / "releases").rglob("*")
+                if path.is_file()
+            },
+        )
 
 
 class Refusals(Lab):

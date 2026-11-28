@@ -172,16 +172,73 @@ def read_block(lines: list[str]) -> tuple[str, dict[str, str]]:
     return head.group(1), pins
 
 
+def read_pins_mapping(lines: list[str]) -> dict[str, dict[str, str]]:
+    """Return the releases a carried pins mapping holds, read line by line in its one shape.
+
+    Raises:
+        RefusedError: a line is not of that shape, a release repeats, or a release has no pin.
+    """
+    releases: dict[str, dict[str, str]] = {}
+    current = ""
+    for line in lines:
+        release = BLOCK_RELEASE.match(line)
+        pin = BLOCK_PIN.match(line)
+        if release is not None:
+            current = release.group(1)
+            if current in releases:
+                raise RefusedError("defaults_not_placeholders")
+            releases[current] = {}
+        elif pin is not None and current and pin.group(1) not in releases[current]:
+            releases[current][pin.group(1)] = pin.group(2)
+        else:
+            raise RefusedError("defaults_not_placeholders")
+    if any(not release for release in releases.values()):
+        raise RefusedError("defaults_not_placeholders")
+    return releases
+
+
+def beside_carried(lines: list[str], version: str, pins: dict[str, str]) -> str:
+    """Return defaults that already carry releases, with this release added beside them.
+
+    The version line is set to the new release. Its pins go in as the first release of the
+    mapping, and every line of the releases already there is kept exactly as it is.
+
+    Raises:
+        RefusedError: the defaults are not one version line and one pins mapping in that shape,
+            the release is already pinned, or the file does not read back as the releases it held
+            plus this one.
+    """
+    heads = [index for index, line in enumerate(lines) if BLOCK_VERSION.match(line)]
+    if len(heads) != 1 or heads[0] + 1 >= len(lines) or lines[heads[0] + 1] != BLOCK_PINS_HEAD:
+        raise RefusedError("defaults_not_placeholders")
+    head = heads[0]
+    if lines.count(BLOCK_PINS_HEAD) != 1:
+        raise RefusedError("defaults_not_placeholders")
+    end = head + 2
+    while end < len(lines) and lines[end].startswith(" "):
+        end += 1
+    before = read_pins_mapping(lines[head + 2 : end])
+    if version in before:
+        raise RefusedError("release_already_carried")
+    block = pins_block(version, pins).split("\n")[2:]
+    out = lines[:head] + [f"broker_deploy_release_version: '{version}'", BLOCK_PINS_HEAD]
+    out += block + lines[head + 2 : end] + lines[end:]
+    after = read_pins_mapping(out[head + 2 : head + 2 + len(block) + (end - head - 2)])
+    if after != {version: pins, **before}:
+        raise RefusedError("defaults_do_not_read_back")
+    return "\n".join(out)
+
+
 def new_defaults(text: str, version: str, pins: dict[str, str]) -> str:
     """Return the role defaults with the release set, after reading the block back.
 
     Raises:
-        RefusedError: the defaults are not the placeholders, or the block does not read back as
-            the version and pins.
+        RefusedError: the defaults are neither the placeholders nor a carried block of this shape,
+            or the block does not read back as the version and pins.
     """
     lines = text.split("\n")
     if lines.count(VERSION_LINE) != 1 or lines.count(PINS_LINE) != 1:
-        raise RefusedError("defaults_not_placeholders")
+        return beside_carried(lines, version, pins)
     block = pins_block(version, pins).split("\n")
     out: list[str] = []
     start = -1
