@@ -237,6 +237,18 @@ class SelectionTest(unittest.TestCase):
         self.assertNotIn("ansible/roles/db1_stack", chosen)
         self.assertLess(len(chosen), len(self.shards))
 
+    def test_an_owner_values_file_runs_the_pull_roles_its_host_applies(self) -> None:
+        # Every enrolled playbook applies ansible_runtime and pull_trigger before its own roles.
+        # check_enrolment R9 keeps them off the host lists, so the selection must add them: the
+        # pull roles read owner_vars (ops1's pull_trigger_steps), and a change there must run them.
+        for host in ("edge1", "ops1"):
+            with self.subTest(host=host):
+                chosen = {
+                    shard["path"] for shard in self.pull_request(f"ansible/owner_vars/{host}.yml")
+                }
+                self.assertIn("ansible/roles/ansible_runtime", chosen)
+                self.assertIn("ansible/roles/pull_trigger", chosen)
+
     def test_an_owner_values_file_for_a_host_with_no_role_list_runs_every_shard(self) -> None:
         # Control: a host that has no role list cannot say which shards read its file.
         self.assertEqual(self.shards, self.pull_request("ansible/owner_vars/mx9.yml"))

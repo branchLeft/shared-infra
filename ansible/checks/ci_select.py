@@ -68,6 +68,8 @@ UNIT = re.compile(r"^(ansible/(?:roles|patterns)/[^/]+)/")
 # ansible/checks/host_roles/HOST.yml: a document, then comments, then one "- role" line each.
 OWNER_VALUES = re.compile(r"^ansible/owner_vars/([a-z][a-z0-9]*)\.yml$")
 HOST_ROLE_LINE = re.compile(r"^- ([a-z][a-z0-9_]*)$")
+# The two pull roles every enrolled playbook applies first; they never appear on a host list.
+PULL_ROLE_NAMES = ("ansible_runtime", "pull_trigger")
 
 # The entry that stands in for "no shard" in the matrix: GitHub refuses an empty one, and
 # the shard job refuses to run for it.
@@ -708,7 +710,9 @@ def host_role_units(root: Path, host: str) -> set[str] | None:
     listing = root / "ansible" / "checks" / "host_roles" / f"{host}.yml"
     if not listing.is_file():
         return None
-    found: set[str] = set()
+    # check_enrolment R9 keeps the two pull roles off every list, yet each enrolled playbook
+    # applies both before its own roles, so they are always among the host's roles.
+    found: set[str] = {f"ansible/roles/{name}" for name in PULL_ROLE_NAMES}
     for raw in listing.read_text(encoding="utf-8").splitlines():
         line = raw.rstrip()
         if not line or line.startswith("#") or line == "---":
