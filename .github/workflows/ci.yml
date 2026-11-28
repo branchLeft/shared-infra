@@ -2357,6 +2357,14 @@ jobs:
           plan-file: preview-plan.json
           working-directory: hetzner/tenants
 
+      # Diagnostic for branchLeft/workspace#4418: prints the exact value the
+      # apply gate reads, so a skipped apply can be matched to what the plan wrote.
+      - name: Echo the value the apply gate reads
+        if: always()
+        env:
+          HAS_CHANGES: ${{ steps.noop.outputs.has_changes }}
+        run: echo "tenants plan has_changes=${HAS_CHANGES}"
+
       - name: Write the plan to the job summary
         if: always()
         env:
