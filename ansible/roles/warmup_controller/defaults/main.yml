@@ -1,0 +1,4 @@
+---
+# Held off. The owner turns the timer on in a reviewed change to this default, after the evidence
+# file, the cards file and the published state file are wired (see README.md).
+warmup_controller_timer_enabled: false

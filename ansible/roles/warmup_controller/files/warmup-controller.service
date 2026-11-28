@@ -1,0 +1,28 @@
+# One day's decision of the IP2 warm-up controller: a single run, then exit. Installed by the
+# warmup_controller role as a static file and started only by its timer. The package is the one
+# under services/warmup-controller in ghost-platform, installed as the unit's working directory.
+#
+# Exit 2 (an input refused) and exit 3 (the ledger not written) both fail the unit: nothing was
+# written, and that failure is what the owner should see on ops1.
+[Unit]
+Description=IP2 warm-up controller, one day's decision
+ConditionPathIsDirectory=/opt/branchleft/warmup-controller/current/warmup_controller
+
+[Service]
+Type=oneshot
+User=warmup-controller
+Group=warmup-controller
+WorkingDirectory=/opt/branchleft/warmup-controller/current
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -m warmup_controller --evidence /var/lib/branchleft/warmup-controller/evidence.json --cards /var/lib/branchleft/warmup-controller/cards.json --controller-state /var/lib/branchleft/warmup-controller/controller.json --published-state /var/lib/branchleft/warmup-controller/ip2-state.json --ledger /var/lib/branchleft/warmup-controller/ledger.jsonl
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/branchleft/warmup-controller

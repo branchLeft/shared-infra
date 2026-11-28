@@ -1,0 +1,39 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_service }}'
+        - '{{ scenario_timer }}'
+      register: warmup_controller_v_stats
+
+    # The timer is installed and held off: the owner's merge turns it on, not the role's default.
+    - name: Require the state directory to be the account's alone and the units to be root's
+      ansible.builtin.assert:
+        that:
+          - warmup_controller_v_stats.results[0].stat.isdir
+          - warmup_controller_v_stats.results[0].stat.mode == '0700'
+          - warmup_controller_v_stats.results[0].stat.pw_name == scenario_account
+          - warmup_controller_v_stats.results[1].stat.pw_name == 'root'
+          - warmup_controller_v_stats.results[2].stat.pw_name == 'root'
+        quiet: true
+
+    - name: Read the timer's state
+      ansible.builtin.command: systemctl is-enabled warmup-controller.timer
+      register: warmup_controller_v_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Require the timer to be held off by default
+      ansible.builtin.assert:
+        that: warmup_controller_v_enabled.stdout != 'enabled'
+        quiet: true

@@ -1,0 +1,22 @@
+---
+# Fixed by the role, not by the inventory: a path or a name the controller depends on must not be
+# moved by a play variable. The role touches only the paths below and its two unit files.
+warmup_controller_account: warmup-controller
+
+# The parents the role asserts and never makes or changes; each is made by an earlier role on ops1.
+warmup_controller_parents:
+  - /var/lib/branchleft
+  - /opt/branchleft
+
+# The package is installed as one directory; the unit runs it from there.
+warmup_controller_current_dir: /opt/branchleft/warmup-controller/current
+
+# The account's own directory: the evidence, cards, controller state, published state and ledger.
+warmup_controller_state_dir: /var/lib/branchleft/warmup-controller
+
+warmup_controller_unit_dir: /etc/systemd/system
+warmup_controller_service_unit: warmup-controller.service
+warmup_controller_timer_unit: warmup-controller.timer
+warmup_controller_units:
+  - '{{ warmup_controller_service_unit }}'
+  - '{{ warmup_controller_timer_unit }}'
