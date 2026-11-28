@@ -236,9 +236,7 @@ class CarriedBeside(Lab):
         self.assertTrue(out.endswith("carry=WRITTEN files=3\n"), out)
         loaded = yaml.safe_load(self.defaults.read_text(encoding="utf-8"))
         self.assertEqual("0.2.2", loaded["broker_deploy_release_version"])
-        self.assertEqual(
-            {"0.2.0", "0.2.1", "0.2.2"}, set(loaded["broker_deploy_release_pins"])
-        )
+        self.assertEqual({"0.2.0", "0.2.1", "0.2.2"}, set(loaded["broker_deploy_release_pins"]))
         live = yaml.safe_load(self.before)["broker_deploy_release_pins"]
         self.assertEqual(live["0.2.1"], loaded["broker_deploy_release_pins"]["0.2.1"])
         self.assertEqual(live["0.2.0"], loaded["broker_deploy_release_pins"]["0.2.0"])
