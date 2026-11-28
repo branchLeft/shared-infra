@@ -51,7 +51,7 @@
 # Its own task, not an item of the loop above: a notify on a loop task fires when any item changed,
 # and a change to the wrapper or the sidecar must not restart the routers. A running router keeps the
 # code it started with, so a changed program is not the one that runs until each slot's router is
-# restarted (#4429). The handler is in handlers/main.yml and runs once, after this apply's writes.
+# restarted. The handler is in handlers/main.yml and runs once, after this apply's writes.
 - name: Install the health router program, and restart the routers when it changed
   ansible.builtin.copy:
     src: '{{ demo1_build_provision_dir }}/health_router.py'

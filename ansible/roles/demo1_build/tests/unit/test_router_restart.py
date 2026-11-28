@@ -2,7 +2,7 @@
 
 A running router keeps the code it started with, so an apply that installs a new
 ``health_router.py`` (or a new router unit) leaves the old code running until each router is
-restarted (workspace#4429, seen on demo1: routers started before the port change kept the old
+restarted (seen on demo1: routers started before the port change kept the old
 port). A Molecule container cannot run the router unit, so this holds the wiring in the role's own
 task and handler text: the install task for the router program, and the task that writes the router
 unit, each notify one handler topic; the handlers under that topic restart every slot's router, and
