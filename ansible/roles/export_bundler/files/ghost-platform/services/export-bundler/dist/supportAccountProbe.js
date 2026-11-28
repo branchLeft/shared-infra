@@ -91,7 +91,7 @@ export function createDockerStatusProbe(template, env, dockerCommand = 'docker',
         async readPreflight(identity) {
             let stdout;
             try {
-                stdout = await withEnvFile(env, (envFile) => runDocker(dockerCommand, buildStatusProbeArgs({ ...template, envFile }, identity)), registry);
+                stdout = await withEnvFile(env, (envFile) => runDocker(dockerCommand, buildStatusProbeArgs({ ...template, envFile }, identity), registry), registry);
             }
             catch (err) {
                 // runDocker never repeats the argv: its message is the exit code and stderr.

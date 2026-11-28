@@ -14,7 +14,7 @@
 # files under files/ghost-platform, this commit and every checksum in one change
 # (README, "Vendored files"): a copy that does not match its pin stops the role before
 # it writes.
-export_bundler_source_sha: 5fb63577cb5850b351c964caa49c93a382516367
+export_bundler_source_sha: 664ef25ffa3c4dbc5b5d727e8113ce5d110c923f
 
 # Every file the role carries, one path and one sha256 each, relative to the bundler's
 # own directory (services/export-bundler). The role writes exactly these files to the
@@ -23,49 +23,61 @@ export_bundler_release_files:
   - path: package.json
     sha256: 1a29600ba3984910e8d1ee34d7310e63ae0525898723cca6a24812ea71755711
   - path: dist/ageEncryption.js
-    sha256: 5d3d46c656b0a42814126f2c9e4ad8773d4d4147b0351db66d0c3a137fa91a5d
+    sha256: 5051ec4bf08fa900e2bc7e3c1aa2f1ef0a1311cb8149113055ed769dbda5d4ba
   - path: dist/archive.js
-    sha256: 7f01cc5071cb96e1f4a2a47d1ffbcf4ffcd03bc51e0acff75aa291dc9b052dc0
+    sha256: 0a992a6b15dc8468e31ad1f8173b92008be6c025047abca8c5a78d159e94a5a8
   - path: dist/auditLog.js
     sha256: 29e000b93d239152a1aaded73947bd9b933a68caa88c4fc8639cab3616eed466
+  - path: dist/bundleReader.js
+    sha256: 8bceb0f8f9455361a521de48ce514b81d977f8aa0037f017e9eebced13a7a088
   - path: dist/cleanup.js
-    sha256: 643d3ba13c3acabcb42da0548e06f4b37229351edc9acf2a20092aee68ab5424
+    sha256: f4de22614cb8f753a3961ffd273233ff83b2d5e1a8f33da59e69d4f144b85ac2
   - path: dist/cli.js
-    sha256: 9699e83d55d2acd5f0cf10a96afbca0720324e76c7968f0efa39e3089a6c4472
+    sha256: b19d49078a1e32796a63c3d5a01fb2bb5b45896ea2c7db3032149942815e082e
   - path: dist/colourIsolation.js
     sha256: 1078eb0e9f39f279cfe472471505e42649525d496d4efd902f4634c878273869
   - path: dist/containerRunner.js
-    sha256: 14254363faf0992efbc57889d65d8ebf79f8d8d947e5dc64e84f8584c18f43c9
+    sha256: 1080ae2b1ffb7bb8be3ca9d5c3e95110955684e5aaefe07d203d908d4910b674
   - path: dist/drainFlag.js
     sha256: eeb30a75701f3125dd1a71cf57735d6a505e386570472b3533e1c6a6b41afc1b
   - path: dist/drainFlagStore.js
     sha256: 91cce7c93980dbfa4e2ceddf7cbb33011e30d67f98d0bc9dadce25adccf07320
   - path: dist/drainGate.js
     sha256: 4d53bc33d89b8a16d6343186cdf606c16b8c654b0528778c40b49dfd61df5468
+  - path: dist/entryNames.js
+    sha256: ea21dc1b8f60b84000bc1d5237c291d659037a2cc17dad814aed3eb20406ea6f
   - path: dist/envFile.js
     sha256: bee446b59aee072d24d8eb990cd2bead2d047427798e150c0777b334d7132a4e
   - path: dist/exportRunner.js
-    sha256: 05d5062bdd414ea0891bf3a38a014d0421de5e8ae5c6709f0c051169712ed778
+    sha256: 3490168e3137a402f4365849ed8d32e1a088bbc82e89578d368a3c0c0c4d08bb
   - path: dist/extensions.js
-    sha256: e5670683a2fd8f121ffd05e8425d2375b95bab40dc9adca54505cc7e42950a18
+    sha256: c8d6de0a902b0108363e2134aaab71b2b45d8c30b64d724e7aa99a70905c1c7f
   - path: dist/ghostExportClient.js
     sha256: b15d44c61228791c628ed90e3e96308799eafff00250bd2cb120df2241b0acc7
   - path: dist/ghostProbe.js
     sha256: 4838a3dd9700df5fbc229da4c8f74e76e0c1a38f1a92d8ed86bb5f39a5fabb94
   - path: dist/manifest.js
-    sha256: a2af8159955845f7ee433aee773991518f882697d888168f48f2052b704c9fc0
+    sha256: b351de596fe8c5454416aa702fb75895ee77d073436f884ddd339622168eccff
   - path: dist/mediaManifest.js
     sha256: bbd32f13818422b524a712be6a12b91424ef617819832d166f5be98c6e8ce609
+  - path: dist/mediaSource.js
+    sha256: cd090622b70e02140437cef4764c5fa7731026931bc8315c6d7ffe3739eed581
+  - path: dist/mediaTree.js
+    sha256: 94fc196ec786313bcc8834a88f02c48f7af6c40bc0eb27e6c7e1b36ade38f9ff
   - path: dist/operatorToken.js
     sha256: aa78b11e0965a09dff081d67530f781930c47356ca38c32a656f16de9fdbfb7d
+  - path: dist/promotionImport.js
+    sha256: 252118dab766a5b368a4bb9c0784a177449280468640fc5d06a9b930e10d4601
+  - path: dist/promotionRewrite.js
+    sha256: 4d06856028b1156b9f8c9ddee4fc4ed39b024a938d5b815652562693fd985c4f
   - path: dist/scratchDatabase.js
-    sha256: 5ce49340994b4dd632bfc9cf5248091cd272bff292935433863e660c6185b0bb
+    sha256: 0bee1ea1c2d20c2f73415a4bf448fc266e3c0c433c2bbe8e998d0c2c877f1bb9
   - path: dist/supportAccountProbe.js
-    sha256: 8ca8bef4c8518e11c5b489449850a48d51ebb3f790000a1988a72aa65e163632
+    sha256: 5c1ce1fe4707d365243a5c0da4409cd5bf397e458cadba3de97dc4b3ff06a5a3
   - path: dist/supportGrant.js
     sha256: ab3f578b8ec4ad385120d04736c75b0f55656bf275859d509c5f1917c56af0de
   - path: dist/tenantConfig.js
-    sha256: 1b025d1eb93cd46558a1e0ffd6c98d918c079e0e175a3c53ae22da786e500c63
+    sha256: 7d1b2297d252d0305757f948186606e2109fb43d5d023b0ddbb8999fa9fc7d56
 
 # Where the bundler goes on the host (the export runbook's Deliver step 4), and the
 # directory the export runs keep their flags, output, audit log and descriptors in (Run
