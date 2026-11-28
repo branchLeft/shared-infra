@@ -1152,7 +1152,13 @@ def step_status(host: Host, slug: str) -> list[str]:
         f"stack={'yes' if stack_is_in_place(host, slug) else 'no'}",
         f"enabled={'yes' if unit_enabled(host, slug) else 'no'}",
         f"slot={'yes' if os.path.lexists(slot_path(host, slug)) else 'no'}",
+        f"unit={unit_state(host, slug)}",
     ]
+
+
+def unit_state(host: Host, slug: str) -> str:
+    """Read the unit's state now, so a status after a deferred restart shows a later failure."""
+    return host.runner([host.paths.systemctl, "is-active", unit_name(slug)], None).stdout.strip()
 
 
 Step = Callable[[Host, str], list[str]]
