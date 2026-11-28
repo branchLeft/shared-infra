@@ -113,7 +113,10 @@ on a running unit, so a unit that is down is never started, and the reply says
 restarting gets `deferred: restart queued, the new file is read when the unit starts`, not a
 `failed: timeout`, so the step timeout never waits on a unit's start. A unit in a failed state fails
 the step (`failed: restart`); the file already holds the new text, so a repeat of the request
-restarts again. Restart in place is the MVP's; the colour-swap apply replaces it when it lands. The
+restarts again. The `deferred` reply is given for every running unit (active, activating,
+deactivating or reloading), so it does not by itself mean the unit is still starting. A unit that
+fails after a deferred reply is not in that reply: a later `status` prints `unit=` with the unit's
+own state (`unit=failed`), which is the read that shows it. Restart in place is the MVP's; the colour-swap apply replaces it when it lands. The
 verb takes no uid, port, compose text or pin.
 
 ### The first pin, and a unit with no pin

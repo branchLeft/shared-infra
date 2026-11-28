@@ -1703,6 +1703,20 @@ class RestackTests(EntryTestCase):
         self.assertIn(DEFERRED, out)
         self.assertEqual(self.host.started, [])
 
+    def test_a_unit_that_fails_after_a_deferred_restack_is_reported_failed_by_a_later_status(
+        self,
+    ) -> None:
+        # Guard: the restack reply is deferred while the unit starts, so the failure that comes
+        # after it is never in that reply. A later `status` read must show the unit's own state.
+        self.host.states[self.unit] = "activating"
+        code, out, err = self.restack(environment={"url": "https://new.example.invalid"})
+        self.assertEqual((code, err), (entry.EXIT_DONE, ""))
+        self.assertIn(DEFERRED, out)
+        self.host.states[self.unit] = "failed"
+        code, out, err = self.host.request(f"status {SLUG}")
+        self.assertEqual((code, err), (entry.EXIT_DONE, ""))
+        self.assertIn("unit=failed\n", out)
+
     def test_a_unit_in_a_failed_state_fails_the_restart_step(self) -> None:
         self.host.states[self.unit] = "failed"
         code, out, err = self.restack()
@@ -1759,13 +1773,13 @@ class StatusTests(EntryTestCase):
         self.assertEqual(
             self.host.request(f"status {SLUG}")[1],
             "claimed-here=yes\nuid=30000\nport_a=40000\nport_b=40001\nport_health=40002\n"
-            "volumes=yes\nsecrets=no\nstack=no\nenabled=no\nslot=no\n",
+            "volumes=yes\nsecrets=no\nstack=no\nenabled=no\nslot=no\nunit=inactive\n",
         )
         self.host.get_to("key")
         self.assertEqual(
             self.host.request(f"status {SLUG}")[1],
             "claimed-here=yes\nuid=30000\nport_a=40000\nport_b=40001\nport_health=40002\n"
-            "volumes=yes\nsecrets=yes\nstack=no\nenabled=yes\nslot=yes\n",
+            "volumes=yes\nsecrets=yes\nstack=no\nenabled=yes\nslot=yes\nunit=inactive\n",
         )
 
 
