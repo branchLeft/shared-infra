@@ -1,0 +1,219 @@
+---
+# Internal to the role. The restricted account that lets ops1 start a promotion's export on this host,
+# and nothing else. It is inert until the owner seeds ops1's public key as the host input
+# export_bundler_controller_key (a host that has no such input, app1, never sets it). Unset or empty
+# takes the key and the sshd settings back out and changes nothing else.
+#
+# Order, with the key last: the checks first (nothing changes on a refusal), then the account, the
+# program and the sudoers rule, then the key and the sshd settings together, which are what let a
+# client in. A run that stops half way leaves no way in rather than one that runs less than it should.
+#
+# The key is a public half, hidden from logs and diffs anyway (ANS-16) because it is private to the
+# estate. Check mode (ANS-10): every task supports it except the two checks the modules do not run
+# in it (the sudoers `validate` and `sshd -t`), so a plan shows a changed file where an apply may
+# still refuse it.
+
+- name: Say whether the export route is switched on
+  ansible.builtin.set_fact:
+    export_bundler_entry_on: "{{ (export_bundler_controller_key | default('') | length) > 0 }}"
+  no_log: true
+
+# --- Off: take down what the role wrote and leave the rest. The account stays, because removing an
+# account is not the role's to do; with no key file it cannot log in.
+- name: Take the account's key and sshd settings back out while the route is off
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ export_bundler_entry_sshd_dropin }}'
+    - '{{ export_bundler_entry_authorized_keys_path }}'
+  when: not export_bundler_entry_on
+  notify: Reload sshd
+
+# --- On.
+- name: Switch the export route on
+  when: export_bundler_entry_on
+  block:
+    - name: Refuse a controller key that is not one ed25519 public key on one line
+      ansible.builtin.assert:
+        that:
+          - export_bundler_controller_key is string
+          - export_bundler_controller_key is match(export_bundler_entry_key_pattern)
+        quiet: true
+        fail_msg: >-
+          export_bundler_controller_key must be one `ssh-ed25519 AAAA...` public key with no comment
+          and no option: the line is written into an authorized_keys file. It is not shown here.
+      no_log: true
+
+    - name: Look at the Node runtime the export needs
+      ansible.builtin.stat:
+        path: '{{ export_bundler_entry_node }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: export_bundler_entry_node_stat
+      check_mode: false
+
+    - name: Refuse a host without the Node runtime
+      ansible.builtin.assert:
+        that:
+          - export_bundler_entry_node_stat.stat.exists
+          - export_bundler_entry_node_stat.stat.isreg
+        quiet: true
+        fail_msg: >-
+          The Node runtime is not at {{ export_bundler_entry_node }}. The role that installs it
+          (broker_deploy) runs first on this host; the export route stays off until it is there.
+
+    # A read-only question to the running daemon, so it runs in check mode too (ANS-10): a plan then
+    # shows the refusal that an apply would make. It never changes anything.
+    - name: Ask Docker which server version is running
+      ansible.builtin.command:
+        argv:
+          - '{{ export_bundler_entry_docker }}'
+          - version
+          - --format
+          - '{{ export_bundler_entry_docker_version_format }}'
+      register: export_bundler_entry_docker_version
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse a Docker older than 28, or one that does not answer
+      ansible.builtin.assert:
+        that:
+          - export_bundler_entry_docker_version.rc == 0
+          - export_bundler_entry_docker_version.stdout | trim is match('^[0-9]+')
+          - (export_bundler_entry_docker_version.stdout | trim | regex_search('^[0-9]+') | int) >= export_bundler_entry_docker_min_major
+        quiet: true
+        fail_msg: >-
+          Docker {{ export_bundler_entry_docker_min_major }} or newer must be running on this host:
+          the export bundler refuses an older engine, so the export route stays off until it is.
+          Docker answered with status {{ export_bundler_entry_docker_version.rc }} and the version
+          text '{{ export_bundler_entry_docker_version.stdout | default('') | trim }}'.
+
+    - name: Look up the account
+      ansible.builtin.command:
+        argv: [getent, passwd, '{{ export_bundler_entry_account }}']
+      register: export_bundler_entry_passwd
+      changed_when: false
+      failed_when: export_bundler_entry_passwd.rc not in [0, 2]
+      check_mode: false
+
+    # An account the role did not make is never repurposed: its name is the role's, so one that
+    # exists with another shell or home is somebody else's.
+    - name: Refuse an existing account that is not the role's own shape
+      ansible.builtin.assert:
+        that:
+          - >-
+            export_bundler_entry_passwd.rc == 2 or
+            (export_bundler_entry_passwd.stdout | trim | split(':'))[5:7]
+            == [export_bundler_entry_home, export_bundler_entry_shell]
+        quiet: true
+        fail_msg: >-
+          The account {{ export_bundler_entry_account }} already exists with another home or shell.
+          The role does not change an existing account.
+
+    - name: Make the account the controller's key logs in as
+      ansible.builtin.user:
+        name: '{{ export_bundler_entry_account }}'
+        comment: Promotion export forced command
+        system: true
+        shell: '{{ export_bundler_entry_shell }}'
+        create_home: false
+        home: '{{ export_bundler_entry_home }}'
+        # An unlocked entry no password can match. sshd refuses a locked account when it does not
+        # use PAM, and this account has no password to try.
+        password: '*'
+
+    - name: Install the forced-command program, root's and executable by every account
+      ansible.builtin.copy:
+        src: '{{ export_bundler_entry_program_source }}'
+        dest: '{{ export_bundler_entry_program_path }}'
+        owner: root
+        group: root
+        mode: '0755'
+
+    # Checked with `visudo -csf`: `-cf` alone passes an undefined alias. A file the check refuses is
+    # never put in place.
+    - name: Let the account run the program as root, and nothing else
+      ansible.builtin.template:
+        src: sudoers.j2
+        dest: '{{ export_bundler_entry_sudoers_path }}'
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -csf %s
+
+    - name: Look at the sshd drop-in directory
+      ansible.builtin.stat:
+        path: '{{ export_bundler_entry_sshd_config_dir }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: export_bundler_entry_dropin_dir
+      check_mode: false
+
+    - name: Refuse a host without the sshd drop-in directory
+      ansible.builtin.assert:
+        that:
+          - export_bundler_entry_dropin_dir.stat.exists
+          - export_bundler_entry_dropin_dir.stat.isdir
+        quiet: true
+        fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+
+    - name: Make the directory of the account's key file, root's and closed to the account
+      ansible.builtin.file:
+        path: '{{ export_bundler_entry_keys_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # Both files are written, then the whole sshd configuration is checked with them in place. If sshd
+    # refuses it, both files are taken back out and the run stops: the account then has no key file
+    # and cannot log in, which is the closed state. The check does not run in check mode (ANS-10).
+    - name: Write the account's key and sshd settings, and take them back out if sshd refuses them
+      block:
+        - name: Write the account's key with its restrictions
+          ansible.builtin.template:
+            src: authorized_keys.j2
+            dest: '{{ export_bundler_entry_authorized_keys_path }}'
+            owner: root
+            group: root
+            mode: '0644'
+          no_log: true
+          diff: false
+          notify: Reload sshd
+
+        - name: Write the sshd settings for the account
+          ansible.builtin.template:
+            src: sshd-drop-in.conf.j2
+            dest: '{{ export_bundler_entry_sshd_dropin }}'
+            owner: root
+            group: root
+            mode: '0644'
+          notify: Reload sshd
+
+        - name: Check the whole sshd configuration with both files in place
+          ansible.builtin.command:
+            argv: ['{{ export_bundler_entry_sshd }}', -t]
+          changed_when: false
+          when: not ansible_check_mode
+      rescue:
+        - name: Take the key and the sshd settings back out
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - '{{ export_bundler_entry_sshd_dropin }}'
+            - '{{ export_bundler_entry_authorized_keys_path }}'
+
+        - name: Stop, with the account left unable to log in
+          ansible.builtin.fail:
+            msg: sshd refused the account's settings. The key and the settings are removed, so the account cannot log in.
+
+# Applied at once, so a changed file is in force before the run ends.
+- name: Apply the sshd settings
+  ansible.builtin.meta: flush_handlers

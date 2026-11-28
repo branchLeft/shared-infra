@@ -10,6 +10,10 @@
 # host_tls_identity makes demo1's own key and self-signed certificate and pins edge1's client certificate
 # as the one its exporter trusts. It goes before any role that reads those files.
 - host_tls_identity
-# node_exporter_public last, so its waiting for the owner's certificate files holds nothing
+# node_exporter_public after those, so its waiting for the owner's certificate files holds nothing
 # back. demo1 takes the Debian-package exporter, which serves TLS to a verified client certificate only.
 - node_exporter_public
+# export_bundler is last of all, so that its refusal of a Docker older than 28 (it checks only once the owner
+# has seeded the controller's key) holds nothing else back. It carries the export bundler that a demo's
+# promotion runs, and the restricted account that ops1 reaches it through.
+- export_bundler

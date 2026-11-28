@@ -1895,6 +1895,42 @@ class TenantEntryInputTests(unittest.TestCase):
                 self.assertNotIn("ghp_", rig.everything)
 
 
+class Demo1ExportKeyTests(unittest.TestCase):
+    """demo1's export route key is set on its own with --set and is never asked for by the fill."""
+
+    KEY = "export_bundler_controller_key"
+    EMAIL = "owner@example.invalid"
+
+    def test_the_fill_of_demo1_asks_for_the_address_only_and_leaves_the_key_out(self) -> None:
+        rig = Rig(self, answers=[self.EMAIL])
+        self.assertEqual(0, rig.run("--host", "demo1"))
+        self.assertEqual(1, len(rig.prompts))
+        self.assertEqual({"broker_deploy_owner_due_diligence_email": self.EMAIL}, rig.document())
+
+    def test_set_adds_the_key_and_keeps_the_address(self) -> None:
+        rig = Rig(self, answers=[VALID_KEY])
+        rig.put(tool.DEST_NAME, json.dumps({"broker_deploy_owner_due_diligence_email": self.EMAIL}))
+        self.assertEqual(0, rig.run("--host", "demo1", "--set", self.KEY))
+        self.assertEqual(
+            {"broker_deploy_owner_due_diligence_email": self.EMAIL, self.KEY: VALID_KEY},
+            rig.document(),
+        )
+        self.assertNotIn(VALID_KEY, rig.everything)
+
+    def test_a_key_that_is_not_exactly_one_ed25519_line_is_refused_and_not_echoed(self) -> None:
+        for label, bad in TypedValueCheckTests.BAD_KEYS:
+            with self.subTest(label):
+                rig = Rig(self, answers=[bad])
+                rig.put(
+                    tool.DEST_NAME,
+                    json.dumps({"broker_deploy_owner_due_diligence_email": self.EMAIL}),
+                )
+                self.assertNotEqual(0, rig.run("--host", "demo1", "--set", self.KEY))
+                self.assertNotIn(self.KEY, rig.document())
+                if bad:
+                    self.assertNotIn(bad, rig.everything)
+
+
 class TypedValueCheckTests(unittest.TestCase):
     """The key lines and the controller address are checked when typed, before any write."""
 

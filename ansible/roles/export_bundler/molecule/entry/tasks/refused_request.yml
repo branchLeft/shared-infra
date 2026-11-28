@@ -1,0 +1,20 @@
+---
+# One request the forced command must refuse, sent with the controller's key. Inputs: attempt_request
+# and attempt_reason, the code the refusal must carry. The refusal is the program's own (status 2 and
+# its line on standard error), nothing was run, and nothing the request asked for happened.
+- name: Send the request
+  ansible.builtin.include_tasks: ssh_attempt.yml
+
+- name: Assert the program refused it with its reason, and nothing was run
+  ansible.builtin.assert:
+    that:
+      - export_bundler_scenario_attempt.rc == 2
+      - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=' ~ attempt_reason"
+      - export_bundler_scenario_attempt.stdout == ''
+      - export_bundler_scenario_calls_seen | length == 0
+      - not export_bundler_scenario_marker_seen
+    fail_msg: >-
+      The request was not refused for {{ attempt_reason }}: the client ended with
+      {{ export_bundler_scenario_attempt.rc }}, said {{ export_bundler_scenario_attempt.stderr }}, and the runtime was run
+      {{ export_bundler_scenario_calls_seen | length }} times.
+    quiet: true

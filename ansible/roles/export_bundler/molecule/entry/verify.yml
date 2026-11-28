@@ -1,0 +1,661 @@
+---
+# The phases, in this order. Each starts from the state the last one left, and the play ends with the
+# host as the converge left it, which the check-mode run that follows verify needs to find.
+#
+#   1  the files and the account the role made: owners, modes, the exact key line, the sudoers rule
+#      and what sudo and sshd say about the account
+#   2  the account cannot change its own key file, and sudo runs the one program with no argument
+#      and refuses it with any
+#   3  an allowed export, over the real sshd: the arguments the stand-in runtime was given, its
+#      environment, the standard streams that pass through, the log lines
+#   4  the statuses: a failed export, a clean-up that failed, a slot with no descriptor, a second
+#      export while one runs
+#   5  the hostile requests, each refused before anything runs
+#   6  what the key cannot do besides: another key, a command of its own, forwards, a subsystem,
+#      scp
+#   7  an apply that must stop (Docker older than 28, a key that is not one key) leaves the key file
+#      as it was
+#   8  the off state, with no key, and the route back on
+#   9  the log of every run and the system log, read for the keys and the request's values
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    export_bundler_scenario_fixed_env:
+      PATH: /usr/local/bin:/usr/bin:/bin
+      HOME: /root
+      LANG: C.UTF-8
+    export_bundler_scenario_valid_request: >-
+      export-demo {{ scenario_slot }} {{ scenario_recipient }} {{ scenario_date }}
+      {{ scenario_port }} {{ scenario_reference }}
+    export_bundler_scenario_expected_argv:
+      - /root/export-bundler/dist/cli.js
+      - --grant-lane
+      - consented
+      - --grant-reference
+      - '{{ scenario_reference }}'
+      - --descriptor
+      - '{{ scenario_state_dir }}/{{ scenario_slot }}.descriptor.json'
+      - --age-recipient
+      - '{{ scenario_recipient }}'
+      - --promotion-recipient
+      - '{{ scenario_recipient }}'
+      - --requested-by
+      - promotion-controller
+      - --delivered-to
+      - ops1
+      - --dest-dir
+      - '{{ scenario_state_dir }}/out'
+      - --flag-dir
+      - '{{ scenario_state_dir }}/flags'
+      - --audit-log
+      - '{{ scenario_state_dir }}/audit.jsonl'
+      - --loopback-port
+      - '{{ scenario_port }}'
+      - --erasure-date
+      - '{{ scenario_date }}'
+      - --carry-media-files
+  tasks:
+    - name: Read the public keys the scenario made
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - controller
+        - other
+      register: export_bundler_scenario_pubs
+      no_log: true
+
+    # The key line the role must write, from the key it was given: the restrictions, the sudo call
+    # that runs the one program, and the key. The bodies are kept to look for in the log at the end.
+    - name: Work out the key line the role must have written
+      ansible.builtin.set_fact:
+        export_bundler_scenario_controller_key: "{{ (export_bundler_scenario_pubs.results[0].content | b64decode).split()[:2] | join(' ') }}"
+        export_bundler_scenario_other_key: "{{ (export_bundler_scenario_pubs.results[1].content | b64decode).split()[:2] | join(' ') }}"
+        export_bundler_scenario_expected_line: >-
+          restrict,command="/usr/bin/sudo -n {{ scenario_program }}"
+          {{ (export_bundler_scenario_pubs.results[0].content | b64decode).split()[:2] | join(' ') }}
+      no_log: true
+
+    - name: Put the key line on one line
+      ansible.builtin.set_fact:
+        export_bundler_scenario_expected_line: "{{ export_bundler_scenario_expected_line | replace('\n', ' ') | trim }}\n"
+      no_log: true
+
+    # Phase 1
+    - name: Look at what the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_keys_dir }}'
+        - '{{ scenario_key_file }}'
+        - '{{ scenario_dropin }}'
+        - '{{ scenario_sudoers }}'
+        - '{{ scenario_program }}'
+      register: export_bundler_scenario_stats
+
+    - name: Require each to be root's and not writable by anyone else
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - not item.stat.wgrp
+          - not item.stat.woth
+          - not item.stat.islnk
+        quiet: true
+      loop: '{{ export_bundler_scenario_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Require the modes the role sets
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_stats.results[1].stat.mode == '0644'
+          - export_bundler_scenario_stats.results[2].stat.mode == '0644'
+          - export_bundler_scenario_stats.results[3].stat.mode == '0440'
+          - export_bundler_scenario_stats.results[4].stat.mode == '0755'
+        quiet: true
+
+    - name: Read the key file
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_file }}'
+      register: export_bundler_scenario_key_now
+      no_log: true
+
+    - name: Require the key file to hold the one restricted line, and nothing else
+      ansible.builtin.assert:
+        that:
+          - (export_bundler_scenario_key_now.content | b64decode) == export_bundler_scenario_expected_line
+        quiet: true
+      no_log: true
+
+    - name: Look the account up
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ scenario_account }}'
+
+    - name: Require it to be an account with no home
+      ansible.builtin.assert:
+        that:
+          - getent_passwd[scenario_account][4] == '/nonexistent'
+          - getent_passwd[scenario_account][5] == '/bin/sh'
+        quiet: true
+
+    - name: Ask sudo what the account may run
+      ansible.builtin.command:
+        argv: [sudo, -l, -U, '{{ scenario_account }}']
+      register: export_bundler_scenario_sudo_list
+      changed_when: false
+      check_mode: false
+
+    - name: Require it to be the one program, as root, with no password and no argument
+      ansible.builtin.assert:
+        that:
+          - >-
+            export_bundler_scenario_sudo_list.stdout_lines | select('match', '^ +\(') | list
+            == ['    (root) NOPASSWD: ' ~ scenario_program ~ ' ""']
+          - "'SSH_ORIGINAL_COMMAND' in export_bundler_scenario_sudo_list.stdout"
+        quiet: true
+
+    - name: Ask sshd what it makes of the account
+      ansible.builtin.command:
+        argv: [/usr/sbin/sshd, -T, -C, 'user={{ scenario_account }},host=localhost,addr=127.0.0.1']
+      register: export_bundler_scenario_sshd_t
+      changed_when: false
+      check_mode: false
+
+    - name: Require the account's sshd settings to be the forced command and nothing else
+      ansible.builtin.assert:
+        that:
+          - "('forcecommand /usr/bin/sudo -n ' ~ scenario_program) in export_bundler_scenario_sshd_t.stdout_lines"
+          - "('authorizedkeysfile ' ~ scenario_key_file) in export_bundler_scenario_sshd_t.stdout_lines"
+          - 'item in export_bundler_scenario_sshd_t.stdout_lines'
+        quiet: true
+      loop:
+        - authenticationmethods publickey
+        - pubkeyauthentication yes
+        - allowtcpforwarding no
+        - allowagentforwarding no
+        - allowstreamlocalforwarding no
+        - gatewayports no
+        - x11forwarding no
+        - permittty no
+        - permittunnel no
+        - permituserrc no
+
+    # Phase 2
+    - name: Try to add a line to the key file as the account
+      ansible.builtin.command:
+        argv:
+          [runuser, -u, '{{ scenario_account }}', --, sh, -c, 'echo x >> {{ scenario_key_file }}']
+      register: export_bundler_scenario_account_write
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Try to put a key file in the account's own home
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_account }}', --, sh, -c, 'mkdir -p /nonexistent/.ssh']
+      register: export_bundler_scenario_account_home
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Ask sudo, as the account, to run the program with an argument and something else
+      ansible.builtin.command:
+        argv: "{{ ['runuser', '-u', scenario_account, '--', 'sudo', '-n'] + item.split() }}"
+      loop:
+        - '{{ scenario_program }} --help'
+        - /bin/true
+        - '{{ scenario_node }} --version'
+      register: export_bundler_scenario_sudo_refused
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Ask sudo, as the account, to run the program with no argument and no request
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_account }}', --, sudo, -n, '{{ scenario_program }}']
+      register: export_bundler_scenario_sudo_bare
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Require the account to change nothing, and sudo to run the program only bare
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_account_write.rc != 0
+          - export_bundler_scenario_account_home.rc != 0
+          - export_bundler_scenario_sudo_refused.results | map(attribute='rc') | select('equalto', 0) | list | length == 0
+          - export_bundler_scenario_sudo_bare.rc == 2
+          - "export_bundler_scenario_sudo_bare.stderr | trim == 'branchleft-export-entry: refused reason=no-command'"
+        quiet: true
+
+    # Phase 3
+    - name: Send an export request with the controller's key and a sign-in line
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require the export to have run, with exactly the arguments the program builds
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 0
+          - export_bundler_scenario_calls_seen | length == 1
+          - export_bundler_scenario_calls_seen[0].argv == (export_bundler_scenario_expected_argv | map('string') | list)
+          - export_bundler_scenario_calls_seen[0].cwd == '/'
+        fail_msg: 'The export did not run as it must: {{ export_bundler_scenario_attempt.stderr }} {{ export_bundler_scenario_calls_seen }}'
+        quiet: true
+
+    - name: Require the child's environment to be the fixed three and nothing the client carried
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_calls_seen[0].env == export_bundler_scenario_fixed_env
+        quiet: true
+
+    - name: Require the standard streams to have passed through, the sign-in line included
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_calls_seen[0].stdin == scenario_signin
+          - export_bundler_scenario_attempt.stdout | trim == 'bundler-ready stdin-length=' ~ (scenario_signin | length)
+          - export_bundler_scenario_stderr == 'bundler-note'
+        quiet: true
+
+    # Phase 4
+    - name: Require a bundler that fails to be reported as a failure
+      ansible.builtin.include_tasks: tasks/expect_status.yml
+      vars:
+        attempt_request: >-
+          export-demo {{ scenario_slot }} {{ scenario_recipient }} {{ scenario_date }}
+          {{ scenario_port }} grant-fail
+        expect_status: 1
+
+    - name: Require a bundler whose clean-up failed to be reported as such
+      ansible.builtin.include_tasks: tasks/expect_status.yml
+      vars:
+        attempt_request: >-
+          export-demo {{ scenario_slot }} {{ scenario_recipient }} {{ scenario_date }}
+          {{ scenario_port }} grant-cleanup
+        expect_status: 70
+
+    - name: Take the slot's descriptor away
+      ansible.builtin.file:
+        path: '{{ scenario_state_dir }}/{{ scenario_slot }}.descriptor.json'
+        state: absent
+
+    - name: Ask for the export of a slot that has no descriptor
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require it to be refused as not ready, and nothing run
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 3
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-descriptor'"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Put a descriptor that anyone can read in its place
+      ansible.builtin.copy:
+        content: "{}\n"
+        dest: '{{ scenario_state_dir }}/{{ scenario_slot }}.descriptor.json'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ask for the export of a slot whose descriptor is readable by others
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require it to be refused too
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 3
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-descriptor'"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Put the descriptor back as the converge placed it
+      ansible.builtin.copy:
+        content: "{}\n"
+        dest: '{{ scenario_state_dir }}/{{ scenario_slot }}.descriptor.json'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Hold the program's lock in another process
+      ansible.builtin.command:
+        argv: [flock, '{{ scenario_lock }}', sleep, '20']
+      async: 40
+      poll: 0
+      register: export_bundler_scenario_holder
+      changed_when: false
+      check_mode: false
+
+    - name: Wait until the lock is held
+      ansible.builtin.command:
+        argv: [flock, -n, '{{ scenario_lock }}', 'true']
+      register: export_bundler_scenario_lock_probe
+      until: export_bundler_scenario_lock_probe.rc != 0
+      retries: 15
+      delay: 1
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Ask for an export while one is running
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require it to be refused as busy, and nothing run
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 4
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=busy'"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Wait for the other process to let go
+      ansible.builtin.async_status:
+        jid: '{{ export_bundler_scenario_holder.ansible_job_id }}'
+      register: export_bundler_scenario_holder_done
+      until: export_bundler_scenario_holder_done.finished
+      retries: 40
+      delay: 1
+      check_mode: false
+
+    - name: Ask for an export once the lock is free
+      ansible.builtin.include_tasks: tasks/expect_status.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+        expect_status: 0
+
+    # Phase 5. Each request is one the program must refuse before it opens a file or runs anything.
+    # The ones that carry a command of their own would leave a file at /tmp/ENTRY_MARKER if they
+    # ran.
+    - name: Send requests that are not the one command in its one shape
+      ansible.builtin.include_tasks: tasks/refused_request.yml
+      vars:
+        attempt_request: '{{ item }}'
+        attempt_reason: bad-command
+      loop:
+        - id
+        - export-demo
+        - EXPORT-DEMO {{ scenario_slot }} {{ scenario_recipient }} {{ scenario_date }} {{ scenario_port }} {{ scenario_reference }}
+        - /bin/sh -c "touch /tmp/ENTRY_MARKER"
+        - '{{ export_bundler_scenario_valid_request }} ; touch /tmp/ENTRY_MARKER'
+        - '{{ export_bundler_scenario_valid_request }} && touch /tmp/ENTRY_MARKER'
+        - '{{ export_bundler_scenario_valid_request }} | touch /tmp/ENTRY_MARKER'
+        - '{{ export_bundler_scenario_valid_request }} extra'
+        - "{{ export_bundler_scenario_valid_request }}\ntouch /tmp/ENTRY_MARKER"
+        - "{{ export_bundler_scenario_valid_request }}\n"
+        - ' {{ export_bundler_scenario_valid_request }}'
+        - '{{ export_bundler_scenario_valid_request }}$(touch /tmp/ENTRY_MARKER)'
+        - '{{ export_bundler_scenario_valid_request }}`touch /tmp/ENTRY_MARKER`'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_reference, "x;touch") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_reference, "-rf") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_reference, "") | trim }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_slot, "demo-123") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_slot, "demo-3/../demo-4") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_slot, "demo-٣") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_recipient, "age1qpzry9x8gf2tvdw0s3jn54khce6mua7l") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_recipient, "age1bpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_port | string, "80") }}'
+        - '{{ export_bundler_scenario_valid_request | replace(scenario_port | string, "020123") }}'
+
+    - name: Send a request that names a date that is not on the calendar
+      ansible.builtin.include_tasks: tasks/refused_request.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request | replace(scenario_date, "2027-02-30") }}'
+        attempt_reason: bad-date
+
+    - name: Send a request that names a port above the range
+      ansible.builtin.include_tasks: tasks/refused_request.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request | replace(scenario_port | string, "70000") }}'
+        attempt_reason: bad-port
+
+    - name: Send a request that is far too long
+      ansible.builtin.include_tasks: tasks/refused_request.yml
+      vars:
+        attempt_request: "export-demo {{ 'a' * 600 }}"
+        attempt_reason: request-too-long
+
+    - name: Ask for no command at all
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_options: ['-T']
+
+    - name: Require the program to refuse, and nothing to run
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 2
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=no-command'"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    # Phase 6
+    - name: Present a key that is in no file
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: other
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require it to be turned away
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 255
+          - "'Permission denied' in export_bundler_scenario_attempt.stderr"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Ask for a terminal and for the agent and X11 to be forwarded
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+        attempt_options:
+          [
+            '-tt',
+            '-A',
+            '-X',
+            '-o',
+            'SendEnv=SSH_ORIGINAL_COMMAND TERM',
+            '-o',
+            'SetEnv=SUDO_USER=x LD_PRELOAD=/tmp/x',
+          ]
+
+    - name: Require the export to run with the fixed environment all the same
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_calls_seen | length == 1
+          - export_bundler_scenario_calls_seen[0].env == export_bundler_scenario_fixed_env
+          - export_bundler_scenario_calls_seen[0].argv == (export_bundler_scenario_expected_argv | map('string') | list)
+        quiet: true
+
+    - name: Ask the server to open a port of its own and send it to a host
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_options:
+          ['-o', 'ExitOnForwardFailure=yes', '-N', '-R', '127.0.0.1:18080:127.0.0.1:22']
+
+    - name: Require it to be refused
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 255
+          - "'remote port forwarding failed' in export_bundler_scenario_attempt.stderr"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Ask the server to carry a stream to a host
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_options: ['-W', '127.0.0.1:{{ scenario_ssh_port }}']
+
+    - name: Require it to be refused
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 255
+          - "'SSH-2.0-' not in export_bundler_scenario_attempt.stdout"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Ask for the sftp subsystem
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_options: ['-s']
+        attempt_request: sftp
+
+    - name: Require it not to be served
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc != 0
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Ask for a file to be written, as scp does
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: 'scp -t /tmp/ENTRY_MARKER'
+
+    - name: Require it to be refused
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 2
+          - "export_bundler_scenario_stderr == 'branchleft-export-entry: refused reason=bad-command'"
+          - not export_bundler_scenario_marker_seen
+        quiet: true
+
+    # Phase 7
+    - name: Apply the role while the stand-in Docker says 27
+      ansible.builtin.include_tasks: tasks/refused_apply.yml
+      vars:
+        refuse_key: '{{ export_bundler_scenario_other_key }}'
+        refuse_docker: 27.5.1
+        refuse_expect: Docker 28 or newer
+
+    - name: Apply the role with a key that is not one key on one line
+      ansible.builtin.include_tasks: tasks/refused_apply.yml
+      vars:
+        refuse_key: '{{ export_bundler_scenario_other_key }} second-field no-pty'
+
+    - name: Apply the role with a key that carries an option
+      ansible.builtin.include_tasks: tasks/refused_apply.yml
+      vars:
+        refuse_key: 'command="id" {{ export_bundler_scenario_other_key }}'
+
+    # Phase 8
+    - name: Apply the role with no key
+      ansible.builtin.include_role:
+        name: branchleft.export_bundler
+      vars:
+        export_bundler_controller_key: ''
+
+    - name: Look for what the role wrote for the key
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ scenario_key_file }}'
+        - '{{ scenario_dropin }}'
+      register: export_bundler_scenario_off_stats
+
+    - name: Require both to be gone
+      ansible.builtin.assert:
+        that: not item.stat.exists
+        quiet: true
+      loop: '{{ export_bundler_scenario_off_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Connect with the controller's key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+    - name: Require it to be turned away now
+      ansible.builtin.assert:
+        that:
+          - export_bundler_scenario_attempt.rc == 255
+          - "'Permission denied' in export_bundler_scenario_attempt.stderr"
+          - export_bundler_scenario_calls_seen | length == 0
+        quiet: true
+
+    - name: Apply the role with the key again
+      ansible.builtin.include_role:
+        name: branchleft.export_bundler
+      vars:
+        export_bundler_controller_key: '{{ export_bundler_scenario_controller_key }}'
+
+    - name: Ask for the export again
+      ansible.builtin.include_tasks: tasks/expect_status.yml
+      vars:
+        attempt_request: '{{ export_bundler_scenario_valid_request }}'
+        expect_status: 0
+
+    # Phase 9
+    - name: Look in the log of the whole run for the two keys
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -c
+          - -F
+          - -e
+          - '{{ export_bundler_scenario_controller_key.split()[1] }}'
+          - -e
+          - '{{ export_bundler_scenario_other_key.split()[1] }}'
+          - '{{ scenario_log_path }}'
+      delegate_to: localhost
+      register: export_bundler_scenario_log_keys
+      changed_when: false
+      failed_when: export_bundler_scenario_log_keys.rc > 1
+      become: false
+      no_log: true
+
+    - name: Require the log to hold neither
+      ansible.builtin.assert:
+        that: export_bundler_scenario_log_keys.stdout | int == 0
+        quiet: true
+        fail_msg: A key the role should have hidden is in the log of the run.
+
+    - name: Look in the log of the whole run for the canary the converge was given
+      ansible.builtin.command:
+        argv: [grep, -c, -F, SCENARIO_LOG_CANARY, '{{ scenario_log_path }}']
+      delegate_to: localhost
+      register: export_bundler_scenario_log_canary
+      changed_when: false
+      failed_when: export_bundler_scenario_log_canary.rc > 1
+      become: false
+
+    - name: Require the log to show it, or an empty result above means nothing
+      ansible.builtin.assert:
+        that: export_bundler_scenario_log_canary.stdout | int > 0
+        quiet: true
+
+    - name: Read what the program wrote to the system log
+      ansible.builtin.command:
+        argv: [journalctl, --no-pager, --output, cat, --identifier, branchleft-export-entry]
+      register: export_bundler_scenario_journal
+      changed_when: false
+      check_mode: false
+
+    - name: Require the program's lines to be there, and to name the slot and nothing of the request
+      ansible.builtin.assert:
+        that:
+          - "'started slot=' ~ scenario_slot in export_bundler_scenario_journal.stdout"
+          - "'finished slot=' ~ scenario_slot ~ ' status=0' in export_bundler_scenario_journal.stdout"
+          - "'finished slot=' ~ scenario_slot ~ ' status=1' in export_bundler_scenario_journal.stdout"
+          - "'finished slot=' ~ scenario_slot ~ ' status=70' in export_bundler_scenario_journal.stdout"
+          - "'refused reason=bad-command' in export_bundler_scenario_journal.stdout"
+          - "'refused reason=busy' in export_bundler_scenario_journal.stdout"
+          - scenario_recipient not in export_bundler_scenario_journal.stdout
+          - scenario_reference not in export_bundler_scenario_journal.stdout
+          - scenario_signin not in export_bundler_scenario_journal.stdout
+          - export_bundler_scenario_controller_key.split()[1] not in export_bundler_scenario_journal.stdout
+        quiet: true
+      no_log: true

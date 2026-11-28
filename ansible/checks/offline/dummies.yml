@@ -136,3 +136,8 @@ overrides:
   db_t1_tenant_entry_controller_address:
     type: str
     value: 192.0.2.20
+  # The export bundler's restricted login takes ops1's public key from the host's inputs: one
+  # throwaway key, no comment, as the role requires.
+  export_bundler_controller_key:
+    type: str
+    value: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10

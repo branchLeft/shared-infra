@@ -1,0 +1,138 @@
+---
+# What the role expects to find on the demo host before it runs, and nothing of the role itself.
+# The real OpenSSH server runs as the ssh service the role reloads, listening on the loopback
+# address only, so the forced command is served as a client of that server meets it. sudo is
+# installed because the account's key line and the sshd settings both run the program through it.
+# The Node runtime, which broker_deploy installs on a real host, and Docker are stand-ins: the
+# stand-in runtime records what the forced command ran it with and ends as the grant reference asks,
+# and the stand-in Docker answers the version question from a file the verify changes. Neither is
+# something the role installs or runs. The key pairs are made here, inside the container, for this
+# run only: no key leaves it except the public halves the converge reads.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the SSH server and client, and sudo
+      ansible.builtin.apt:
+        name:
+          - openssh-server
+          - openssh-client
+          - sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the directories the scenario records into and makes its keys in
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - '{{ scenario_record_dir }}'
+        - '{{ scenario_key_dir }}'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used (ANS-9).
+    # The creates argument makes it report truthfully. The controller is the key the role is told
+    # about, and other is a key in no file.
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - ''
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - controller
+        - other
+      no_log: true
+
+    - name: Make the directory of the Node runtime
+      ansible.builtin.file:
+        path: /opt/branchleft/broker/node/bin
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the stand-in Node runtime where broker_deploy puts the real one
+      ansible.builtin.copy:
+        src: fake_node.py
+        dest: '{{ scenario_node }}'
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the stand-in Docker in place
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          exec cat {{ scenario_docker_version_file }}
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Say which Docker server version the stand-in answers with
+      ansible.builtin.copy:
+        content: "28.0.1\n"
+        dest: '{{ scenario_docker_version_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make the SSH server's host keys
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -A
+        creates: /etc/ssh/ssh_host_ed25519_key
+
+    # Close to the Debian defaults: key authentication only, StrictModes on. Only the listener is
+    # the test's, and PAM is off because a container has no login session for it to open.
+    # OpenSSH 9.8 and later penalise a source after refused attempts and reset its next connections
+    # before key exchange, so a probe after a run of denials failed for no reason the key line
+    # decided. Penalties are off here so each connection's verdict is its own; the role does not
+    # set this. The file is named to sort before the role's drop-in, and ends with Match all.
+    - name: Put the test SSH server's configuration in place
+      ansible.builtin.copy:
+        content: |
+          ListenAddress 127.0.0.1:{{ scenario_ssh_port }}
+          UsePAM no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          StrictModes yes
+          PerSourcePenalties no
+          Match all
+        dest: /etc/ssh/sshd_config.d/00-scenario.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Check the whole SSH server configuration
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -t
+      changed_when: false
+
+    - name: Start the SSH server as the service the role reloads
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for the SSH server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ scenario_ssh_port }}'
+        timeout: 30

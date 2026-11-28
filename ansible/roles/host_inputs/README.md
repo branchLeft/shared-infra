@@ -58,7 +58,7 @@ starts with a code, so that a test can tell one from another:
 
 `host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
 file may leave out. Today that is `ci_jump_user` (edge1 and edget), `ntfy_pager_mx1_token` (edge1),
-`mx1_abuse_page_token` (mx1), `ci_jump_spool_user` (edget) and the two `broker_tunnel_client_demo1_*` inputs (ops1), and nothing else. (dbt1 had two optional registry inputs until 26 Nov 2026; its image is public and pulled with no login, so the inputs and the code that read them are gone.) An
+`mx1_abuse_page_token` (mx1), `ci_jump_spool_user` (edget), the two `broker_tunnel_client_demo1_*` inputs (ops1) and `export_bundler_controller_key` (demo1: ops1's public key, one `ssh-ed25519` line, for the restricted export account), and nothing else. (dbt1 had two optional registry inputs until 26 Nov 2026; its image is public and pulled with no login, so the inputs and the code that read them are gone.) An
 absent optional input is not set, which leaves its role's argument unset, and the play goes
 on. A host whose every input in its row is optional (demo1 today, and edget, whose two inputs are
 `ci_jump_user` and `ci_jump_spool_user`) runs without the file at all: no file loads as an empty set of inputs and the

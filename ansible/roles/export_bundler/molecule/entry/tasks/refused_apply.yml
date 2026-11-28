@@ -1,0 +1,67 @@
+---
+# An apply of the role that must stop, and what it must leave alone. Inputs: refuse_key, the key it is
+# applied with, refuse_docker, the version the stand-in Docker answers with (default 28.0.1) and
+# refuse_expect, text the refusal must say (default none). The role refuses, the key file still holds
+# the controller's line and nothing else, and the key that was refused is not let in.
+- name: Say which version the stand-in Docker answers with
+  ansible.builtin.copy:
+    content: "{{ refuse_docker | default('28.0.1') }}\n"
+    dest: '{{ scenario_docker_version_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply the role with what it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.export_bundler
+      vars:
+        export_bundler_controller_key: '{{ refuse_key }}'
+    - name: Say the role did not stop
+      ansible.builtin.set_fact:
+        export_bundler_scenario_refused: false
+        export_bundler_scenario_refusal: ''
+  rescue:
+    - name: Keep what the role said
+      ansible.builtin.set_fact:
+        export_bundler_scenario_refused: true
+        export_bundler_scenario_refusal: '{{ ansible_failed_result.msg | default("") }}'
+  always:
+    - name: Put the stand-in Docker's answer back
+      ansible.builtin.copy:
+        content: "28.0.1\n"
+        dest: '{{ scenario_docker_version_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Read the key file
+  ansible.builtin.slurp:
+    src: '{{ scenario_key_file }}'
+  register: export_bundler_scenario_key_after
+  no_log: true
+
+- name: Assert the role stopped, said why, and left the key file as it was
+  ansible.builtin.assert:
+    that:
+      - export_bundler_scenario_refused
+      - refuse_expect | default('') in export_bundler_scenario_refusal
+      - (export_bundler_scenario_key_after.content | b64decode) == export_bundler_scenario_expected_line
+    fail_msg: 'The role did not stop as it must, or changed the key file: {{ export_bundler_scenario_refusal }}'
+    quiet: true
+  no_log: true
+
+- name: Connect with the key that was refused
+  ansible.builtin.include_tasks: ssh_attempt.yml
+  vars:
+    attempt_key: other
+    attempt_request: '{{ export_bundler_scenario_valid_request }}'
+
+- name: Assert it was turned away
+  ansible.builtin.assert:
+    that:
+      - export_bundler_scenario_attempt.rc == 255
+      - "'Permission denied' in export_bundler_scenario_attempt.stderr"
+      - export_bundler_scenario_calls_seen | length == 0
+    quiet: true

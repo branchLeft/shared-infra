@@ -354,7 +354,10 @@ class RealTree(unittest.TestCase):
                     "db_t1_tenant_entry_controller_address",
                 ],
                 "mx1": ["mx1_abuse_page_token"],
-                "demo1": ["broker_deploy_owner_due_diligence_email"],
+                "demo1": [
+                    "broker_deploy_owner_due_diligence_email",
+                    "export_bundler_controller_key",
+                ],
             },
         )
 
@@ -374,7 +377,10 @@ class RealTree(unittest.TestCase):
                 ],
                 "edget": ["ci_jump_user", "ci_jump_spool_user"],
                 "mx1": ["mx1_abuse_page_token"],
-                "demo1": ["broker_deploy_owner_due_diligence_email"],
+                "demo1": [
+                    "broker_deploy_owner_due_diligence_email",
+                    "export_bundler_controller_key",
+                ],
             },
         )
 
@@ -443,6 +449,7 @@ class Mutations(unittest.TestCase):
             "mx1_abuse_page",
             "broker_deploy",
             "broker_tunnel_client",
+            "export_bundler",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()

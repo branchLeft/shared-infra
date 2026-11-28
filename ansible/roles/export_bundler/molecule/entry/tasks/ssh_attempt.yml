@@ -1,0 +1,94 @@
+---
+# One connection to the container's own sshd with one key, and what came of it. Inputs:
+#   attempt_key      the key pair's name (default controller)
+#   attempt_request  the one remote command to send, as a single string. Left out, the client asks
+#                    for no command
+#   attempt_options  more ssh client options, a list (default none)
+#   attempt_stdin    the text sent on standard input (default: the made-up sign-in line)
+# Outputs: export_bundler_scenario_attempt, the client's result (rc, stdout, stderr); export_bundler_scenario_calls_seen, the
+# stand-in Node runtime's records, one object for each time it was run during the connection; and
+# export_bundler_scenario_marker_seen, whether the file a hostile command tries to make exists. The assertions are
+# the caller's, because each case expects something else.
+- name: Clear the records and the marker a hostile command would make
+  ansible.builtin.file:
+    path: '{{ export_bundler_scenario_path }}'
+    state: absent
+  loop:
+    - '{{ scenario_calls }}'
+    - /tmp/ENTRY_MARKER
+  loop_control:
+    loop_var: export_bundler_scenario_path
+  check_mode: false
+
+- name: Connect with the key
+  ansible.builtin.command:
+    argv: >-
+      {{ attempt_base + (attempt_options | default([])) + [scenario_account ~ '@127.0.0.1']
+      + ([attempt_request] if attempt_request is defined else []) }}
+    stdin: "{{ attempt_stdin | default(scenario_signin ~ '\n') }}"
+    stdin_add_newline: false
+  vars:
+    # timeout turns a client left waiting into a failure (124, or 137 once killed) that the
+    # assertions name.
+    attempt_base:
+      - timeout
+      - --kill-after=5
+      - '60'
+      - ssh
+      - -o
+      - ConnectTimeout=10
+      - -i
+      - '{{ scenario_key_dir }}/{{ attempt_key | default("controller") }}'
+      - -p
+      - '{{ scenario_ssh_port }}'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - LogLevel=ERROR
+  register: export_bundler_scenario_attempt
+  # The test server may be restarting after a reload, and the client then fails in key exchange
+  # before any answer. Only that reset is retried; every other result is judged on the first.
+  until: "'kex_exchange_identification' not in (export_bundler_scenario_attempt.stderr | default(''))"
+  retries: 4
+  delay: 2
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Look at what the stand-in Node runtime recorded
+  ansible.builtin.slurp:
+    src: '{{ scenario_calls }}'
+  register: export_bundler_scenario_attempt_calls
+  failed_when: false
+  check_mode: false
+
+- name: Look for the marker a hostile command would make
+  ansible.builtin.stat:
+    path: /tmp/ENTRY_MARKER
+  register: export_bundler_scenario_attempt_marker
+  check_mode: false
+
+- name: Keep what the connection did
+  ansible.builtin.set_fact:
+    export_bundler_scenario_calls_seen: >-
+      {{ (export_bundler_scenario_attempt_calls.content | default('') | b64decode).splitlines() | map('from_json') | list }}
+    export_bundler_scenario_marker_seen: '{{ export_bundler_scenario_attempt_marker.stat.exists }}'
+    # sshd says this on the client's standard error, because the account's home is /nonexistent on
+    # purpose (nothing the account can write). It is not the program's, so it is left out here.
+    export_bundler_scenario_stderr: >-
+      {{ export_bundler_scenario_attempt.stderr_lines | default([])
+      | reject('match', '^Could not chdir to home directory') | join('\n') }}
+
+- name: Assert the client was not left waiting and nothing the client asked for ran by itself
+  ansible.builtin.assert:
+    that:
+      - export_bundler_scenario_attempt.rc not in [124, 137]
+      - not export_bundler_scenario_marker_seen
+    fail_msg: 'The client hung, or a command it asked for ran: {{ export_bundler_scenario_attempt.stderr }}'
+    quiet: true

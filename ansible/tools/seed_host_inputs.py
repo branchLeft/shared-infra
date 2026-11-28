@@ -95,7 +95,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ci_jump_user",
     ),
     "edget": ("ci_jump_user", "ci_jump_spool_user"),
-    "demo1": ("broker_deploy_owner_due_diligence_email",),
+    "demo1": ("broker_deploy_owner_due_diligence_email", "export_bundler_controller_key"),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -150,6 +150,7 @@ SET_ONLY: Final = frozenset(
     {
         "broker_tunnel_client_demo1_address",
         "broker_tunnel_client_demo1_host_key",
+        "export_bundler_controller_key",
     }
 )
 
@@ -248,6 +249,8 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "broker_tunnel_client_demo1_address": (Source(TYPED, ""),),
     "broker_tunnel_client_demo1_host_key": (Source(TYPED, ""),),
     "broker_deploy_owner_due_diligence_email": (Source(TYPED, ""),),
+    # ops1's public key for demo1's export route: one ssh-ed25519 line, typed once with --set.
+    "export_bundler_controller_key": (Source(KEYLINE, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.

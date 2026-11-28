@@ -1,0 +1,18 @@
+# Written by the export_bundler role. Change the role, not this file.
+# PermitUserEnvironment cannot be set in a Match block (sshd refuses the file); its default is no,
+# and the key's `restrict` option turns off environment settings as well.
+Match User {{ export_bundler_entry_account }}
+    AuthorizedKeysFile {{ export_bundler_entry_authorized_keys_path }}
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    GatewayPorts no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ export_bundler_entry_sudo_path }} -n {{ export_bundler_entry_program_path }}
+Match all
